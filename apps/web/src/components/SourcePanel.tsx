@@ -54,7 +54,7 @@ export function SourcePanel({ projectId, selected, onClose }: { projectId: strin
             {span.file}:{line}
           </div>
           <a className="small" href={hrefFile(projectId, span.file, line)}>
-            Open in Files
+            Open in Source
           </a>
         </div>
         <button type="button" onClick={onClose} aria-label="Close source">

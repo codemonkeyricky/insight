@@ -1,4 +1,4 @@
-import { enclosing, type IRView, type Lens, type LensFinding, type LensResult, type TableView } from "@insight/sdk";
+import { enclosing, isExternal, type IRView, type Lens, type LensFinding, type LensResult, type TableView } from "@insight/sdk";
 import type { NodeId, Span } from "@insight/ir";
 
 export interface ComplexityConfig {
@@ -23,6 +23,7 @@ const DEFAULT_MAX = 10;
 export function measureFunctions(view: IRView): FunctionComplexity[] {
   const byId = new Map<NodeId, FunctionComplexity>();
   for (const fn of view.nodes({ facet: "structure", kind: "structure.function" })) {
+    if (isExternal(fn)) continue;
     byId.set(fn.id, {
       id: fn.id,
       name: String(fn.attrs.name ?? fn.id),
@@ -35,7 +36,7 @@ export function measureFunctions(view: IRView): FunctionComplexity[] {
   }
   // Kind queries are subkind-aware, so flow.switch and any plugin kind extending flow.branch count too.
   const count = (kind: string, field: "branches" | "loops" | "tries") => {
-    for (const node of view.nodes({ facet: "flow", kind })) {
+    for (const node of view.nodes({ facet: "flow", kind }).filter((n) => !isExternal(n))) {
       const owner = enclosing(view, node.id, "structure.function");
       const entry = owner ? byId.get(owner.id) : undefined;
       if (entry) entry[field]++;

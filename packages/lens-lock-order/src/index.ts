@@ -1,4 +1,4 @@
-import { edgeTargets, findCycles, ownerOf, type Confidence, type GraphView, type IRView, type Lens, type LensFinding, type LensResult, type TableView } from "@insight/sdk";
+import { edgeTargets, findCycles, isExternal, ownerOf, type Confidence, type GraphView, type IRView, type Lens, type LensFinding, type LensResult, type TableView } from "@insight/sdk";
 import type { IRNode, NodeId, Span } from "@insight/ir";
 
 interface Site {
@@ -36,8 +36,9 @@ type Event =
  * reported as inferred.
  */
 export function lockOrderEdges(view: IRView): { edges: OrderEdge[]; locks: string[]; unknownLocks: number } {
-  const acquires = view.nodes({ facet: "sync", kind: "sync.lock-acquire" });
-  const releases = view.nodes({ facet: "sync", kind: "sync.lock-release" });
+  // Stubs hold no lock of this scope, and are not counted in unknownLocks.
+  const acquires = view.nodes({ facet: "sync", kind: "sync.lock-acquire" }).filter((n) => !isExternal(n));
+  const releases = view.nodes({ facet: "sync", kind: "sync.lock-release" }).filter((n) => !isExternal(n));
   let unknownLocks = 0;
 
   const eventsByUnit = new Map<NodeId, Event[]>();

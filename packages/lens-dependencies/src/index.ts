@@ -1,5 +1,5 @@
 import picomatch from "picomatch";
-import { edgeTargets, findCycles, type GraphView, type IRView, type Lens, type LensFinding, type LensResult, type TableView } from "@insight/sdk";
+import { edgeTargets, findCycles, isExternal, type GraphView, type IRView, type Lens, type LensFinding, type LensResult, type TableView } from "@insight/sdk";
 import type { IREdge, NodeId } from "@insight/ir";
 
 /** A layer rule the user writes in .insight/lenses/lens-dependencies.json. */
@@ -22,13 +22,28 @@ interface PairInfo {
   span?: IREdge["span"];
 }
 
-/** The file that owns a node: the node itself when it is a file, else its nearest file ancestor. */
-function moduleOf(view: IRView, id: NodeId): NodeId | undefined {
-  let cur = view.node(id);
+/** A module, and whether the node it was found from is an external stub. */
+interface ModuleRef {
+  id: NodeId;
+  external: boolean;
+}
+
+/**
+ * The file that owns a node: the node itself when it is a file, else its nearest file ancestor.
+ * An external function stub has no parent, so its module is the part of its id before "#" (the
+ * TypeScript id convention "<file>#<name>"). That module is external.
+ */
+function moduleOf(view: IRView, id: NodeId): ModuleRef | undefined {
+  const start = view.node(id);
+  let cur = start;
   while (cur) {
-    if (cur.kind === "structure.file") return cur.id;
-    if (cur.parent === undefined) return undefined;
+    if (cur.kind === "structure.file") return { id: cur.id, external: isExternal(cur) };
+    if (cur.parent === undefined) break;
     cur = view.node(cur.parent);
+  }
+  if (start !== undefined && isExternal(start)) {
+    const file = String(id).split("#")[0];
+    if (file !== undefined && file !== "" && file !== id) return { id: file, external: true };
   }
   return undefined;
 }
@@ -38,16 +53,26 @@ const weakest = (a: PairInfo["confidence"], b: PairInfo["confidence"]): PairInfo
   return rank[a] >= rank[b] ? a : b;
 };
 
-/** Module-level graph: imports and includes, plus calls lifted to the modules that contain them. */
-export function buildModuleGraph(view: IRView): { pairs: Map<string, PairInfo>; from: Map<string, [NodeId, NodeId]>; unresolved: number } {
+/**
+ * Module-level graph: imports and includes, plus calls lifted to the modules that contain them.
+ * `local` holds the modules that have a node of their own in the view. Any other module is external.
+ */
+export function buildModuleGraph(view: IRView): {
+  pairs: Map<string, PairInfo>;
+  from: Map<string, [NodeId, NodeId]>;
+  unresolved: number;
+  local: Set<NodeId>;
+} {
   const pairs = new Map<string, PairInfo>();
   const endpoints = new Map<string, [NodeId, NodeId]>();
+  const local = new Set<NodeId>();
   let unresolved = 0;
 
-  const add = (kind: "imports" | "calls", edge: IREdge, fromMod: NodeId, toMod: NodeId) => {
-    if (fromMod === toMod) return;
-    const key = `${fromMod}\0${toMod}`;
-    endpoints.set(key, [fromMod, toMod]);
+  const add = (kind: "imports" | "calls", edge: IREdge, fromMod: ModuleRef, toMod: ModuleRef) => {
+    if (fromMod.id === toMod.id) return;
+    for (const m of [fromMod, toMod]) if (!m.external) local.add(m.id);
+    const key = `${fromMod.id}\0${toMod.id}`;
+    endpoints.set(key, [fromMod.id, toMod.id]);
     const info = pairs.get(key) ?? { imports: 0, calls: 0, confidence: edge.provenance.confidence };
     info[kind === "imports" ? "imports" : "calls"]++;
     info.confidence = weakest(info.confidence, edge.provenance.confidence);
@@ -58,10 +83,11 @@ export function buildModuleGraph(view: IRView): { pairs: Map<string, PairInfo>; 
   const importEdges = [...view.edges({ facet: "packaging", kind: "packaging.import" }), ...view.edges({ facet: "packaging", kind: "packaging.include" })];
   for (const edge of importEdges) {
     const fromMod = moduleOf(view, edge.from);
-    const targets = edgeTargets(edge);
     if (fromMod === undefined) continue;
+    const targets = edgeTargets(edge);
     if (targets.unresolved) {
-      unresolved++;
+      // Only an import made inside the scope is this scope's unresolved import.
+      if (!fromMod.external) unresolved++;
       continue;
     }
     for (const t of [...targets.nodes, ...targets.candidates]) {
@@ -78,7 +104,7 @@ export function buildModuleGraph(view: IRView): { pairs: Map<string, PairInfo>; 
       if (toMod !== undefined) add("calls", edge, fromMod, toMod);
     }
   }
-  return { pairs, from: endpoints, unresolved };
+  return { pairs, from: endpoints, unresolved, local };
 }
 
 export const lensDependencies: Lens = {
@@ -90,7 +116,7 @@ export const lensDependencies: Lens = {
   async run(view, ctx): Promise<LensResult> {
     const config = (ctx.config ?? {}) as DependencyConfig;
     const rules = Array.isArray(config.rules) ? config.rules : [];
-    const { pairs, from, unresolved } = buildModuleGraph(view);
+    const { pairs, from, unresolved, local } = buildModuleGraph(view);
 
     const modules = new Set<NodeId>();
     const importAdjacency = new Map<NodeId, NodeId[]>();
@@ -121,6 +147,8 @@ export const lensDependencies: Lens = {
       for (const [key, info] of pairs) {
         if (info.imports === 0) continue;
         const [a, b] = from.get(key) as [NodeId, NodeId];
+        // A rule is checked on the importing side, so only an importer inside the scope can break it.
+        if (!local.has(a)) continue;
         if (!fromMatch(a) || !toMatches.some((m) => m(b))) continue;
         findings.push({
           lens: "lens-dependencies",
@@ -144,7 +172,7 @@ export const lensDependencies: Lens = {
         return {
           id: m,
           label: path,
-          group: slash >= 0 ? path.slice(0, slash) : ".",
+          group: !local.has(m) ? "(outside scope)" : slash >= 0 ? path.slice(0, slash) : ".",
           ...(node?.span ? { span: node.span } : {}),
         };
       }),
@@ -171,7 +199,8 @@ export const lensDependencies: Lens = {
       findings: findings.map((f) => ({ ...f, lens: "lens-dependencies" })) as LensFinding[],
       views: [graph, cycleTable],
       metrics: {
-        modules: sortedModules.length,
+        modules: sortedModules.filter((m) => local.has(m)).length,
+        externalModules: sortedModules.filter((m) => !local.has(m)).length,
         importPairs: importCount,
         callPairs: callCount,
         cycles: cycles.length,

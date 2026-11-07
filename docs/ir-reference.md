@@ -65,14 +65,15 @@ Base kinds shipped by the core:
 | `structure.namespace` | structure | node | – |  |
 | `structure.type` | structure | node | – |  |
 | `structure.function` | structure | node | – |  |
-| `flow.block` | flow | node | – |  |
+| `flow.block` | flow | node | – | A labelled region: the try, catch or finally part of a try, or a loop body. |
 | `flow.branch` | flow | node | – | if / else, or any two-way choice. |
-| `flow.branch-arm` | flow | node | – | One arm of a branch. |
+| `flow.branch-arm` | flow | node | – | One arm of a branch or switch: then, else, a case or the default. |
 | `flow.switch` | flow | node | `flow.branch` |  |
 | `flow.loop` | flow | node | – |  |
 | `flow.try` | flow | node | – |  |
-| `flow.throw` | flow | node | – |  |
-| `flow.return` | flow | node | – |  |
+| `flow.throw` | flow | node | – | Raises an exception. |
+| `flow.return` | flow | node | – | Leaves the enclosing function. |
+| `flow.jump` | flow | node | – | break or continue: leaves or restarts the enclosing loop or switch. |
 | `packaging.build-target` | packaging | node | – |  |
 | `packaging.import` | packaging | edge | – |  |
 | `packaging.export` | packaging | edge | – |  |

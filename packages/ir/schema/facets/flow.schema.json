@@ -4,13 +4,14 @@
   "title": "FlowFacet",
   "description": "Control flow inside a function.",
   "$defs": {
-    "FlowBlock": { "type": "object" },
+    "FlowBlock": { "type": "object", "properties": { "label": { "enum": ["try", "catch", "finally", "body"] } } },
     "FlowBranch": { "type": "object", "properties": { "condition": { "type": "string" } } },
     "FlowBranchArm": { "type": "object", "properties": { "label": { "type": "string" } } },
     "FlowSwitch": { "type": "object", "properties": { "hasDefault": { "type": "boolean" } } },
-    "FlowLoop": { "type": "object", "required": ["variant"], "properties": { "variant": { "enum": ["for", "while", "do", "for-of", "for-in"] } } },
+    "FlowLoop": { "type": "object", "required": ["variant"], "properties": { "variant": { "enum": ["for", "while", "do", "for-of", "for-in"] }, "condition": { "type": "string" } } },
     "FlowTry": { "type": "object", "properties": { "hasFinally": { "type": "boolean" } } },
     "FlowThrow": { "type": "object" },
-    "FlowReturn": { "type": "object" }
+    "FlowReturn": { "type": "object" },
+    "FlowJump": { "type": "object", "required": ["variant"], "properties": { "variant": { "enum": ["break", "continue"] }, "label": { "type": "string" } } }
   }
 }

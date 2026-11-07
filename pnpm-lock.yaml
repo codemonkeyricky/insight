@@ -26,6 +26,9 @@ importers:
       '@insight/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@insight/flow':
+        specifier: workspace:*
+        version: link:../../packages/flow
       '@insight/ir':
         specifier: workspace:*
         version: link:../../packages/ir
@@ -52,6 +55,9 @@ importers:
         specifier: 19.3.1
         version: 19.3.1(react@19.3.1)
     devDependencies:
+      '@insight/flow':
+        specifier: workspace:*
+        version: link:../../packages/flow
       '@types/cytoscape':
         specifier: 3.31.0
         version: 3.31.0
@@ -104,6 +110,19 @@ importers:
       '@types/picomatch':
         specifier: ^4.0.3
         version: 4.0.3
+
+  packages/flow:
+    dependencies:
+      '@insight/ir':
+        specifier: workspace:*
+        version: link:../ir
+      '@insight/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+    devDependencies:
+      '@insight/frontend-typescript':
+        specifier: workspace:*
+        version: link:../frontend-typescript
 
   packages/frontend-bazel:
     dependencies:

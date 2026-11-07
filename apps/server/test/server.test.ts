@@ -231,6 +231,27 @@ describe("API against a real index", () => {
     expect((await server.app.inject({ method: "GET", url: `/api/projects/${projectId}/file?path=src/nope.ts` })).statusCode).toBe(404);
   });
 
+  it("charts a file's control flow and summarises flow per file", async () => {
+    const res = await server.app.inject({ method: "GET", url: `/api/projects/${projectId}/flow?path=src/b.ts` });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.file).toBe("src/b.ts");
+    const fns = body.functions as { name: string; nodes: { role: string }[]; edges: unknown[] }[];
+    expect(fns.map((f) => f.name)).toContain("b");
+    const b = fns.find((f) => f.name === "b");
+    expect(b?.nodes[0]?.role).toBe("start");
+
+    expect((await server.app.inject({ method: "GET", url: `/api/projects/${projectId}/flow` })).statusCode).toBe(400);
+    const none = await server.app.inject({ method: "GET", url: `/api/projects/${projectId}/flow?path=src/nope.ts` });
+    expect(none.statusCode).toBe(200);
+    expect(none.json().functions).toEqual([]);
+
+    const sum = await server.app.inject({ method: "GET", url: `/api/projects/${projectId}/flow-summary` });
+    expect(sum.statusCode).toBe(200);
+    const files = sum.json().files as { file: string; functions: number }[];
+    expect(files.find((f) => f.file === "src/b.ts")?.functions).toBeGreaterThanOrEqual(1);
+  });
+
   it("serves the event stream with the current status", async () => {
     await server.app.listen({ port: 0, host: "127.0.0.1" });
     const address = server.app.server.address();

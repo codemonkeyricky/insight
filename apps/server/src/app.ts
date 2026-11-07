@@ -19,7 +19,24 @@ import {
   setDecision,
   updateAnnotation,
 } from "@insight/core";
-import { allFindings, analysisFor, fileFacts, languageOf, lensRecord, listFiles, nodeFacts, overview, publicProject, resolveSnapshot } from "./reader.js";
+import type { ProjectRoot } from "@insight/sdk";
+import {
+  allFindings,
+  analysisFor,
+  fileFacts,
+  fileFlow,
+  flowSummary,
+  languageOf,
+  lensRecord,
+  listFiles,
+  nodeFacts,
+  overview,
+  publicProject,
+  resolveSnapshot,
+  runScopedLens,
+  scopeLensRows,
+  scopeView,
+} from "./reader.js";
 import { readFileText, sourceSlice } from "./source.js";
 
 export const SERVER_VERSION = "0.1.0";
@@ -55,6 +72,13 @@ interface SnapshotQuery {
   snapshot?: string;
 }
 
+/** The `path` query of a scope route. It must be given, once. An empty string is the project scope. */
+function scopePathOf(raw: unknown): string {
+  if (raw === undefined) throw new ProjectError(400, "path is required");
+  if (typeof raw !== "string") throw new ProjectError(400, "path must be given once");
+  return raw;
+}
+
 export async function buildServer(opts: ServerOptions = {}): Promise<InsightServer> {
   const home = opts.home ? resolve(opts.home) : insightHome();
   const registry = new ProjectRegistry(home);
@@ -82,6 +106,7 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
     return p;
   };
   const rootFor = (p: ProjectRecord): string => registry.rootOf(p);
+  const projectRoot = (p: ProjectRecord): ProjectRoot => ({ path: rootFor(p), name: p.name, allowBuildTools: p.allowBuildTools });
 
   app.get("/api/health", async () => ({ ok: true, version: SERVER_VERSION, home }));
 
@@ -180,6 +205,35 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
     },
   );
 
+  // Scoped IR: a folder or file of the snapshot, with its own lens runs. See docs/scoped-ir.md.
+  app.get<{ Params: ProjectParams; Querystring: SnapshotQuery & { path?: string } }>("/api/projects/:id/scope/lenses", async (req) => {
+    const p = project(req.params.id);
+    const path = scopePathOf(req.query.path);
+    const snapshot = resolveSnapshot(rootFor(p), req.query.snapshot);
+    if (!snapshot) throw new ProjectError(404, "project has no snapshot yet");
+    const view = await scopeView(rootFor(p), snapshot, path);
+    return {
+      snapshot,
+      scope: view.scope,
+      kind: view.kind,
+      stats: view.stats,
+      facets: view.facets,
+      lenses: scopeLensRows(view, rootFor(p)),
+    };
+  });
+
+  app.get<{ Params: ProjectParams & { lensId: string }; Querystring: SnapshotQuery & { path?: string } }>(
+    "/api/projects/:id/scope/lenses/:lensId",
+    async (req) => {
+      const p = project(req.params.id);
+      const path = scopePathOf(req.query.path);
+      const snapshot = resolveSnapshot(rootFor(p), req.query.snapshot);
+      if (!snapshot) throw new ProjectError(404, "project has no snapshot yet");
+      const view = await scopeView(rootFor(p), snapshot, path);
+      return { snapshot, scope: view.scope, kind: view.kind, lens: await runScopedLens(view, req.params.lensId, projectRoot(p)) };
+    },
+  );
+
   app.get<{ Params: ProjectParams; Querystring: SnapshotQuery & { lens?: string; severity?: string } }>(
     "/api/projects/:id/findings",
     async (req) => {
@@ -219,6 +273,21 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
     const facts = snapshot ? fileFacts(rootFor(p), snapshot, path) : { symbols: [], findings: [] };
     const language = languageOf(path);
     return { snapshot: snapshot ?? null, ...text, ...(language ? { language } : {}), ...facts };
+  });
+
+  app.get<{ Params: ProjectParams; Querystring: SnapshotQuery & { path?: string } }>("/api/projects/:id/flow", async (req) => {
+    const p = project(req.params.id);
+    const path = req.query.path;
+    if (!path) throw new ProjectError(400, "path is required");
+    const snapshot = resolveSnapshot(rootFor(p), req.query.snapshot);
+    if (!snapshot) throw new ProjectError(404, "project has no snapshot yet");
+    return { snapshot, ...fileFlow(rootFor(p), snapshot, path) };
+  });
+
+  app.get<{ Params: ProjectParams; Querystring: SnapshotQuery }>("/api/projects/:id/flow-summary", async (req) => {
+    const p = project(req.params.id);
+    const snapshot = resolveSnapshot(rootFor(p), req.query.snapshot);
+    return { snapshot: snapshot ?? null, files: snapshot ? flowSummary(rootFor(p), snapshot) : [] };
   });
 
   app.get<{ Params: ProjectParams; Querystring: { file?: string; start?: string; end?: string; context?: string } }>(

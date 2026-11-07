@@ -56,7 +56,8 @@
     "on": "node",
     "attrs": {
       "$ref": "https://insight.dev/ir/facets/flow.json#/$defs/FlowBlock"
-    }
+    },
+    "description": "A labelled region of statements: the try, catch or finally part of a try, or the body of a loop."
   },
   {
     "kind": "flow.branch",
@@ -71,7 +72,7 @@
     "kind": "flow.branch-arm",
     "facet": "flow",
     "on": "node",
-    "description": "One arm of a branch.",
+    "description": "One arm of a branch or switch: then, else, a case or the default.",
     "attrs": {
       "$ref": "https://insight.dev/ir/facets/flow.json#/$defs/FlowBranchArm"
     }
@@ -107,7 +108,8 @@
     "on": "node",
     "attrs": {
       "$ref": "https://insight.dev/ir/facets/flow.json#/$defs/FlowThrow"
-    }
+    },
+    "description": "Raises an exception."
   },
   {
     "kind": "flow.return",
@@ -115,6 +117,16 @@
     "on": "node",
     "attrs": {
       "$ref": "https://insight.dev/ir/facets/flow.json#/$defs/FlowReturn"
+    },
+    "description": "Leaves the enclosing function."
+  },
+  {
+    "kind": "flow.jump",
+    "facet": "flow",
+    "on": "node",
+    "description": "break or continue: leaves or restarts the enclosing loop or switch.",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/flow.json#/$defs/FlowJump"
     }
   },
   {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { irFixtures as fx, type TableView } from "@insight/sdk";
+import { irFixtures as fx, type LensView, type TableView } from "@insight/sdk";
 import { lensCalls } from "../src/index.js";
 
 const ctx = (config?: unknown) => ({
@@ -35,7 +35,7 @@ function fixture() {
   });
 }
 
-const table = (rows: TableView[] | undefined, id: string): TableView => {
+const table = (rows: readonly LensView[] | undefined, id: string): TableView => {
   const t = rows?.find((v): v is TableView => v.type === "table" && v.id === id);
   if (!t) throw new Error(`missing table ${id}`);
   return t;
@@ -69,5 +69,65 @@ describe("lensCalls", () => {
     const unreachable = result.findings.filter((f) => f.id.startsWith("unreachable:")).map((f) => f.id).sort();
     expect(unreachable).toEqual(["unreachable:src/m.ts#dead", "unreachable:src/m.ts#helper", "unreachable:src/m.ts#main", "unreachable:src/m.ts#rec1", "unreachable:src/m.ts#rec2"]);
     expect(result.findings.some((f) => f.id === "entry:src/m.ts#nope" && f.severity === "warning")).toBe(true);
+  });
+});
+
+/**
+ * The scope "src" cut from a project. main (exported, in scope) calls lib/x.ts#lib, which is outside. lib/x.ts#caller
+ * is outside too and calls helper. orphan is in scope and nothing calls it. The outside stub lib is marked exported,
+ * but a stub is never an entry point.
+ */
+function scopedFixture() {
+  const fn = (name: string, exported: boolean) =>
+    fx.node(`src/m.ts#${name}`, "structure", "structure.function", { parent: "src/m.ts", attrs: { name, exported }, span: fx.span("src/m.ts", 0, 0, 0, 1) });
+  const stub = (id: string, name: string, exported: boolean) =>
+    fx.node(id, "structure", "structure.function", { attrs: { name, exported, external: true } });
+  return fx.view({
+    nodes: [
+      fx.node("src/m.ts", "structure", "structure.file"),
+      fn("main", true),
+      fn("helper", false),
+      fn("orphan", false),
+      stub("lib/x.ts#lib", "lib", true),
+      stub("lib/x.ts#caller", "caller", false),
+    ],
+    edges: [
+      fx.edge("src/m.ts#main", "lib/x.ts#lib", "calls", "calls.call"),
+      fx.edge("lib/x.ts#caller", "src/m.ts#helper", "calls", "calls.call"),
+    ],
+  });
+}
+
+const scoped = (config?: unknown) => ({ ...ctx(config), scope: "src" });
+
+describe("lensCalls in a partial scope", () => {
+  it("reports a function that an outside caller can reach as called from outside, not unreachable", async () => {
+    const result = await lensCalls.run(scopedFixture(), scoped());
+    expect(result.findings.map((f) => f.nodes?.[0])).toEqual(["src/m.ts#orphan"]);
+    const rows = table(result.views, "reachability").rows;
+    expect(rows).toHaveLength(3);
+    expect(rows.find((r) => r[0] === "src/m.ts#helper")).toEqual(["src/m.ts#helper", "called from outside", null, null]);
+    expect(rows.find((r) => r[0] === "src/m.ts#orphan")?.[1]).toBe("unreachable");
+  });
+
+  it("counts only local functions, and does not count an outside stub as reached", async () => {
+    const result = await lensCalls.run(scopedFixture(), scoped());
+    expect(result.metrics).toMatchObject({ functions: 3, entries: 1, reachable: 1, unreachable: 1 });
+  });
+
+  it("ignores configured entries that lie outside the scope", async () => {
+    const result = await lensCalls.run(scopedFixture(), scoped({ entries: ["lib/x.ts#caller", "src/m.ts#main"] }));
+    expect(result.findings.some((f) => f.id.startsWith("entry:"))).toBe(false);
+    expect(result.metrics.entries).toBe(1);
+  });
+
+  it("still warns about a configured entry that names a missing function inside the scope", async () => {
+    const result = await lensCalls.run(scopedFixture(), scoped({ entries: ["src/m.ts#nope", "lib/x.ts#caller"] }));
+    expect(result.findings.filter((f) => f.id.startsWith("entry:")).map((f) => f.id)).toEqual(["entry:src/m.ts#nope"]);
+  });
+
+  it("warns about any missing configured entry when the whole project is the scope", async () => {
+    const result = await lensCalls.run(scopedFixture(), { ...ctx({ entries: ["lib/x.ts#caller"] }), scope: "" });
+    expect(result.findings.some((f) => f.id === "entry:lib/x.ts#caller")).toBe(true);
   });
 });

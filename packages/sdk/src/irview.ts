@@ -150,6 +150,15 @@ export function enclosing(view: IRView, id: NodeId, kind: string): IRNode | unde
   return undefined;
 }
 
+/**
+ * True for an external stub: a node outside a scope that a scoped view keeps only as the far end of
+ * an edge. A stub has the id, facet, kind and attrs of the real node, plus `external: true`, and no
+ * span or parent. Lenses count and list local nodes only, and use stubs only as edge ends.
+ */
+export function isExternal(node: IRNode): boolean {
+  return node.attrs.external === true;
+}
+
 /** The function that owns a node, or the file when the node sits at module level. */
 export function ownerOf(view: IRView, id: NodeId): IRNode | undefined {
   return enclosing(view, id, "structure.function") ?? enclosing(view, id, "structure.file");

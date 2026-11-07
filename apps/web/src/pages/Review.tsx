@@ -1,14 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, type Review, type ReviewItem } from "../api";
 import { AnnotationBox } from "../components/AnnotationBox";
-import { ProjectTabs } from "../components/ProjectTabs";
-import { hrefCompare, hrefProject } from "../router";
+import { hrefCompare } from "../router";
 
 type Filter = "open" | "accepted" | "dismissed" | "all";
 
 export function ReviewPage({ id }: { id: string }) {
   const [review, setReview] = useState<Review | null>(null);
-  const [name, setName] = useState<string>(id);
   const [filter, setFilter] = useState<Filter>("open");
   const [error, setError] = useState<string | null>(null);
 
@@ -23,11 +21,7 @@ export function ReviewPage({ id }: { id: string }) {
 
   useEffect(() => {
     void load();
-    api
-      .project(id)
-      .then((p) => setName(p.name))
-      .catch(() => undefined);
-  }, [id, load]);
+  }, [load]);
 
   // Runs one change, then reloads the checklist so every count and list agrees with the server.
   const change = async (run: () => Promise<unknown>) => {
@@ -62,11 +56,7 @@ export function ReviewPage({ id }: { id: string }) {
 
   return (
     <section>
-      <nav className="crumbs small">
-        <a href={hrefProject(id)}>{name}</a> / <span>Review</span>
-      </nav>
-      <ProjectTabs id={id} active="review" />
-      <h1>Review findings</h1>
+      <h2>Review findings</h2>
       <p className="muted small">
         Each finding is decided by its key, the lens and the finding id. A dismissal needs a note saying why. A finding whose id
         includes a line number gets a new key when its line moves, so its old decision is listed under stale.{" "}
@@ -100,9 +90,9 @@ export function ReviewPage({ id }: { id: string }) {
           {shown.length === 0 && <p className="muted">No findings to show.</p>}
           {shown.map(([lens, rows]) => (
             <div key={lens} className="group">
-              <h2>
+              <h3>
                 {lens} <span className="muted small">({rows.length})</span>
-              </h2>
+              </h3>
               <ul className="review-list">
                 {rows.map((item) => (
                   <ReviewRow key={item.key} projectId={id} item={item} onChange={change} />

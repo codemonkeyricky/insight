@@ -313,37 +313,58 @@ export function emitFile(project: Project, rel: string): IRBatch {
       }
     };
 
-    const flow = (tag: string, kind: string, attrs: Record<string, unknown>) =>
+    const flow = (tag: string, kind: string, attrs: Record<string, unknown>, at: ts.Node = node) =>
       push({
-        id: uniqueId(`${tag}:${pos(sf, node.getStart(sf)).join(":")}`),
+        id: uniqueId(`${tag}:${pos(sf, at.getStart(sf)).join(":")}`),
         facet: "flow",
         kind,
         parent: container,
         attrs,
-        span: spanOf(rel, sf, node),
+        span: spanOf(rel, sf, at),
         provenance: PROV,
       });
+    const arm = (label: string, at: ts.Node) => flow("arm", "flow.branch-arm", { label }, at);
+    const block = (label: string, at: ts.Node) => flow("block", "flow.block", { label }, at);
 
     if (ts.isIfStatement(node)) {
       flow("if", "flow.branch", { condition: node.expression.getText(sf).slice(0, 200) });
+      arm("then", node.thenStatement);
+      if (node.elseStatement) arm("else", node.elseStatement);
     } else if (ts.isConditionalExpression(node)) {
       flow("cond", "flow.branch", { condition: node.condition.getText(sf).slice(0, 200) });
+      arm("then", node.whenTrue);
+      arm("else", node.whenFalse);
     } else if (ts.isSwitchStatement(node)) {
       flow("switch", "flow.switch", { hasDefault: node.caseBlock.clauses.some((c) => ts.isDefaultClause(c)) });
+      for (const clause of node.caseBlock.clauses) {
+        arm(ts.isDefaultClause(clause) ? "default" : `case ${clause.expression.getText(sf).slice(0, 60)}`, clause);
+      }
     } else if (ts.isForStatement(node)) {
-      flow("loop", "flow.loop", { variant: "for" });
+      flow("loop", "flow.loop", { variant: "for", condition: node.condition?.getText(sf).slice(0, 200) ?? "" });
+      block("body", node.statement);
     } else if (ts.isForOfStatement(node)) {
-      flow("loop", "flow.loop", { variant: "for-of" });
+      flow("loop", "flow.loop", { variant: "for-of", condition: `${node.initializer.getText(sf)} of ${node.expression.getText(sf)}`.slice(0, 200) });
+      block("body", node.statement);
     } else if (ts.isForInStatement(node)) {
-      flow("loop", "flow.loop", { variant: "for-in" });
+      flow("loop", "flow.loop", { variant: "for-in", condition: `${node.initializer.getText(sf)} in ${node.expression.getText(sf)}`.slice(0, 200) });
+      block("body", node.statement);
     } else if (ts.isWhileStatement(node)) {
-      flow("loop", "flow.loop", { variant: "while" });
+      flow("loop", "flow.loop", { variant: "while", condition: node.expression.getText(sf).slice(0, 200) });
+      block("body", node.statement);
     } else if (ts.isDoStatement(node)) {
-      flow("loop", "flow.loop", { variant: "do" });
+      flow("loop", "flow.loop", { variant: "do", condition: node.expression.getText(sf).slice(0, 200) });
+      block("body", node.statement);
     } else if (ts.isTryStatement(node)) {
       flow("try", "flow.try", { hasFinally: node.finallyBlock !== undefined });
+      block("try", node.tryBlock);
+      if (node.catchClause) block("catch", node.catchClause);
+      if (node.finallyBlock) block("finally", node.finallyBlock);
     } else if (ts.isThrowStatement(node)) {
       flow("throw", "flow.throw", {});
+    } else if (ts.isReturnStatement(node)) {
+      flow("return", "flow.return", {});
+    } else if (ts.isBreakStatement(node) || ts.isContinueStatement(node)) {
+      flow("jump", "flow.jump", { variant: ts.isBreakStatement(node) ? "break" : "continue", ...(node.label ? { label: node.label.text } : {}) });
     }
 
     if (ts.isAwaitExpression(node)) {

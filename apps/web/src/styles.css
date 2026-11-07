@@ -44,6 +44,7 @@ h1 { font-size: 1.5rem; margin: 0.4rem 0; }
 h2 { font-size: 1.15rem; margin: 1.4rem 0 0.4rem; }
 h3 { font-size: 1rem; margin: 1rem 0 0.3rem; }
 .app { max-width: 1280px; margin: 0 auto; padding: 0 16px 48px; }
+.app.wide { max-width: 1680px; }
 .top { display: flex; align-items: baseline; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
 .brand { font-weight: 700; font-size: 1.1rem; color: var(--fg); text-decoration: none; }
 .muted { color: var(--muted); }
@@ -75,6 +76,8 @@ button.link { background: none; border: none; color: var(--accent); padding: 0; 
 table.grid { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 table.grid th, table.grid td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
 table.grid th { font-size: 0.8rem; color: var(--muted); font-weight: 600; }
+/* Long paths may break anywhere so a table fits its column. Short cells keep whole words. */
+table.grid td.break-any { overflow-wrap: anywhere; }
 .log { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; max-height: 220px; overflow: auto; white-space: pre-wrap; font-size: 0.82rem; margin: 0; }
 .findings { padding-left: 18px; margin: 0.3rem 0; }
 .findings li { margin: 3px 0; }
@@ -84,7 +87,10 @@ table.grid th { font-size: 0.8rem; color: var(--muted); font-weight: 600; }
 .sev.info { color: var(--muted); }
 .problems { color: var(--error); }
 .graph { width: 100%; height: 460px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
-.split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 420px); gap: 18px; align-items: start; }
+.split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 380px); gap: 18px; align-items: start; }
+/* Grid items keep their content width unless told otherwise, so a wide table would push into the side column. */
+.split > * { min-width: 0; }
+.split > .main { overflow-x: auto; }
 .side { position: sticky; top: 12px; }
 .source { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; max-height: calc(100vh - 40px); overflow: auto; }
 .source header { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; margin-bottom: 8px; }
@@ -106,17 +112,73 @@ textarea { min-height: 3.2em; width: 100%; box-sizing: border-box; resize: verti
 .annotations h3 { margin: 0; }
 .annotations .field { gap: 6px; }
 .note-text { white-space: pre-wrap; }
-@media (max-width: 860px) {
-  .split { grid-template-columns: 1fr; }
-  .side { position: static; }
-}
 
 /* Tabs */
 .tabs { display: flex; flex-wrap: wrap; gap: 2px 4px; border-bottom: 1px solid var(--line); margin: 8px 0 14px; align-items: flex-end; }
 .tab { padding: 7px 12px; text-decoration: none; color: var(--muted); border: 1px solid transparent; border-bottom: none; border-radius: 6px 6px 0 0; margin-bottom: -1px; font-size: 0.92rem; }
 .tab:hover { color: var(--fg); }
 .tab.on { color: var(--fg); background: var(--panel); border-color: var(--line); font-weight: 600; }
+/* A lens with nothing to show here stays a link, but reads as quieter. */
+.tab.dim { color: var(--muted); opacity: 0.6; }
+.tab.dim.on { opacity: 1; }
 .tab-sep { align-self: stretch; width: 1px; background: var(--line); margin: 6px 6px; }
+.scope-banner { margin: 0 0 6px; color: var(--muted); font-size: 0.85rem; overflow-wrap: anywhere; }
+.lens-empty { border: 1px dashed var(--line); border-radius: 8px; padding: 12px 14px; margin: 8px 0; color: var(--muted); }
+.lens-empty p { margin: 0; }
+/* The key of a graph: a dot in the colour of the nodes it stands for. */
+.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: middle; background: #3b6fd1; }
+.swatch.outside { background: #9aa3b2; }
+.lens-empty p + p { margin-top: 4px; }
+
+/* Workspace: the explorer on the left, the view on the right */
+.ws { display: grid; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); gap: 18px; align-items: start; }
+.ws-main { min-width: 0; }
+.scope { margin-bottom: 10px; }
+.scope p { margin: 2px 0 0; }
+.scope-note { margin: 0 0 10px; }
+.sep { color: var(--muted); }
+.explorer { position: sticky; top: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; max-height: calc(100vh - 24px); overflow: auto; font-size: 0.9rem; }
+.explorer input[type="search"] { width: 100%; margin-bottom: 8px; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+.explorer > p { margin: 6px 0; }
+.node { color: var(--fg); text-decoration: none; border-radius: 4px; padding: 1px 6px; }
+.node:hover, .file:hover { background: var(--bg); }
+.node.on, .file.on { background: var(--accent); color: #fff; }
+.node.root { display: block; font-weight: 600; margin-bottom: 4px; }
+.dir > summary { cursor: pointer; padding: 2px 0; }
+.dir-kids { margin-left: 8px; padding-left: 10px; border-left: 1px solid var(--line); }
+.file { display: flex; justify-content: space-between; gap: 8px; padding: 2px 6px; border-radius: 4px; text-decoration: none; color: var(--fg); font-size: 0.88rem; }
+.fname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.count { font-size: 0.72rem; padding: 0 6px; border-radius: 999px; border: 1px solid var(--line); }
+.count.warn { color: var(--warn); border-color: var(--warn); }
+.node.on .count, .file.on .count { color: #fff; border-color: #fff; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+.chip { padding: 3px 10px; border: 1px solid var(--line); border-radius: 999px; text-decoration: none; color: var(--fg); background: var(--panel); font-size: 0.88rem; }
+.chip:hover { border-color: var(--accent); }
+.chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.chip.on .muted { color: #e8efff; }
+
+/* Control-flow chart */
+.flow-panel h2 { margin-top: 0; display: flex; align-items: center; gap: 8px; }
+.flow-scroll { overflow: auto; max-height: 70vh; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+svg.flow { display: block; }
+a.flow-node { cursor: pointer; }
+a.flow-node:hover :is(rect, polygon, circle) { stroke: var(--accent); stroke-width: 2; }
+.flow-node :is(rect, polygon, circle) { fill: var(--panel); stroke: var(--muted); stroke-width: 1.2; }
+.flow-node.terminator rect { fill: var(--bg); stroke: var(--accent); }
+.flow-node.decision polygon { stroke: var(--accent); }
+.flow-node.loop polygon { stroke: var(--ok); }
+.flow-node.join circle { fill: var(--muted); stroke: var(--muted); }
+.flow-node:is(.role-return, .role-throw, .role-break, .role-continue) :is(rect, polygon, circle) { stroke: var(--error); stroke-width: 2; }
+.flow-node.role-await :is(rect, polygon), .flow-node.role-spawn :is(rect, polygon) { stroke-dasharray: 5 3; }
+.flow-text { fill: var(--fg); font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.flow-label { fill: var(--muted); font: 11px system-ui, sans-serif; paint-order: stroke; stroke: var(--panel); stroke-width: 3px; }
+.flow-edge path { fill: none; stroke: var(--muted); stroke-width: 1.3; }
+.flow-edge.true path { stroke: var(--ok); }
+.flow-edge.false path { stroke: var(--warn); }
+.flow-edge.back path { stroke-dasharray: 5 4; }
+.flow-edge.exception path { stroke: var(--error); stroke-dasharray: 2 3; }
+.flow-arrow { fill: var(--muted); }
+.legend { margin: 10px 0 0; }
 
 /* Lens tree */
 .tree { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; overflow-x: auto; }
@@ -131,20 +193,7 @@ textarea { min-height: 3.2em; width: 100%; box-sizing: border-box; resize: verti
 .kind.coroutine { color: var(--accent); border-color: var(--accent); }
 .kind.module { color: var(--ok); border-color: var(--ok); }
 
-/* File browser */
-.files { display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); gap: 16px; align-items: start; }
-.filetree { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; position: sticky; top: 12px; max-height: calc(100vh - 32px); overflow: auto; }
-.filetree input { width: 100%; margin-bottom: 8px; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
-.dir > summary { cursor: pointer; padding: 2px 0; font-size: 0.9rem; }
-.dir-kids { margin-left: 8px; padding-left: 10px; border-left: 1px solid var(--line); }
-.file { display: flex; justify-content: space-between; gap: 8px; padding: 2px 6px; border-radius: 4px; text-decoration: none; color: var(--fg); font-size: 0.88rem; }
-.file:hover { background: var(--bg); }
-.file.on { background: var(--accent); color: #fff; }
-.fname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.count { font-size: 0.72rem; padding: 0 6px; border-radius: 999px; border: 1px solid var(--line); }
-.count.warn { color: var(--warn); border-color: var(--warn); }
-.file.on .count { color: #fff; border-color: #fff; }
-.fileview { min-width: 0; }
+/* Source viewer (FileViewer) */
 .viewer-head { margin-bottom: 8px; }
 .viewer-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 260px); gap: 16px; align-items: start; }
 .viewer-body pre.code { max-height: 78vh; overflow: auto; }
@@ -152,7 +201,9 @@ pre.code > div.flag { box-shadow: inset 3px 0 0 var(--warn); }
 .outline { position: sticky; top: 12px; font-size: 0.88rem; min-width: 0; overflow-wrap: anywhere; }
 .outline h3:first-child { margin-top: 0; }
 ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
-@media (max-width: 800px) {
-  .files, .viewer-body, .split { grid-template-columns: minmax(0, 1fr); }
-  .filetree, .outline, .side { position: static; max-height: 50vh; }
+
+@media (max-width: 860px) {
+  .split, .ws, .viewer-body { grid-template-columns: minmax(0, 1fr); }
+  .side, .outline { position: static; }
+  .explorer { position: static; max-height: 45vh; }
 }
