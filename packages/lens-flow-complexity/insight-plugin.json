@@ -1,0 +1,9 @@
+{
+  "id": "lens-flow-complexity",
+  "version": "0.1.0",
+  "description": "Insight lens: cyclomatic complexity per function from flow records",
+  "irVersion": "^1.0",
+  "roles": {
+    "lens": "dist/index.js"
+  }
+}

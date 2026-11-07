@@ -234,6 +234,17 @@ export function emitFile(project: Project, rel: string): IRBatch {
           provenance: PROV,
         });
         nextFn = decl.id;
+        if (decl.entity.async) {
+          push({
+            id: `async:${decl.id}`,
+            facet: "concurrency",
+            kind: "concurrency.async-task",
+            parent: decl.id,
+            attrs: { name: decl.entity.name },
+            span,
+            provenance: PROV,
+          });
+        }
       }
       nextContainer = decl.id;
     }
@@ -308,6 +319,18 @@ export function emitFile(project: Project, rel: string): IRBatch {
       flow("try", "flow.try", { hasFinally: node.finallyBlock !== undefined });
     } else if (ts.isThrowStatement(node)) {
       flow("throw", "flow.throw", {});
+    }
+
+    if (ts.isAwaitExpression(node)) {
+      push({
+        id: uniqueId(`await:${pos(sf, node.getStart(sf)).join(":")}`),
+        facet: "concurrency",
+        kind: "concurrency.await",
+        parent: container,
+        attrs: {},
+        span: spanOf(rel, sf, node),
+        provenance: PROV,
+      });
     }
 
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {

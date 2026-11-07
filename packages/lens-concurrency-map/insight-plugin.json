@@ -1,0 +1,9 @@
+{
+  "id": "lens-concurrency-map",
+  "version": "0.1.0",
+  "description": "Insight lens: async tasks, awaits and thread or process spawns per function",
+  "irVersion": "^1.0",
+  "roles": {
+    "lens": "dist/index.js"
+  }
+}

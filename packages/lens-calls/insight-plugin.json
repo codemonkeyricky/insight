@@ -1,0 +1,9 @@
+{
+  "id": "lens-calls",
+  "version": "0.1.0",
+  "description": "Insight lens: reachability over the call graph from entry points, unreachable functions and recursion",
+  "irVersion": "^1.0",
+  "roles": {
+    "lens": "dist/index.js"
+  }
+}

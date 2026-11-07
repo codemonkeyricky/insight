@@ -134,3 +134,23 @@ function push<K, V>(map: Map<K, V[]>, key: K, value: V): void {
   if (list) list.push(value);
   else map.set(key, [value]);
 }
+
+/**
+ * The nearest node at or above `id` whose kind matches `kind` (subkinds included), or undefined.
+ * A node counts as its own ancestor, so a function given to this returns itself.
+ */
+export function enclosing(view: IRView, id: NodeId, kind: string): IRNode | undefined {
+  const kinds = new Set(view.registry.subkinds(kind));
+  let cur = view.node(id);
+  while (cur) {
+    if (kinds.has(cur.kind)) return cur;
+    if (cur.parent === undefined) return undefined;
+    cur = view.node(cur.parent);
+  }
+  return undefined;
+}
+
+/** The function that owns a node, or the file when the node sits at module level. */
+export function ownerOf(view: IRView, id: NodeId): IRNode | undefined {
+  return enclosing(view, id, "structure.function") ?? enclosing(view, id, "structure.file");
+}

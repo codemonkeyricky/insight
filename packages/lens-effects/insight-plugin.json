@@ -1,0 +1,9 @@
+{
+  "id": "lens-effects",
+  "version": "0.1.0",
+  "description": "Insight lens: side effects per function, effects reachable from entry points, and forbid rules by module",
+  "irVersion": "^1.0",
+  "roles": {
+    "lens": "dist/index.js"
+  }
+}

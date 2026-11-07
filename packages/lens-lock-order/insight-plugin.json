@@ -1,0 +1,9 @@
+{
+  "id": "lens-lock-order",
+  "version": "0.1.0",
+  "description": "Insight lens: lock acquisition order across calls, and cycles in it",
+  "irVersion": "^1.0",
+  "roles": {
+    "lens": "dist/index.js"
+  }
+}

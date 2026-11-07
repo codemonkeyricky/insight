@@ -127,6 +127,24 @@ importers:
         specifier: ^16.0.0
         version: 16.0.0
 
+  packages/lens-calls:
+    dependencies:
+      '@insight/ir':
+        specifier: workspace:*
+        version: link:../ir
+      '@insight/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+
+  packages/lens-concurrency-map:
+    dependencies:
+      '@insight/ir':
+        specifier: workspace:*
+        version: link:../ir
+      '@insight/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+
   packages/lens-dependencies:
     dependencies:
       '@insight/ir':
@@ -142,6 +160,40 @@ importers:
       '@types/picomatch':
         specifier: ^4.0.3
         version: 4.0.3
+
+  packages/lens-effects:
+    dependencies:
+      '@insight/ir':
+        specifier: workspace:*
+        version: link:../ir
+      '@insight/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+      picomatch:
+        specifier: ^4.0.7
+        version: 4.0.7
+    devDependencies:
+      '@types/picomatch':
+        specifier: ^4.0.3
+        version: 4.0.3
+
+  packages/lens-flow-complexity:
+    dependencies:
+      '@insight/ir':
+        specifier: workspace:*
+        version: link:../ir
+      '@insight/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+
+  packages/lens-lock-order:
+    dependencies:
+      '@insight/ir':
+        specifier: workspace:*
+        version: link:../ir
+      '@insight/sdk':
+        specifier: workspace:*
+        version: link:../sdk
 
   packages/sdk:
     dependencies:
