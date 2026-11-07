@@ -207,6 +207,30 @@ describe("API against a real index", () => {
     expect(badLine.statusCode).toBe(400);
   });
 
+  it("lists the indexed files with their symbol counts", async () => {
+    const res = await server.app.inject({ method: "GET", url: `/api/projects/${projectId}/files` });
+    expect(res.statusCode).toBe(200);
+    const files = res.json().files as { path: string; language?: string; functions: number; size: number }[];
+    const a = files.find((f) => f.path === "src/a.ts");
+    expect(a).toMatchObject({ language: "TypeScript", functions: 1 });
+    expect(a?.size).toBeGreaterThan(0);
+    expect(files.map((f) => f.path)).toEqual([...files.map((f) => f.path)].sort((x, y) => x.localeCompare(y)));
+  });
+
+  it("returns a whole file with its outline, and refuses unsafe or missing paths", async () => {
+    const ok = await server.app.inject({ method: "GET", url: `/api/projects/${projectId}/file?path=src/b.ts` });
+    expect(ok.statusCode).toBe(200);
+    const body = ok.json();
+    expect(body.totalLines).toBe(5);
+    expect(body.lines[0]).toBe(`import { a } from "./a.js";`);
+    expect(body.language).toBe("TypeScript");
+    expect(body.symbols.map((s: { name: string }) => s.name)).toContain("b");
+
+    expect((await server.app.inject({ method: "GET", url: `/api/projects/${projectId}/file` })).statusCode).toBe(400);
+    expect((await server.app.inject({ method: "GET", url: `/api/projects/${projectId}/file?path=../outside.txt` })).statusCode).toBe(400);
+    expect((await server.app.inject({ method: "GET", url: `/api/projects/${projectId}/file?path=src/nope.ts` })).statusCode).toBe(404);
+  });
+
   it("serves the event stream with the current status", async () => {
     await server.app.listen({ port: 0, host: "127.0.0.1" });
     const address = server.app.server.address();

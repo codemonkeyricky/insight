@@ -4,16 +4,20 @@ export type Route =
   | { name: "lens"; id: string; lensId: string }
   | { name: "compare"; id: string; base?: string; head?: string }
   | { name: "review"; id: string }
+  | { name: "files"; id: string; path?: string; line?: number }
   | { name: "unknown" };
 
-/** Parses a hash route such as #/projects/abc123/lenses/lens-dependencies or #/projects/abc123/compare?base=a&head=b. */
+/**
+ * Parses a hash route such as #/projects/abc123/lenses/lens-dependencies,
+ * #/projects/abc123/compare?base=a&head=b or #/projects/abc123/files/src/index.ts?line=12.
+ */
 export function parseRoute(hash: string): Route {
   const raw = hash.replace(/^#/, "");
   const at = raw.indexOf("?");
   const path = at === -1 ? raw : raw.slice(0, at);
   const query = new URLSearchParams(at === -1 ? "" : raw.slice(at + 1));
   const parts = path.split("/").filter((p) => p.length > 0).map((p) => decodeURIComponent(p));
-  if (parts.length === 0 || parts[0] === "projects" && parts.length === 1) return { name: "projects" };
+  if (parts.length === 0 || (parts[0] === "projects" && parts.length === 1)) return { name: "projects" };
   if (parts[0] === "projects" && parts.length === 2) return { name: "project", id: parts[1] as string };
   if (parts[0] === "projects" && parts[2] === "lenses" && parts.length === 4) {
     return { name: "lens", id: parts[1] as string, lensId: parts[3] as string };
@@ -29,6 +33,16 @@ export function parseRoute(hash: string): Route {
   if (parts[0] === "projects" && parts[2] === "review" && parts.length === 3) {
     return { name: "review", id: parts[1] as string };
   }
+  if (parts[0] === "projects" && parts[2] === "files") {
+    const file = parts.slice(3).join("/");
+    const line = Number(query.get("line"));
+    return {
+      name: "files",
+      id: parts[1] as string,
+      ...(file ? { path: file } : {}),
+      ...(file && Number.isInteger(line) && line > 0 ? { line } : {}),
+    };
+  }
   return { name: "unknown" };
 }
 
@@ -43,3 +57,7 @@ export function hrefCompare(id: string, base?: string, head?: string): string {
   const qs = params.toString();
   return `#/projects/${encodeURIComponent(id)}/compare${qs ? `?${qs}` : ""}`;
 }
+
+/** A link to the file browser, optionally opened on one file and line (1-based). */
+export const hrefFile = (id: string, path?: string, line?: number) =>
+  `#/projects/${encodeURIComponent(id)}/files${path ? `/${path.split("/").map(encodeURIComponent).join("/")}` : ""}${path && line ? `?line=${line}` : ""}`;

@@ -53,3 +53,21 @@ export function sourceSlice(root: string, rel: string, start: number, end: numbe
     totalLines: all.length,
   };
 }
+
+export interface FileText {
+  file: string;
+  lines: string[];
+  totalLines: number;
+  size: number;
+}
+
+/** A whole text file, for the file browser. Binary files are refused. */
+export function readFileText(root: string, rel: string): FileText {
+  const abs = resolveInside(root, rel);
+  const buf = readFileSync(abs);
+  if (buf.includes(0)) throw new ProjectError(415, `${rel} is a binary file`);
+  const lines = buf.toString("utf8").split("\n").map((l) => l.replace(/\r$/, ""));
+  // A trailing newline ends the last line; it does not start another one.
+  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+  return { file: rel, lines, totalLines: lines.length, size: buf.length };
+}

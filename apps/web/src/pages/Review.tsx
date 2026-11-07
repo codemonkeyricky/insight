@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, type Review, type ReviewItem } from "../api";
 import { AnnotationBox } from "../components/AnnotationBox";
+import { ProjectTabs } from "../components/ProjectTabs";
 import { hrefCompare, hrefProject } from "../router";
 
 type Filter = "open" | "accepted" | "dismissed" | "all";
@@ -64,6 +65,7 @@ export function ReviewPage({ id }: { id: string }) {
       <nav className="crumbs small">
         <a href={hrefProject(id)}>{name}</a> / <span>Review</span>
       </nav>
+      <ProjectTabs id={id} active="review" />
       <h1>Review findings</h1>
       <p className="muted small">
         Each finding is decided by its key, the lens and the finding id. A dismissal needs a note saying why. A finding whose id

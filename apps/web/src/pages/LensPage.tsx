@@ -3,6 +3,8 @@ import { api, type FindingRow, type LensRecord, type LensView, type Project, typ
 import { AnnotationBox } from "../components/AnnotationBox";
 import { GraphCanvas, type GraphPick } from "../components/GraphCanvas";
 import { SourcePanel, type SelectedSpan } from "../components/SourcePanel";
+import { ProjectTabs } from "../components/ProjectTabs";
+import { TreeBlock } from "../components/TreeBlock";
 import { hrefProject } from "../router";
 
 /** The node or edge last clicked in a graph view. Its notes are shown beside the source. */
@@ -63,6 +65,7 @@ export function LensPage({ id, lensId }: { id: string; lensId: string }) {
       <nav className="crumbs small">
         <a href={hrefProject(id)}>{project.name}</a> / <span>{lens.title}</span>
       </nav>
+      <ProjectTabs id={id} active={{ lens: lensId }} />
       <h1>{lens.title}</h1>
       {lens.status !== "ok" && (
         <p className="muted" role="status">
@@ -72,7 +75,7 @@ export function LensPage({ id, lensId }: { id: string; lensId: string }) {
       <div className="split">
         <div className="main">
           {lens.result?.views.map((view) => (
-            <ViewBlock key={view.id} view={view} onPick={pick} onShow={show} />
+            <ViewBlock key={view.id} view={view} projectId={id} onPick={pick} onShow={show} />
           ))}
           {lens.result && Object.keys(lens.result.metrics).length > 0 && (
             <>
@@ -114,7 +117,7 @@ export function LensPage({ id, lensId }: { id: string; lensId: string }) {
   );
 }
 
-function ViewBlock({ view, onPick, onShow }: { view: LensView; onPick: (p: GraphPick) => void; onShow: (s: Span, label: string) => void }) {
+function ViewBlock({ view, projectId, onPick, onShow }: { view: LensView; projectId: string; onPick: (p: GraphPick) => void; onShow: (s: Span, label: string) => void }) {
   if (view.type === "graph") {
     const withSpan = view.edges.filter((e) => e.span !== undefined);
     return (
@@ -190,18 +193,7 @@ function ViewBlock({ view, onPick, onShow }: { view: LensView; onPick: (p: Graph
   return (
     <div className="view">
       <h2>{view.title}</h2>
-      <TreeNode node={view.root} depth={0} />
-    </div>
-  );
-}
-
-function TreeNode({ node, depth }: { node: { label: string; children?: { label: string; children?: unknown[] }[] }; depth: number }) {
-  return (
-    <div style={{ marginLeft: depth * 16 }}>
-      <div>{node.label}</div>
-      {node.children?.map((c, i) => (
-        <TreeNode key={`${c.label}-${i}`} node={c as typeof node} depth={depth + 1} />
-      ))}
+      <TreeBlock root={view.root} projectId={projectId} onShow={onShow} />
     </div>
   );
 }

@@ -118,6 +118,11 @@
       "findings": 0
     },
     {
+      "id": "lens-execution",
+      "status": "ok",
+      "findings": 0
+    },
+    {
       "id": "lens-flow-complexity",
       "status": "ok",
       "findings": 15

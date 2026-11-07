@@ -1,6 +1,8 @@
 import { loadState, projectPaths, readAnalysis, readSnapshot, type AnalysisFile, type CoverageRow, type LensRecord } from "@insight/core";
 import { edgeTargets } from "@insight/sdk";
 import type { IREdge, IRFinding, IRNode, IRRecord, NodeId } from "@insight/ir";
+import { statSync } from "node:fs";
+import { join } from "node:path";
 import { ProjectError, type ProjectRecord } from "./registry.js";
 import type { JobRunner } from "./jobs.js";
 
@@ -196,6 +198,78 @@ export function nodeFacts(root: string, snapshot: string, id: NodeId) {
     outgoing: (snap.outgoing.get(id) ?? []).map(describe),
     incoming: (snap.incoming.get(id) ?? []).map(describe),
   };
+}
+
+const LANGUAGES: Record<string, string> = {
+  ts: "TypeScript", tsx: "TypeScript", mts: "TypeScript", cts: "TypeScript", js: "JavaScript", jsx: "JavaScript", mjs: "JavaScript", cjs: "JavaScript",
+  json: "JSON", md: "Markdown", yaml: "YAML", yml: "YAML", html: "HTML", css: "CSS", cc: "C++", cpp: "C++", cxx: "C++", h: "C++", hpp: "C++",
+  c: "C", py: "Python", rs: "Rust", go: "Go", bzl: "Starlark", bazel: "Starlark", sh: "Shell", txt: "Text",
+};
+
+export function languageOf(path: string): string | undefined {
+  const name = path.split("/").pop() ?? path;
+  if (name === "BUILD" || name === "WORKSPACE") return "Starlark";
+  if (name === "CMakeLists.txt") return "CMake";
+  return LANGUAGES[name.includes(".") ? (name.split(".").pop() as string) : ""];
+}
+
+export interface FileEntry {
+  path: string;
+  size: number;
+  language?: string;
+  functions: number;
+  types: number;
+  findings: number;
+}
+
+/** Every file in the snapshot, with the counts the browser shows next to it. */
+export function listFiles(root: string, snapshot: string): FileEntry[] {
+  const snap = loadSnapshot(root, snapshot);
+  const counts = new Map<string, { functions: number; types: number; findings: number }>();
+  const bump = (file: string, key: "functions" | "types" | "findings") => {
+    const c = counts.get(file) ?? { functions: 0, types: 0, findings: 0 };
+    c[key]++;
+    counts.set(file, c);
+  };
+  for (const n of snap.nodes.values()) {
+    if (n.kind === "structure.function" && n.span) bump(n.span.file, "functions");
+    else if (n.kind === "structure.type" && n.span) bump(n.span.file, "types");
+  }
+  for (const f of allFindings(root, snapshot)) if (f.span) bump(f.span.file, "findings");
+  const files: FileEntry[] = [];
+  for (const n of snap.nodes.values()) {
+    if (n.kind !== "structure.file") continue;
+    const path = String(n.attrs.path ?? n.id);
+    let size = 0;
+    try {
+      size = statSync(join(root, path)).size;
+    } catch {
+      /* the file is gone since the snapshot; it is listed with size 0 */
+    }
+    const c = counts.get(path) ?? { functions: 0, types: 0, findings: 0 };
+    const language = languageOf(path);
+    files.push({ path, size, ...(language ? { language } : {}), ...c });
+  }
+  return files.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+export interface FileSymbol {
+  id: string;
+  kind: string;
+  name: string;
+  span: NonNullable<IRNode["span"]>;
+}
+
+/** Functions and types declared in one file, in source order, and the findings that point into it. */
+export function fileFacts(root: string, snapshot: string, file: string): { symbols: FileSymbol[]; findings: FindingRow[] } {
+  const snap = loadSnapshot(root, snapshot);
+  const symbols: FileSymbol[] = [];
+  for (const n of snap.nodes.values()) {
+    if ((n.kind !== "structure.function" && n.kind !== "structure.type") || n.span?.file !== file) continue;
+    symbols.push({ id: n.id, kind: n.kind, name: String(n.attrs.qualifiedName ?? n.attrs.name ?? n.id), span: n.span });
+  }
+  symbols.sort((a, b) => a.span.start[0] - b.span.start[0] || a.span.start[1] - b.span.start[1]);
+  return { symbols, findings: allFindings(root, snapshot).filter((f) => f.span?.file === file) };
 }
 
 export type { CoverageRow };

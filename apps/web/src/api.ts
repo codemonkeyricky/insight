@@ -1,3 +1,9 @@
+import { ApiError } from "./apiError";
+import { staticApi } from "./staticApi";
+
+/** True in the read-only demo build (VITE_STATIC=1): one fixed project, served from JSON files. */
+export const IS_DEMO = import.meta.env.VITE_STATIC === "1";
+
 export type Span = { file: string; start: [number, number]; end: [number, number] };
 export type Severity = "error" | "warning" | "info";
 
@@ -93,11 +99,20 @@ export interface TableView {
   rows: (string | number | boolean | null)[][];
 }
 
+export interface TreeNode {
+  label: string;
+  /** What the node is, for example process, thread, coroutine, module or function. */
+  kind?: string;
+  detail?: string;
+  span?: Span;
+  children?: TreeNode[];
+}
+
 export interface TreeView {
   type: "tree";
   id: string;
   title: string;
-  root: { label: string; children?: TreeView["root"][] };
+  root: TreeNode;
 }
 
 export type LensView = GraphView | TableView | TreeView;
@@ -227,11 +242,34 @@ export interface Annotation {
   updatedAt: string;
 }
 
-export class ApiError extends Error {
-  constructor(readonly status: number, message: string) {
-    super(message);
-  }
+export interface FileEntry {
+  path: string;
+  size: number;
+  language?: string;
+  functions: number;
+  types: number;
+  findings: number;
 }
+
+export interface FileSymbol {
+  id: string;
+  kind: string;
+  name: string;
+  span: Span;
+}
+
+export interface FileView {
+  snapshot: string | null;
+  file: string;
+  lines: string[];
+  totalLines: number;
+  size: number;
+  language?: string;
+  symbols: FileSymbol[];
+  findings: FindingRow[];
+}
+
+export { ApiError };
 
 async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
@@ -250,7 +288,7 @@ const q = (params: Record<string, string | number | undefined>) => {
   return entries.length === 0 ? "" : `?${new URLSearchParams(entries.map(([k, v]) => [k, String(v)])).toString()}`;
 };
 
-export const api = {
+const liveApi = {
   health: () => call<{ ok: boolean; version: string }>("GET", "/api/health"),
   projects: () => call<{ projects: Project[] }>("GET", "/api/projects").then((r) => r.projects),
   project: (id: string) => call<{ project: Project }>("GET", `/api/projects/${id}`).then((r) => r.project),
@@ -265,6 +303,9 @@ export const api = {
     call<{ findings: FindingRow[] }>("GET", `/api/projects/${id}/findings${q(filter)}`).then((r) => r.findings),
   source: (id: string, file: string, start: number, end: number, context = 3) =>
     call<SourceSlice>("GET", `/api/projects/${id}/source${q({ file, start, end, context })}`),
+  files: (id: string, snapshot?: string) =>
+    call<{ snapshot: string | null; files: FileEntry[] }>("GET", `/api/projects/${id}/files${q({ snapshot })}`).then((r) => r.files),
+  file: (id: string, path: string, snapshot?: string) => call<FileView>("GET", `/api/projects/${id}/file${q({ path, snapshot })}`),
   node: (id: string, nodeId: string) => call<NodeFacts>("GET", `/api/projects/${id}/nodes/${nodeId.split("/").map(encodeURIComponent).join("/")}`),
   compare: (id: string, base: string, head: string) => call<Compare>("GET", `/api/projects/${id}/compare${q({ base, head })}`),
   review: (id: string, snapshot?: string) => call<Review>("GET", `/api/projects/${id}/review${q({ snapshot })}`),
@@ -279,3 +320,6 @@ export const api = {
     call<{ annotation: Annotation }>("PATCH", `/api/projects/${id}/annotations/${encodeURIComponent(annId)}`, { text }).then((r) => r.annotation),
   removeAnnotation: (id: string, annId: string) => call<void>("DELETE", `/api/projects/${id}/annotations/${encodeURIComponent(annId)}`),
 };
+
+/** The demo build answers from captured JSON; every other build calls the server. */
+export const api: typeof liveApi = IS_DEMO ? staticApi : liveApi;

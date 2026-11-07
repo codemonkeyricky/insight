@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { api, type Compare, type DiffEdge, type DiffFinding, type DiffNode, type Overview } from "../api";
+import { ProjectTabs } from "../components/ProjectTabs";
 import { hrefCompare, hrefProject, hrefReview } from "../router";
 
 /** Rows shown per table. The rest are counted, not drawn. */
@@ -81,6 +82,7 @@ export function ComparePage({ id, base, head }: { id: string; base?: string; hea
       <nav className="crumbs small">
         <a href={hrefProject(id)}>{name}</a> / <span>Compare commits</span>
       </nav>
+      <ProjectTabs id={id} active="compare" />
       <h1>Compare commits</h1>
       <p className="muted small">
         Each commit is indexed from its own committed files, so uncommitted edits are not part of either side. A commit that was

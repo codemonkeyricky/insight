@@ -52,7 +52,8 @@ export function GraphCanvas({ view, onPick }: { view: GraphView; onPick: (pick: 
   pickRef.current = onPick;
 
   useEffect(() => {
-    if (!container.current) return;
+    const host = container.current as (HTMLDivElement & { __cy?: Core }) | null;
+    if (!host) return;
     const elements: ElementDefinition[] = [
       ...view.nodes.map((n) => ({ data: { id: n.id, label: n.label, group: n.group ?? "" } })),
       ...view.edges.map((e, i) => ({
@@ -68,7 +69,7 @@ export function GraphCanvas({ view, onPick }: { view: GraphView; onPick: (pick: 
       })),
     ];
     const cy: Core = cytoscape({
-      container: container.current,
+      container: host,
       elements,
       style: STYLE,
       layout: { name: "cose", animate: false, padding: 24, nodeRepulsion: () => 9000 } as cytoscape.LayoutOptions,
@@ -89,9 +90,10 @@ export function GraphCanvas({ view, onPick }: { view: GraphView; onPick: (pick: 
       pickRef.current({ kind: "node", id: d.id, key: d.id, label: d.label });
     });
     // Exposed on the container so browser tests can find an edge's on-screen position and click it.
-    (container.current as HTMLDivElement & { __cy?: Core }).__cy = cy;
+    host.__cy = cy;
     return () => {
-      delete (container.current as HTMLDivElement & { __cy?: Core }).__cy;
+      // React clears container.current before this runs, so the element is held in `host`.
+      delete host.__cy;
       cy.destroy();
     };
   }, [view]);

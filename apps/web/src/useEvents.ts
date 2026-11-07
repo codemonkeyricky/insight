@@ -1,3 +1,4 @@
+import { IS_DEMO } from "./api";
 import { useEffect, useRef } from "react";
 
 export interface RunEvent {
@@ -16,7 +17,7 @@ export function useProjectEvents(projectId: string | undefined, onEvent: (event:
   handler.current = onEvent;
 
   useEffect(() => {
-    if (!projectId || typeof EventSource === "undefined") return;
+    if (!projectId || IS_DEMO || typeof EventSource === "undefined") return;
     const source = new EventSource(`/api/projects/${encodeURIComponent(projectId)}/events`);
     const listen = (type: RunEvent["type"]) => (message: MessageEvent<string>) => {
       try {

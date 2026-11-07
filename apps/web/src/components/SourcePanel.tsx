@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { hrefFile } from "../router";
 import { api, type SourceSlice, type Span } from "../api";
 
 export interface SelectedSpan {
@@ -37,7 +38,7 @@ export function SourcePanel({ projectId, selected, onClose }: { projectId: strin
   if (!selected) {
     return (
       <aside className="source empty" aria-label="Source">
-        <p>Select a dependency edge or a finding to see the line it comes from.</p>
+        <p>Select a tree node, dependency edge or finding to see the line it comes from.</p>
       </aside>
     );
   }
@@ -52,6 +53,9 @@ export function SourcePanel({ projectId, selected, onClose }: { projectId: strin
           <div className="mono muted">
             {span.file}:{line}
           </div>
+          <a className="small" href={hrefFile(projectId, span.file, line)}>
+            Open in Files
+          </a>
         </div>
         <button type="button" onClick={onClose} aria-label="Close source">
           Close

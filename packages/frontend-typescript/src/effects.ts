@@ -97,3 +97,19 @@ export function matchEnvRead(node: ts.PropertyAccessExpression, imports: Map<str
   if (imports.has("process")) return undefined;
   return node.name.text;
 }
+
+/** `new Worker(file)` from worker_threads, as a named or namespace import. Returns the script it runs. */
+export function matchWorker(node: ts.NewExpression, imports: Map<string, ImportBinding>): { api: string; target: string } | undefined {
+  const callee = node.expression;
+  let isWorker = false;
+  if (ts.isIdentifier(callee)) {
+    const b = imports.get(callee.text);
+    isWorker = b !== undefined && b.module === "worker_threads" && b.name === "Worker";
+  } else if (ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && callee.name.text === "Worker") {
+    const b = imports.get(callee.expression.text);
+    isWorker = b !== undefined && b.module === "worker_threads" && b.name === undefined;
+  }
+  if (!isWorker) return undefined;
+  const first = node.arguments?.[0];
+  return { api: "worker_threads.Worker", target: first && ts.isStringLiteralLike(first) ? first.text : DYNAMIC };
+}
