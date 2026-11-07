@@ -103,11 +103,21 @@ export interface TableView {
   rows: (string | number | boolean | null)[][];
 }
 
+/** A node of a tree view. `kind` picks the badge the web app draws (process, thread, coroutine, module, function, ...). */
+export interface TreeNode {
+  label: string;
+  kind?: string;
+  /** A short second line: counts, the API used, and so on. */
+  detail?: string;
+  span?: { file: string; start: [number, number]; end: [number, number] };
+  children?: TreeNode[];
+}
+
 export interface TreeView {
   type: "tree";
   id: string;
   title: string;
-  root: { label: string; children?: TreeView["root"][] };
+  root: TreeNode;
 }
 
 export type LensView = GraphView | TableView | TreeView;

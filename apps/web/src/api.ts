@@ -99,11 +99,20 @@ export interface TableView {
   rows: (string | number | boolean | null)[][];
 }
 
+export interface TreeNode {
+  label: string;
+  /** What the node is, for example process, thread, coroutine, module or function. */
+  kind?: string;
+  detail?: string;
+  span?: Span;
+  children?: TreeNode[];
+}
+
 export interface TreeView {
   type: "tree";
   id: string;
   title: string;
-  root: { label: string; children?: TreeView["root"][] };
+  root: TreeNode;
 }
 
 export type LensView = GraphView | TableView | TreeView;
@@ -132,6 +141,33 @@ export interface NodeFacts {
   children: { id: string; kind: string }[];
   outgoing: { from: string; to: unknown; kind: string; span?: Span; provenance: { confidence: string } }[];
   incoming: { from: string; to: unknown; kind: string; span?: Span; provenance: { confidence: string } }[];
+}
+
+export interface FileEntry {
+  path: string;
+  size: number;
+  language?: string;
+  functions: number;
+  types: number;
+  findings: number;
+}
+
+export interface FileSymbol {
+  id: string;
+  kind: string;
+  name: string;
+  span: Span;
+}
+
+export interface FileView {
+  snapshot: string | null;
+  file: string;
+  lines: string[];
+  totalLines: number;
+  size: number;
+  language?: string;
+  symbols: FileSymbol[];
+  findings: FindingRow[];
 }
 
 export { ApiError };
@@ -168,6 +204,9 @@ const liveApi = {
     call<{ findings: FindingRow[] }>("GET", `/api/projects/${id}/findings${q(filter)}`).then((r) => r.findings),
   source: (id: string, file: string, start: number, end: number, context = 3) =>
     call<SourceSlice>("GET", `/api/projects/${id}/source${q({ file, start, end, context })}`),
+  files: (id: string, snapshot?: string) =>
+    call<{ snapshot: string | null; files: FileEntry[] }>("GET", `/api/projects/${id}/files${q({ snapshot })}`).then((r) => r.files),
+  file: (id: string, path: string, snapshot?: string) => call<FileView>("GET", `/api/projects/${id}/file${q({ path, snapshot })}`),
   node: (id: string, nodeId: string) => call<NodeFacts>("GET", `/api/projects/${id}/nodes/${nodeId.split("/").map(encodeURIComponent).join("/")}`),
 };
 

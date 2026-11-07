@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, IS_DEMO, type FindingRow, type Overview } from "../api";
 import { useProjectEvents, type RunEvent } from "../useEvents";
+import { ProjectTabs } from "../components/ProjectTabs";
 import { hrefLens } from "../router";
 import { StatusBadge } from "./Projects";
 
@@ -87,6 +88,7 @@ export function ProjectOverviewPage({ id }: { id: string }) {
           )}
         </div>
       </div>
+      <ProjectTabs id={id} active="overview" />
       {p.error && <p className="error" role="alert">Last run failed: {p.error}</p>}
       {error && <p className="error" role="alert">{error}</p>}
 

@@ -45,6 +45,7 @@ try {
   const lenses = {};
   for (const l of overview.lenses) lenses[l.id] = (await get(`${base}/lenses/${l.id}`)).lens;
   const { findings } = await get(`${base}/findings`);
+  const { files: fileList } = await get(`${base}/files`);
 
   const root = server.registry.rootOf(record);
   const snap = loadSnapshot(root, resolveSnapshot(root, undefined));
@@ -54,8 +55,9 @@ try {
     for (const t of edgeTargets(e).nodes) (incoming[t] ??= []).push(i);
   });
 
-  // Source text for every file a span points at, so the source panel works without a server.
-  const files = new Set();
+  // Source text for every indexed file and every file a span points at, so the source panel and
+  // the file browser work without a server.
+  const files = new Set(fileList.map((f) => f.path));
   const spanFile = (s) => {
     if (s && typeof s.file === "string") files.add(s.file);
   };
@@ -86,6 +88,8 @@ try {
   put("findings.json", findings);
   put("graph.json", { snapshot: overview.snapshot.id, nodes, edges: snap.edges, incoming });
   put("sources.json", sources);
+  // Only files whose text was captured can be opened in the browser, so only those are listed as openable.
+  put("files.json", fileList.filter((f) => sources[f.path] !== undefined));
 
   let commit = overview.snapshot.commit ?? "unknown";
   try {

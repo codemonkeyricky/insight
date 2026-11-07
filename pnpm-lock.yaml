@@ -177,6 +177,15 @@ importers:
         specifier: ^4.0.3
         version: 4.0.3
 
+  packages/lens-execution:
+    dependencies:
+      '@insight/ir':
+        specifier: workspace:*
+        version: link:../ir
+      '@insight/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+
   packages/lens-flow-complexity:
     dependencies:
       '@insight/ir':

@@ -9,7 +9,7 @@ import frontend from "../src/index.js";
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "fixtures", "sample-ts");
 const goldenFile = join(here, "golden", "sample-ts.ndjson");
-const files = ["src/app/main.ts", "src/lib/io.ts", "src/lib/math.ts"];
+const files = ["src/app/main.ts", "src/lib/io.ts", "src/lib/math.ts", "src/lib/proc.ts"];
 
 const root: ProjectRoot = { path: fixtureRoot, name: "sample-ts", allowBuildTools: false };
 const readFile = async (rel: string) => readFileSync(join(fixtureRoot, rel), "utf8");
@@ -54,6 +54,17 @@ describe("frontend-typescript", () => {
   it("detects the sample project", async () => {
     const detection = await frontend.detect(root);
     expect(detection).not.toBeNull();
+  });
+
+  it("emits process, thread and coroutine facts", async () => {
+    const records = (await extractAll()).flatMap((b) => b.records);
+    const nodes = records.flatMap((r) => ("node" in r ? [r.node] : []));
+    const spawn = (kind: string) => nodes.filter((n) => n.kind === kind);
+    expect(spawn("concurrency.spawn-process").map((n) => n.attrs)).toEqual([{ target: "git", api: "child_process.execFileSync" }]);
+    expect(spawn("concurrency.spawn-process")[0]?.parent).toBe("src/lib/proc.ts#gitHead");
+    expect(spawn("concurrency.spawn-thread").map((n) => n.attrs)).toEqual([{ target: "./worker.js", api: "worker_threads.Worker" }]);
+    expect(spawn("concurrency.spawn-thread")[0]?.parent).toBe("src/lib/proc.ts#startWorker");
+    expect(spawn("concurrency.coroutine").map((n) => n.attrs)).toEqual([{ name: "countTo", variant: "generator" }]);
   });
 
   it("matches the golden IR for the sample project", async () => {

@@ -3,7 +3,7 @@ import { join, relative, sep } from "node:path";
 import ts from "typescript";
 import type { IREdge, IRFinding, IRNode, IRRecord, NodeId, Provenance, Span, UnresolvedRef } from "@insight/ir";
 import type { IRBatch } from "@insight/sdk";
-import { importBindings, matchCall, matchEnvRead, type ImportBinding } from "./effects.js";
+import { importBindings, matchCall, matchEnvRead, matchWorker, type ImportBinding } from "./effects.js";
 import { scriptKind } from "./digest.js";
 
 export const FRONTEND_ID = "frontend-typescript";
@@ -12,7 +12,7 @@ const PROV: Provenance = { frontend: FRONTEND_ID, confidence: "exact" };
 
 type Entity =
   | { type: "type"; name: string; typeKind: "class" | "interface" | "enum" | "alias" }
-  | { type: "function"; name: string; async: boolean; exported: boolean };
+  | { type: "function"; name: string; async: boolean; generator: boolean; exported: boolean };
 
 interface Decl {
   id: NodeId;
@@ -45,6 +45,7 @@ function classify(node: ts.Node): Entity | undefined {
     type: "function",
     name,
     async: hasModifier(fnNode, ts.SyntaxKind.AsyncKeyword),
+    generator: (fnNode as ts.FunctionLikeDeclaration).asteriskToken !== undefined,
     exported: (ts.getCombinedModifierFlags(owner as ts.Declaration) & ts.ModifierFlags.Export) !== 0,
   });
   if (ts.isClassDeclaration(node)) return { type: "type", name: node.name?.text ?? "default", typeKind: "class" };
@@ -245,6 +246,18 @@ export function emitFile(project: Project, rel: string): IRBatch {
             provenance: PROV,
           });
         }
+        if (decl.entity.generator) {
+          // A generator is a coroutine: it suspends at each yield and is resumed by its caller.
+          push({
+            id: `coroutine:${decl.id}`,
+            facet: "concurrency",
+            kind: "concurrency.coroutine",
+            parent: decl.id,
+            attrs: { name: decl.entity.name, variant: decl.entity.async ? "async-generator" : "generator" },
+            span,
+            provenance: PROV,
+          });
+        }
       }
       nextContainer = decl.id;
     }
@@ -285,6 +298,18 @@ export function emitFile(project: Project, rel: string): IRBatch {
           span: spanOf(rel, sf, call),
           provenance: PROV,
         });
+        if (effect.kind === "effects.proc.exec") {
+          // Running a command starts a child process, which is also a concurrency fact.
+          push({
+            id: uniqueId(`spawn:${pos(sf, call.getStart(sf)).join(":")}`),
+            facet: "concurrency",
+            kind: "concurrency.spawn-process",
+            parent: container,
+            attrs: { target: effect.attrs.command, api: effect.attrs.api },
+            span: spanOf(rel, sf, call),
+            provenance: PROV,
+          });
+        }
       }
     };
 
@@ -331,6 +356,21 @@ export function emitFile(project: Project, rel: string): IRBatch {
         span: spanOf(rel, sf, node),
         provenance: PROV,
       });
+    }
+
+    if (ts.isNewExpression(node)) {
+      const worker = matchWorker(node, imports);
+      if (worker !== undefined) {
+        push({
+          id: uniqueId(`spawn:${pos(sf, node.getStart(sf)).join(":")}`),
+          facet: "concurrency",
+          kind: "concurrency.spawn-thread",
+          parent: container,
+          attrs: { target: worker.target, api: worker.api },
+          span: spanOf(rel, sf, node),
+          provenance: PROV,
+        });
+      }
     }
 
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {

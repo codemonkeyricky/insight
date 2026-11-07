@@ -6,6 +6,7 @@ import { parseRoute, type Route } from "./router";
 import { ProjectsPage } from "./pages/Projects";
 import { ProjectOverviewPage } from "./pages/ProjectOverview";
 import { LensPage } from "./pages/LensPage";
+import { FilesPage } from "./pages/FilesPage";
 
 function useRoute(): Route {
   const read = () => parseRoute(window.location.hash);
@@ -49,6 +50,7 @@ export function App() {
         {route.name === "projects" && <ProjectsPage />}
         {route.name === "project" && <ProjectOverviewPage key={route.id} id={route.id} />}
         {route.name === "lens" && <LensPage key={`${route.id}/${route.lensId}`} id={route.id} lensId={route.lensId} />}
+        {route.name === "files" && <FilesPage key={route.id} id={route.id} path={route.path} line={route.line} />}
         {route.name === "unknown" && <p>Page not found. <a href="#/">Back to projects</a></p>}
       </main>
     </div>

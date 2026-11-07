@@ -5,8 +5,8 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import fastifyStatic from "@fastify/static";
 import { ProjectError, ProjectRegistry, insightHome, type ProjectRecord } from "./registry.js";
 import { JobRunner, type IndexFn, type JobEvent } from "./jobs.js";
-import { allFindings, analysisFor, lensRecord, nodeFacts, overview, publicProject, resolveSnapshot } from "./reader.js";
-import { sourceSlice } from "./source.js";
+import { allFindings, analysisFor, fileFacts, languageOf, lensRecord, listFiles, nodeFacts, overview, publicProject, resolveSnapshot } from "./reader.js";
+import { readFileText, sourceSlice } from "./source.js";
 
 export const SERVER_VERSION = "0.1.0";
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -186,6 +186,23 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
       return { snapshot, ...nodeFacts(rootFor(p), snapshot, req.params["*"]) };
     },
   );
+
+  app.get<{ Params: ProjectParams; Querystring: SnapshotQuery }>("/api/projects/:id/files", async (req) => {
+    const p = project(req.params.id);
+    const snapshot = resolveSnapshot(rootFor(p), req.query.snapshot);
+    return { snapshot: snapshot ?? null, files: snapshot ? listFiles(rootFor(p), snapshot) : [] };
+  });
+
+  app.get<{ Params: ProjectParams; Querystring: SnapshotQuery & { path?: string } }>("/api/projects/:id/file", async (req) => {
+    const p = project(req.params.id);
+    const path = req.query.path;
+    if (!path) throw new ProjectError(400, "path is required");
+    const text = readFileText(rootFor(p), path);
+    const snapshot = resolveSnapshot(rootFor(p), req.query.snapshot);
+    const facts = snapshot ? fileFacts(rootFor(p), snapshot, path) : { symbols: [], findings: [] };
+    const language = languageOf(path);
+    return { snapshot: snapshot ?? null, ...text, ...(language ? { language } : {}), ...facts };
+  });
 
   app.get<{ Params: ProjectParams; Querystring: { file?: string; start?: string; end?: string; context?: string } }>(
     "/api/projects/:id/source",

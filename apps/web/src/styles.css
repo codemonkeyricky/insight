@@ -98,3 +98,49 @@ pre.code .gutter { display: inline-block; width: 3.5em; color: var(--muted); tex
   .split { grid-template-columns: 1fr; }
   .side { position: static; }
 }
+
+/* Tabs */
+.tabs { display: flex; flex-wrap: wrap; gap: 2px 4px; border-bottom: 1px solid var(--line); margin: 8px 0 14px; align-items: flex-end; }
+.tab { padding: 7px 12px; text-decoration: none; color: var(--muted); border: 1px solid transparent; border-bottom: none; border-radius: 6px 6px 0 0; margin-bottom: -1px; font-size: 0.92rem; }
+.tab:hover { color: var(--fg); }
+.tab.on { color: var(--fg); background: var(--panel); border-color: var(--line); font-weight: 600; }
+.tab-sep { align-self: stretch; width: 1px; background: var(--line); margin: 6px 6px; }
+
+/* Lens tree */
+.tree { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; overflow-x: auto; }
+.tree-kids { margin-left: 11px; padding-left: 12px; border-left: 1px solid var(--line); }
+.tree-row { padding: 2px 0; display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; }
+.tree-branch > summary { cursor: pointer; list-style-position: outside; }
+.tree-label { font-weight: 500; }
+.tree-detail::before { content: "· "; }
+.kind { display: inline-block; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 0 6px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); }
+.kind.process { color: var(--error); border-color: var(--error); }
+.kind.thread { color: var(--warn); border-color: var(--warn); }
+.kind.coroutine { color: var(--accent); border-color: var(--accent); }
+.kind.module { color: var(--ok); border-color: var(--ok); }
+
+/* File browser */
+.files { display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.filetree { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; position: sticky; top: 12px; max-height: calc(100vh - 32px); overflow: auto; }
+.filetree input { width: 100%; margin-bottom: 8px; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+.dir > summary { cursor: pointer; padding: 2px 0; font-size: 0.9rem; }
+.dir-kids { margin-left: 8px; padding-left: 10px; border-left: 1px solid var(--line); }
+.file { display: flex; justify-content: space-between; gap: 8px; padding: 2px 6px; border-radius: 4px; text-decoration: none; color: var(--fg); font-size: 0.88rem; }
+.file:hover { background: var(--bg); }
+.file.on { background: var(--accent); color: #fff; }
+.fname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.count { font-size: 0.72rem; padding: 0 6px; border-radius: 999px; border: 1px solid var(--line); }
+.count.warn { color: var(--warn); border-color: var(--warn); }
+.file.on .count { color: #fff; border-color: #fff; }
+.fileview { min-width: 0; }
+.viewer-head { margin-bottom: 8px; }
+.viewer-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 260px); gap: 16px; align-items: start; }
+.viewer-body pre.code { max-height: 78vh; overflow: auto; }
+pre.code > div.flag { box-shadow: inset 3px 0 0 var(--warn); }
+.outline { position: sticky; top: 12px; font-size: 0.88rem; min-width: 0; overflow-wrap: anywhere; }
+.outline h3:first-child { margin-top: 0; }
+ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
+@media (max-width: 800px) {
+  .files, .viewer-body, .split { grid-template-columns: minmax(0, 1fr); }
+  .filetree, .outline, .side { position: static; max-height: 50vh; }
+}

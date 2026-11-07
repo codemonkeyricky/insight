@@ -2,6 +2,9 @@
 // scripts/capture-demo.mjs wrote into /demo/: one fixed project, Insight indexed at one commit.
 import { ApiError } from "./apiError";
 import type {
+  FileEntry,
+  FileSymbol,
+  FileView,
   FindingRow,
   LensRecord,
   NodeFacts,
@@ -147,6 +150,36 @@ export const staticApi = {
       children: (index.children.get(nodeId) ?? []).flatMap((c) => index.byId.get(c) ?? []),
       outgoing: (index.outgoing.get(nodeId) ?? []).map((i) => graph.edges[i] as RawEdge),
       incoming: (graph.incoming[nodeId] ?? []).map((i) => graph.edges[i] as RawEdge),
+    };
+  },
+  files: async (id: string, _snapshot?: string): Promise<FileEntry[]> => {
+    await checkProject(id);
+    return load<FileEntry[]>("files.json");
+  },
+  file: async (id: string, path: string, _snapshot?: string): Promise<FileView> => {
+    await checkProject(id);
+    const text = (await load<Record<string, string>>("sources.json"))[path];
+    if (text === undefined) throw new ApiError(404, `${path} is not part of the demo data`);
+    const lines = text.split("\n").map((l) => l.replace(/\r$/, ""));
+    if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+    const { graph } = await loadGraph();
+    const symbols: FileSymbol[] = [];
+    for (const n of graph.nodes) {
+      if ((n.kind !== "structure.function" && n.kind !== "structure.type") || n.span?.file !== path) continue;
+      symbols.push({ id: n.id, kind: n.kind, name: String(n.attrs.qualifiedName ?? n.attrs.name ?? n.id), span: n.span });
+    }
+    symbols.sort((a, b) => a.span.start[0] - b.span.start[0] || a.span.start[1] - b.span.start[1]);
+    const findings = (await load<FindingRow[]>("findings.json")).filter((f) => f.span?.file === path);
+    const entry = (await load<FileEntry[]>("files.json")).find((f) => f.path === path);
+    return {
+      snapshot: graph.snapshot,
+      file: path,
+      lines,
+      totalLines: lines.length,
+      size: new TextEncoder().encode(text).length,
+      ...(entry?.language ? { language: entry.language } : {}),
+      symbols,
+      findings,
     };
   },
   /** Facts about the captured run, shown in the demo banner. */
