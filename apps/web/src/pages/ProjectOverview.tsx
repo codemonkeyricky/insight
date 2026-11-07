@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, type FindingRow, type Overview } from "../api";
 import { useProjectEvents, type RunEvent } from "../useEvents";
-import { hrefLens } from "../router";
+import { hrefCompare, hrefLens, hrefReview } from "../router";
 import { StatusBadge } from "./Projects";
 
 const LOG_LIMIT = 200;
@@ -83,6 +83,10 @@ export function ProjectOverviewPage({ id }: { id: string }) {
           </button>
         </div>
       </div>
+      <nav className="row small" aria-label="Project pages">
+        <a href={hrefCompare(id)}>Compare commits</a>
+        <a href={hrefReview(id)}>Review findings</a>
+      </nav>
       {p.error && <p className="error" role="alert">Last run failed: {p.error}</p>}
       {error && <p className="error" role="alert">{error}</p>}
 

@@ -1,20 +1,30 @@
 import { useEffect, useState } from "react";
-import { api, type FindingRow, type LensRecord, type LensView, type Project, type Span } from "../api";
+import { api, type FindingRow, type LensRecord, type LensView, type Project, type Span, type TargetType } from "../api";
+import { AnnotationBox } from "../components/AnnotationBox";
 import { GraphCanvas, type GraphPick } from "../components/GraphCanvas";
 import { SourcePanel, type SelectedSpan } from "../components/SourcePanel";
 import { hrefProject } from "../router";
+
+/** The node or edge last clicked in a graph view. Its notes are shown beside the source. */
+interface Picked {
+  type: Extract<TargetType, "node" | "edge">;
+  key: string;
+  label: string;
+}
 
 export function LensPage({ id, lensId }: { id: string; lensId: string }) {
   const [project, setProject] = useState<Project | null>(null);
   const [lens, setLens] = useState<LensRecord | null>(null);
   const [findings, setFindings] = useState<FindingRow[]>([]);
   const [selected, setSelected] = useState<SelectedSpan | null>(null);
+  const [picked, setPicked] = useState<Picked | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setSelected(null);
+    setPicked(null);
     setNote(null);
     Promise.all([api.project(id), api.lens(id, lensId), api.findings(id, { lens: lensId })])
       .then(([p, l, f]) => {
@@ -36,6 +46,7 @@ export function LensPage({ id, lensId }: { id: string; lensId: string }) {
   };
 
   const pick = (p: GraphPick) => {
+    setPicked({ type: p.kind, key: p.key, label: p.label });
     if (!p.span) {
       setSelected(null);
       setNote(p.kind === "edge" ? `${p.label}: this edge has no source line.` : `${p.label} selected.`);
@@ -96,6 +107,7 @@ export function LensPage({ id, lensId }: { id: string; lensId: string }) {
         <div className="side">
           {note && <p className="muted small" role="status">{note}</p>}
           <SourcePanel projectId={id} selected={selected} onClose={() => setSelected(null)} />
+          {picked && <AnnotationBox projectId={id} type={picked.type} targetKey={picked.key} title={picked.label} />}
         </div>
       </div>
     </section>

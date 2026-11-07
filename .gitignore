@@ -5,6 +5,6 @@ dist
 .DS_Store
 
 # scratch space for package tests (created and removed by the tests)
-.insight-test/
+.insight-test*/
 .env*.local
 .vercel

@@ -4,10 +4,16 @@ import type { GraphView } from "../api";
 
 export interface GraphPick {
   kind: "node" | "edge";
+  /** Element id in the canvas. For an edge this is only a position, so use key to refer to it. */
   id: string;
+  /** Stable key for annotations: the node id, or from|kind|to for an edge. */
+  key: string;
   label: string;
   span?: GraphView["edges"][number]["span"];
 }
+
+/** The stable key of an edge in a graph view. Two edges with the same ends and kind share it. */
+export const edgeKey = (e: { from: string; kind: string; to: string }) => `${e.from}|${e.kind}|${e.to}`;
 
 const STYLE: cytoscape.StylesheetJson = [
   {
@@ -70,11 +76,17 @@ export function GraphCanvas({ view, onPick }: { view: GraphView; onPick: (pick: 
     });
     cy.on("tap", "edge", (evt) => {
       const d = evt.target.data() as { id: string; source: string; target: string; kind: string; span?: GraphView["edges"][number]["span"] };
-      pickRef.current({ kind: "edge", id: d.id, label: `${d.source} ${d.kind === "call" ? "calls" : "imports"} ${d.target}`, span: d.span });
+      pickRef.current({
+        kind: "edge",
+        id: d.id,
+        key: edgeKey({ from: d.source, kind: d.kind, to: d.target }),
+        label: `${d.source} ${d.kind === "call" ? "calls" : "imports"} ${d.target}`,
+        span: d.span,
+      });
     });
     cy.on("tap", "node", (evt) => {
       const d = evt.target.data() as { id: string; label: string };
-      pickRef.current({ kind: "node", id: d.id, label: d.label });
+      pickRef.current({ kind: "node", id: d.id, key: d.id, label: d.label });
     });
     // Exposed on the container so browser tests can find an edge's on-screen position and click it.
     (container.current as HTMLDivElement & { __cy?: Core }).__cy = cy;

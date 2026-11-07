@@ -128,6 +128,105 @@ export interface NodeFacts {
   incoming: { from: string; to: unknown; kind: string; span?: Span; provenance: { confidence: string } }[];
 }
 
+export interface DiffNode {
+  id: string;
+  kind: string;
+  facet: string;
+  name?: string;
+  parent?: string;
+  file?: string;
+  line?: number;
+}
+
+export interface DiffEdge {
+  from: string;
+  to: unknown;
+  kind: string;
+  facet: string;
+  count: number;
+}
+
+export interface DiffFinding {
+  key: string;
+  lens: string;
+  id: string;
+  severity: string;
+  message: string;
+  file?: string;
+  line?: number;
+}
+
+export interface LensDiff {
+  id: string;
+  comparable: boolean;
+  /** The lens status on each side, or "not run". */
+  base: string;
+  head: string;
+  added: DiffFinding[];
+  removed: DiffFinding[];
+  unchanged: number;
+}
+
+export interface SnapshotDiff {
+  ir: {
+    nodes: { added: DiffNode[]; removed: DiffNode[]; changed: DiffNode[] };
+    edges: { added: DiffEdge[]; removed: DiffEdge[] };
+    findings: { added: string[]; removed: string[] };
+  };
+  lenses: LensDiff[];
+  summary: string[];
+}
+
+export interface CompareSide {
+  commit: string;
+  snapshot: string;
+  reused: boolean;
+}
+
+export interface Compare {
+  base: CompareSide;
+  head: CompareSide;
+  diff: SnapshotDiff;
+}
+
+export type ReviewStatus = "open" | "accepted" | "dismissed";
+
+export interface ReviewItem {
+  key: string;
+  lens: string;
+  id: string;
+  severity: string;
+  message: string;
+  file?: string;
+  line?: number;
+  status: ReviewStatus;
+  note?: string;
+  updatedAt?: string;
+}
+
+export interface ReviewStale {
+  key: string;
+  status: "accepted" | "dismissed";
+  note: string;
+  updatedAt: string;
+}
+
+export interface Review {
+  snapshot: string | null;
+  items: ReviewItem[];
+  stale: ReviewStale[];
+}
+
+export type TargetType = "node" | "edge" | "finding";
+
+export interface Annotation {
+  id: string;
+  target: { type: TargetType; key: string };
+  text: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export class ApiError extends Error {
   constructor(readonly status: number, message: string) {
     super(message);
@@ -167,4 +266,16 @@ export const api = {
   source: (id: string, file: string, start: number, end: number, context = 3) =>
     call<SourceSlice>("GET", `/api/projects/${id}/source${q({ file, start, end, context })}`),
   node: (id: string, nodeId: string) => call<NodeFacts>("GET", `/api/projects/${id}/nodes/${nodeId.split("/").map(encodeURIComponent).join("/")}`),
+  compare: (id: string, base: string, head: string) => call<Compare>("GET", `/api/projects/${id}/compare${q({ base, head })}`),
+  review: (id: string, snapshot?: string) => call<Review>("GET", `/api/projects/${id}/review${q({ snapshot })}`),
+  decide: (id: string, key: string, status: "accepted" | "dismissed", note = "") =>
+    call<{ key: string; decision: ReviewStale }>("PUT", `/api/projects/${id}/review`, { key, status, note }),
+  reopen: (id: string, key: string) => call<void>("DELETE", `/api/projects/${id}/review${q({ key })}`),
+  annotations: (id: string, filter: { type?: TargetType; key?: string } = {}) =>
+    call<{ annotations: Annotation[] }>("GET", `/api/projects/${id}/annotations${q(filter)}`).then((r) => r.annotations),
+  addAnnotation: (id: string, body: { type: TargetType; key: string; text: string }) =>
+    call<{ annotation: Annotation }>("POST", `/api/projects/${id}/annotations`, body).then((r) => r.annotation),
+  editAnnotation: (id: string, annId: string, text: string) =>
+    call<{ annotation: Annotation }>("PATCH", `/api/projects/${id}/annotations/${encodeURIComponent(annId)}`, { text }).then((r) => r.annotation),
+  removeAnnotation: (id: string, annId: string) => call<void>("DELETE", `/api/projects/${id}/annotations/${encodeURIComponent(annId)}`),
 };

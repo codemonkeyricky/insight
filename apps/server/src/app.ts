@@ -5,6 +5,20 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import fastifyStatic from "@fastify/static";
 import { ProjectError, ProjectRegistry, insightHome, type ProjectRecord } from "./registry.js";
 import { JobRunner, type IndexFn, type JobEvent } from "./jobs.js";
+import {
+  addAnnotation,
+  checklist,
+  clearDecision,
+  compareCommits,
+  deleteAnnotation,
+  InputError,
+  keyedFindings,
+  listAnnotations,
+  projectPaths,
+  readReview,
+  setDecision,
+  updateAnnotation,
+} from "@insight/core";
 import { allFindings, analysisFor, lensRecord, nodeFacts, overview, publicProject, resolveSnapshot } from "./reader.js";
 import { sourceSlice } from "./source.js";
 
@@ -50,6 +64,9 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof ProjectError) {
       return reply.code(err.statusCode).send({ error: err.message });
+    }
+    if (err instanceof InputError) {
+      return reply.code(400).send({ error: err.message });
     }
     const e = err as { statusCode?: number; message: string };
     if (e.statusCode !== undefined && e.statusCode < 500) {
@@ -201,6 +218,78 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
       return sourceSlice(rootFor(p), file, first, last, Math.min(200, Number(context ?? 3) || 0));
     },
   );
+
+  // Compare runs index commits into the project's own state folder. Two requests for one project run one at a time.
+  const comparing = new Map<string, Promise<unknown>>();
+  const serialized = <T>(projectId: string, work: () => Promise<T>): Promise<T> => {
+    const prev = comparing.get(projectId) ?? Promise.resolve();
+    const next = prev.catch(() => undefined).then(work);
+    comparing.set(projectId, next);
+    next.catch(() => undefined).then(() => {
+      if (comparing.get(projectId) === next) comparing.delete(projectId);
+    });
+    return next;
+  };
+
+  app.get<{ Params: ProjectParams; Querystring: { base?: string; head?: string } }>("/api/projects/:id/compare", async (req) => {
+    const p = project(req.params.id);
+    const { base, head } = req.query;
+    if (!base || !head) throw new ProjectError(400, "base and head are required");
+    const result = await serialized(p.id, () => compareCommits(rootFor(p), base, head, { allowBuildTools: p.allowBuildTools }));
+    const side = (s: { commit: string; snapshot: string; reused: boolean }) => ({ commit: s.commit, snapshot: s.snapshot, reused: s.reused });
+    return { base: side(result.base), head: side(result.head), diff: result.diff };
+  });
+
+  app.get<{ Params: ProjectParams; Querystring: { type?: string; key?: string } }>("/api/projects/:id/annotations", async (req) => {
+    const p = project(req.params.id);
+    return { annotations: listAnnotations(projectPaths(rootFor(p)), req.query) };
+  });
+
+  app.post<{ Params: ProjectParams; Body: Record<string, unknown> }>("/api/projects/:id/annotations", async (req, reply) => {
+    const p = project(req.params.id);
+    const body = req.body ?? {};
+    const annotation = addAnnotation(projectPaths(rootFor(p)), { type: body.type, key: body.key, text: body.text });
+    return reply.code(201).send({ annotation });
+  });
+
+  app.patch<{ Params: ProjectParams & { annId: string }; Body: Record<string, unknown> }>(
+    "/api/projects/:id/annotations/:annId",
+    async (req) => {
+      const p = project(req.params.id);
+      const annotation = updateAnnotation(projectPaths(rootFor(p)), req.params.annId, req.body?.text);
+      if (!annotation) throw new ProjectError(404, `no annotation ${req.params.annId}`);
+      return { annotation };
+    },
+  );
+
+  app.delete<{ Params: ProjectParams & { annId: string } }>("/api/projects/:id/annotations/:annId", async (req, reply) => {
+    const p = project(req.params.id);
+    if (!deleteAnnotation(projectPaths(rootFor(p)), req.params.annId)) throw new ProjectError(404, `no annotation ${req.params.annId}`);
+    return reply.code(204).send();
+  });
+
+  app.get<{ Params: ProjectParams; Querystring: SnapshotQuery }>("/api/projects/:id/review", async (req) => {
+    const p = project(req.params.id);
+    const root = rootFor(p);
+    const snapshot = resolveSnapshot(root, req.query.snapshot);
+    const findings = snapshot ? keyedFindings(analysisFor(root, snapshot)) : [];
+    return { snapshot: snapshot ?? null, ...checklist(findings, readReview(projectPaths(root))) };
+  });
+
+  app.put<{ Params: ProjectParams; Body: Record<string, unknown> }>("/api/projects/:id/review", async (req) => {
+    const p = project(req.params.id);
+    const body = req.body ?? {};
+    const decision = setDecision(projectPaths(rootFor(p)), body.key, body.status, body.note);
+    return { key: String(body.key), decision };
+  });
+
+  app.delete<{ Params: ProjectParams; Querystring: { key?: string } }>("/api/projects/:id/review", async (req, reply) => {
+    const p = project(req.params.id);
+    const key = req.query.key;
+    if (typeof key !== "string" || key.trim() === "") throw new ProjectError(400, "key is required");
+    clearDecision(projectPaths(rootFor(p)), key);
+    return reply.code(204).send();
+  });
 
   const webDist = opts.webDist === null ? undefined : (opts.webDist ?? DEFAULT_WEB_DIST);
   const hasWeb = webDist !== undefined && existsSync(join(webDist, "index.html"));

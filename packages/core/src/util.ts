@@ -42,3 +42,11 @@ export function readJsonFile<T>(path: string, fallback: T): T {
 export function compareStrings(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
+
+/** A request the caller got wrong. The server maps it to 400. */
+export class InputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InputError";
+  }
+}
