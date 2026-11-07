@@ -10,3 +10,4 @@ export * from "./linker.js";
 export * from "./coverage.js";
 export * from "./indexdb.js";
 export * from "./pipeline.js";
+export * from "./analyze.js";

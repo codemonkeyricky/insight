@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import picomatch from "picomatch";
 import { CORE_FACETS, validateIR, type IRRecord } from "@insight/ir";
@@ -13,6 +13,7 @@ import { KEEP_SNAPSHOTS, loadState, saveState, type FrontendState, type IndexSta
 import { gcShards, readShard, shardKey, shardName, writeShard } from "./shards.js";
 import { deleteSnapshot, serializeDocument, snapshotExists, snapshotId, writeSnapshot } from "./snapshots.js";
 import { canonicalJson, readJsonFile, sha256, writeFileAtomic } from "./util.js";
+import { analysisPath, readAnalysis, runAnalysis, writeAnalysis, type LensRecord } from "./analyze.js";
 
 export interface IndexOptions extends LoadOptions {
   /** Ignore every cached shard and re-extract everything. */
@@ -21,6 +22,8 @@ export interface IndexOptions extends LoadOptions {
   allowBuildTools?: boolean;
   /** Receives progress lines as they happen. */
   onProgress?: (line: string) => void;
+  /** The commit this tree was taken from, when known. Recorded on the snapshot. */
+  commit?: string;
 }
 
 export interface IndexReport {
@@ -53,6 +56,8 @@ export interface IndexReport {
   /** Problems the validator found in the linked IR. Empty for a healthy run. */
   problems: string[];
   logs: string[];
+  /** One entry per lens: its status, and the number of findings it produced. */
+  lenses: { id: string; title: string; status: LensRecord["status"]; reason?: string; reused: boolean; findings: number }[];
 }
 
 const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -319,11 +324,37 @@ export async function runIndex(opts: IndexOptions): Promise<IndexReport> {
       nodes: linked.doc.nodes.length,
       edges: linked.doc.edges.length,
       findings: linked.doc.findings.length,
+      ...(opts.commit !== undefined ? { commit: opts.commit } : {}),
     });
     while (state.snapshots.length > KEEP_SNAPSHOTS) {
       const old = state.snapshots.shift();
-      if (old && old.id !== id) deleteSnapshot(paths, old.id);
+      if (old && old.id !== id) {
+        deleteSnapshot(paths, old.id);
+        rmSync(analysisPath(paths, old.id), { force: true });
+      }
     }
+  } else if (opts.commit !== undefined) {
+    const entry = state.snapshots.find((s) => s.id === id);
+    if (entry) entry.commit = opts.commit;
+  }
+
+  const configs: Record<string, unknown> = {};
+  for (const l of plugins.lenses) {
+    const cfg = readJsonFile<unknown>(join(paths.lensConfigs, `${l.lens.id}.json`), undefined);
+    if (cfg !== undefined) configs[l.lens.id] = cfg;
+  }
+  const analysis = await runAnalysis({
+    doc: linked.doc,
+    registry: plugins.registry,
+    root: projectRoot,
+    snapshot: id,
+    lenses: plugins.lenses,
+    configs,
+    previous: previousLatest ? readAnalysis(paths, previousLatest) : undefined,
+  });
+  writeAnalysis(paths, analysis);
+  for (const r of analysis.lenses) {
+    if (r.status !== "ok") say(`lens ${r.id}: ${r.reason ?? r.status}`);
   }
   state.latest = id;
 
@@ -371,6 +402,14 @@ export async function runIndex(opts: IndexOptions): Promise<IndexReport> {
     coverage,
     problems,
     logs,
+    lenses: analysis.lenses.map((r) => ({
+      id: r.id,
+      title: r.title,
+      status: r.status,
+      ...(r.reason !== undefined ? { reason: r.reason } : {}),
+      reused: r.reused,
+      findings: r.result?.findings.length ?? 0,
+    })),
   };
 }
 

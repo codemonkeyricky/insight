@@ -1,4 +1,5 @@
 import type { IREdge, IRFinding, IRNode, KindRegistry, NodeId, UnresolvedRef } from "@insight/ir";
+import { trace, type Reach, type TraceOptions } from "./trace.js";
 
 export interface NodeQuery {
   facet?: string;
@@ -79,6 +80,11 @@ export class IRView {
   /** Direct children, by the parent field. */
   children(id: NodeId, query: NodeQuery = {}): IRNode[] {
     return this.allNodes.filter((n) => n.parent === id && (query.kind === undefined || this.registry.subkinds(query.kind).includes(n.kind)));
+  }
+
+  /** Walks chains of edges from start nodes. See trace.ts. */
+  trace(starts: NodeId[], opts: TraceOptions): Reach {
+    return trace(this, starts, opts);
   }
 
   findings(): IRFinding[] {

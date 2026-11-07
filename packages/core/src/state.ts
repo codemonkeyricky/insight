@@ -26,6 +26,8 @@ export interface SnapshotInfo {
   nodes: number;
   edges: number;
   findings: number;
+  /** The commit the snapshot was indexed from, when the project is a git checkout. */
+  commit?: string;
 }
 
 export interface IndexState {

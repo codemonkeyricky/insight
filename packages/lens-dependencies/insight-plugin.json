@@ -1,0 +1,9 @@
+{
+  "id": "lens-dependencies",
+  "version": "0.1.0",
+  "description": "Module graph from imports and lifted calls, import cycles, and layer rules from .insight/lenses/lens-dependencies.json",
+  "irVersion": "^1.0",
+  "roles": {
+    "lens": "dist/index.js"
+  }
+}

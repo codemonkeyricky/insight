@@ -92,7 +92,7 @@ export interface GraphView {
   id: string;
   title: string;
   nodes: { id: string; label: string; group?: string; span?: { file: string; start: [number, number]; end: [number, number] } }[];
-  edges: { from: string; to: string; kind: string; label?: string; confidence?: Confidence }[];
+  edges: { from: string; to: string; kind: string; label?: string; confidence?: Confidence; span?: { file: string; start: [number, number]; end: [number, number] } }[];
 }
 
 export interface TableView {
@@ -120,6 +120,8 @@ export interface LensResult {
 
 export interface LensContext {
   root: ProjectRoot;
+  /** The lens's own settings, read from .insight/lenses/<id>.json in the project. Undefined when none. */
+  config?: unknown;
   /** The result this lens produced last time, if any. */
   previous?: LensResult;
   /** A result from another lens that ran earlier in this pass (see Lens.after). */

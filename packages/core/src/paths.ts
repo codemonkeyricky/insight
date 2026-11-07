@@ -15,6 +15,11 @@ export interface ProjectPaths {
   statCache: string;
   indexDb: string;
   localPlugins: string;
+  analysis: string;
+  lensConfigs: string;
+  /** Review decisions and annotations, kept by the user. */
+  review: string;
+  annotations: string;
 }
 
 export function projectPaths(root: string): ProjectPaths {
@@ -30,6 +35,10 @@ export function projectPaths(root: string): ProjectPaths {
     statCache: join(state, "stat-cache.json"),
     indexDb: join(state, "index.sqlite"),
     localPlugins: join(state, "plugins"),
+    analysis: join(state, "analysis"),
+    lensConfigs: join(state, "lenses"),
+    review: join(state, "review.json"),
+    annotations: join(state, "annotations.json"),
   };
 }
 
