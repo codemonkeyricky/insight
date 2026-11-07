@@ -1,0 +1,18 @@
+[
+  {
+    "kind": "x-cpp.scoped-lock",
+    "facet": "sync",
+    "on": "node",
+    "extends": "sync.lock-acquire",
+    "description": "A lock taken by an RAII guard (std::lock_guard, std::unique_lock, std::scoped_lock, std::shared_lock). The guard releases it at the end of its enclosing block.",
+    "attrs": {
+      "type": "object",
+      "required": ["lock"],
+      "properties": {
+        "lock": { "type": "string", "minLength": 1 },
+        "api": { "type": "string" },
+        "mode": { "enum": ["exclusive", "shared"] }
+      }
+    }
+  }
+]

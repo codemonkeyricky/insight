@@ -30,8 +30,9 @@ export interface LinkResult {
   unresolved: number;
 }
 
-const RANK: Record<Provenance["confidence"], number> = { exact: 0, inferred: 1, heuristic: 2 };
-const weaker = (a: Provenance["confidence"], b: Provenance["confidence"]) => (RANK[a] >= RANK[b] ? a : b);
+type Confidence = Provenance["confidence"];
+const RANK: Record<Confidence, number> = { exact: 0, inferred: 1, heuristic: 2 };
+const weaker = (a: Confidence, b: Confidence) => (RANK[a] >= RANK[b] ? a : b);
 
 /**
  * Merges shards into one graph, then settles open references with resolvers. Resolution runs
@@ -89,19 +90,20 @@ export async function link(input: LinkInput): Promise<LinkResult> {
     byScheme.set(r.resolver.scheme, list);
   }
 
+  const extra: { edge: IREdge; file: string }[] = [];
   for (const { edge, file } of edges) {
     const to = edge.to;
     if (typeof to === "string" || "candidates" in to) continue;
     const ref = to.unresolved;
-    let settled = false;
+    const ctx: ResolveContext = {
+      root: input.root,
+      fromFile: file,
+      hasFile: (p) => fileSet.has(p),
+      hasNode: (n) => nodes.has(n),
+      listFiles: () => input.files,
+    };
+    const answers: { id: string; answer: ResolveAnswer }[] = [];
     for (const { id, resolver } of byScheme.get(ref.scheme) ?? []) {
-      const ctx: ResolveContext = {
-        root: input.root,
-        fromFile: file,
-        hasFile: (p) => fileSet.has(p),
-        hasNode: (n) => nodes.has(n),
-        listFiles: () => input.files,
-      };
       let answer: ResolveAnswer | null;
       try {
         answer = await resolver.resolve(ref, ctx);
@@ -111,19 +113,58 @@ export async function link(input: LinkInput): Promise<LinkResult> {
       }
       if (!answer || answer.targets.length === 0) continue;
       if (!answer.targets.every((t) => nodes.has(t))) continue;
-      const [first, ...rest] = answer.targets as [NodeId, ...NodeId[]];
-      edge.to = rest.length === 0 ? first : { candidates: [first, ...rest] };
-      edge.provenance = {
-        ...edge.provenance,
-        resolvedBy: id,
-        confidence: weaker(edge.provenance.confidence, answer.confidence),
-      };
-      settled = true;
-      break;
+      answers.push({ id, answer });
     }
-    if (settled) resolved++;
-    else unresolved++;
+
+    // A heuristic answer only counts when no strong answer exists. Strong answers that agree are
+    // adopted together. Strong answers that disagree keep every target, each on its own edge.
+    const strong = answers.filter((a) => a.answer.confidence !== "heuristic");
+    const pool = strong.length > 0 ? strong : answers;
+    if (pool.length === 0) {
+      unresolved++;
+      continue;
+    }
+    const groups = new Map<string, { targets: NodeId[]; by: string[]; confidence: Confidence }>();
+    for (const { id, answer } of pool) {
+      const key = [...answer.targets].sort(compareStrings).join("\0");
+      const group = groups.get(key) ?? { targets: answer.targets, by: [], confidence: answer.confidence };
+      group.by.push(id);
+      group.confidence = weaker(group.confidence, answer.confidence);
+      groups.set(key, group);
+    }
+
+    const settleEdge = (target: { targets: NodeId[]; by: string[]; confidence: Confidence }, into: IREdge) => {
+      const [first, ...rest] = target.targets as [NodeId, ...NodeId[]];
+      into.to = rest.length === 0 ? first : { candidates: [first, ...rest] };
+      into.provenance = {
+        ...into.provenance,
+        resolvedBy: target.by.join("+"),
+        confidence: weaker(into.provenance.confidence, target.confidence),
+      };
+    };
+
+    const [firstGroup, ...otherGroups] = [...groups.values()];
+    if (firstGroup === undefined) {
+      unresolved++;
+      continue;
+    }
+    settleEdge(firstGroup, edge);
+    if (otherGroups.length > 0) {
+      const described = [firstGroup, ...otherGroups].map((g) => `${g.targets.join(", ")} (by ${g.by.join("+")})`);
+      findings.push({
+        severity: "warning",
+        message: `"${ref.text}" resolves to ${described.length} different targets: ${described.join("; ")}. Every target is kept.`,
+        ...(edge.span ? { span: edge.span } : {}),
+      });
+      for (const group of otherGroups) {
+        const copy: IREdge = { ...edge, provenance: { ...edge.provenance } };
+        settleEdge(group, copy);
+        extra.push({ edge: copy, file });
+      }
+    }
+    resolved++;
   }
+  edges.push(...extra);
 
   const doc: IRDocument = {
     nodes: [...nodes.values()].sort((a, b) => compareStrings(a.id, b.id)),

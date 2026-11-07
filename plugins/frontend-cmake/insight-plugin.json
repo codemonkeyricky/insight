@@ -1,0 +1,17 @@
+{
+  "id": "frontend-cmake",
+  "version": "0.1.0",
+  "description": "CMake: add_library, add_executable, sources, link and include directories, read from CMakeLists.txt without running cmake. Answers C++ includes through target include directories.",
+  "irVersion": "^1.0",
+  "detect": ["**/CMakeLists.txt"],
+  "files": ["**/CMakeLists.txt"],
+  "provides": ["packaging"],
+  "roles": {
+    "frontend": "./index.js",
+    "resolver": {
+      "scheme": "cpp.include",
+      "entry": "./resolve.js",
+      "priority": 80
+    }
+  }
+}

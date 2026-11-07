@@ -1,0 +1,13 @@
+{"edge":{"from":"//:app","to":"//lib:core","facet":"packaging","kind":"packaging.dep-edge","provenance":{"frontend":"frontend-bazel","confidence":"exact"}}}
+{"edge":{"from":"//:app","to":"app/main.cc","facet":"packaging","kind":"packaging.target-contains","provenance":{"frontend":"frontend-bazel","confidence":"exact"}}}
+{"edge":{"from":"//lib:core","to":"//lib:util","facet":"packaging","kind":"packaging.dep-edge","provenance":{"frontend":"frontend-bazel","confidence":"exact"}}}
+{"edge":{"from":"//lib:core","to":"lib/include/core/core.h","facet":"packaging","kind":"packaging.target-contains","provenance":{"frontend":"frontend-bazel","confidence":"exact"}}}
+{"edge":{"from":"//lib:core","to":"lib/src/core.cc","facet":"packaging","kind":"packaging.target-contains","provenance":{"frontend":"frontend-bazel","confidence":"exact"}}}
+{"edge":{"from":"//lib:core_test","to":"//lib:core","facet":"packaging","kind":"packaging.dep-edge","provenance":{"frontend":"frontend-bazel","confidence":"exact"}}}
+{"edge":{"from":"//lib:core_test","to":"lib/test/core_test.cc","facet":"packaging","kind":"packaging.target-contains","provenance":{"frontend":"frontend-bazel","confidence":"exact"}}}
+{"edge":{"from":"//lib:core_test","to":{"unresolved":{"scheme":"bazel.label","text":"@googletest//:gtest_main"}},"facet":"packaging","kind":"packaging.dep-edge","provenance":{"frontend":"frontend-bazel","confidence":"exact"}}}
+{"edge":{"from":"//lib:util","to":"lib/util/log.h","facet":"packaging","kind":"packaging.target-contains","provenance":{"frontend":"frontend-bazel","confidence":"exact"}}}
+{"node":{"id":"//:app","facet":"packaging","kind":"packaging.build-target","attrs":{"name":"app","label":"//:app","targetKind":"cc_binary","source":"static"},"span":{"file":"BUILD.bazel","start":[2,0],"end":[9,1]},"provenance":{"frontend":"frontend-bazel","confidence":"exact"}}}
+{"node":{"id":"//lib:core","facet":"packaging","kind":"packaging.build-target","attrs":{"name":"core","label":"//lib:core","targetKind":"cc_library","source":"static"},"span":{"file":"lib/BUILD","start":[3,0],"end":[10,1]},"provenance":{"frontend":"frontend-bazel","confidence":"exact"}}}
+{"node":{"id":"//lib:core_test","facet":"packaging","kind":"packaging.build-target","attrs":{"name":"core_test","label":"//lib:core_test","targetKind":"cc_test","source":"static"},"span":{"file":"lib/BUILD","start":[18,0],"end":[25,1]},"provenance":{"frontend":"frontend-bazel","confidence":"exact"}}}
+{"node":{"id":"//lib:util","facet":"packaging","kind":"packaging.build-target","attrs":{"name":"util","label":"//lib:util","targetKind":"cc_library","source":"static"},"span":{"file":"lib/BUILD","start":[12,0],"end":[16,1]},"provenance":{"frontend":"frontend-bazel","confidence":"exact"}}}

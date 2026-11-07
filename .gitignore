@@ -6,3 +6,5 @@ dist
 
 # scratch space for package tests (created and removed by the tests)
 .insight-test/
+.env*.local
+.vercel

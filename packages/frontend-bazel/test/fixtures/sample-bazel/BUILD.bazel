@@ -1,0 +1,10 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+
+cc_binary(
+    name = "app",
+    srcs = ["app/main.cc"],
+    copts = select({
+        "//conditions:default": ["-O2"],
+    }),
+    deps = ["//lib:core"],
+)

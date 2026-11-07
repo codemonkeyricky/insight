@@ -20,7 +20,8 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  rmSync(join(here, "..", ".insight-test"), { recursive: true, force: true });
+  // Remove only this suite's scratch, since the other core suites run in parallel workers.
+  rmSync(SCRATCH, { recursive: true, force: true });
 });
 
 describe("merkle scan", () => {

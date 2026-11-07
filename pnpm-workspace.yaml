@@ -1,3 +1,8 @@
 packages:
   - "packages/*"
   - "apps/*"
+minimumReleaseAgeExclude:
+  - web-tree-sitter@0.27.2
+allowBuilds:
+  tree-sitter-c: false
+  tree-sitter-cpp: false

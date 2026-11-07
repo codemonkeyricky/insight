@@ -1,0 +1,17 @@
+{
+  "id": "frontend-bazel",
+  "version": "0.1.0",
+  "description": "Bazel: cc_* targets, their sources, headers and deps, read from BUILD files without running bazel. Answers C++ includes through target include paths.",
+  "irVersion": "^1.0",
+  "detect": ["**/BUILD", "**/BUILD.bazel"],
+  "files": ["**/BUILD", "**/BUILD.bazel"],
+  "provides": ["packaging"],
+  "roles": {
+    "frontend": "dist/index.js",
+    "resolver": {
+      "scheme": "cpp.include",
+      "entry": "dist/resolve.js",
+      "priority": 90
+    }
+  }
+}

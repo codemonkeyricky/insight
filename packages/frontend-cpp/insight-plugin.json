@@ -1,0 +1,45 @@
+{
+  "id": "frontend-cpp",
+  "version": "0.1.0",
+  "description": "C and C++: structure, includes, calls, control flow, known system effects, threads and standard locks. Syntactic (tree-sitter), no compiler.",
+  "irVersion": "^1.0",
+  "detect": [
+    "**/*.c",
+    "**/*.cc",
+    "**/*.cpp",
+    "**/*.cxx",
+    "**/*.h",
+    "**/*.hh",
+    "**/*.hpp",
+    "**/*.hxx"
+  ],
+  "files": [
+    "**/*.c",
+    "**/*.cc",
+    "**/*.cpp",
+    "**/*.cxx",
+    "**/*.h",
+    "**/*.hh",
+    "**/*.hpp",
+    "**/*.hxx",
+    "**/*.inl"
+  ],
+  "provides": [
+    "calls",
+    "concurrency",
+    "effects",
+    "flow",
+    "packaging",
+    "structure",
+    "sync"
+  ],
+  "kinds": "data/kinds.json",
+  "roles": {
+    "frontend": "dist/index.js",
+    "resolver": {
+      "scheme": "cpp.include",
+      "entry": "dist/resolve.js",
+      "priority": 10
+    }
+  }
+}

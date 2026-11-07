@@ -1,0 +1,169 @@
+{
+  "frontends": [
+    {
+      "id": "frontend-bazel",
+      "files": 4
+    },
+    {
+      "id": "frontend-cmake",
+      "files": 3
+    },
+    {
+      "id": "frontend-cpp",
+      "files": 121
+    }
+  ],
+  "problems": [],
+  "coverage": [
+    {
+      "facet": "calls",
+      "providers": [
+        "frontend-cpp"
+      ],
+      "filesScanned": 121,
+      "filesWithRecords": 87,
+      "filesWithErrors": 0,
+      "nodes": 0,
+      "edges": 1544
+    },
+    {
+      "facet": "concurrency",
+      "providers": [
+        "frontend-cpp"
+      ],
+      "filesScanned": 121,
+      "filesWithRecords": 4,
+      "filesWithErrors": 0,
+      "nodes": 5,
+      "edges": 0
+    },
+    {
+      "facet": "effects",
+      "providers": [
+        "frontend-cpp"
+      ],
+      "filesScanned": 121,
+      "filesWithRecords": 8,
+      "filesWithErrors": 0,
+      "nodes": 22,
+      "edges": 0
+    },
+    {
+      "facet": "flow",
+      "providers": [
+        "frontend-cpp"
+      ],
+      "filesScanned": 121,
+      "filesWithRecords": 84,
+      "filesWithErrors": 0,
+      "nodes": 923,
+      "edges": 0
+    },
+    {
+      "facet": "packaging",
+      "providers": [
+        "frontend-bazel",
+        "frontend-cmake",
+        "frontend-cpp"
+      ],
+      "filesScanned": 128,
+      "filesWithRecords": 123,
+      "filesWithErrors": 0,
+      "nodes": 10,
+      "edges": 1021
+    },
+    {
+      "facet": "structure",
+      "providers": [
+        "core",
+        "frontend-cpp"
+      ],
+      "filesScanned": 225,
+      "filesWithRecords": 225,
+      "filesWithErrors": 0,
+      "nodes": 1507,
+      "edges": 0
+    },
+    {
+      "facet": "sync",
+      "providers": [
+        "frontend-cpp"
+      ],
+      "filesScanned": 121,
+      "filesWithRecords": 4,
+      "filesWithErrors": 0,
+      "nodes": 10,
+      "edges": 0
+    }
+  ],
+  "lenses": [
+    {
+      "id": "lens-calls",
+      "status": "ok",
+      "findings": 355
+    },
+    {
+      "id": "lens-concurrency-map",
+      "status": "ok",
+      "findings": 0
+    },
+    {
+      "id": "lens-dependencies",
+      "status": "ok",
+      "findings": 0
+    },
+    {
+      "id": "lens-effects",
+      "status": "ok",
+      "findings": 0
+    },
+    {
+      "id": "lens-flow-complexity",
+      "status": "ok",
+      "findings": 15
+    },
+    {
+      "id": "lens-lock-order",
+      "status": "ok",
+      "findings": 0
+    }
+  ],
+  "lockOrder": {
+    "locks": 4,
+    "orderEdges": 0,
+    "cycles": 0,
+    "unknownLocks": 0
+  },
+  "concurrency": {
+    "asyncFunctions": 0,
+    "awaits": 0,
+    "spawns": 5,
+    "channelOps": 0,
+    "asyncWithoutAwait": 0
+  },
+  "recordsByKind": {
+    "calls.call": 1544,
+    "concurrency.spawn-thread": 5,
+    "effects.clock.read": 12,
+    "effects.env.read": 7,
+    "effects.fs.write": 1,
+    "effects.proc.exec": 2,
+    "finding": 47,
+    "flow.branch": 536,
+    "flow.loop": 366,
+    "flow.switch": 12,
+    "flow.throw": 8,
+    "flow.try": 1,
+    "packaging.build-target": 10,
+    "packaging.dep-edge": 19,
+    "packaging.include": 889,
+    "packaging.target-contains": 113,
+    "structure.file": 225,
+    "structure.function": 967,
+    "structure.namespace": 191,
+    "structure.type": 124,
+    "sync.lock-acquire": 4,
+    "sync.lock-release": 5,
+    "x-cpp.scoped-lock": 1
+  }
+}
