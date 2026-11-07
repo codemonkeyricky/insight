@@ -1,4 +1,4 @@
-import { ownerOf, type IRView, type Lens, type LensFinding, type LensResult, type TableView } from "@insight/sdk";
+import { isExternal, ownerOf, type IRView, type Lens, type LensFinding, type LensResult, type TableView } from "@insight/sdk";
 import type { NodeId, Span } from "@insight/ir";
 
 interface Row {
@@ -19,6 +19,7 @@ const CHANNEL_KINDS = ["concurrency.channel-send", "concurrency.channel-recv"];
 export function concurrencyRows(view: IRView): Row[] {
   const rows = new Map<NodeId, Row>();
   for (const fn of view.nodes({ facet: "structure", kind: "structure.function" })) {
+    if (isExternal(fn)) continue;
     rows.set(fn.id, {
       id: fn.id,
       name: String(fn.attrs.name ?? fn.id),

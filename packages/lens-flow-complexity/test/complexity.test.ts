@@ -53,3 +53,30 @@ describe("lensFlowComplexity", () => {
     expect(table?.type === "table" && table.rows[0]?.[0]).toBe("f");
   });
 });
+
+/**
+ * The scope "src" cut from a project. f (in scope) has one branch. g is outside, and its stub has a branch under it.
+ * The second branch under f is marked external, so it is not this scope's flow.
+ */
+function scopedFixture() {
+  return fx.view({
+    nodes: [
+      fx.node("src/a.ts", "structure", "structure.file"),
+      fx.node("src/a.ts#f", "structure", "structure.function", { parent: "src/a.ts", attrs: { name: "f" }, span: fx.span("src/a.ts", 0, 0, 5, 1) }),
+      fx.node("src/a.ts@b1", "flow", "flow.branch", { parent: "src/a.ts#f" }),
+      fx.node("src/a.ts@b2", "flow", "flow.branch", { parent: "src/a.ts#f", attrs: { external: true } }),
+      fx.node("lib/g.ts#g", "structure", "structure.function", { attrs: { name: "g", external: true } }),
+      fx.node("lib/g.ts@b3", "flow", "flow.branch", { parent: "lib/g.ts#g", attrs: { external: true } }),
+    ],
+  });
+}
+
+describe("lens-flow-complexity in a partial scope", () => {
+  it("measures only local functions, and counts only their own flow", async () => {
+    const measured = measureFunctions(scopedFixture());
+    expect(measured).toHaveLength(1);
+    expect(measured[0]).toMatchObject({ id: "src/a.ts#f", complexity: 2, branches: 1 });
+    const result = await lensFlowComplexity.run(scopedFixture(), { ...ctx(), scope: "src" });
+    expect(result.metrics).toMatchObject({ functions: 1, maxComplexity: 2 });
+  });
+});

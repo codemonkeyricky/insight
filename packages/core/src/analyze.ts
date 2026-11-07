@@ -74,7 +74,7 @@ export function orderLenses(lenses: LoadedLens[]): LoadedLens[] {
 }
 
 /** The facets a lens reads, and the IR records in them. Findings are not inputs. */
-function inputsFor(lens: Lens, doc: IRDocument): { facets: string[]; nodes: unknown[]; edges: unknown[] } {
+export function inputsFor(lens: Lens, doc: IRDocument): { facets: string[]; nodes: unknown[]; edges: unknown[] } {
   const facets = [...new Set([...lens.requires, ...(lens.optional ?? [])])].sort();
   const set = new Set(facets);
   return {
@@ -148,7 +148,7 @@ export async function runAnalysis(input: AnalyzeInput): Promise<AnalysisFile> {
 }
 
 /** Gives every lens finding its lens id and an id that is unique within the result. */
-function normalize(lensId: string, result: LensResult): LensResult {
+export function normalize(lensId: string, result: LensResult): LensResult {
   const seen = new Set<string>();
   const findings: LensFinding[] = result.findings.map((f, i) => {
     let id = f.id && f.id.length > 0 ? f.id : `${lensId}:${i}`;

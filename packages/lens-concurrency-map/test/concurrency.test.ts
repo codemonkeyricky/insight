@@ -40,3 +40,30 @@ describe("lensConcurrencyMap", () => {
     expect(result.findings[0]).toMatchObject({ id: "async-no-await:src/a.ts#worker", severity: "info", nodes: ["src/a.ts#worker"] });
   });
 });
+
+/**
+ * The scope "src" cut from a project. run (in scope) spawns a thread and calls fetchAll, which is outside the scope.
+ * fetchAll is async and awaits, but its stub and its await are outside, so neither is this scope's.
+ */
+function scopedFixture() {
+  const file = "src/a.ts";
+  return fx.view({
+    nodes: [
+      fx.node(file, "structure", "structure.file"),
+      fx.node(`${file}#run`, "structure", "structure.function", { parent: file, attrs: { name: "run", async: false }, span: fx.span(file, 0, 0, 5, 1) }),
+      fx.node("lib/y.ts#fetchAll", "structure", "structure.function", { attrs: { name: "fetchAll", async: true, external: true } }),
+      fx.node(`${file}@spawn:3:2`, "concurrency", "concurrency.spawn-thread", { parent: `${file}#run` }),
+      fx.node("lib/y.ts@await:4:2", "concurrency", "concurrency.await", { parent: "lib/y.ts#fetchAll", attrs: { external: true } }),
+    ],
+    edges: [fx.edge(`${file}#run`, "lib/y.ts#fetchAll", "calls", "calls.call")],
+  });
+}
+
+describe("lensConcurrencyMap in a partial scope", () => {
+  it("lists only local functions and counts only their concurrency", async () => {
+    const result = await lensConcurrencyMap.run(scopedFixture(), { ...ctx(), scope: "src" });
+    expect(concurrencyTable(result.views).rows).toEqual([["run", "no", 0, 0, 1, 0, "src/a.ts:1"]]);
+    expect(result.metrics).toMatchObject({ asyncFunctions: 0, awaits: 0, spawns: 1, asyncWithoutAwait: 0 });
+    expect(result.findings).toEqual([]);
+  });
+});

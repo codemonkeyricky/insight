@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import cytoscape, { type Core, type ElementDefinition } from "cytoscape";
 import type { GraphView } from "../api";
+import { nodeText, OUTSIDE_SCOPE } from "../scopeLenses";
 
 export interface GraphPick {
   kind: "node" | "edge";
@@ -42,6 +43,7 @@ const STYLE: cytoscape.StylesheetJson = [
   },
   { selector: "edge[kind = 'call']", style: { "line-style": "dashed", "line-color": "#c08a2b", "target-arrow-color": "#c08a2b" } },
   { selector: "edge[?hasSpan]", style: { "line-color": "#2f7d5b", "target-arrow-color": "#2f7d5b", width: 2.5 } },
+  { selector: "node[?outside]", style: { "background-color": "#9aa3b2", color: "#5d6678" } },
   { selector: ":selected", style: { "background-color": "#d1493b", "line-color": "#d1493b", "target-arrow-color": "#d1493b" } },
 ];
 
@@ -55,7 +57,7 @@ export function GraphCanvas({ view, onPick }: { view: GraphView; onPick: (pick: 
     const host = container.current as (HTMLDivElement & { __cy?: Core }) | null;
     if (!host) return;
     const elements: ElementDefinition[] = [
-      ...view.nodes.map((n) => ({ data: { id: n.id, label: n.label, group: n.group ?? "" } })),
+      ...view.nodes.map((n) => ({ data: { id: n.id, label: nodeText(n.label), full: n.label, outside: n.group === OUTSIDE_SCOPE } })),
       ...view.edges.map((e, i) => ({
         data: {
           id: `e${i}`,
@@ -86,8 +88,8 @@ export function GraphCanvas({ view, onPick }: { view: GraphView; onPick: (pick: 
       });
     });
     cy.on("tap", "node", (evt) => {
-      const d = evt.target.data() as { id: string; label: string };
-      pickRef.current({ kind: "node", id: d.id, key: d.id, label: d.label });
+      const d = evt.target.data() as { id: string; full: string };
+      pickRef.current({ kind: "node", id: d.id, key: d.id, label: d.full });
     });
     // Exposed on the container so browser tests can find an edge's on-screen position and click it.
     host.__cy = cy;

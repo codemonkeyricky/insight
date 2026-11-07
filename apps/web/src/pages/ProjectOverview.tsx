@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, IS_DEMO, type FindingRow, type Overview } from "../api";
 import { useProjectEvents, type RunEvent } from "../useEvents";
-import { ProjectTabs } from "../components/ProjectTabs";
 import { hrefLens } from "../router";
-import { StatusBadge } from "./Projects";
 
 const LOG_LIMIT = 200;
 
-export function ProjectOverviewPage({ id }: { id: string }) {
+/** The overview tab: run controls, counts, lenses, coverage and findings for the whole project. */
+export function ProjectOverview({ id }: { id: string }) {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [findings, setFindings] = useState<FindingRow[]>([]);
   const [log, setLog] = useState<string[]>([]);
@@ -53,7 +52,6 @@ export function ProjectOverviewPage({ id }: { id: string }) {
   if (error && !overview) return <p className="error" role="alert">{error}</p>;
   if (!overview) return <p className="muted">Loading</p>;
   const p = overview.project;
-  const sourceText = p.source.kind === "path" ? p.source.path : p.source.url;
 
   const reindex = async () => {
     setBusy(true);
@@ -69,26 +67,16 @@ export function ProjectOverviewPage({ id }: { id: string }) {
 
   return (
     <section>
-      <div className="head">
-        <div>
-          <h1>{p.name}</h1>
-          <div className="mono muted small">{sourceText}</div>
-        </div>
+      {!IS_DEMO && (
         <div className="actions">
-          <StatusBadge project={p} />
-          {!IS_DEMO && (
-            <>
-              <label className="check small">
-                <input type="checkbox" checked={full} onChange={(e) => setFull(e.target.checked)} /> full
-              </label>
-              <button type="button" onClick={() => void reindex()} disabled={busy}>
-                Re-index
-              </button>
-            </>
-          )}
+          <label className="check small">
+            <input type="checkbox" checked={full} onChange={(e) => setFull(e.target.checked)} /> full
+          </label>
+          <button type="button" onClick={() => void reindex()} disabled={busy}>
+            Re-index
+          </button>
         </div>
-      </div>
-      <ProjectTabs id={id} active="overview" />
+      )}
       {p.error && <p className="error" role="alert">Last run failed: {p.error}</p>}
       {error && <p className="error" role="alert">{error}</p>}
 

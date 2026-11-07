@@ -130,6 +130,11 @@ export interface LensResult {
 
 export interface LensContext {
   root: ProjectRoot;
+  /**
+   * The scope the lens runs on: a file or folder path, or "" for the whole project. Undefined for
+   * the project-level pass. The view then holds only that scope's IR, plus external stubs.
+   */
+  scope?: string;
   /** The lens's own settings, read from .insight/lenses/<id>.json in the project. Undefined when none. */
   config?: unknown;
   /** The result this lens produced last time, if any. */

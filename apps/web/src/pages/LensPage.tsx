@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
-import { api, type FindingRow, type LensRecord, type LensView, type Project, type Span, type TargetType } from "../api";
+import { useEffect, useRef, useState } from "react";
+import { api, type LensRecord, type LensView, type ScopeStats, type Span, type TargetType } from "../api";
 import { AnnotationBox } from "../components/AnnotationBox";
 import { GraphCanvas, type GraphPick } from "../components/GraphCanvas";
 import { SourcePanel, type SelectedSpan } from "../components/SourcePanel";
-import { ProjectTabs } from "../components/ProjectTabs";
 import { TreeBlock } from "../components/TreeBlock";
-import { hrefProject } from "../router";
+import { canonicalScope } from "../scopeKey";
+import { granularityOf, OUTSIDE_SCOPE, plainReason, resultHasContent, scopeBanner } from "../scopeLenses";
 
 /** The node or edge last clicked in a graph view. Its notes are shown beside the source. */
 interface Picked {
@@ -14,37 +14,84 @@ interface Picked {
   label: string;
 }
 
-export function LensPage({ id, lensId }: { id: string; lensId: string }) {
-  const [project, setProject] = useState<Project | null>(null);
+export interface LensPageProps {
+  id: string;
+  lensId: string;
+  scope: string;
+  projectName: string;
+  /** The stats of the scope, once its listing has loaded. */
+  stats: ScopeStats | null;
+  /** Called once a lens has loaded, since running it can change which lenses have results. */
+  onLoaded?: () => void;
+}
+
+/** One lens on one scope. The result is computed for the scope, so nothing is narrowed here. */
+export function LensPage({ id, lensId, scope, projectName, stats, onLoaded }: LensPageProps) {
   const [lens, setLens] = useState<LensRecord | null>(null);
-  const [findings, setFindings] = useState<FindingRow[]>([]);
   const [selected, setSelected] = useState<SelectedSpan | null>(null);
   const [picked, setPicked] = useState<Picked | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const onLoadedRef = useRef(onLoaded);
+
+  useEffect(() => {
+    onLoadedRef.current = onLoaded;
+  }, [onLoaded]);
 
   useEffect(() => {
     let cancelled = false;
+    setLens(null);
+    setError(null);
     setSelected(null);
     setPicked(null);
     setNote(null);
-    Promise.all([api.project(id), api.lens(id, lensId), api.findings(id, { lens: lensId })])
-      .then(([p, l, f]) => {
+    api.scopeLens(id, scope, lensId).then(
+      (run) => {
         if (cancelled) return;
-        setProject(p);
-        setLens(l);
-        setFindings(f);
-        setError(null);
-      })
-      .catch((e: Error) => !cancelled && setError(e.message));
+        setLens(run.lens);
+        onLoadedRef.current?.();
+      },
+      (e: Error) => {
+        if (!cancelled) setError(e.message);
+      },
+    );
     return () => {
       cancelled = true;
     };
-  }, [id, lensId]);
+  }, [id, lensId, scope]);
 
-  const show = (span: Span, label: string) => {
+  if (error) return <p className="error" role="alert">{error}</p>;
+  if (!lens) return <p className="muted">Loading</p>;
+
+  const label = scope === "" ? projectName : canonicalScope(scope);
+  const banner = stats && <p className="scope-banner mono">{scopeBanner(label, stats)}</p>;
+  const head = (
+    <>
+      <h2>{lens.title}</h2>
+      {banner}
+    </>
+  );
+
+  if (lens.status !== "ok" || !lens.result) {
+    const failed = lens.status === "error";
+    return (
+      <section>
+        {head}
+        <div className="lens-empty" role="status">
+          <p>{failed ? "This lens could not run on this scope." : "This lens is not available for this scope."}</p>
+          {lens.reason && <p className="muted small">{plainReason(lens.reason, lens.status)}</p>}
+        </div>
+      </section>
+    );
+  }
+
+  const result = lens.result;
+  const granularity = granularityOf(result.views);
+  const metrics = Object.entries(result.metrics);
+
+  const show = (span: Span, text: string) => {
     setNote(null);
-    setSelected({ span, label });
+    setSelected({ span, label: text });
   };
 
   const pick = (p: GraphPick) => {
@@ -57,32 +104,45 @@ export function LensPage({ id, lensId }: { id: string; lensId: string }) {
     show(p.span, p.label);
   };
 
-  if (error) return <p className="error" role="alert">{error}</p>;
-  if (!lens || !project) return <p className="muted">Loading</p>;
-
   return (
     <section>
-      <nav className="crumbs small">
-        <a href={hrefProject(id)}>{project.name}</a> / <span>{lens.title}</span>
-      </nav>
-      <ProjectTabs id={id} active={{ lens: lensId }} />
-      <h1>{lens.title}</h1>
-      {lens.status !== "ok" && (
-        <p className="muted" role="status">
-          {lens.status}: {lens.reason}
-        </p>
-      )}
+      {head}
+      {granularity && <p className="muted small">Granularity: {granularity}</p>}
       <div className="split">
         <div className="main">
-          {lens.result?.views.map((view) => (
-            <ViewBlock key={view.id} view={view} projectId={id} onPick={pick} onShow={show} />
-          ))}
-          {lens.result && Object.keys(lens.result.metrics).length > 0 && (
+          {!resultHasContent(result) ? (
+            <div className="lens-empty">
+              <p>Nothing to show for this scope.</p>
+            </div>
+          ) : (
             <>
-              <h2>Metrics</h2>
+              {result.views.map((view) => (
+                <ViewBlock key={view.id} view={view} projectId={id} onPick={pick} onShow={show} />
+              ))}
+              <h3>Findings</h3>
+              {result.findings.length === 0 && (
+                <p className="muted">{scope === "" ? "No findings from this lens." : "No findings from this lens in this scope."}</p>
+              )}
+              <ul className="findings">
+                {result.findings.map((f) => (
+                  <li key={f.id}>
+                    <span className={`sev ${f.severity}`}>{f.severity}</span> {f.message}{" "}
+                    {f.span && (
+                      <button type="button" className="link" onClick={() => show(f.span as Span, f.message)}>
+                        show line
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          {metrics.length > 0 && (
+            <>
+              <h3>Metrics</h3>
               <table className="grid">
                 <tbody>
-                  {Object.entries(lens.result.metrics).map(([k, v]) => (
+                  {metrics.map(([k, v]) => (
                     <tr key={k}>
                       <td>{k}</td>
                       <td className="mono">{String(v)}</td>
@@ -92,20 +152,6 @@ export function LensPage({ id, lensId }: { id: string; lensId: string }) {
               </table>
             </>
           )}
-          <h2>Findings</h2>
-          {findings.length === 0 && <p className="muted">No findings from this lens.</p>}
-          <ul className="findings">
-            {findings.map((f) => (
-              <li key={f.id}>
-                <span className={`sev ${f.severity}`}>{f.severity}</span> {f.message}{" "}
-                {f.span && (
-                  <button type="button" className="link" onClick={() => show(f.span as Span, f.message)}>
-                    show line
-                  </button>
-                )}
-              </li>
-            ))}
-          </ul>
         </div>
         <div className="side">
           {note && <p className="muted small" role="status">{note}</p>}
@@ -117,19 +163,34 @@ export function LensPage({ id, lensId }: { id: string; lensId: string }) {
   );
 }
 
-function ViewBlock({ view, projectId, onPick, onShow }: { view: LensView; projectId: string; onPick: (p: GraphPick) => void; onShow: (s: Span, label: string) => void }) {
+function ViewBlock({
+  view,
+  projectId,
+  onPick,
+  onShow,
+}: {
+  view: LensView;
+  projectId: string;
+  onPick: (p: GraphPick) => void;
+  onShow: (s: Span, label: string) => void;
+}) {
   if (view.type === "graph") {
     const withSpan = view.edges.filter((e) => e.span !== undefined);
     return (
       <div className="view">
-        <h2>{view.title}</h2>
+        <h3>{view.title}</h3>
         <GraphCanvas view={view} onPick={onPick} />
         <p className="muted small">
           Click an edge to see its line. Solid green edges have a source line; dashed edges are calls.
         </p>
+        {view.nodes.some((n) => n.group === OUTSIDE_SCOPE) && (
+          <p className="muted small">
+            <span className="swatch outside" aria-hidden="true" /> {OUTSIDE_SCOPE}: modules the scope imports but does not contain.
+          </p>
+        )}
         {withSpan.length > 0 && (
           <>
-            <h3>Import edges</h3>
+            <h4>Import edges</h4>
             <table className="grid">
               <thead>
                 <tr>
@@ -141,8 +202,8 @@ function ViewBlock({ view, projectId, onPick, onShow }: { view: LensView; projec
               <tbody>
                 {withSpan.map((e, i) => (
                   <tr key={`${e.from}>${e.to}>${i}`}>
-                    <td className="mono">{e.from}</td>
-                    <td className="mono">{e.to}</td>
+                    <td className="mono break-any">{e.from}</td>
+                    <td className="mono break-any">{e.to}</td>
                     <td>
                       <button
                         type="button"
@@ -164,7 +225,7 @@ function ViewBlock({ view, projectId, onPick, onShow }: { view: LensView; projec
   if (view.type === "table") {
     return (
       <div className="view">
-        <h2>{view.title}</h2>
+        <h3>{view.title}</h3>
         {view.rows.length === 0 ? (
           <p className="muted">None.</p>
         ) : (
@@ -180,7 +241,9 @@ function ViewBlock({ view, projectId, onPick, onShow }: { view: LensView; projec
               {view.rows.map((row, i) => (
                 <tr key={i}>
                   {row.map((cell, j) => (
-                    <td key={j}>{String(cell ?? "")}</td>
+                    <td key={j} className={String(cell ?? "").length > 30 ? "break-any" : undefined}>
+                      {String(cell ?? "")}
+                    </td>
                   ))}
                 </tr>
               ))}
@@ -192,7 +255,7 @@ function ViewBlock({ view, projectId, onPick, onShow }: { view: LensView; projec
   }
   return (
     <div className="view">
-      <h2>{view.title}</h2>
+      <h3>{view.title}</h3>
       <TreeBlock root={view.root} projectId={projectId} onShow={onShow} />
     </div>
   );

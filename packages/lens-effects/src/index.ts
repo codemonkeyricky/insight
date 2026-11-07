@@ -1,5 +1,5 @@
 import picomatch from "picomatch";
-import { enclosing, ownerOf, type IRView, type Lens, type LensFinding, type LensResult, type TableView } from "@insight/sdk";
+import { enclosing, isExternal, ownerOf, type IRView, type Lens, type LensFinding, type LensResult, type TableView } from "@insight/sdk";
 import type { IRNode, NodeId, Span } from "@insight/ir";
 
 export interface ForbidRule {
@@ -34,11 +34,12 @@ export const lensEffects: Lens = {
 
   async run(view, ctx): Promise<LensResult> {
     const config = (ctx.config ?? {}) as EffectsConfig;
-    const functions = view.nodes({ facet: "structure", kind: "structure.function" });
+    const functions = view.nodes({ facet: "structure", kind: "structure.function" }).filter((f) => !isExternal(f));
     const fnById = new Map(functions.map((f) => [f.id, f]));
     const hasCalls = view.hasFacet("calls");
 
-    const effectNodes = view.nodes({ facet: "effects" });
+    // Effects of an external stub happen in another scope, so they are not this scope's effects.
+    const effectNodes = view.nodes({ facet: "effects" }).filter((e) => !isExternal(e));
     /** owner id -> effect kind -> effect nodes */
     const direct = new Map<NodeId, Map<string, IRNode[]>>();
     for (const effect of effectNodes) {

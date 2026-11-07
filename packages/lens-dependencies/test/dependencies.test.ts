@@ -69,3 +69,72 @@ describe("lens-dependencies", () => {
     expect(result.findings.filter((f) => f.id.startsWith("rule:"))).toEqual([]);
   });
 });
+
+/**
+ * The scope "src" cut from a project. a.ts imports lib/util.ts and calls its function u. lib/other.ts is outside: it
+ * imports c.ts and has an unresolved import of its own. c.ts has an unresolved import too. a.ts and b.ts import each other.
+ */
+function scopedFixture() {
+  return fx.view({
+    nodes: [
+      fx.node("src/a.ts", "structure", "structure.file", { attrs: { path: "src/a.ts" } }),
+      fx.node("src/b.ts", "structure", "structure.file"),
+      fx.node("src/c.ts", "structure", "structure.file"),
+      fx.node("src/a.ts#f", "structure", "structure.function", { parent: "src/a.ts", span: sp("src/a.ts") }),
+      fx.node("lib/util.ts", "structure", "structure.file", { attrs: { external: true } }),
+      fx.node("lib/other.ts", "structure", "structure.file", { attrs: { external: true } }),
+      fx.node("lib/util.ts#u", "structure", "structure.function", { attrs: { name: "u", external: true } }),
+    ],
+    edges: [
+      fx.edge("src/a.ts", "src/b.ts", "packaging", "packaging.import"),
+      fx.edge("src/b.ts", "src/a.ts", "packaging", "packaging.import"),
+      fx.edge("src/a.ts", "lib/util.ts", "packaging", "packaging.import", { span: fx.span("src/a.ts", 0, 0, 0, 20) }),
+      fx.edge("src/c.ts", { unresolved: { scheme: "ts.import", text: "left-pad" } }, "packaging", "packaging.import"),
+      fx.edge("lib/other.ts", "src/c.ts", "packaging", "packaging.import"),
+      fx.edge("lib/other.ts", { unresolved: { scheme: "ts.import", text: "magic" } }, "packaging", "packaging.import"),
+      fx.edge("src/a.ts#f", "lib/util.ts#u", "calls", "calls.call"),
+    ],
+  });
+}
+
+const runScoped = (config?: unknown): Promise<LensResult> =>
+  lensDependencies.run(scopedFixture(), {
+    root: { path: "/unused", name: "fixture", allowBuildTools: false },
+    config,
+    resultOf: () => undefined,
+    scope: "src",
+  });
+
+describe("lens-dependencies in a partial scope", () => {
+  it("keeps the cycle inside the scope and finds no cycle through outside modules", async () => {
+    const result = await runScoped();
+    const cycles = result.findings.filter((f) => f.id.startsWith("cycle:"));
+    expect(cycles.map((f) => f.nodes)).toEqual([["src/a.ts", "src/b.ts"]]);
+  });
+
+  it("counts in-scope modules apart from outside ones, and unresolved imports only inside the scope", async () => {
+    const result = await runScoped();
+    expect(result.metrics).toMatchObject({ modules: 3, externalModules: 2, unresolvedImports: 1 });
+  });
+
+  it("labels outside modules in the graph and lifts a call into an outside function onto its module", async () => {
+    const result = await runScoped();
+    const graph = result.views.find((v): v is GraphView => v.type === "graph");
+    expect(graph?.nodes.find((n) => n.id === "lib/util.ts")?.group).toBe("(outside scope)");
+    expect(graph?.nodes.find((n) => n.id === "src/a.ts")?.group).toBe("src");
+    expect(graph?.edges.some((e) => e.kind === "call" && e.from === "src/a.ts" && e.to === "lib/util.ts")).toBe(true);
+    expect(graph?.edges.some((e) => e.kind === "import" && e.from === "lib/other.ts" && e.to === "src/c.ts")).toBe(true);
+  });
+
+  it("checks a rule only against importers inside the scope", async () => {
+    const result = await runScoped({
+      rules: [
+        { from: "src/a.ts", notDependOn: ["lib/**"], reason: "a stays local" },
+        { from: "lib/**", notDependOn: ["src/**"] },
+      ],
+    });
+    const violations = result.findings.filter((f) => f.id.startsWith("rule:")).map((f) => f.id);
+    expect(violations).toEqual(["rule:0:src/a.ts>lib/util.ts"]);
+    expect(result.metrics.ruleViolations).toBe(1);
+  });
+});

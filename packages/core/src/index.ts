@@ -11,6 +11,8 @@ export * from "./coverage.js";
 export * from "./indexdb.js";
 export * from "./pipeline.js";
 export * from "./analyze.js";
+export * from "./scope.js";
+export * from "./scoped-analysis.js";
 export * from "./diff.js";
 export * from "./commits.js";
 export * from "./review.js";

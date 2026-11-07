@@ -100,3 +100,36 @@ describe("lensLockOrder", () => {
     expect(graph?.edges.find((e) => e.from === "A" && e.to === "B")?.span).toBeDefined();
   });
 });
+
+/**
+ * The scope "src" cut from a project. f (in scope) takes A, then calls k, which is outside the scope. k calls g (in
+ * scope), which takes B. An acquire node under k has no lock name, and it is outside, so it must be ignored.
+ */
+function scopedFixture() {
+  const file = "src/l.cpp";
+  return fx.view({
+    nodes: [
+      fx.node(file, "structure", "structure.file"),
+      fx.node(`${file}#f`, "structure", "structure.function", { parent: file, attrs: { name: "f" }, span: fx.span(file, 0, 0, 5, 1) }),
+      fx.node(`${file}#g`, "structure", "structure.function", { parent: file, attrs: { name: "g" }, span: fx.span(file, 10, 0, 15, 1) }),
+      fx.node("lib/x.cpp#k", "structure", "structure.function", { attrs: { name: "k", external: true } }),
+      lock(`${file}#f@a`, `${file}#f`, "A", file, 1),
+      lock(`${file}#g@b`, `${file}#g`, "B", file, 11),
+      fx.node("lib/x.cpp@acq", "sync", "sync.lock-acquire", { parent: "lib/x.cpp#k", attrs: { external: true }, span: at("lib/x.cpp", 3) }),
+    ],
+    edges: [
+      fx.edge(`${file}#f`, "lib/x.cpp#k", "calls", "calls.call", { span: at(file, 2) }),
+      fx.edge("lib/x.cpp#k", `${file}#g`, "calls", "calls.call"),
+    ],
+  });
+}
+
+describe("lockOrderEdges in a partial scope", () => {
+  it("orders the held lock before a lock taken through an outside function, as inferred", () => {
+    const { edges, locks, unknownLocks } = lockOrderEdges(scopedFixture());
+    expect(edges.map((e) => `${e.from}>${e.to}`)).toEqual(["A>B"]);
+    expect(edges[0]?.sites[0]?.confidence).toBe("inferred");
+    expect(locks).toEqual(["A", "B"]);
+    expect(unknownLocks).toBe(0);
+  });
+});

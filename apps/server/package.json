@@ -21,6 +21,7 @@
   "dependencies": {
     "@fastify/static": "^9.0.0",
     "@insight/core": "workspace:*",
+    "@insight/flow": "workspace:*",
     "@insight/ir": "workspace:*",
     "@insight/sdk": "workspace:*",
     "fastify": "^5.12.8"

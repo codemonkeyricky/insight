@@ -5,6 +5,8 @@ import type {
   Annotation,
   Compare,
   FileEntry,
+  FileFlow,
+  FileFlowSummary,
   FileSymbol,
   FileView,
   FindingRow,
@@ -14,9 +16,13 @@ import type {
   Project,
   Review,
   ReviewStale,
+  ScopeLensRow,
+  ScopeLenses,
+  ScopeLensRun,
   SourceSlice,
   TargetType,
 } from "./api";
+import { scopeKey, scopeProblem } from "./scopeKey";
 
 interface RawNode {
   id: string;
@@ -48,7 +54,10 @@ function load<T>(name: string): Promise<T> {
   let hit = cache.get(name) as Promise<T> | undefined;
   if (!hit) {
     hit = fetch(base + name).then((res) => {
-      if (!res.ok) throw new ApiError(res.status, `demo data ${name} is missing (${res.status})`);
+      // A host that answers an unknown path with its HTML page has no such file, the same as a 404.
+      const isPage = (res.headers.get("content-type") ?? "").includes("text/html");
+      const status = !res.ok ? res.status : isPage ? 404 : 200;
+      if (status !== 200) throw new ApiError(status, `demo data ${name} is missing (${status})`);
       return res.json() as Promise<T>;
     });
     cache.set(name, hit);
@@ -100,6 +109,33 @@ function loadGraph() {
   return graphIndex;
 }
 
+/** A captured file of one scope, or undefined when the capture did not write it. */
+function scopeFile<T>(scope: string, name: string): Promise<T | undefined> {
+  return load<T>(`scope/${scopeKey(scope)}/${name}`).catch((e: unknown) => {
+    if (e instanceof ApiError && e.status === 404) return undefined;
+    throw e;
+  });
+}
+
+/** The scope's listing as the capture saved it. A scope the capture did not reach is "no such scope", as on the server. */
+async function scopeListing(scope: string): Promise<ScopeLenses> {
+  const problem = scopeProblem(scope);
+  if (problem) throw new ApiError(400, problem);
+  const listing = await scopeFile<ScopeLenses>(scope, "lenses.json");
+  if (!listing) throw new ApiError(404, "no such scope");
+  return listing;
+}
+
+/**
+ * The record of a lens whose result the capture did not save. The capture saves only ok results with
+ * something to show, so an ok lens here has nothing in it, and the other statuses carry their reason.
+ */
+function recordOf(row: ScopeLensRow): LensRecord {
+  if (row.status === "ok") return { id: row.id, title: row.title, status: "ok", reused: false, result: { findings: [], views: [], metrics: {} } };
+  if (row.status === "unavailable" || row.status === "error") return { id: row.id, title: row.title, status: row.status, reason: row.reason, reused: false };
+  return { id: row.id, title: row.title, status: "unavailable", reason: "Not captured for this scope in the demo.", reused: false };
+}
+
 export const staticApi = {
   health: async () => ({ ok: true, version: "demo" }),
   projects: async () => [(await project()).project],
@@ -117,6 +153,20 @@ export const staticApi = {
     const lens = (await load<Record<string, LensRecord>>("lenses.json"))[lensId];
     if (!lens) throw new ApiError(404, `no lens ${lensId} in this snapshot`);
     return lens;
+  },
+  scopeLenses: async (id: string, scope: string): Promise<ScopeLenses> => {
+    await checkProject(id);
+    return scopeListing(scope);
+  },
+  scopeLens: async (id: string, scope: string, lensId: string): Promise<ScopeLensRun> => {
+    await checkProject(id);
+    const listing = await scopeListing(scope);
+    const row = listing.lenses.find((l) => l.id === lensId);
+    if (!row) throw new ApiError(404, `no lens ${lensId}`);
+    // The capture writes a result file only for an ok lens with something to show, so no other lens asks for one.
+    const saved = row.status === "ok" && row.hasContent === true ? await scopeFile<ScopeLensRun>(scope, `${lensId}.json`) : undefined;
+    if (saved) return saved;
+    return { snapshot: listing.snapshot, scope: listing.scope, kind: listing.kind, lens: recordOf(row) };
   },
   findings: async (id: string, filter: { lens?: string; severity?: string; snapshot?: string } = {}): Promise<FindingRow[]> => {
     await checkProject(id);
@@ -186,6 +236,19 @@ export const staticApi = {
       symbols,
       findings,
     };
+  },
+  /** A file with no functions has no flow file, so that answers an empty chart rather than an error. */
+  flow: async (id: string, path: string): Promise<FileFlow> => {
+    await checkProject(id);
+    const name = `flow/${path.split("/").map(encodeURIComponent).join("/")}.json`;
+    return load<FileFlow>(name).catch((e: unknown) => {
+      if (e instanceof ApiError && e.status === 404) return { file: path, functions: [] };
+      throw e;
+    });
+  },
+  flowSummary: async (id: string): Promise<FileFlowSummary[]> => {
+    await checkProject(id);
+    return (await load<{ snapshot: string | null; files: FileFlowSummary[] }>("flow-summary.json")).files;
   },
   // Comparing commits and keeping review decisions and notes need a git history and a writable
   // store, which the static demo does not have. The tabs are hidden in demo mode; these keep the

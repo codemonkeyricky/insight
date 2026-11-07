@@ -1,5 +1,9 @@
+import type { FileFlow, FileFlowSummary } from "@insight/flow";
 import { ApiError } from "./apiError";
 import { staticApi } from "./staticApi";
+
+// Types only: the flow package is not bundled, its charts are drawn by components/FlowChart.tsx.
+export type { FileFlow, FileFlowSummary, FlowEdge, FlowEdgeKind, FlowNode, FlowRole, FlowShape, FlowSpan, FlowStats, FunctionFlow } from "@insight/flow";
 
 /** True in the read-only demo build (VITE_STATIC=1): one fixed project, served from JSON files. */
 export const IS_DEMO = import.meta.env.VITE_STATIC === "1";
@@ -124,6 +128,46 @@ export interface LensRecord {
   reason?: string;
   reused: boolean;
   result?: { findings: FindingRow[]; views: LensView[]; metrics: Record<string, unknown> };
+}
+
+/** What a scope is: the whole project, a folder, or one file. */
+export type ScopeLevel = "project" | "folder" | "file";
+
+export interface ScopeStats {
+  /** Nodes that belong to the scope. */
+  nodes: number;
+  edges: number;
+  findings: number;
+  /** Nodes outside the scope that an edge inside it reaches. */
+  external: number;
+}
+
+/** One lens on one scope. "not-run" means no run of the lens on this scope is stored yet. */
+export interface ScopeLensRow {
+  id: string;
+  title: string;
+  status: "ok" | "unavailable" | "error" | "not-run";
+  reason?: string;
+  findings: number | null;
+  /** Demo captures only: false when the lens has no views or findings for the scope, so its tab is dimmed. */
+  hasContent?: boolean;
+}
+
+export interface ScopeLenses {
+  snapshot: string;
+  scope: string;
+  kind: ScopeLevel;
+  stats: ScopeStats;
+  facets: string[];
+  lenses: ScopeLensRow[];
+}
+
+/** One lens run on one scope. */
+export interface ScopeLensRun {
+  snapshot: string;
+  scope: string;
+  kind: ScopeLevel;
+  lens: LensRecord;
 }
 
 export interface SourceSlice {
@@ -301,11 +345,18 @@ const liveApi = {
     call<{ snapshot: string | null; lens: LensRecord }>("GET", `/api/projects/${id}/lenses/${lensId}${q({ snapshot })}`).then((r) => r.lens),
   findings: (id: string, filter: { lens?: string; severity?: string; snapshot?: string } = {}) =>
     call<{ findings: FindingRow[] }>("GET", `/api/projects/${id}/findings${q(filter)}`).then((r) => r.findings),
-  source: (id: string, file: string, start: number, end: number, context = 3) =>
+  // The path is always sent, even when it is "" (the project), so the query is built here: q() drops empty values.
+  scopeLenses: (id: string, scope: string) => call<ScopeLenses>("GET", `/api/projects/${id}/scope/lenses?path=${encodeURIComponent(scope)}`),
+  scopeLens: (id: string, scope: string, lensId: string) =>
+    call<ScopeLensRun>("GET", `/api/projects/${id}/scope/lenses/${encodeURIComponent(lensId)}?path=${encodeURIComponent(scope)}`),
+  source:(id: string, file: string, start: number, end: number, context = 3) =>
     call<SourceSlice>("GET", `/api/projects/${id}/source${q({ file, start, end, context })}`),
   files: (id: string, snapshot?: string) =>
     call<{ snapshot: string | null; files: FileEntry[] }>("GET", `/api/projects/${id}/files${q({ snapshot })}`).then((r) => r.files),
   file: (id: string, path: string, snapshot?: string) => call<FileView>("GET", `/api/projects/${id}/file${q({ path, snapshot })}`),
+  flow: (id: string, path: string) => call<FileFlow>("GET", `/api/projects/${id}/flow${q({ path })}`),
+  flowSummary: (id: string) =>
+    call<{ snapshot: string | null; files: FileFlowSummary[] }>("GET", `/api/projects/${id}/flow-summary`).then((r) => r.files),
   node: (id: string, nodeId: string) => call<NodeFacts>("GET", `/api/projects/${id}/nodes/${nodeId.split("/").map(encodeURIComponent).join("/")}`),
   compare: (id: string, base: string, head: string) => call<Compare>("GET", `/api/projects/${id}/compare${q({ base, head })}`),
   review: (id: string, snapshot?: string) => call<Review>("GET", `/api/projects/${id}/review${q({ snapshot })}`),
