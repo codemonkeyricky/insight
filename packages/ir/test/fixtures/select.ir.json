@@ -1,0 +1,2 @@
+{"node":{"id":"app/worker.go#run","facet":"structure","kind":"structure.function","attrs":{"name":"run"},"provenance":{"frontend":"hand-written","confidence":"exact"}}}
+{"node":{"id":"app/worker.go#run/select/1","facet":"flow","kind":"x-test.select","parent":"app/worker.go#run","attrs":{"hasDefault":true},"provenance":{"frontend":"hand-written","confidence":"exact"}}}

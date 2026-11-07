@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://insight.dev/ir/facets/sync.json",
+  "title": "SyncFacet",
+  "description": "Coordination between concurrent things.",
+  "$defs": {
+    "SyncLockAcquire": { "type": "object", "required": ["lock"], "properties": { "lock": { "type": "string", "minLength": 1 }, "mode": { "enum": ["exclusive", "shared"] } } },
+    "SyncLockRelease": { "type": "object", "required": ["lock"], "properties": { "lock": { "type": "string", "minLength": 1 } } },
+    "SyncRwlockAcquire": { "type": "object", "required": ["mode"], "properties": { "mode": { "enum": ["shared", "exclusive"] } } },
+    "SyncSemaphore": { "type": "object", "required": ["op"], "properties": { "op": { "enum": ["acquire", "release"] }, "name": { "type": "string" } } },
+    "SyncAtomicOp": { "type": "object", "properties": { "op": { "type": "string" } } },
+    "SyncCondvar": { "type": "object", "required": ["op"], "properties": { "op": { "enum": ["wait", "notify"] } } }
+  }
+}

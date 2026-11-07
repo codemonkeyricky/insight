@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://insight.dev/ir/facets/calls.json",
+  "title": "CallsFacet",
+  "description": "Who invokes whom.",
+  "$defs": {
+    "CallsCallSite": { "type": "object", "properties": { "callee": { "type": "string" }, "dynamic": { "type": "boolean" } } },
+    "CallsDynamicDispatch": { "type": "object", "properties": { "receiver": { "type": "string" }, "method": { "type": "string" } } },
+    "CallsCallbackRegistration": { "type": "object", "properties": { "api": { "type": "string" } } },
+    "CallsCall": { "type": "object", "properties": { "callee": { "type": "string" } } },
+    "CallsContainsCall": { "type": "object" }
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://insight.dev/ir/kind-definition.json",
+  "title": "KindDefinition",
+  "description": "A kind declared as data. It may extend one kind and may be composed of existing kinds.",
+  "type": "object",
+  "required": ["kind", "facet", "on"],
+  "additionalProperties": false,
+  "properties": {
+    "kind": { "$ref": "https://insight.dev/ir/core.json#/$defs/KindName" },
+    "facet": { "$ref": "https://insight.dev/ir/core.json#/$defs/FacetId" },
+    "on": { "description": "Whether instances are nodes or edges.", "enum": ["node", "edge"] },
+    "extends": { "$ref": "https://insight.dev/ir/core.json#/$defs/KindName" },
+    "attrs": { "description": "JSON Schema for the kind's own attributes.", "type": "object" },
+    "composedOf": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Part" }
+    },
+    "description": { "type": "string" }
+  },
+  "$defs": {
+    "Part": {
+      "type": "object",
+      "required": ["role"],
+      "additionalProperties": false,
+      "anyOf": [{ "required": ["kind"] }, { "required": ["oneOf"] }],
+      "properties": {
+        "role": { "type": "string", "minLength": 1 },
+        "kind": { "$ref": "https://insight.dev/ir/core.json#/$defs/KindName" },
+        "oneOf": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "https://insight.dev/ir/core.json#/$defs/KindName" }
+        },
+        "many": { "type": "boolean" },
+        "optional": { "type": "boolean" },
+        "contains": { "type": "array", "items": { "$ref": "#/$defs/Part" } }
+      }
+    }
+  }
+}

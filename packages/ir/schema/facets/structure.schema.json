@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://insight.dev/ir/facets/structure.json",
+  "title": "StructureFacet",
+  "description": "Containment: package, module, file, namespace, type, function. Attribute schemas are open so plugins can add fields.",
+  "$defs": {
+    "StructurePackage": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string", "minLength": 1 }, "root": { "type": "string" } } },
+    "StructureModule": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string", "minLength": 1 }, "path": { "type": "string" } } },
+    "StructureFile": { "type": "object", "required": ["path"], "properties": { "path": { "type": "string", "minLength": 1 }, "language": { "type": "string" }, "parseStatus": { "enum": ["ok", "error"] } } },
+    "StructureNamespace": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string", "minLength": 1 } } },
+    "StructureType": { "type": "object", "required": ["name", "typeKind"], "properties": { "name": { "type": "string", "minLength": 1 }, "typeKind": { "enum": ["class", "interface", "struct", "enum", "alias"] } } },
+    "StructureFunction": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string", "minLength": 1 }, "qualifiedName": { "type": "string" }, "async": { "type": "boolean" }, "exported": { "type": "boolean" } } }
+  }
+}

@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://insight.dev/ir/core.json",
+  "title": "IRRecord",
+  "description": "One line of an IR NDJSON stream: a node, an edge or a finding.",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["node"],
+      "additionalProperties": false,
+      "properties": { "node": { "$ref": "#/$defs/IRNode" } }
+    },
+    {
+      "type": "object",
+      "required": ["edge"],
+      "additionalProperties": false,
+      "properties": { "edge": { "$ref": "#/$defs/IREdge" } }
+    },
+    {
+      "type": "object",
+      "required": ["finding"],
+      "additionalProperties": false,
+      "properties": { "finding": { "$ref": "#/$defs/IRFinding" } }
+    }
+  ],
+  "$defs": {
+    "FacetId": {
+      "type": "string",
+      "pattern": "^(structure|packaging|flow|calls|concurrency|sync|effects|x-[a-z0-9-]+)$"
+    },
+    "KindName": {
+      "type": "string",
+      "pattern": "^(structure|packaging|flow|calls|concurrency|sync|effects|x-[a-z0-9-]+)\\.[a-z0-9][a-z0-9-]*(\\.[a-z0-9][a-z0-9-]*)*$"
+    },
+    "NodeId": { "type": "string", "minLength": 1 },
+    "Position": {
+      "description": "[line, column], both zero-based.",
+      "type": "array",
+      "items": { "type": "integer", "minimum": 0 },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "Span": {
+      "type": "object",
+      "required": ["file", "start", "end"],
+      "additionalProperties": false,
+      "properties": {
+        "file": { "type": "string", "minLength": 1 },
+        "start": { "$ref": "#/$defs/Position" },
+        "end": { "$ref": "#/$defs/Position" }
+      }
+    },
+    "Provenance": {
+      "type": "object",
+      "required": ["frontend", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "frontend": { "type": "string", "minLength": 1 },
+        "confidence": { "enum": ["exact", "inferred", "heuristic"] },
+        "mode": { "description": "How the fact was produced, e.g. tool-backed or static.", "type": "string" },
+        "configuration": { "description": "Build configuration the fact belongs to.", "type": "string" }
+      }
+    },
+    "IRNode": {
+      "type": "object",
+      "required": ["id", "facet", "kind", "attrs", "provenance"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/NodeId" },
+        "facet": { "$ref": "#/$defs/FacetId" },
+        "kind": { "$ref": "#/$defs/KindName" },
+        "parent": { "$ref": "#/$defs/NodeId" },
+        "span": { "$ref": "#/$defs/Span" },
+        "attrs": { "type": "object" },
+        "provenance": { "$ref": "#/$defs/Provenance" }
+      }
+    },
+    "UnresolvedRef": {
+      "type": "object",
+      "required": ["unresolved"],
+      "additionalProperties": false,
+      "properties": {
+        "unresolved": {
+          "type": "object",
+          "required": ["scheme", "text"],
+          "additionalProperties": false,
+          "properties": {
+            "scheme": { "type": "string", "minLength": 1 },
+            "text": { "type": "string" }
+          }
+        }
+      }
+    },
+    "CandidateSet": {
+      "type": "object",
+      "required": ["candidates"],
+      "additionalProperties": false,
+      "properties": {
+        "candidates": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/NodeId" }
+        }
+      }
+    },
+    "EdgeTarget": {
+      "oneOf": [
+        { "$ref": "#/$defs/NodeId" },
+        { "$ref": "#/$defs/UnresolvedRef" },
+        { "$ref": "#/$defs/CandidateSet" }
+      ]
+    },
+    "IREdge": {
+      "type": "object",
+      "required": ["from", "to", "facet", "kind", "provenance"],
+      "additionalProperties": false,
+      "properties": {
+        "from": { "$ref": "#/$defs/NodeId" },
+        "to": { "$ref": "#/$defs/EdgeTarget" },
+        "facet": { "$ref": "#/$defs/FacetId" },
+        "kind": { "$ref": "#/$defs/KindName" },
+        "attrs": { "type": "object" },
+        "span": { "$ref": "#/$defs/Span" },
+        "provenance": { "$ref": "#/$defs/Provenance" }
+      }
+    },
+    "IRFinding": {
+      "type": "object",
+      "required": ["severity", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "severity": { "enum": ["info", "warning", "error"] },
+        "message": { "type": "string", "minLength": 1 },
+        "nodes": { "type": "array", "items": { "$ref": "#/$defs/NodeId" } },
+        "span": { "$ref": "#/$defs/Span" },
+        "provenance": { "$ref": "#/$defs/Provenance" }
+      }
+    }
+  }
+}

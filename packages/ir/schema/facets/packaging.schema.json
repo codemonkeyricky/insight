@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://insight.dev/ir/facets/packaging.json",
+  "title": "PackagingFacet",
+  "description": "How code is split and wired together.",
+  "$defs": {
+    "PackagingBuildTarget": { "type": "object", "required": ["name", "source"], "properties": { "name": { "type": "string", "minLength": 1 }, "label": { "type": "string" }, "targetKind": { "type": "string" }, "source": { "enum": ["tool", "static"] } } },
+    "PackagingImport": { "type": "object", "required": ["specifier"], "properties": { "specifier": { "type": "string" }, "typeOnly": { "type": "boolean" }, "dynamic": { "type": "boolean" } } },
+    "PackagingExport": { "type": "object", "properties": { "name": { "type": "string" } } },
+    "PackagingReExport": { "type": "object", "properties": { "specifier": { "type": "string" } } },
+    "PackagingInclude": { "type": "object", "properties": { "text": { "type": "string" }, "system": { "type": "boolean" } } },
+    "PackagingDepEdge": { "type": "object", "properties": { "scope": { "type": "string" } } },
+    "PackagingTargetContains": { "type": "object" }
+  }
+}

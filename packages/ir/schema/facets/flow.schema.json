@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://insight.dev/ir/facets/flow.json",
+  "title": "FlowFacet",
+  "description": "Control flow inside a function.",
+  "$defs": {
+    "FlowBlock": { "type": "object" },
+    "FlowBranch": { "type": "object", "properties": { "condition": { "type": "string" } } },
+    "FlowBranchArm": { "type": "object", "properties": { "label": { "type": "string" } } },
+    "FlowSwitch": { "type": "object", "properties": { "hasDefault": { "type": "boolean" } } },
+    "FlowLoop": { "type": "object", "required": ["variant"], "properties": { "variant": { "enum": ["for", "while", "do", "for-of", "for-in"] } } },
+    "FlowTry": { "type": "object", "properties": { "hasFinally": { "type": "boolean" } } },
+    "FlowThrow": { "type": "object" },
+    "FlowReturn": { "type": "object" }
+  }
+}

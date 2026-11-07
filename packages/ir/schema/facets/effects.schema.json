@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://insight.dev/ir/facets/effects.json",
+  "title": "EffectsFacet",
+  "description": "System calls and other contact with the outside world.",
+  "$defs": {
+    "EffectsFsRead": { "type": "object", "required": ["api"], "properties": { "api": { "type": "string" }, "path": { "type": "string" } } },
+    "EffectsFsWrite": { "type": "object", "required": ["api"], "properties": { "api": { "type": "string" }, "path": { "type": "string" } } },
+    "EffectsNetConnect": { "type": "object", "required": ["api"], "properties": { "api": { "type": "string" }, "host": { "type": "string" } } },
+    "EffectsNetListen": { "type": "object", "required": ["api"], "properties": { "api": { "type": "string" }, "port": { "type": "string" } } },
+    "EffectsProcExec": { "type": "object", "required": ["api"], "properties": { "api": { "type": "string" }, "command": { "type": "string" } } },
+    "EffectsEnvRead": { "type": "object", "required": ["api"], "properties": { "api": { "type": "string" }, "name": { "type": "string" } } },
+    "EffectsClockRead": { "type": "object", "required": ["api"], "properties": { "api": { "type": "string" } } },
+    "EffectsUnknown": { "type": "object", "properties": { "api": { "type": "string" } } }
+  }
+}

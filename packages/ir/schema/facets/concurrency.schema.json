@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://insight.dev/ir/facets/concurrency.json",
+  "title": "ConcurrencyFacet",
+  "description": "Things that run alongside other things.",
+  "$defs": {
+    "ConcurrencySpawnThread": { "type": "object", "properties": { "target": { "type": "string" } } },
+    "ConcurrencySpawnProcess": { "type": "object", "properties": { "target": { "type": "string" } } },
+    "ConcurrencyCoroutine": { "type": "object", "properties": { "name": { "type": "string" } } },
+    "ConcurrencyAsyncTask": { "type": "object", "properties": { "name": { "type": "string" } } },
+    "ConcurrencyAwait": { "type": "object" },
+    "ConcurrencyChannelSend": { "type": "object", "properties": { "channel": { "type": "string" } } },
+    "ConcurrencyChannelRecv": { "type": "object", "properties": { "channel": { "type": "string" } } },
+    "ConcurrencySpawns": { "type": "object" }
+  }
+}

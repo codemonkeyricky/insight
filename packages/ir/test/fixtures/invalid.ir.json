@@ -1,0 +1,5 @@
+{"node":{"id":"app/a.ts","facet":"structure","kind":"structure.file","attrs":{"path":"app/a.ts"},"provenance":{"frontend":"hand-written","confidence":"exact"}}}
+{"node":{"id":"app/a.ts#lock","facet":"sync","kind":"sync.lock-acquire","parent":"app/a.ts","attrs":{"mode":"exclusive"},"provenance":{"frontend":"hand-written","confidence":"exact"}}}
+{"node":{"id":"app/a.ts#bad","facet":"nonsense","kind":"structure.function","attrs":{"name":"f"},"provenance":{"frontend":"hand-written","confidence":"exact"}}}
+this line is not json
+{"edge":{"from":"app/a.ts#missing","to":"app/a.ts","facet":"packaging","kind":"packaging.import","provenance":{"frontend":"hand-written","confidence":"exact"}}}

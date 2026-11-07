@@ -1,0 +1,399 @@
+[
+  {
+    "kind": "structure.package",
+    "facet": "structure",
+    "on": "node",
+    "description": "A package or project root.",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/structure.json#/$defs/StructurePackage"
+    }
+  },
+  {
+    "kind": "structure.module",
+    "facet": "structure",
+    "on": "node",
+    "description": "A module (one import unit).",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/structure.json#/$defs/StructureModule"
+    }
+  },
+  {
+    "kind": "structure.file",
+    "facet": "structure",
+    "on": "node",
+    "description": "A source file. Created by discovery before any frontend runs.",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/structure.json#/$defs/StructureFile"
+    }
+  },
+  {
+    "kind": "structure.namespace",
+    "facet": "structure",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/structure.json#/$defs/StructureNamespace"
+    }
+  },
+  {
+    "kind": "structure.type",
+    "facet": "structure",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/structure.json#/$defs/StructureType"
+    }
+  },
+  {
+    "kind": "structure.function",
+    "facet": "structure",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/structure.json#/$defs/StructureFunction"
+    }
+  },
+  {
+    "kind": "flow.block",
+    "facet": "flow",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/flow.json#/$defs/FlowBlock"
+    }
+  },
+  {
+    "kind": "flow.branch",
+    "facet": "flow",
+    "on": "node",
+    "description": "if / else, or any two-way choice.",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/flow.json#/$defs/FlowBranch"
+    }
+  },
+  {
+    "kind": "flow.branch-arm",
+    "facet": "flow",
+    "on": "node",
+    "description": "One arm of a branch.",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/flow.json#/$defs/FlowBranchArm"
+    }
+  },
+  {
+    "kind": "flow.switch",
+    "facet": "flow",
+    "on": "node",
+    "extends": "flow.branch",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/flow.json#/$defs/FlowSwitch"
+    }
+  },
+  {
+    "kind": "flow.loop",
+    "facet": "flow",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/flow.json#/$defs/FlowLoop"
+    }
+  },
+  {
+    "kind": "flow.try",
+    "facet": "flow",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/flow.json#/$defs/FlowTry"
+    }
+  },
+  {
+    "kind": "flow.throw",
+    "facet": "flow",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/flow.json#/$defs/FlowThrow"
+    }
+  },
+  {
+    "kind": "flow.return",
+    "facet": "flow",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/flow.json#/$defs/FlowReturn"
+    }
+  },
+  {
+    "kind": "packaging.build-target",
+    "facet": "packaging",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/packaging.json#/$defs/PackagingBuildTarget"
+    }
+  },
+  {
+    "kind": "packaging.import",
+    "facet": "packaging",
+    "on": "edge",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/packaging.json#/$defs/PackagingImport"
+    }
+  },
+  {
+    "kind": "packaging.export",
+    "facet": "packaging",
+    "on": "edge",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/packaging.json#/$defs/PackagingExport"
+    }
+  },
+  {
+    "kind": "packaging.re-export",
+    "facet": "packaging",
+    "on": "edge",
+    "extends": "packaging.export",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/packaging.json#/$defs/PackagingReExport"
+    }
+  },
+  {
+    "kind": "packaging.include",
+    "facet": "packaging",
+    "on": "edge",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/packaging.json#/$defs/PackagingInclude"
+    }
+  },
+  {
+    "kind": "packaging.dep-edge",
+    "facet": "packaging",
+    "on": "edge",
+    "description": "A build-level dependency between targets or packages.",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/packaging.json#/$defs/PackagingDepEdge"
+    }
+  },
+  {
+    "kind": "packaging.target-contains",
+    "facet": "packaging",
+    "on": "edge",
+    "description": "A build target contains a file.",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/packaging.json#/$defs/PackagingTargetContains"
+    }
+  },
+  {
+    "kind": "calls.call-site",
+    "facet": "calls",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/calls.json#/$defs/CallsCallSite"
+    }
+  },
+  {
+    "kind": "calls.dynamic-dispatch",
+    "facet": "calls",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/calls.json#/$defs/CallsDynamicDispatch"
+    }
+  },
+  {
+    "kind": "calls.callback-registration",
+    "facet": "calls",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/calls.json#/$defs/CallsCallbackRegistration"
+    }
+  },
+  {
+    "kind": "calls.call",
+    "facet": "calls",
+    "on": "edge",
+    "description": "Caller function to callee function.",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/calls.json#/$defs/CallsCall"
+    }
+  },
+  {
+    "kind": "calls.contains-call",
+    "facet": "calls",
+    "on": "edge",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/calls.json#/$defs/CallsContainsCall"
+    }
+  },
+  {
+    "kind": "concurrency.spawn-thread",
+    "facet": "concurrency",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/concurrency.json#/$defs/ConcurrencySpawnThread"
+    }
+  },
+  {
+    "kind": "concurrency.spawn-process",
+    "facet": "concurrency",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/concurrency.json#/$defs/ConcurrencySpawnProcess"
+    }
+  },
+  {
+    "kind": "concurrency.coroutine",
+    "facet": "concurrency",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/concurrency.json#/$defs/ConcurrencyCoroutine"
+    }
+  },
+  {
+    "kind": "concurrency.async-task",
+    "facet": "concurrency",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/concurrency.json#/$defs/ConcurrencyAsyncTask"
+    }
+  },
+  {
+    "kind": "concurrency.await",
+    "facet": "concurrency",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/concurrency.json#/$defs/ConcurrencyAwait"
+    }
+  },
+  {
+    "kind": "concurrency.channel-send",
+    "facet": "concurrency",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/concurrency.json#/$defs/ConcurrencyChannelSend"
+    }
+  },
+  {
+    "kind": "concurrency.channel-recv",
+    "facet": "concurrency",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/concurrency.json#/$defs/ConcurrencyChannelRecv"
+    }
+  },
+  {
+    "kind": "concurrency.spawns",
+    "facet": "concurrency",
+    "on": "edge",
+    "description": "Spawning function to the thing it starts.",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/concurrency.json#/$defs/ConcurrencySpawns"
+    }
+  },
+  {
+    "kind": "sync.lock-acquire",
+    "facet": "sync",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/sync.json#/$defs/SyncLockAcquire"
+    }
+  },
+  {
+    "kind": "sync.lock-release",
+    "facet": "sync",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/sync.json#/$defs/SyncLockRelease"
+    }
+  },
+  {
+    "kind": "sync.rwlock-acquire",
+    "facet": "sync",
+    "on": "node",
+    "extends": "sync.lock-acquire",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/sync.json#/$defs/SyncRwlockAcquire"
+    }
+  },
+  {
+    "kind": "sync.semaphore",
+    "facet": "sync",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/sync.json#/$defs/SyncSemaphore"
+    }
+  },
+  {
+    "kind": "sync.atomic-op",
+    "facet": "sync",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/sync.json#/$defs/SyncAtomicOp"
+    }
+  },
+  {
+    "kind": "sync.condvar",
+    "facet": "sync",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/sync.json#/$defs/SyncCondvar"
+    }
+  },
+  {
+    "kind": "effects.fs.read",
+    "facet": "effects",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/effects.json#/$defs/EffectsFsRead"
+    }
+  },
+  {
+    "kind": "effects.fs.write",
+    "facet": "effects",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/effects.json#/$defs/EffectsFsWrite"
+    }
+  },
+  {
+    "kind": "effects.net.connect",
+    "facet": "effects",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/effects.json#/$defs/EffectsNetConnect"
+    }
+  },
+  {
+    "kind": "effects.net.listen",
+    "facet": "effects",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/effects.json#/$defs/EffectsNetListen"
+    }
+  },
+  {
+    "kind": "effects.proc.exec",
+    "facet": "effects",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/effects.json#/$defs/EffectsProcExec"
+    }
+  },
+  {
+    "kind": "effects.env.read",
+    "facet": "effects",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/effects.json#/$defs/EffectsEnvRead"
+    }
+  },
+  {
+    "kind": "effects.clock.read",
+    "facet": "effects",
+    "on": "node",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/effects.json#/$defs/EffectsClockRead"
+    }
+  },
+  {
+    "kind": "effects.unknown",
+    "facet": "effects",
+    "on": "node",
+    "description": "An external call no catalog recognises. Kept rather than dropped.",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/effects.json#/$defs/EffectsUnknown"
+    }
+  }
+]
