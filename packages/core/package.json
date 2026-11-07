@@ -1,0 +1,36 @@
+{
+  "name": "@insight/core",
+  "version": "0.1.0",
+  "description": "Insight core: plugin loader, Merkle change detection, shards, snapshots, linker, pipeline and SQLite index",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "schema"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@insight/ir": "workspace:*",
+    "@insight/sdk": "workspace:*",
+    "ajv": "^8.20.0",
+    "better-sqlite3": "^13.0.3",
+    "ignore": "^7.0.14",
+    "picomatch": "^4.0.7"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/picomatch": "^4.0.3"
+  }
+}

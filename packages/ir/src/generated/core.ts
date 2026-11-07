@@ -52,6 +52,10 @@ export interface Provenance {
    * Build configuration the fact belongs to.
    */
   configuration?: string;
+  /**
+   * The resolver plugin that settled an open reference.
+   */
+  resolvedBy?: string;
 }
 export interface IREdge {
   from: NodeId;

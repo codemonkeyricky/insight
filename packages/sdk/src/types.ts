@@ -21,6 +21,11 @@ export interface Detection {
 export interface IRBatch {
   file: string;
   records: IRRecord[];
+  /**
+   * Other project files this batch's facts were derived from, such as the file that declares a
+   * type a call was resolved against. Changing one of them re-extracts this batch.
+   */
+  dependsOn?: string[];
 }
 
 export interface ExtractContext {
@@ -45,6 +50,12 @@ export interface Frontend {
   defines?: KindDefinition[];
   detect(root: ProjectRoot): Promise<Detection | null>;
   extract(ctx: ExtractContext): AsyncIterable<IRBatch>;
+  /**
+   * Optional. A digest of the part of a file that other files can see (its API), computed from
+   * the text alone. When a dependency changes but its digest does not, dependents keep their shards.
+   * Without it the file's content hash is used.
+   */
+  apiDigest?(relPath: string, text: string): string;
 }
 
 export type Confidence = "exact" | "inferred" | "heuristic";
@@ -54,7 +65,8 @@ export interface ResolveContext {
   /** Project-relative path of the file that holds the unresolved reference. */
   fromFile: string;
   hasFile(relPath: string): boolean;
-  fileNodeId(relPath: string): NodeId | undefined;
+  /** True when a node with this id exists in the linked IR. */
+  hasNode(id: NodeId): boolean;
   listFiles(): string[];
 }
 

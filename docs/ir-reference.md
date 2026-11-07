@@ -134,4 +134,4 @@ Definitions from every plugin are merged into one registry. Each batch is checke
 
 ## Versioning
 
-Each facet is versioned. Plugins declare the IR version they target in their manifest (`irVersion`), and the loader rejects a mismatch with a message.
+Plugins declare the IR format version they target in their manifest (`irVersion`), and the loader rejects a mismatch with a message. Individual facets are not versioned yet; that is future work.

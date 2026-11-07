@@ -1,0 +1,13 @@
+{
+  "id": "frontend-typescript",
+  "version": "0.1.0",
+  "description": "TypeScript and JavaScript: structure, imports, calls, control flow and known effects.",
+  "irVersion": "^1.0",
+  "detect": ["tsconfig.json", "jsconfig.json", "package.json", "**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx"],
+  "files": ["**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs"],
+  "inputs": ["tsconfig*.json", "jsconfig.json"],
+  "provides": ["structure", "packaging", "flow", "calls", "effects"],
+  "roles": {
+    "frontend": "dist/index.js"
+  }
+}

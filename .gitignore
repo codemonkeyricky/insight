@@ -3,3 +3,6 @@ dist
 *.tsbuildinfo
 .insight/
 .DS_Store
+
+# scratch space for package tests (created and removed by the tests)
+.insight-test/

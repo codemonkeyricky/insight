@@ -1,0 +1,30 @@
+{
+  "name": "@insight/frontend-typescript",
+  "version": "0.1.0",
+  "description": "Insight frontend for TypeScript and JavaScript, built on the TypeScript compiler API",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "data",
+    "insight-plugin.json"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@insight/ir": "workspace:*",
+    "@insight/sdk": "workspace:*",
+    "typescript": "5.9.3"
+  }
+}
