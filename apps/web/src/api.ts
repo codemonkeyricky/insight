@@ -1,3 +1,9 @@
+import { ApiError } from "./apiError";
+import { staticApi } from "./staticApi";
+
+/** True in the read-only demo build (VITE_STATIC=1): one fixed project, served from JSON files. */
+export const IS_DEMO = import.meta.env.VITE_STATIC === "1";
+
 export type Span = { file: string; start: [number, number]; end: [number, number] };
 export type Severity = "error" | "warning" | "info";
 
@@ -128,11 +134,7 @@ export interface NodeFacts {
   incoming: { from: string; to: unknown; kind: string; span?: Span; provenance: { confidence: string } }[];
 }
 
-export class ApiError extends Error {
-  constructor(readonly status: number, message: string) {
-    super(message);
-  }
-}
+export { ApiError };
 
 async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
@@ -151,7 +153,7 @@ const q = (params: Record<string, string | number | undefined>) => {
   return entries.length === 0 ? "" : `?${new URLSearchParams(entries.map(([k, v]) => [k, String(v)])).toString()}`;
 };
 
-export const api = {
+const liveApi = {
   health: () => call<{ ok: boolean; version: string }>("GET", "/api/health"),
   projects: () => call<{ projects: Project[] }>("GET", "/api/projects").then((r) => r.projects),
   project: (id: string) => call<{ project: Project }>("GET", `/api/projects/${id}`).then((r) => r.project),
@@ -168,3 +170,6 @@ export const api = {
     call<SourceSlice>("GET", `/api/projects/${id}/source${q({ file, start, end, context })}`),
   node: (id: string, nodeId: string) => call<NodeFacts>("GET", `/api/projects/${id}/nodes/${nodeId.split("/").map(encodeURIComponent).join("/")}`),
 };
+
+/** The demo build answers from captured JSON; every other build calls the server. */
+export const api: typeof liveApi = IS_DEMO ? staticApi : liveApi;

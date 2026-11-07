@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
-import { api } from "./api";
+import { api, IS_DEMO } from "./api";
+import type { DemoMeta } from "./staticApi";
+import { staticApi } from "./staticApi";
 import { parseRoute, type Route } from "./router";
 import { ProjectsPage } from "./pages/Projects";
 import { ProjectOverviewPage } from "./pages/ProjectOverview";
@@ -19,6 +21,10 @@ function useRoute(): Route {
 export function App() {
   const route = useRoute();
   const [server, setServer] = useState<string>("checking");
+  const [meta, setMeta] = useState<DemoMeta | null>(null);
+  useEffect(() => {
+    if (IS_DEMO) void staticApi.meta().then(setMeta).catch(() => setMeta(null));
+  }, []);
   useEffect(() => {
     api
       .health()
@@ -32,7 +38,12 @@ export function App() {
         <a className="brand" href="#/">
           Insight
         </a>
-        <span className="muted small">{server}</span>
+        <span className="muted small">{IS_DEMO ? "read-only demo" : server}</span>
+        {IS_DEMO && meta && (
+          <span className="muted small mono" title={`captured ${meta.capturedAt}`}>
+            Insight at {meta.commit}
+          </span>
+        )}
       </header>
       <main>
         {route.name === "projects" && <ProjectsPage />}

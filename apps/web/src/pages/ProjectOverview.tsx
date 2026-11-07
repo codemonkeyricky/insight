@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, type FindingRow, type Overview } from "../api";
+import { api, IS_DEMO, type FindingRow, type Overview } from "../api";
 import { useProjectEvents, type RunEvent } from "../useEvents";
 import { hrefLens } from "../router";
 import { StatusBadge } from "./Projects";
@@ -75,12 +75,16 @@ export function ProjectOverviewPage({ id }: { id: string }) {
         </div>
         <div className="actions">
           <StatusBadge project={p} />
-          <label className="check small">
-            <input type="checkbox" checked={full} onChange={(e) => setFull(e.target.checked)} /> full
-          </label>
-          <button type="button" onClick={() => void reindex()} disabled={busy}>
-            Re-index
-          </button>
+          {!IS_DEMO && (
+            <>
+              <label className="check small">
+                <input type="checkbox" checked={full} onChange={(e) => setFull(e.target.checked)} /> full
+              </label>
+              <button type="button" onClick={() => void reindex()} disabled={busy}>
+                Re-index
+              </button>
+            </>
+          )}
         </div>
       </div>
       {p.error && <p className="error" role="alert">Last run failed: {p.error}</p>}
@@ -101,10 +105,14 @@ export function ProjectOverviewPage({ id }: { id: string }) {
         <Stat label="Indexed" value={p.last ? new Date(p.last.finishedAt).toLocaleString() : "never"} />
       </div>
 
-      <h2>Run log</h2>
-      <pre className="log" aria-live="polite" data-testid="run-log">
-        {log.length === 0 ? "No run in this session yet. Re-index to see progress." : log.join("\n")}
-      </pre>
+      {!IS_DEMO && (
+        <>
+          <h2>Run log</h2>
+          <pre className="log" aria-live="polite" data-testid="run-log">
+            {log.length === 0 ? "No run in this session yet. Re-index to see progress." : log.join("\n")}
+          </pre>
+        </>
+      )}
 
       <h2>Lenses</h2>
       <table className="grid">

@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { api, ApiError, type Project } from "../api";
+import { api, ApiError, IS_DEMO, type Project } from "../api";
 import { hrefProject } from "../router";
 
 export function ProjectsPage() {
@@ -9,14 +9,20 @@ export function ProjectsPage() {
 
   useEffect(() => {
     void load();
-    const timer = setInterval(() => void load(), 4000);
+    const timer = IS_DEMO ? undefined : setInterval(() => void load(), 4000);
     return () => clearInterval(timer);
   }, []);
 
   return (
     <section>
       <h1>Projects</h1>
-      <AddProject onAdded={() => void load()} />
+      {IS_DEMO ? (
+        <p className="panel muted">
+          This demo shows one fixed project: Insight analysing its own latest commit. Run Insight locally to add your own projects.
+        </p>
+      ) : (
+        <AddProject onAdded={() => void load()} />
+      )}
       {error && <p className="error" role="alert">{error}</p>}
       {projects === null && !error && <p className="muted">Loading</p>}
       {projects?.length === 0 && <p className="muted">No projects yet. Add a folder or a git URL above.</p>}
