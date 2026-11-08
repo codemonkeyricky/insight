@@ -296,4 +296,74 @@ describe("scoped IR routes", () => {
       expect(pinned.body).toEqual(latest.body);
     });
   });
+
+  describe("the execution model route", () => {
+    interface ExecListing {
+      snapshot: string;
+      scope: string;
+      kind: string;
+      truncated: boolean;
+      functions: { id: string; inScope: boolean }[];
+      threads: { id: string; kind: string; roots: string[]; reach: number; reached: string[]; coroutines: unknown[] }[];
+      dispatches: unknown[];
+      stats: { threads: number; spawns: number; functionsInScope: number; functionsThreaded: number; functionsUnthreaded: number };
+    }
+    const execUrl = (path: string) => `/api/projects/${id}/scope/exec?path=${encodeURIComponent(path)}`;
+
+    it("answers 400 when the path is missing or given twice, and for a path that leaves the project", async () => {
+      const missing = await get<{ error: string }>(`/api/projects/${id}/scope/exec`);
+      expect(missing.status).toBe(400);
+      expect(missing.body.error).toBe("path is required");
+      const twice = await get<{ error: string }>(`/api/projects/${id}/scope/exec?path=src&path=lib`);
+      expect(twice.status).toBe(400);
+      for (const path of ["../outside", "/etc", "src/../../x"]) {
+        const res = await get<{ error: string }>(execUrl(path));
+        expect(res.status, path).toBe(400);
+      }
+    });
+
+    it("answers 404 for a path with no indexed file under it, an unknown snapshot, and a project with no snapshot", async () => {
+      for (const path of ["nope", "src/a.ts/x", "docs"]) {
+        const res = await get<{ error: string }>(execUrl(path));
+        expect(res.status, path).toBe(404);
+        expect(res.body.error).toBe("no such scope");
+      }
+      const unknown = await get<{ error: string }>(`${execUrl("src")}&snapshot=nope`);
+      expect(unknown.status).toBe(404);
+      expect(unknown.body.error).toBe("unknown snapshot nope");
+      const none = await get<{ error: string }>(`/api/projects/${bareId}/scope/exec?path=`);
+      expect(none.status).toBe(404);
+      expect(none.body.error).toBe("project has no snapshot yet");
+    });
+
+    it("starts the project's main thread at the one function nothing calls, and reaches the rest from it", async () => {
+      const project = await get<ExecListing>(execUrl(""));
+      expect(project.status).toBe(200);
+      expect(project.body).toMatchObject({ scope: "", kind: "project", truncated: false, dispatches: [] });
+      expect(project.body.threads).toHaveLength(1);
+      // d() is the only function nothing calls. From it the thread reaches a(), b() and c(): four functions in all.
+      expect(project.body.threads[0]).toMatchObject({ id: "main", kind: "main", roots: ["src/b.ts#d"], reach: 4 });
+      expect(project.body.threads[0]?.reached).toEqual(["lib/c.ts#c", "src/a.ts#a", "src/b.ts#b", "src/b.ts#d"]);
+      expect(project.body.stats).toMatchObject({ threads: 1, spawns: 0, functionsInScope: 4, functionsThreaded: 4, functionsUnthreaded: 0 });
+    });
+
+    it("starts a folder's main thread at the functions no caller in the folder reaches, and keeps the functions outside it", async () => {
+      const folder = await get<ExecListing>(execUrl("src"));
+      expect(folder.body.threads[0]).toMatchObject({ roots: ["src/b.ts#d"], reach: 4 });
+      expect(folder.body.stats).toMatchObject({ functionsInScope: 3, functionsThreaded: 3 });
+      // c() is in lib, outside the folder. It is listed because the thread reaches it, and it is not in scope.
+      expect(folder.body.functions.find((f) => f.id === "lib/c.ts#c")).toMatchObject({ inScope: false });
+      // a() has no caller inside its own file, so it is that file's root. It reaches b() and c() across the file's edge.
+      const file = await get<ExecListing>(execUrl("src/a.ts"));
+      expect(file.body.threads[0]).toMatchObject({ roots: ["src/a.ts#a"], reach: 3 });
+      expect(file.body.stats).toMatchObject({ functionsInScope: 1, functionsThreaded: 1 });
+    });
+
+    it("reads the snapshot it names, and the same scope gives the same model again", async () => {
+      const latest = await get<ExecListing>(execUrl("src"));
+      const pinned = await get<ExecListing>(`${execUrl("src")}&snapshot=${latest.body.snapshot}`);
+      expect(pinned.status).toBe(200);
+      expect(pinned.body).toEqual(latest.body);
+    });
+  });
 });

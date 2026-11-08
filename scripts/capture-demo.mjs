@@ -10,7 +10,8 @@
 // Every scope the explorer can reach (the project, each folder, each openable file) also gets its
 // lens listing under scope/<key>/lenses.json, and each lens result that has something to show gets
 // scope/<key>/<lensId>.json. Those are read through the real server, so the demo matches the live app.
-// A scope with at least one function also gets its call flow under scope/<key>/flow.json.
+// A scope with at least one function also gets its call flow under scope/<key>/flow.json and its
+// execution model (threads, coroutines, reach) under scope/<key>/exec.json.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -175,9 +176,13 @@ try {
       const run = runs.get(row.id);
       if (row.status === "ok" && run) row.hasContent = resultHasContent(run.lens.result ?? { findings: [], views: [] });
     }
-    // The call flow of the scope. A scope with no functions has nothing to draw, so it writes no flow file.
+    // The call flow and execution model of the scope. A scope with no functions has nothing to draw,
+    // so it writes neither file. The exec model is fetched only for those scopes, since each one
+    // walks the whole graph once per thread and coroutine.
     const flow = await get(`${base}/scope/flow${q}`);
-    return { scope, kind: listing.kind, listing, runs, flow: flow.stats.functions > 0 ? flow : undefined };
+    const hasFunctions = flow.stats.functions > 0;
+    const exec = hasFunctions ? await get(`${base}/scope/exec${q}`) : undefined;
+    return { scope, kind: listing.kind, listing, runs, flow: hasFunctions ? flow : undefined, exec };
   };
 
   const captured = [];
@@ -247,6 +252,7 @@ try {
       });
       out.set(`${dir}/lenses.json`, JSON.stringify({ ...c.listing, lenses: rows }));
       if (c.flow) out.set(`${dir}/flow.json`, JSON.stringify(c.flow));
+      if (c.exec) out.set(`${dir}/exec.json`, JSON.stringify(c.exec));
     }
     return out;
   };
@@ -270,6 +276,10 @@ try {
   }
   const scopeEntries = [...out].filter(([rel]) => rel.startsWith("scope/"));
   const scopeBytes = scopeEntries.reduce((sum, [, text]) => sum + Buffer.byteLength(text), 0);
+  // What the exec models add to the demo, measured on the final file set so a budget cap is reflected.
+  const execEntries = [...out].filter(([rel]) => rel.startsWith("scope/") && rel.endsWith("/exec.json"));
+  const execBytes = execEntries.reduce((sum, [, text]) => sum + Buffer.byteLength(text), 0);
+  const execLargest = execEntries.reduce((max, [rel, text]) => (Buffer.byteLength(text) > max.bytes ? { rel, bytes: Buffer.byteLength(text) } : max), { rel: "", bytes: 0 });
 
   rmSync(OUT, { recursive: true, force: true });
   for (const [rel, text] of out) {
@@ -284,6 +294,10 @@ try {
   }
   console.log(`captured ${nodes.length} nodes, ${snap.edges.length} edges, ${findings.length} findings, ${Object.keys(sources).length} files -> ${OUT}`);
   console.log(`scope captures: ${captured.length} scopes, ${scopeEntries.length} files, ${megabytes(scopeBytes)}`);
+  console.log(
+    `exec models: ${execEntries.length} files, ${megabytes(execBytes)}, largest ${execLargest.rel} ${megabytes(execLargest.bytes)}; ` +
+      `demo without them: ${out.size - execEntries.length} files, ${megabytes(totalBytes(out) - execBytes)}`,
+  );
   if (capped) {
     console.log(
       `over ${megabytes(MAX_DEMO_BYTES)} with every scope capture (${megabytes(fullBytes)}): file scopes keep only ${[...KEEP_FILE_LENSES].join(", ")}`,

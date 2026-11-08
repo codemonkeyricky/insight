@@ -307,6 +307,87 @@ function is never an entry.
 The result is kept in memory for up to 32 scopes, keyed by snapshot and scope. A snapshot does not
 change, so a kept result is never stale. The errors are the same as the lens routes.
 
+### Execution model of a scope
+
+`GET /api/projects/:id/scope/exec?path=<scope>`
+
+The `ExecModel` of the scope, with `snapshot` and `kind` in front. `execModel` in
+`packages/flow/src/exec-model.ts` computes it from the calls, references, spawns and dispatches the
+flow view reads. The shape is exact. The values are the `src` folder of the route test's fixture,
+which has no spawns, and `functions` is in the order the threads list them.
+
+```json
+{
+  "snapshot": "<snapshot id>",
+  "kind": "folder",
+  "scope": "src",
+  "truncated": false,
+  "functions": [
+    { "id": "src/b.ts#d", "name": "d", "file": "src/b.ts", "line": 5, "inScope": true },
+    { "id": "lib/c.ts#c", "name": "c", "file": "lib/c.ts", "line": 1, "inScope": false },
+    { "id": "src/a.ts#a", "name": "a", "file": "src/a.ts", "line": 3, "inScope": true },
+    { "id": "src/b.ts#b", "name": "b", "file": "src/b.ts", "line": 2, "inScope": true }
+  ],
+  "threads": [
+    {
+      "id": "main", "kind": "main",
+      "roots": ["src/b.ts#d"],
+      "reach": 4,
+      "reached": ["lib/c.ts#c", "src/a.ts#a", "src/b.ts#b", "src/b.ts#d"],
+      "coroutines": []
+    }
+  ],
+  "dispatches": [],
+  "stats": {
+    "threads": 1, "spawns": 0, "resolved": 0, "outside": 0, "unresolved": 0, "candidates": 0,
+    "coroutines": 0, "dispatches": 0,
+    "functionsInScope": 3, "functionsThreaded": 3, "functionsUnthreaded": 0, "functionsListed": 4
+  }
+}
+```
+
+- **Threads.** The `main` thread starts at the in-scope functions that no in-scope caller references.
+  A function is referenced when an in-scope function or file calls it, refers to it, dispatches to it
+  or spawns it. Module-level code is a file, so a function that module-level code calls is referenced
+  and starts no thread. Each spawn node in scope starts one thread after `main`, sorted by spawn id,
+  whether or not the spawn resolves. Its `kind` is the spawn's `how`: `thread`, `process` or `async`.
+- **Roots and status.** A spawn's roots are its targets. A function target is a root. A script file
+  target, such as a worker's file, has the functions its top-level code calls as roots, and `spawn.script`
+  names it. A spawn with several targets has all of them as roots and sets `candidates`. The status is
+  `resolved` when a root lies in scope, `outside` when it has roots and all of them lie outside the
+  scope, and `unresolved` when it has none. An `outside` thread keeps its out-of-scope roots, so it still
+  shows what the spawn runs.
+- **Reach.** `reach` is the number of distinct functions a thread runs by calls, references and
+  dispatches, roots included. It does not follow spawns, since those start other threads. Reach follows
+  the whole graph, so it can leave the scope. `reached` lists the same functions sorted by id.
+- **Coroutines.** Each `await` or `start` dispatch that a thread reaches starts a coroutine, listed once
+  per thread. Its `callees` are the functions it reaches by calls, without the coroutines it awaits,
+  which are nested through `parent`. A cycle of awaits is cut where it repeats. `dispatchedBy` lists
+  every function or file that starts the coroutine. `callback`, `timer` and `microtask` dispatches run on
+  the dispatching thread, so they are not coroutines.
+- **Dispatches.** The flat list holds each dispatch whose source is in scope, in a fixed order. `from` is
+  the function, or the file for module-level code, that dispatches. `file` and `line` are the site.
+- **Stats.** `functionsInScope` counts the functions whose file lies in scope, `functionsThreaded` those a
+  thread runs, and `functionsUnthreaded` the rest. `functionsListed` is the size of the `functions` table.
+- **Order.** The result does not depend on the order of the edges they arrive in. Edges are sorted by
+  content first, and threads, roots and `reached` are sorted by id.
+- **Cap.** At most `MAX_EXEC_FUNCTIONS` (2000) distinct functions are listed. Past that, later functions
+  are dropped, the lists are cut and `truncated` is `true`. `reach` stays exact. No scope of this
+  repository reaches the cap.
+- **Widening.** A function that is a main root of a wider scope is a main root of every narrower scope
+  that holds it. Each spawn thread is the same in every scope that holds its spawn, with the same roots,
+  reach and coroutines. The narrower scope's function and spawn counts are never larger than the wider's.
+
+Module-level code does not start a thread. A function that only top-level code calls, such as a script's
+`main()` at the bottom of the file, or a React component tree rendered from a module-level `render` call,
+is in no thread, and neither is anything only it reaches. These functions are counted in
+`functionsUnthreaded`. Test, fixture and sample functions are not roots of a project or folder scope
+that is not itself test, fixture or sample code. They are roots of a scope that is, so their threads
+show in that scope.
+
+The result is kept in memory for up to 32 scopes, keyed by snapshot and scope. The errors are the same as
+the call flow route, which is the table below.
+
 ### Errors
 
 Errors are `{ "error": "<message>" }`.
@@ -330,7 +411,9 @@ So a bad path in a project with no snapshot gives the snapshot error.
 
 - The Web app calls these routes through `liveApi` in `apps/web/src/api.ts`. The demo build reads
   the same data from captured files under `scope/<key>/` (see `scripts/capture-demo.mjs`):
-  `lenses.json`, `<lensId>.json` and `flow.json` (the `/scope/flow` payload). The root key is `@root`.
+  `lenses.json`, `<lensId>.json`, `flow.json` (the `/scope/flow` payload) and `exec.json` (the
+  `/scope/exec` payload). `flow.json` and `exec.json` exist only for a scope with at least one function.
+  The root key is `@root`.
 - The demo holds one project and its id is random on every capture, so `staticApi` ignores the id in
   the URL. A link from an earlier deploy keeps working.
 - The routes do not paginate. A folder listing holds one row per loaded lens.

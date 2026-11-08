@@ -34,6 +34,7 @@ import {
   publicProject,
   resolveSnapshot,
   runScopedLens,
+  scopeExecOf,
   scopeFlowOf,
   scopeLensRows,
   scopeView,
@@ -243,6 +244,18 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
     if (!snapshot) throw new ProjectError(404, "project has no snapshot yet");
     const { scope, kind, flow } = scopeFlowOf(rootFor(p), snapshot, path);
     return { snapshot, scope, kind, ...flow };
+  });
+
+  // The execution model of a scope: its threads, the functions each runs, and the coroutines it awaits.
+  // Same errors as the flow route, which it shares its path and snapshot checks with.
+  app.get<{ Params: ProjectParams; Querystring: SnapshotQuery & { path?: string } }>("/api/projects/:id/scope/exec", async (req) => {
+    const p = project(req.params.id);
+    const path = scopePathOf(req.query.path);
+    const snapshot = resolveSnapshot(rootFor(p), req.query.snapshot);
+    if (!snapshot) throw new ProjectError(404, "project has no snapshot yet");
+    // exec.scope is the normalized scope, so the spread supplies it. Naming it again would be overwritten.
+    const { kind, exec } = scopeExecOf(rootFor(p), snapshot, path);
+    return { snapshot, kind, ...exec };
   });
 
   app.get<{ Params: ProjectParams; Querystring: SnapshotQuery & { lens?: string; severity?: string } }>(
