@@ -2,15 +2,15 @@
 // load the content rule (resultHasContent) directly, the same as scopeKey.ts.
 import type { LensView, ScopeLensRow, ScopeStats, TreeNode, TreeView } from "./api";
 
-/** Lenses that answer "what runs" come first; the rest keep the order the server gives. */
-const FIRST_LENSES = ["lens-execution"];
+/**
+ * Lenses that no longer have a tab. The flow tab's execution canvas shows what they showed, and a link to one of them
+ * opens the flow tab instead (see redirectFor in router.ts). The lens itself stays, for the CLI.
+ */
+export const RETIRED_LENSES: readonly string[] = ["lens-execution"];
 
-export function lensOrder(rows: readonly ScopeLensRow[]): ScopeLensRow[] {
-  const rank = (id: string) => {
-    const i = FIRST_LENSES.indexOf(id);
-    return i === -1 ? FIRST_LENSES.length : i;
-  };
-  return [...rows].sort((a, b) => rank(a.id) - rank(b.id));
+/** The lens rows that get a tab: every row but the retired ones, in the order the server gave. */
+export function tabbedLenses(rows: readonly ScopeLensRow[]): ScopeLensRow[] {
+  return rows.filter((r) => !RETIRED_LENSES.includes(r.id));
 }
 
 export interface LensTab {

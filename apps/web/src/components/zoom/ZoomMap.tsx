@@ -1,42 +1,27 @@
-// The zoom map: one d3-zoom camera over the whole project. Folders, files and functions open as the camera
-// reaches them, a function's chart sits in its own slot, and the URL follows the focus. The camera transform is
-// written straight onto a <g>; React re-renders only when the set of drawn items changes.
-import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as KeyEvent, type PointerEvent as PointerEv } from "react";
+// The zoom map: one d3-zoom camera over a scene from a MapSource (the execution canvas of a scope). Containers open as
+// the camera reaches them, and the URL follows the focus. The camera transform is written straight onto a <g>; React
+// re-renders only when the set of drawn items changes.
+import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as KeyEvent, type PointerEvent as PointerEv, type ReactNode } from "react";
 import { select } from "d3-selection";
 import "d3-transition";
 import { zoom, zoomIdentity, type D3ZoomEvent, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
-import {
-  PROJECT_ID,
-  ZOOM_SIZE,
-  breadcrumb,
-  fileBands,
-  fitCamera,
-  focusAt,
-  nextOpen,
-  urlFocus,
-  visibleWorld,
-  type Camera,
-  type FunctionFlow,
-  type PlacedEdge,
-  type PlacedItem,
-  type Rect,
-  type ScopeFlowStats,
-  type ScopeNode,
-} from "@insight/flow";
-import { nameOfId, resolutionPercent } from "../../flowTargets";
+import { ZOOM_SIZE, fitCamera, nextOpen, visibleWorld, type Camera, type PlacedItem, type Rect } from "@insight/flow";
+import { nameOfId } from "../../flowTargets";
 import { hrefView } from "../../router";
-import { type Build, type ZoomStore } from "../../zoom/scene";
-import { FlowChart } from "../FlowChart";
-import { FunctionDetail } from "./FunctionDetail";
+import { deepestAt, edgeClass, edgeKey, edgeTitle, edgeWidth, nearestBox, type MapBuild, type MapEdge, type MapNode, type MapSource } from "../../zoom/source";
+import { bucketScale, fitLabel, headerLabels, labelChars, lodBucket } from "../../zoom/lod";
 
 /** The camera's scale range: from the whole project down to a single line of a chart. */
 const SCALE: [number, number] = [0.02, 16];
 const ANIM_MS = 450;
-/** File colour bands, in the order files are listed. Matches --band-0 .. --band-5 in styles.css. */
-const BANDS = 6;
 /** Items this far (world units) outside the view are still drawn, so a pan does not show a blank edge. */
 const CULL_MARGIN = 120;
 const PAN_PX = 80;
+/**
+ * A gap between boxes this close on screen (px) still counts as the nearest box: a gesture or Enter that ends in a gap
+ * opens the nearest box within it.
+ */
+const GAP_PX = 60;
 
 const sameList = <T,>(a: readonly T[], b: readonly T[], key: (t: T) => string): boolean =>
   a.length === b.length &&
@@ -60,17 +45,24 @@ const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 interface Props {
   id: string;
-  /** The store of the flow tab, shared with the entry view so the flows loaded for one are kept for the other. */
-  store: ZoomStore;
+  /** Where the scene comes from. The map draws whatever it builds. */
+  source: MapSource;
   /** The URL's scope: a folder, or a file (a function's file). Empty is the project. */
   scope: string;
   /** The URL's function, when one is picked. */
   fn?: string;
+  /** What the page draws below the map for the focus, such as the function panel. `open` moves the map to a node id. */
+  detail?: (build: MapBuild, open: (nodeId: string) => void) => ReactNode;
 }
 
-export function ZoomMap({ id, store, scope, fn }: Props) {
-  const [build, setBuild] = useState<Build>();
-  const [shown, setShown] = useState<{ build?: Build; items: PlacedItem[]; edges: PlacedEdge[] }>({ items: [], edges: [] });
+/**
+ * The execution map: one camera over a scope's scene. Each node is a focus of the source; the map's items and edges
+ * are named by node id, so a click or key that names a node is turned into a focus by the source first (`focusOf`).
+ */
+export function ZoomMap({ id, source, scope, fn, detail }: Props) {
+  const [build, setBuild] = useState<MapBuild>();
+  /** `lod` is the camera's quarter-octave bucket (lod.ts): labels are cut to it, and it changes only with the bucket. */
+  const [shown, setShown] = useState<{ build?: MapBuild; items: PlacedItem[]; edges: MapEdge[]; lod: number }>({ items: [], edges: [], lod: 0 });
   const [error, setError] = useState<string>();
   const stageRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -79,7 +71,8 @@ export function ZoomMap({ id, store, scope, fn }: Props) {
   const miniViewRef = useRef<SVGRectElement>(null);
   const zoomRef = useRef<ZoomBehavior<SVGSVGElement, unknown> | undefined>(undefined);
   const cameraRef = useRef<Camera>({ k: 1, x: 0, y: 0 });
-  const buildRef = useRef<Build | undefined>(undefined);
+  const buildRef = useRef<MapBuild | undefined>(undefined);
+  /** The focus the map shows. Its build's `nodeId` is the node it stands for. */
   const focusRef = useRef<string | undefined>(undefined);
   const boxesRef = useRef<{ id: string; x: number; y: number; w: number; h: number }[]>([]);
   const seqRef = useRef(0);
@@ -107,10 +100,11 @@ export function ZoomMap({ id, store, scope, fn }: Props) {
       const z = b.placed.rects.get(e.to);
       return a !== undefined && z !== undefined && intersects(union(a, z), area);
     });
+    const lod = lodBucket(c.k);
     setShown((prev) =>
-      prev.build === b && sameList(prev.items, items, (i) => i.id) && sameList(prev.edges, edges, (e) => `${e.from}\u0000${e.to}`)
+      prev.build === b && prev.lod === lod && sameList(prev.items, items, (i) => i.id) && sameList(prev.edges, edges, edgeKey)
         ? prev
-        : { build: b, items, edges },
+        : { build: b, items, edges, lod },
     );
   };
 
@@ -133,13 +127,17 @@ export function ZoomMap({ id, store, scope, fn }: Props) {
     cull(c);
   };
 
-  /** The deepest item under a world point. */
-  const underAt = (b: Build, x: number, y: number): string | undefined => focusAt(b.tree, boxesRef.current, x, y);
+  /**
+   * The box a world point stands in: the deepest item under it, or else the nearest box within GAP_PX on screen (a point
+   * in a gap between boxes). Undefined when neither exists.
+   */
+  const pickAt = (b: MapBuild, x: number, y: number, c: Camera): string | undefined =>
+    deepestAt(boxesRef.current, b.depth, x, y) ?? nearestBox(boxesRef.current, b.depth, x, y, GAP_PX / c.k);
 
-  /** The deepest item under the middle of the view. */
-  const underCentre = (b: Build, c: Camera): string | undefined => {
+  /** The middle of the view, in world units. */
+  const centreOf = (c: Camera) => {
     const v = visibleWorld(c, sizeOf());
-    return underAt(b, v.x + v.w / 2, v.y + v.h / 2);
+    return { x: v.x + v.w / 2, y: v.y + v.h / 2 };
   };
 
   /** The world point under a screen point (client pixels) for the camera `c`. */
@@ -150,10 +148,10 @@ export function ZoomMap({ id, store, scope, fn }: Props) {
   };
 
   /** Writes the focus into the URL without a history entry, then tells the router the hash changed. */
-  const syncUrl = (b: Build, focus: string) => {
-    const target = urlFocus(b.tree, focus);
+  const syncUrl = (b: MapBuild, focus: string) => {
+    const target = source.url(b, focus);
     if (target === undefined) return;
-    const href = hrefView(id, "flow", { ...target, mode: "hierarchy" });
+    const href = hrefView(id, "flow", target);
     if (window.location.hash === href) return;
     window.history.replaceState(window.history.state, "", href);
     window.dispatchEvent(new HashChangeEvent("hashchange"));
@@ -165,11 +163,11 @@ export function ZoomMap({ id, store, scope, fn }: Props) {
    */
   const show = async (focus: string, animate: boolean, writeUrl: boolean) => {
     const seq = ++seqRef.current;
-    let b: Build;
+    let b: MapBuild;
     try {
-      // A focus reached by a gesture has not been loaded yet: its scope flows, and for a function its file's charts.
-      await store.ensureFocus(focus);
-      b = await store.build(focus);
+      // A focus reached by a gesture may not be loaded yet: the source loads what it needs first.
+      await source.ensureFocus(focus);
+      b = await source.build(focus);
     } catch (e) {
       if (seq === seqRef.current) setError(messageOf(e));
       return;
@@ -177,10 +175,10 @@ export function ZoomMap({ id, store, scope, fn }: Props) {
     if (seq !== seqRef.current) return;
     buildRef.current = b;
     focusRef.current = focus;
-    boxesRef.current = b.placed.items.filter((i) => i.kind !== "stub").map((i) => ({ id: i.id, x: i.rect.x, y: i.rect.y, w: i.rect.w, h: i.rect.h }));
+    boxesRef.current = b.placed.items.map((i) => ({ id: i.id, x: i.rect.x, y: i.rect.y, w: i.rect.w, h: i.rect.h }));
     setBuild(b);
     setError(undefined);
-    const rect = b.placed.rects.get(focus);
+    const rect = b.placed.rects.get(b.nodeId);
     const svg = svgRef.current;
     const z = zoomRef.current;
     if (rect && svg && z) {
@@ -196,18 +194,21 @@ export function ZoomMap({ id, store, scope, fn }: Props) {
   /**
    * The hysteresis step after a user gesture: the open node stays open until it is narrower than 200 px on screen,
    * and a node opens once it is wider than 240 px. Runs at the end of a wheel or key gesture, not during it. A wheel
-   * gesture looks at the item under the pointer; other gestures look at the middle of the view.
+   * gesture looks at the item under the pointer; other gestures look at the middle of the view. Either point may lie in
+   * a gap between boxes, and then the nearest box within GAP_PX is the one looked at (`pickAt`).
    */
   const decide = () => {
     const b = buildRef.current;
-    const focus = focusRef.current;
     const point = pointRef.current;
     pointRef.current = undefined;
-    if (!b || focus === undefined) return;
+    if (!b || focusRef.current === undefined) return;
     const c = cameraRef.current;
-    const under = point ? underAt(b, point.x, point.y) : underCentre(b, c);
+    const at = point ?? centreOf(c);
+    const under = pickAt(b, at.x, at.y, c);
     const underRect = under === undefined ? undefined : b.placed.rects.get(under);
-    const cur = focus === PROJECT_ID ? null : focus;
+    // The root is always open, so it is never the node that stays open; going up from it stays at it.
+    const parent = b.node(b.nodeId)?.parent;
+    const cur = parent === undefined ? null : b.nodeId;
     const curRect = cur === null ? undefined : b.placed.rects.get(cur);
     // Only a gesture that zoomed in or panned may open a child. A zoom out would otherwise reopen the child it just left.
     const mayOpen = c.k >= gestureKRef.current;
@@ -216,8 +217,14 @@ export function ZoomMap({ id, store, scope, fn }: Props) {
       curRect ? curRect.w * c.k : null,
       mayOpen && under !== undefined && underRect ? { id: under, width: underRect.w * c.k } : null,
     );
-    const target = next ?? b.tree.nodes.get(focus)?.parent ?? PROJECT_ID;
-    if (target !== focus) void show(target, true, true);
+    const target = next ?? parent ?? b.nodeId;
+    if (target !== b.nodeId) openNode(target);
+  };
+
+  /** Opens the node a click, key or link names: the source turns the node into its focus, then the map shows it. */
+  const openNode = (nodeId: string) => {
+    const b = buildRef.current;
+    if (b) void show(source.focusOf?.(b, nodeId) ?? nodeId, true, true);
   };
 
   const zoomStep = (factor: number) => {
@@ -291,15 +298,20 @@ export function ZoomMap({ id, store, scope, fn }: Props) {
       zoomRef.current = undefined;
       seqRef.current += 1;
     };
-    // The handlers read only refs and the store, so the ones from this render stay correct for the life of the effect.
+    // The handlers read only refs and the source, so the ones from this render stay correct for the life of the effect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [store, id]);
+  }, [source, id]);
 
   // The URL drives the focus. A change this map made itself is already the focus, so it is skipped.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const next = await store.resolve(scope, fn);
+      // A URL this map wrote for its focus names that focus. Several nodes can share a URL (an exec helper drawn in two
+      // threads, or a thread, which writes only its scope), so the URL is not resolved again.
+      const b = buildRef.current;
+      const here = b && focusRef.current !== undefined ? source.url(b, focusRef.current) : undefined;
+      if (here !== undefined && here.scope === scope && here.fn === fn) return;
+      const next = await source.resolve(scope, fn);
       if (cancelled) return;
       if (next === focusRef.current && buildRef.current !== undefined) return;
       await show(next, buildRef.current !== undefined, false);
@@ -309,9 +321,9 @@ export function ZoomMap({ id, store, scope, fn }: Props) {
     return () => {
       cancelled = true;
     };
-    // show reads only the store and refs, so it needs no dependency of its own.
+    // show reads only the source and refs, so it needs no dependency of its own.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [store, scope, fn]);
+  }, [source, scope, fn]);
 
   // A new build may arrive while the camera stays put. Its minimap view box and world transform are set here.
   useEffect(() => {
@@ -322,7 +334,6 @@ export function ZoomMap({ id, store, scope, fn }: Props) {
 
   const onKey = (e: KeyEvent<HTMLDivElement>) => {
     const b = buildRef.current;
-    const focus = focusRef.current;
     switch (e.key) {
       case "+":
       case "=":
@@ -345,14 +356,16 @@ export function ZoomMap({ id, store, scope, fn }: Props) {
         panStep(0, -PAN_PX);
         break;
       case "Escape": {
-        const parent = focus === undefined || !b ? undefined : b.tree.nodes.get(focus)?.parent;
-        if (parent !== undefined) void show(parent, true, true);
+        const parent = b?.node(b.nodeId)?.parent;
+        if (parent !== undefined) openNode(parent);
         break;
       }
       case "Enter": {
         if (!b) break;
-        const under = underCentre(b, cameraRef.current);
-        if (under !== undefined && under !== focus) void show(under, true, true);
+        const c = cameraRef.current;
+        const at = centreOf(c);
+        const under = pickAt(b, at.x, at.y, c);
+        if (under !== undefined && under !== b.nodeId) openNode(under);
         break;
       }
       default:
@@ -361,21 +374,20 @@ export function ZoomMap({ id, store, scope, fn }: Props) {
     e.preventDefault();
   };
 
-  const tree = build?.tree;
-  const bands = useMemo(() => (tree ? fileBands(tree, BANDS) : new Map<string, number>()), [tree]);
-  const miniItems = useMemo(() => (build ? build.placed.items.filter((i) => i.kind !== "stub") : []), [build]);
+  const miniItems = useMemo(() => (build ? build.placed.items : []), [build]);
   // The items and edges drawn are only those of the current build, so a stale set never shows.
   const live = build !== undefined && shown.build === build ? shown : undefined;
   const drawn = (kind: PlacedItem["kind"]) => (live ? live.items.filter((i) => i.kind === kind) : []);
+  /** The camera scale of the labels' bucket: labels are fitted to the boxes' width on screen at this scale. */
+  const labelScale = bucketScale(shown.lod);
 
   return (
-    <div className="zm">
-      {build?.stats && <ResolutionMeter stats={build.stats} />}
-      {tree && build && (
+    <div className="zm zm-exec">
+      {build && (
         <nav className="zm-crumbs" aria-label="Breadcrumb">
           <ol>
-            {breadcrumb(tree, build.focus).map((n, i, all) => {
-              const label = n.kind === "project" ? "Project" : n.name;
+            {build.crumbs.map((n, i, all) => {
+              const label = n.label;
               if (i === all.length - 1) {
                 return (
                   <li key={n.id}>
@@ -386,10 +398,10 @@ export function ZoomMap({ id, store, scope, fn }: Props) {
               return (
                 <li key={n.id}>
                   <a
-                    href={hrefView(id, "flow", { ...(urlFocus(tree, n.id) ?? {}), mode: "hierarchy" })}
+                    href={hrefView(id, "flow", source.url(build, source.focusOf?.(build, n.id) ?? n.id) ?? {})}
                     onClick={(e) => {
                       e.preventDefault();
-                      void show(n.id, true, true);
+                      openNode(n.id);
                     }}
                   >
                     {label}
@@ -410,7 +422,7 @@ export function ZoomMap({ id, store, scope, fn }: Props) {
         ref={stageRef}
         tabIndex={0}
         role="application"
-        aria-label="Zoom map of the project"
+        aria-label="Execution map of the scope"
         aria-describedby={hintId}
         onKeyDown={onKey}
       >
@@ -431,31 +443,23 @@ export function ZoomMap({ id, store, scope, fn }: Props) {
           </defs>
           <g ref={worldRef}>
             {drawn("frame").map((it) => (
-              <FrameShape key={it.id} item={it} node={tree?.nodes.get(it.id)} onOpen={(next) => void show(next, true, true)} />
+              <FrameShape key={it.id} item={it} node={build?.node(it.id)} k={labelScale} onOpen={openNode} />
             ))}
             {live?.edges.map((e) => (
               <path
-                key={`${e.from}\u0000${e.to}`}
+                key={edgeKey(e)}
                 d={e.d}
-                className={e.stub ? "zm-edge stub" : e.candidate ? "zm-edge candidate" : "zm-edge"}
-                style={{ strokeWidth: Math.min(4, 1 + Math.log2(Math.max(1, e.count))) }}
+                className={edgeClass(e)}
+                style={{ strokeWidth: edgeWidth(e) }}
                 markerEnd={`url(#${arrowId})`}
               >
-                <title>{e.stub ? `${e.count} calls, ${e.stubCount} leave the scope` : `${e.count} calls`}</title>
+                <title>{edgeTitle(e)}</title>
               </path>
             ))}
             {drawn("box").map((it) => {
-              const node = tree?.nodes.get(it.id);
-              return node ? (
-                <BoxShape key={it.id} item={it} node={node} band={bands.get(node.path)} onOpen={(next) => void show(next, true, true)} />
-              ) : null;
+              const node = build?.node(it.id);
+              return node ? <BoxShape key={it.id} item={it} node={node} k={labelScale} onOpen={openNode} /> : null;
             })}
-            {drawn("stub").map((it) => (
-              <StubShape key={it.id} item={it} />
-            ))}
-            {drawn("cfg").map((it) =>
-              build?.cfg && build.cfg.id === it.id ? <ChartSlot key={it.id} item={it} id={id} scope={build.path} fn={build.cfg.fn} /> : null,
-            )}
           </g>
         </svg>
         {!build && !error && <p className="zm-loading muted">Loading</p>}
@@ -488,7 +492,7 @@ export function ZoomMap({ id, store, scope, fn }: Props) {
                 y={it.rect.y}
                 width={it.rect.w}
                 height={it.rect.h}
-                className={it.kind === "frame" ? "zm-mini-frame" : it.kind === "cfg" ? "zm-mini-cfg" : "zm-mini-box"}
+                className={it.kind === "frame" ? "zm-mini-frame" : "zm-mini-box"}
               />
             ))}
             <rect ref={miniViewRef} className="zm-mini-view" />
@@ -499,51 +503,33 @@ export function ZoomMap({ id, store, scope, fn }: Props) {
         Scroll or press + and - to zoom. Arrow keys pan. Enter opens the item at the centre and Escape goes up one level. Click a
         box to open it.
       </p>
-      {build?.cfg && tree && (
-        <FunctionDetail id={id} fn={build.cfg.fn} scope={build.path} calledFromOutside={Boolean(tree.nodes.get(build.focus)?.fn?.calledFromOutside)} />
-      )}
+      {build && detail?.(build, openNode)}
     </div>
   );
 }
 
-function ResolutionMeter({ stats }: { stats: ScopeFlowStats }) {
-  const pct = resolutionPercent(stats);
-  if (pct === undefined) return <p className="muted small">No calls start in this scope.</p>;
-  return (
-    <div className="meter">
-      <p className="small">
-        Resolution: {stats.resolved} of {stats.calls} calls resolved in this scope · {stats.external} leave the scope
-      </p>
-      <div
-        className="meter-bar"
-        role="meter"
-        aria-label="Calls resolved in this scope"
-        aria-valuemin={0}
-        aria-valuemax={stats.calls}
-        aria-valuenow={stats.resolved}
-        aria-valuetext={`${pct}% resolved`}
-      >
-        <span style={{ width: `${pct}%` }} />
-      </div>
-    </div>
-  );
-}
-
-function FrameShape({ item, node, onOpen }: { item: PlacedItem; node: ScopeNode | undefined; onOpen: (id: string) => void }) {
+/**
+ * A frame's header and a box's label are cut to the room they have on screen at the label scale `k` (lod.ts). The full
+ * text stays in the tooltip.
+ */
+function FrameShape({ item, node, k, onOpen }: { item: PlacedItem; node: MapNode | undefined; k: number; onOpen: (id: string) => void }) {
   const { rect } = item;
   const head = ZOOM_SIZE.head;
+  const text = headerLabels(node?.label ?? nameOfId(item.id), node?.detail, rect.w * k);
   return (
-    <g className="zm-frame">
-      <title>{node?.path || node?.name || item.id}</title>
+    <g className={node ? `zm-frame zm-${node.kind}` : "zm-frame"}>
+      <title>{node?.title || item.id}</title>
       <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={10} className="zm-frame-body" />
       <g className="zm-hit" onClick={() => onOpen(item.id)}>
         <rect x={rect.x} y={rect.y} width={rect.w} height={head} rx={10} className="zm-frame-head" />
-        <text x={rect.x + 12} y={rect.y + head / 2} dominantBaseline="central" className="zm-label">
-          {node?.name ?? nameOfId(item.id)}
-        </text>
-        {node && (
+        {text.label !== null && (
+          <text x={rect.x + 12} y={rect.y + head / 2} dominantBaseline="central" className="zm-label">
+            {text.label}
+          </text>
+        )}
+        {text.detail !== null && (
           <text x={rect.x + rect.w - 12} y={rect.y + head / 2} dominantBaseline="central" textAnchor="end" className="zm-count">
-            {node.functions} {node.functions === 1 ? "function" : "functions"}
+            {text.detail}
           </text>
         )}
       </g>
@@ -551,50 +537,19 @@ function FrameShape({ item, node, onOpen }: { item: PlacedItem; node: ScopeNode 
   );
 }
 
-function BoxShape({ item, node, band, onOpen }: { item: PlacedItem; node: ScopeNode; band: number | undefined; onOpen: (id: string) => void }) {
+function BoxShape({ item, node, k, onOpen }: { item: PlacedItem; node: MapNode; k: number; onOpen: (id: string) => void }) {
   const { rect } = item;
-  const style = band !== undefined ? ({ "--band": `var(--band-${band})` } as CSSProperties) : undefined;
+  const style = node.band !== undefined ? ({ "--band": `var(--band-${node.band})` } as CSSProperties) : undefined;
+  const label = fitLabel(node.label, labelChars(rect.w * k));
   return (
     <g className={`zm-box zm-${node.kind}`} style={style} onClick={() => onOpen(item.id)}>
-      <title>{node.path || node.name}</title>
+      <title>{node.title || node.label}</title>
       <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={8} className="zm-box-body" />
-      <text x={rect.x + 12} y={rect.y + rect.h / 2} dominantBaseline="central" className="zm-label">
-        {node.name}
-      </text>
-    </g>
-  );
-}
-
-function StubShape({ item }: { item: PlacedItem }) {
-  const { rect } = item;
-  return (
-    <g className="zm-stub">
-      <title>{`${nameOfId(item.id)} in ${item.id.split("#")[0]}, outside this scope`}</title>
-      <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={8} className="zm-stub-body" />
-      <text x={rect.x + 12} y={rect.y + rect.h / 2} dominantBaseline="central" className="zm-label zm-label-stub">
-        {nameOfId(item.id)}
-      </text>
-    </g>
-  );
-}
-
-/** The focused function's chart in its slot. A chart too large to draw, or with no steps, says so in the slot. */
-function ChartSlot({ item, id, scope, fn }: { item: PlacedItem; id: string; scope: string; fn: FunctionFlow }) {
-  const { rect, inner } = item;
-  if (!inner) return null;
-  const message = fn.tooLarge ? "Too many steps to chart" : fn.nodes.length === 0 ? "No steps to chart" : undefined;
-  return (
-    <g className="zm-cfg">
-      <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={10} className="zm-cfg-body" />
-      <g transform={`translate(${inner.x} ${inner.y})`}>
-        {message ? (
-          <text x={inner.w / 2} y={inner.h / 2} textAnchor="middle" dominantBaseline="central" className="zm-label zm-label-stub">
-            {message}
-          </text>
-        ) : (
-          <FlowChart id={id} fn={fn} scope={scope} />
-        )}
-      </g>
+      {label !== null && (
+        <text x={rect.x + 12} y={rect.y + rect.h / 2} dominantBaseline="central" className="zm-label">
+          {label}
+        </text>
+      )}
     </g>
   );
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BUILTIN_TABS, hrefCompare, hrefFile, hrefFlow, hrefLens, hrefProject, hrefReview, hrefView, inScope, parseRoute } from "../src/router.js";
+import { BUILTIN_TABS, hrefCompare, hrefFile, hrefFlow, hrefLens, hrefProject, hrefReview, hrefView, inScope, parseRoute, redirectFor } from "../src/router.js";
 
 describe("hash router", () => {
   it("parses the projects list", () => {
@@ -107,18 +107,66 @@ describe("hash router", () => {
     expect(parseRoute(hrefFlow("p1", "src/sample.ts"))).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "src/sample.ts" });
   });
 
-  it("keeps the flow mode in the URL only when it is the hierarchy", () => {
-    expect(hrefView("p1", "flow", { scope: "src", mode: "hierarchy" })).toBe("#/projects/p1/view/flow?scope=src&mode=hierarchy");
-    expect(hrefView("p1", "flow", { scope: "src", mode: "entries" })).toBe("#/projects/p1/view/flow?scope=src");
-    expect(parseRoute("#/projects/p1/view/flow?scope=src&mode=hierarchy")).toEqual({
+  it("writes the roots-only flag as roots=1 only when it is on", () => {
+    expect(hrefView("p1", "flow", { scope: "src", roots: true })).toBe("#/projects/p1/view/flow?scope=src&roots=1");
+    expect(hrefView("p1", "flow", { scope: "src", roots: false })).toBe("#/projects/p1/view/flow?scope=src");
+    expect(hrefView("p1", "flow", { scope: "src/a.py", fn: "src/a.py#run", roots: true })).toBe(
+      "#/projects/p1/view/flow?scope=src%2Fa.py&fn=src%2Fa.py%23run&roots=1",
+    );
+  });
+
+  it("parses roots=1 into roots, and leaves roots out of the route otherwise", () => {
+    expect(parseRoute("#/projects/p1/view/flow?scope=src&roots=1")).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "src", roots: true });
+    expect(parseRoute("#/projects/p1/view/flow?scope=src&roots=0")).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "src" });
+    expect(parseRoute("#/projects/p1/view/flow?scope=src&roots=yes")).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "src" });
+    expect(parseRoute("#/projects/p1/view/flow?scope=src")).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "src" });
+  });
+
+  it("round-trips the roots-only flag with its scope and function", () => {
+    const scope = "src/a b.py";
+    const fn = `${scope}#run`;
+    expect(parseRoute(hrefView("p1", "flow", { scope, fn, roots: true }))).toEqual({
+      name: "workspace",
+      id: "p1",
+      tab: "flow",
+      scope,
+      fn,
+      roots: true,
+    });
+  });
+
+  it("still opens the flow tab from the retired mode links, and ignores their mode", () => {
+    expect(parseRoute("#/projects/p1/view/flow?scope=src&mode=hierarchy")).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "src" });
+    expect(parseRoute("#/projects/p1/view/flow?scope=src&mode=exec")).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "src" });
+    expect(parseRoute("#/projects/p1/view/flow?scope=src&mode=entries&fn=src%23run")).toEqual({
       name: "workspace",
       id: "p1",
       tab: "flow",
       scope: "src",
-      mode: "hierarchy",
+      fn: "src#run",
     });
-    expect(parseRoute("#/projects/p1/view/flow?scope=src")).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "src" });
-    expect(parseRoute("#/projects/p1/view/flow?scope=src&mode=other")).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "src" });
+    expect(parseRoute("#/projects/p1/view/flow?scope=src&mode=hierarchy&roots=1")).toEqual({
+      name: "workspace",
+      id: "p1",
+      tab: "flow",
+      scope: "src",
+      roots: true,
+    });
+  });
+
+  it("sends the retired execution lens to the flow tab with the same scope, from both lens URLs", () => {
+    const fromView = parseRoute("#/projects/p1/view/lens-execution?scope=src%2Fcore");
+    const fromLenses = parseRoute("#/projects/p1/lenses/lens-execution");
+    expect(redirectFor(fromView)).toBe("#/projects/p1/view/flow?scope=src%2Fcore");
+    expect(redirectFor(fromLenses)).toBe("#/projects/p1/view/flow");
+    expect(redirectFor(parseRoute("#/projects/p1/view/lens-execution"))).toBe("#/projects/p1/view/flow");
+  });
+
+  it("does not redirect any other route", () => {
+    expect(redirectFor(parseRoute("#/projects/p1/view/flow?scope=src"))).toBeUndefined();
+    expect(redirectFor(parseRoute("#/projects/p1/view/lens-dependencies?scope=src"))).toBeUndefined();
+    expect(redirectFor(parseRoute("#/projects"))).toBeUndefined();
+    expect(redirectFor(parseRoute("#/elsewhere"))).toBeUndefined();
   });
 
   it("parses the compare links the helpers build", () => {

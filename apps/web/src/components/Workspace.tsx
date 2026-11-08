@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { api, IS_DEMO, type FileEntry, type Overview, type ScopeLenses } from "../api";
-import { hrefView, type FlowMode } from "../router";
+import { hrefView, redirectFor } from "../router";
 import { canonicalScope } from "../scopeKey";
-import { lensOrder, lensTab } from "../scopeLenses";
+import { lensTab, tabbedLenses } from "../scopeLenses";
 import { ComparePage } from "../pages/Compare";
 import { LensPage } from "../pages/LensPage";
 import { ProjectOverview } from "../pages/ProjectOverview";
@@ -24,7 +24,8 @@ export interface WorkspaceProps {
   scope: string;
   line?: number;
   fn?: string;
-  mode?: FlowMode;
+  /** The flow tab's canvas shows only the functions each thread starts in. */
+  roots?: boolean;
   base?: string;
   head?: string;
 }
@@ -38,7 +39,7 @@ interface Loaded {
  * One project: the source explorer on the left, and on the right the view the tab names. The lens
  * tabs are the lenses of the explorer scope, from the scope listing.
  */
-export function Workspace({ id, tab, scope, line, fn, mode, base, head }: WorkspaceProps) {
+export function Workspace({ id, tab, scope, line, fn, roots = false, base, head }: WorkspaceProps) {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [listing, setListing] = useState<ScopeLenses | null>(null);
@@ -59,6 +60,12 @@ export function Workspace({ id, tab, scope, line, fn, mode, base, head }: Worksp
   useEffect(() => {
     void load();
   }, [load]);
+
+  // A retired lens tab (the execution lens) is the flow tab now, so its link is replaced by the flow tab's.
+  const redirect = redirectFor({ name: "workspace", id, tab, scope });
+  useEffect(() => {
+    if (redirect !== undefined) window.location.replace(redirect);
+  }, [redirect]);
 
   useProjectEvents(id, (event: RunEvent) => {
     if (event.type === "done" || event.type === "failed" || event.type === "status") void load();
@@ -107,13 +114,14 @@ export function Workspace({ id, tab, scope, line, fn, mode, base, head }: Worksp
     );
   }, [id, scope, listingKey]);
 
+  if (redirect !== undefined) return null;
   if (!loaded) return error ? <p className="error" role="alert">{error}</p> : <p className="muted">Loading</p>;
 
   const { overview, files } = loaded;
   const p = overview.project;
   const sourceText = p.source.kind === "path" ? p.source.path : p.source.url;
   const kind = scopeKind(scope, files);
-  const lensTabs = listing ? lensOrder(listing.lenses).map((row) => lensTab(row, !IS_DEMO)) : [];
+  const lensTabs = listing ? tabbedLenses(listing.lenses).map((row) => lensTab(row, !IS_DEMO)) : [];
   // The banner's numbers belong to one scope. A listing for another scope is not shown while the new one loads.
   const stats = listing && listing.scope === canonicalScope(scope) ? listing.stats : null;
   // A project-wide tab has no source of its own, so picking a file in the explorer shows that file's source.
@@ -135,7 +143,7 @@ export function Workspace({ id, tab, scope, line, fn, mode, base, head }: Worksp
       case "source":
         return <SourceView id={id} files={files} scope={scope} line={line} />;
       case "flow":
-        return <FlowView id={id} files={files} scope={scope} fn={fn} mode={mode ?? "entries"} />;
+        return <FlowView id={id} files={files} scope={scope} fn={fn} roots={roots} />;
       case "findings":
         return <FindingsView id={id} scope={scope} />;
       case "compare":
@@ -191,7 +199,7 @@ export function Workspace({ id, tab, scope, line, fn, mode, base, head }: Worksp
         )}
         {!IS_DEMO && <span className="tab-sep" aria-hidden="true" />}
         {!IS_DEMO && tabLink("compare", "Compare")}
-        {!IS_DEMO && tabLink("review", "Review")}
+        {!IS_DEMO && tabLink("review", "Triage")}
       </nav>
       <div className="ws">
         <Explorer id={id} tab={explorerTab} scope={scope} files={files} />

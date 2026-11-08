@@ -1,11 +1,7 @@
+import { RETIRED_LENSES } from "./scopeLenses";
+
 /** The tabs every project has. Any other tab id is a lens id. */
 export const BUILTIN_TABS = ["overview", "source", "flow", "findings", "compare", "review"] as const;
-
-/**
- * How the flow tab shows a scope: its entry points (the functions nothing in the scope calls), which is the default, or
- * the hierarchy zoom map. Only `hierarchy` is written to the URL, as `mode=hierarchy`.
- */
-export type FlowMode = "entries" | "hierarchy";
 
 export type Route =
   | { name: "projects" }
@@ -19,8 +15,8 @@ export type Route =
       line?: number;
       /** The function open in the flow tab (its IR id). */
       fn?: string;
-      /** The flow tab's mode, when it is not the default. */
-      mode?: FlowMode;
+      /** The flow tab's canvas shows only the functions each thread starts in. */
+      roots?: boolean;
       base?: string;
       head?: string;
     }
@@ -30,7 +26,8 @@ export interface ViewOptions {
   scope?: string;
   line?: number;
   fn?: string;
-  mode?: FlowMode;
+  /** The flow tab's roots-only canvas. Written as `roots=1`, and only when true. */
+  roots?: boolean;
   base?: string;
   head?: string;
 }
@@ -39,7 +36,7 @@ export interface ViewOptions {
  * Parses a hash route. The canonical form is
  * #/projects/<id>/view/<tab>?scope=<folder or file>&line=<n>&fn=<function>.
  * Older links are still understood: #/projects/<id>, .../lenses/<lens>, .../compare, .../review
- * and .../files/<path>?line=<n>.
+ * and .../files/<path>?line=<n>. A `mode` parameter from the retired flow modes is ignored.
  */
 export function parseRoute(hash: string): Route {
   const raw = hash.replace(/^#/, "");
@@ -66,7 +63,7 @@ export function parseRoute(hash: string): Route {
       scope: query.get("scope") ?? "",
       ...(line ? { line } : {}),
       ...opt("fn", query.get("fn")),
-      ...(query.get("mode") === "hierarchy" ? { mode: "hierarchy" as const } : {}),
+      ...(query.get("roots") === "1" ? { roots: true } : {}),
       ...opt("base", query.get("base")),
       ...opt("head", query.get("head")),
     };
@@ -92,11 +89,20 @@ export function hrefView(id: string, tab: string, opts: ViewOptions = {}): strin
   if (opts.scope) params.set("scope", opts.scope);
   if (opts.line) params.set("line", String(opts.line));
   if (opts.fn) params.set("fn", opts.fn);
-  if (opts.mode === "hierarchy") params.set("mode", "hierarchy");
+  if (opts.roots) params.set("roots", "1");
   if (opts.base) params.set("base", opts.base);
   if (opts.head) params.set("head", opts.head);
   const qs = params.toString();
   return `#/projects/${enc(id)}/view/${enc(tab)}${qs ? `?${qs}` : ""}`;
+}
+
+/**
+ * Where a route must be sent instead of shown, or undefined when it is shown as it is. A retired lens tab (the
+ * execution lens) goes to the flow tab, whose canvas draws the same threads, coroutines and functions, for the same scope.
+ */
+export function redirectFor(route: Route): string | undefined {
+  if (route.name !== "workspace" || !RETIRED_LENSES.includes(route.tab)) return undefined;
+  return hrefView(route.id, "flow", { scope: route.scope });
 }
 
 export const hrefProject = (id: string) => `#/projects/${enc(id)}`;

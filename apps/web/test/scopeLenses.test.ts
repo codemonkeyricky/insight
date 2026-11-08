@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LensView, ScopeLensRow, TreeView } from "../src/api.js";
-import { granularityOf, lensOrder, lensTab, nodeText, plainReason, resultHasContent, scopeBanner, viewHasContent } from "../src/scopeLenses.js";
+import { granularityOf, lensTab, nodeText, plainReason, RETIRED_LENSES, resultHasContent, scopeBanner, tabbedLenses, viewHasContent } from "../src/scopeLenses.js";
 
 function row(over: Partial<ScopeLensRow> & Pick<ScopeLensRow, "id">): ScopeLensRow {
   return { title: over.id, status: "ok", findings: 0, ...over };
@@ -10,16 +10,20 @@ function tree(root: TreeView["root"], id = "execution"): TreeView {
   return { type: "tree", id, title: "Execution", root };
 }
 
-describe("lensOrder", () => {
-  it("puts lens-execution first and keeps the rest in the order the server gave", () => {
+describe("tabbedLenses", () => {
+  it("drops the retired execution lens, and keeps the rest in the order the server gave", () => {
     const rows = [row({ id: "lens-calls" }), row({ id: "lens-execution" }), row({ id: "lens-effects" }), row({ id: "lens-flow-complexity" })];
-    expect(lensOrder(rows).map((r) => r.id)).toEqual(["lens-execution", "lens-calls", "lens-effects", "lens-flow-complexity"]);
+    expect(tabbedLenses(rows).map((r) => r.id)).toEqual(["lens-calls", "lens-effects", "lens-flow-complexity"]);
   });
 
-  it("does not change the list it is given", () => {
-    const rows = [row({ id: "b" }), row({ id: "lens-execution" })];
-    lensOrder(rows);
-    expect(rows.map((r) => r.id)).toEqual(["b", "lens-execution"]);
+  it("keeps every other lens, and does not change the list it is given", () => {
+    const rows = [row({ id: "b" }), row({ id: "lens-execution" }), row({ id: "a" })];
+    expect(tabbedLenses(rows).map((r) => r.id)).toEqual(["b", "a"]);
+    expect(rows.map((r) => r.id)).toEqual(["b", "lens-execution", "a"]);
+  });
+
+  it("retires the execution lens only", () => {
+    expect(RETIRED_LENSES).toEqual(["lens-execution"]);
   });
 });
 

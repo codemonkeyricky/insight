@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, type FileEntry, type FileFlowSummary } from "../../api";
-import { hrefFlow, hrefView, inScope, type FlowMode } from "../../router";
+import { hrefFlow, hrefView, inScope } from "../../router";
+import { ExecStore } from "../../zoom/execStore";
 import { ZoomStore } from "../../zoom/scene";
 import { scopeKind } from "../ScopeNote";
-import { EntryMap } from "../zoom/EntryMap";
+import { ExecContainerPanel } from "../zoom/ExecContainerPanel";
+import { ExecFunctionPanel } from "../zoom/ExecFunctionPanel";
 import { Stat } from "../zoom/FunctionDetail";
 import { ZoomMap } from "../zoom/ZoomMap";
 
@@ -29,51 +31,62 @@ function useLoaded<T>(key: string, load: () => Promise<T>): Loaded<T> {
   return done?.key === key ? done.state : { status: "loading" };
 }
 
+interface Props {
+  id: string;
+  files: FileEntry[];
+  scope: string;
+  fn?: string;
+  /** The canvas shows only the functions each thread starts in. */
+  roots: boolean;
+}
+
 /**
- * The flow tab. Its default mode shows a scope's entry points: the functions nothing in the scope calls. The hierarchy
- * mode is the zoom map of the project, which opens from the project down to a function's chart; its URL keeps the
- * focus in step, and below it a folder or the project lists its files. Both modes share one store, so a flow loaded
- * for one is not loaded again for the other.
+ * The flow tab: the execution canvas of the scope, a zoom map of its threads, coroutines, file groups and functions.
+ * Below it, the panel of the focus: for a function, its trail, chart, and Calls and Called by lists; for a container,
+ * its functions as pills and as a table. For a folder or the project, the table of its files comes last. The roots-only
+ * switch cuts the canvas to the functions each thread starts in. The canvas and the panel share one flow store, so a
+ * chart or a scope's flow loaded for one is not loaded again for the other.
  */
-export function FlowView({ id, files, scope, fn, mode }: { id: string; files: FileEntry[]; scope: string; fn?: string; mode: FlowMode }) {
+export function FlowView({ id, files, scope, fn, roots }: Props) {
   const store = useMemo(() => new ZoomStore(id), [id]);
+  const exec = useMemo(() => new ExecStore(id, roots), [id, roots]);
   const kind = scopeKind(scope, files);
   if (kind === "missing") return <p className="muted">Nothing at this path in the snapshot, so there is no flow to chart.</p>;
   return (
     <div>
-      <ModeSwitch id={id} scope={scope} fn={fn} mode={mode} />
-      {mode === "hierarchy" ? (
-        <>
-          <ZoomMap id={id} store={store} scope={scope} fn={fn} />
-          {kind !== "file" && <FlowFolders id={id} scope={scope} />}
-        </>
-      ) : (
-        <EntryMap id={id} store={store} scope={scope} fn={fn} />
-      )}
+      <RootsOnly id={id} scope={scope} fn={fn} roots={roots} />
+      <ZoomMap
+        key={roots ? "roots" : "all"}
+        id={id}
+        source={exec}
+        scope={scope}
+        fn={fn}
+        detail={(build, open) => {
+          const view = exec.viewOf(build);
+          if (view === undefined) return null;
+          const panel = { id, scope: build.path, roots, store, index: view.index, nodeId: build.nodeId, onOpen: open };
+          return build.selected ? <ExecFunctionPanel {...panel} selected={build.selected} /> : <ExecContainerPanel {...panel} />;
+        }}
+      />
+      {kind !== "file" && <FlowFolders id={id} scope={scope} />}
     </div>
   );
 }
 
-const MODES: { mode: FlowMode; label: string }[] = [
-  { mode: "entries", label: "Entry points" },
-  { mode: "hierarchy", label: "Hierarchy" },
-];
-
-/** The two ways to see a scope. Each link keeps the scope and function, so switching does not lose the place. */
-function ModeSwitch({ id, scope, fn, mode }: { id: string; scope: string; fn?: string; mode: FlowMode }) {
+/** The roots-only switch above the canvas. Turning it on or off changes the URL, and the canvas follows the URL. */
+function RootsOnly({ id, scope, fn, roots }: { id: string; scope: string; fn?: string; roots: boolean }) {
   return (
-    <nav className="em-modes" aria-label="Flow view">
-      {MODES.map((m) => (
-        <a
-          key={m.mode}
-          href={hrefView(id, "flow", { scope, mode: m.mode, ...(fn ? { fn } : {}) })}
-          className={m.mode === mode ? "em-mode on" : "em-mode"}
-          aria-current={m.mode === mode ? "page" : undefined}
-        >
-          {m.label}
-        </a>
-      ))}
-    </nav>
+    <label className="zm-roots">
+      <input
+        type="checkbox"
+        checked={roots}
+        onChange={(e) => {
+          window.location.hash = hrefView(id, "flow", { scope, ...(fn ? { fn } : {}), roots: e.target.checked });
+        }}
+      />{" "}
+      Roots only
+      <span className="muted small"> shows only the functions each thread starts in</span>
+    </label>
   );
 }
 
