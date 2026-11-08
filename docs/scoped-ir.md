@@ -2,7 +2,7 @@
 
 A scope is a part of a project that a lens can run on: a folder, a single file, or the whole
 project. This page covers how a scope is cut from the IR, what a lens does with the cut, how
-results are cached, and the two server routes that expose it.
+results are cached, how a folder's calls resolve, and the server routes that expose it.
 
 Scoped views are read-only. They never change the IR, the project's stored analysis, or the
 project format.
@@ -131,9 +131,53 @@ scope and snapshot, by file time. Within one snapshot the inputs are fixed, so t
 out of date after a lens setting or lens version changes and the lens has not been run again.
 A run always checks the hash.
 
+## Flow and call resolution by scope
+
+`summarizeScope(nodes, edges, scopeFiles)` in `packages/flow/src/scope.ts` turns a scope's cut
+document into its call flow. It is pure: it reads the nodes and edges that `scopeDoc` keeps and
+returns plain data, with nothing laid out. The server passes `scopeFiles`, the scope's
+`structure.file` nodes that are not stubs.
+
+Each `calls.call` edge whose caller is in the scope is one call. Its target is resolved against the
+scope:
+
+| Outcome      | When                                                                              |
+|--------------|-----------------------------------------------------------------------------------|
+| `resolved`   | the target is a function in the scope                                             |
+| `external`   | the target is outside the scope (a stub), so it resolves in a wider scope         |
+| `unresolved` | the IR names no target for the call                                               |
+
+A call with a candidate set (one of several possible targets) is `resolved` when any candidate is a
+function in the scope. Each candidate gets its own row, with `candidate: true`.
+
+A call from outside the scope into a function in it is `inbound`. It is not counted in `calls`. It
+marks the function `calledFromOutside`, and such a function is never an entry.
+
+Resolution only widens. A call that is `external` in a file is `resolved` in the folder that holds
+its callee, and stays `resolved` in every scope above that folder. In every scope,
+`resolved + external + unresolved` equals `calls`.
+
+Granularity:
+
+- At most `SCOPE_FUNCTION_LIMIT` (400) functions gives `"functions"`. Each function is a row, and
+  each caller and callee pair is a row in `calls`.
+- More than 400 gives `"files"`. `functions` is empty, `calls` is aggregated per pair of files
+  (calls within one file are dropped), and each outside file is one external whose `id` is its
+  path.
+
+Entries are the roots of the call graph: the functions (or, in `files` granularity, the files) with
+no caller in the scope and no caller outside it.
+
+Module-level code, meaning statements that run when a module loads, is not a function row. Its calls
+have the file path as `from`, and its counts go to the file's row in `files`.
+
+`stats.files` counts every file of the scope. The linker gives each project file a `structure.file`
+node, so files with no functions count too. `files` lists only the files with functions or
+module-level code.
+
 ## Server routes
 
-Both routes are in `apps/server/src/app.ts`. They take `?path=<scope>`, and an optional
+The routes are in `apps/server/src/app.ts`. They take `?path=<scope>`, and an optional
 `?snapshot=<id>` (the default is the project's latest snapshot). The `path` parameter must be given
 exactly once. An empty value (`?path=`) is the project scope.
 
@@ -186,6 +230,41 @@ the project scope.
 `lens` is a `LensRecord`: `status`, `reason` (for `unavailable` and `error`), `reused`,
 `inputsHash`, and `result` (for `ok`) with `findings`, `views` and `metrics`.
 
+### Call flow of a scope
+
+`GET /api/projects/:id/scope/flow?path=<scope>`
+
+The `ScopeFlow` of the scope, with `snapshot`, `scope` and `kind` in front. The values below are an
+example. The shape is exact.
+
+```json
+{
+  "snapshot": "<snapshot id>",
+  "scope": "src",
+  "kind": "folder",
+  "granularity": "functions",
+  "functions": [
+    {
+      "id": "src/a.ts#a", "name": "a", "file": "src/a.ts", "async": false,
+      "span": { "file": "src/a.ts", "start": [2, 0], "end": [4, 1] }, "line": 3,
+      "steps": 2, "decisions": 0, "loops": 0, "tries": 0,
+      "awaits": 0, "spawns": 0, "effects": 0, "exits": 1, "calledFromOutside": true
+    }
+  ],
+  "calls": [{ "from": "src/a.ts#a", "to": "lib/c.ts#c", "count": 1, "external": true }],
+  "externals": [{ "id": "lib/c.ts#c", "name": "c", "file": "lib/c.ts" }],
+  "entries": ["src/b.ts#d"],
+  "files": [{ "file": "src/a.ts", "functions": 1, "decisions": 0, "loops": 0, "tries": 0, "calledFromOutside": true }],
+  "stats": { "functions": 4, "files": 5, "calls": 3, "resolved": 2, "external": 1, "unresolved": 0, "inbound": 0, "entries": 1 }
+}
+```
+
+`functions` is empty in `files` granularity. `calledFromOutside` appears only when it is true. A
+`span` is `{ file, start: [line, column], end: [line, column] }`, with 0-based positions.
+
+The result is kept in memory for up to 32 scopes, keyed by snapshot and scope. A snapshot does not
+change, so a kept result is never stale. The errors are the same as the lens routes.
+
 ### Errors
 
 Errors are `{ "error": "<message>" }`.
@@ -207,6 +286,10 @@ So a bad path in a project with no snapshot gives the snapshot error.
 
 ## Limits
 
-- The Web app does not use these routes yet.
+- The Web app calls these routes through `liveApi` in `apps/web/src/api.ts`. The demo build reads
+  the same data from captured files under `scope/<key>/` (see `scripts/capture-demo.mjs`):
+  `lenses.json`, `<lensId>.json` and `flow.json` (the `/scope/flow` payload). The root key is `@root`.
+- The demo holds one project and its id is random on every capture, so `staticApi` ignores the id in
+  the URL. A link from an earlier deploy keeps working.
 - The routes do not paginate. A folder listing holds one row per loaded lens.
 - A lens that errors on a scope is run again on each request, since only `ok` results are stored.

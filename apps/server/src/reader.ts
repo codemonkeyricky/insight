@@ -19,8 +19,8 @@ import {
   type LoadedPlugins,
   type ScopeStats,
 } from "@insight/core";
-import { buildFileFlow, summarizeFlows, type FileFlow, type FileFlowSummary } from "@insight/flow";
-import { edgeTargets, type ProjectRoot } from "@insight/sdk";
+import { buildFileFlow, summarizeFlows, summarizeScope, type FileFlow, type FileFlowSummary, type ScopeFlow } from "@insight/flow";
+import { edgeTargets, isExternal, type ProjectRoot } from "@insight/sdk";
 import type { IREdge, IRDocument, IRFinding, IRNode, IRRecord, NodeId } from "@insight/ir";
 import { statSync } from "node:fs";
 import { join } from "node:path";
@@ -360,6 +360,37 @@ export async function scopeView(root: string, snapshot: string, path: string): P
   const doc: IRDocument = { nodes: [...snap.nodes.values()], edges: snap.edges, findings: snap.findings };
   const cut = scopeDoc(doc, scope);
   return { snapshot, scope, kind, doc, stats: cut.stats, facets: scopeFacets(cut.doc), plugins: await pluginsFor(root) };
+}
+
+/** The call flow of one scope, and the scope it names. */
+export interface ScopeFlowView {
+  scope: string;
+  kind: ScopeKind;
+  flow: ScopeFlow;
+}
+
+const SCOPE_FLOW_LIMIT = 32;
+const scopeFlows = new Map<string, ScopeFlowView>();
+
+/**
+ * The call flow of a scope, summarized from its scoped IR (see docs/scoped-ir.md). A snapshot never
+ * changes, so each scope's summary is kept until enough other scopes push it out.
+ */
+export function scopeFlowOf(root: string, snapshot: string, path: string): ScopeFlowView {
+  const scope = normalizeScope(path);
+  const key = `${root}\0${snapshot}\0${scope}`;
+  const hit = scopeFlows.get(key);
+  if (hit) return hit;
+  const snap = loadSnapshot(root, snapshot);
+  const kind = scopeKindOf(snap, scope);
+  if (!kind) throw new ProjectError(404, "no such scope");
+  const doc: IRDocument = { nodes: [...snap.nodes.values()], edges: snap.edges, findings: snap.findings };
+  const cut = scopeDoc(doc, scope);
+  const files = cut.doc.nodes.filter((n) => n.kind === "structure.file" && !isExternal(n)).map((n) => String(n.attrs.path ?? n.id));
+  const view: ScopeFlowView = { scope, kind, flow: summarizeScope(cut.doc.nodes, cut.doc.edges, files) };
+  scopeFlows.set(key, view);
+  if (scopeFlows.size > SCOPE_FLOW_LIMIT) scopeFlows.delete(scopeFlows.keys().next().value as string);
+  return view;
 }
 
 export interface ScopeLensRow {

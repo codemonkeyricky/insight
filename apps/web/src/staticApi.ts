@@ -16,6 +16,7 @@ import type {
   Project,
   Review,
   ReviewStale,
+  ScopeFlow,
   ScopeLensRow,
   ScopeLenses,
   ScopeLensRun,
@@ -69,10 +70,12 @@ function load<T>(name: string): Promise<T> {
 
 const project = () => load<{ project: Project; overview: Overview }>("project.json");
 
-async function checkProject(id: string): Promise<{ project: Project; overview: Overview }> {
-  const data = await project();
-  if (data.project.id !== id) throw new ApiError(404, `no project ${id}`);
-  return data;
+/**
+ * The demo holds one project, and its id is random on every capture. Any id in the URL opens it, so a
+ * link shared from an earlier deploy keeps working after the demo is captured again.
+ */
+async function checkProject(_id: string): Promise<{ project: Project; overview: Overview }> {
+  return project();
 }
 
 const readOnly = (): never => {
@@ -135,6 +138,17 @@ function recordOf(row: ScopeLensRow): LensRecord {
   if (row.status === "unavailable" || row.status === "error") return { id: row.id, title: row.title, status: row.status, reason: row.reason, reused: false };
   return { id: row.id, title: row.title, status: "unavailable", reason: "Not captured for this scope in the demo.", reused: false };
 }
+
+/** The flow of a scope with no functions. The capture writes no flow file for such a scope. */
+const EMPTY_SCOPE_FLOW: ScopeFlow = {
+  granularity: "functions",
+  functions: [],
+  calls: [],
+  externals: [],
+  entries: [],
+  files: [],
+  stats: { functions: 0, files: 0, calls: 0, resolved: 0, external: 0, unresolved: 0, inbound: 0, entries: 0 },
+};
 
 export const staticApi = {
   health: async () => ({ ok: true, version: "demo" }),
@@ -249,6 +263,13 @@ export const staticApi = {
   flowSummary: async (id: string): Promise<FileFlowSummary[]> => {
     await checkProject(id);
     return (await load<{ snapshot: string | null; files: FileFlowSummary[] }>("flow-summary.json")).files;
+  },
+  /** A scope's call flow as the capture saved it. A scope with no functions has no file, which is the empty flow. */
+  scopeFlow: async (id: string, scope: string): Promise<ScopeFlow> => {
+    await checkProject(id);
+    const problem = scopeProblem(scope);
+    if (problem) throw new ApiError(400, problem);
+    return (await scopeFile<ScopeFlow>(scope, "flow.json")) ?? EMPTY_SCOPE_FLOW;
   },
   // Comparing commits and keeping review decisions and notes need a git history and a writable
   // store, which the static demo does not have. The tabs are hidden in demo mode; these keep the

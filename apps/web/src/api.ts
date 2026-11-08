@@ -1,9 +1,27 @@
-import type { FileFlow, FileFlowSummary } from "@insight/flow";
+import type { FileFlow, FileFlowSummary, ScopeFlow } from "@insight/flow";
 import { ApiError } from "./apiError";
 import { staticApi } from "./staticApi";
 
 // Types only: the flow package is not bundled, its charts are drawn by components/FlowChart.tsx.
-export type { FileFlow, FileFlowSummary, FlowEdge, FlowEdgeKind, FlowNode, FlowRole, FlowShape, FlowSpan, FlowStats, FunctionFlow } from "@insight/flow";
+export type {
+  FileFlow,
+  FileFlowSummary,
+  FlowEdge,
+  FlowEdgeKind,
+  FlowNode,
+  FlowRole,
+  FlowShape,
+  FlowSpan,
+  FlowStats,
+  FunctionFlow,
+  ScopeCall,
+  ScopeExternal,
+  ScopeFile,
+  ScopeFlow,
+  ScopeFlowStats,
+  ScopeFunction,
+  ScopeGranularity,
+} from "@insight/flow";
 
 /** True in the read-only demo build (VITE_STATIC=1): one fixed project, served from JSON files. */
 export const IS_DEMO = import.meta.env.VITE_STATIC === "1";
@@ -357,6 +375,8 @@ const liveApi = {
   flow: (id: string, path: string) => call<FileFlow>("GET", `/api/projects/${id}/flow${q({ path })}`),
   flowSummary: (id: string) =>
     call<{ snapshot: string | null; files: FileFlowSummary[] }>("GET", `/api/projects/${id}/flow-summary`).then((r) => r.files),
+  // The server adds snapshot, scope and kind to the flow; the page does not use them.
+  scopeFlow: (id: string, scope: string) => call<ScopeFlow>("GET", `/api/projects/${id}/scope/flow?path=${encodeURIComponent(scope)}`),
   node: (id: string, nodeId: string) => call<NodeFacts>("GET", `/api/projects/${id}/nodes/${nodeId.split("/").map(encodeURIComponent).join("/")}`),
   compare: (id: string, base: string, head: string) => call<Compare>("GET", `/api/projects/${id}/compare${q({ base, head })}`),
   review: (id: string, snapshot?: string) => call<Review>("GET", `/api/projects/${id}/review${q({ snapshot })}`),

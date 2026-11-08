@@ -10,6 +10,7 @@
 // Every scope the explorer can reach (the project, each folder, each openable file) also gets its
 // lens listing under scope/<key>/lenses.json, and each lens result that has something to show gets
 // scope/<key>/<lensId>.json. Those are read through the real server, so the demo matches the live app.
+// A scope with at least one function also gets its call flow under scope/<key>/flow.json.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -174,7 +175,9 @@ try {
       const run = runs.get(row.id);
       if (row.status === "ok" && run) row.hasContent = resultHasContent(run.lens.result ?? { findings: [], views: [] });
     }
-    return { scope, kind: listing.kind, listing, runs };
+    // The call flow of the scope. A scope with no functions has nothing to draw, so it writes no flow file.
+    const flow = await get(`${base}/scope/flow${q}`);
+    return { scope, kind: listing.kind, listing, runs, flow: flow.stats.functions > 0 ? flow : undefined };
   };
 
   const captured = [];
@@ -243,6 +246,7 @@ try {
         return dropped ? { id: row.id, title: row.title, status: "not-run", findings: null } : row;
       });
       out.set(`${dir}/lenses.json`, JSON.stringify({ ...c.listing, lenses: rows }));
+      if (c.flow) out.set(`${dir}/flow.json`, JSON.stringify(c.flow));
     }
     return out;
   };

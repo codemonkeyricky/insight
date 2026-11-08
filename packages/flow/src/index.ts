@@ -5,6 +5,7 @@ import type { FileFlow } from "./types.js";
 
 export * from "./types.js";
 export { MAX_NODES } from "./layout.js";
+export { SCOPE_FUNCTION_LIMIT, summarizeScope } from "./scope.js";
 
 /**
  * The control-flow chart of every function in one source file, rebuilt from the IR.
