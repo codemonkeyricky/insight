@@ -1,10 +1,11 @@
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
 import ts from "typescript";
 import type { IREdge, IRFinding, IRNode, IRRecord, NodeId, Provenance, Span, UnresolvedRef } from "@insight/ir";
 import type { IRBatch } from "@insight/sdk";
 import { importBindings, matchCall, matchEnvRead, matchSchedule, matchWorker, scriptPath, type ImportBinding, type ScriptPath } from "./effects.js";
 import { scriptKind } from "./digest.js";
+import { dispatchFor, MAX_DISPATCH_TARGETS, propName } from "./dispatch.js";
 
 export const FRONTEND_ID = "frontend-typescript";
 export const SOURCE_RE = /\.(?:[mc]?[jt]sx?)$/;
@@ -15,7 +16,7 @@ type Entity =
   | { type: "type"; name: string; typeKind: "class" | "interface" | "enum" | "alias" }
   | { type: "function"; name: string; async: boolean; generator: boolean; exported: boolean; anonymous: boolean };
 
-interface Decl {
+export interface Decl {
   id: NodeId;
   rel: string;
   qname: string;
@@ -35,23 +36,79 @@ export interface Project {
   sourceFor(rel: string): ts.SourceFile | undefined;
   /** Maps a path under the compiler's output directory to the same path under its source directory. Undefined for other paths. */
   mapOutput(rel: string): string | undefined;
+  /**
+   * The declaration in an indexed source file that a node of a built `.d.ts` declares: `dist/a.d.ts`'s `f` is `src/a.ts`'s `f`.
+   * Undefined for any other node, and when no indexed source file defines it.
+   */
+  sourceOf(node: ts.Node): Decl | undefined;
 }
 
-const propName = (name: ts.PropertyName): string => name.getText();
 const isFnInit = (n: ts.Expression): boolean => ts.isArrowFunction(n) || ts.isFunctionExpression(n);
 const hasModifier = (node: ts.Node, kind: ts.SyntaxKind): boolean =>
   ts.canHaveModifiers(node) && (ts.getModifiers(node)?.some((m) => m.kind === kind) ?? false);
 
-/** A function expression that its parent declaration names: the variable or class property it initializes. */
-function namedByParent(node: ts.ArrowFunction | ts.FunctionExpression): boolean {
+/**
+ * The qualified name that the function properties of a bound object literal take, by literal: `<binding>` for a literal
+ * a variable, class property or `export default` holds, `<binding>.<prop>` for one a property of a bound literal holds.
+ * A literal in no such place is not here, so its function properties stay lambdas.
+ */
+type LiteralNames = Map<ts.ObjectLiteralExpression, { qname: string }>;
+
+/** The object literal an expression is, looking through parentheses and type assertions. */
+function literalOf(e: ts.Expression): ts.ObjectLiteralExpression | undefined {
+  let inner = e;
+  while (
+    ts.isParenthesizedExpression(inner) ||
+    ts.isAsExpression(inner) ||
+    ts.isSatisfiesExpression(inner) ||
+    ts.isNonNullExpression(inner) ||
+    ts.isTypeAssertionExpression(inner)
+  ) {
+    inner = inner.expression;
+  }
+  return ts.isObjectLiteralExpression(inner) ? inner : undefined;
+}
+
+/**
+ * Records the object literal that `node` binds to a name, so that its properties are named by it. A variable with an
+ * identifier name, a class property and `export default` bind their initializer; a property binds the literal it holds
+ * when its own literal is bound. The literal's names follow its container, as the class members of a container do.
+ */
+function bindLiteral(node: ts.Node, container: { qname: string } | undefined, literals: LiteralNames): void {
+  let value: ts.Expression | undefined;
+  let name: string | undefined;
+  let scope = container;
+  if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
+    value = node.initializer;
+    name = node.name.text;
+  } else if (ts.isPropertyDeclaration(node)) {
+    value = node.initializer;
+    name = propName(node.name);
+  } else if (ts.isExportAssignment(node) && !node.isExportEquals) {
+    value = node.expression;
+    name = "default";
+  } else if (ts.isPropertyAssignment(node) && ts.isObjectLiteralExpression(node.parent)) {
+    const outer = literals.get(node.parent);
+    if (outer === undefined) return;
+    value = node.initializer;
+    name = propName(node.name);
+    scope = outer;
+  }
+  const literal = value && literalOf(value);
+  if (literal && name !== undefined) literals.set(literal, { qname: scope ? `${scope.qname}.${name}` : name });
+}
+
+/** A function expression that its parent declaration names: the variable, class property or bound literal property it initializes. */
+function namedByParent(node: ts.ArrowFunction | ts.FunctionExpression, literals: LiteralNames): boolean {
   const parent = node.parent;
   if (ts.isVariableDeclaration(parent)) return parent.initializer === node && ts.isIdentifier(parent.name);
   if (ts.isPropertyDeclaration(parent)) return parent.initializer === node;
+  if (ts.isPropertyAssignment(parent)) return parent.initializer === node && literals.has(parent.parent);
   return false;
 }
 
 /** Decides whether a node becomes a structure node. Shared by the declaration pass and the emit pass. */
-function classify(node: ts.Node, sf: ts.SourceFile): Entity | undefined {
+function classify(node: ts.Node, sf: ts.SourceFile, literals: LiteralNames): Entity | undefined {
   // fnNode carries the async modifier; owner carries the export modifier (for a variable, its statement).
   const fn = (name: string, owner: ts.Node, fnNode: ts.Node, anonymous = false): Entity => ({
     type: "function",
@@ -76,8 +133,12 @@ function classify(node: ts.Node, sf: ts.SourceFile): Entity | undefined {
   if (ts.isPropertyDeclaration(node) && node.initializer && isFnInit(node.initializer)) {
     return fn(propName(node.name), node, node.initializer);
   }
+  // A function-valued property of a bound object literal is named by the property. Other literals' properties are lambdas.
+  if (ts.isPropertyAssignment(node) && isFnInit(node.initializer) && literals.has(node.parent)) {
+    return fn(propName(node.name), node, node.initializer);
+  }
   // A function expression that no declaration names is a lambda. It is named by where it starts, 1-based like an editor.
-  if ((ts.isArrowFunction(node) || ts.isFunctionExpression(node)) && !namedByParent(node)) {
+  if ((ts.isArrowFunction(node) || ts.isFunctionExpression(node)) && !namedByParent(node, literals)) {
     const at = sf.getLineAndCharacterOfPosition(node.getStart(sf));
     return fn(`λ${at.line + 1}:${at.character + 1}`, node, node, true);
   }
@@ -87,11 +148,17 @@ function classify(node: ts.Node, sf: ts.SourceFile): Entity | undefined {
 /** Assigns IDs to every declaration in a file: <file>#<qualified name>, with ~N for repeats. */
 function assignDecls(rel: string, sf: ts.SourceFile, out: Map<ts.Node, Decl>): void {
   const counts = new Map<string, number>();
+  const literals: LiteralNames = new Map();
   const visit = (node: ts.Node, container: { qname: string } | undefined): void => {
     let next = container;
-    const entity = classify(node, sf);
+    // A binding is registered before its children, so a literal's properties see it when they are classified.
+    bindLiteral(node, container, literals);
+    const entity = classify(node, sf, literals);
     if (entity) {
-      const qname = container ? `${container.qname}.${entity.name}` : entity.name;
+      // A property of a bound literal is named under that literal; anything else under its container.
+      const owner = node.parent !== undefined && ts.isObjectLiteralExpression(node.parent) ? literals.get(node.parent) : undefined;
+      const scope = owner ?? container;
+      const qname = scope ? `${scope.qname}.${entity.name}` : entity.name;
       const n = (counts.get(qname) ?? 0) + 1;
       counts.set(qname, n);
       const id = n === 1 ? `${rel}#${qname}` : `${rel}#${qname}~${n}`;
@@ -162,9 +229,10 @@ export function buildProject(root: string, rels: string[], texts: Map<string, st
     const sf = program.getSourceFile(abs(rel));
     if (sf) assignDecls(rel, sf, decls);
   }
+  const relSet = new Set(rels);
   return {
     root,
-    rels: new Set(rels),
+    rels: relSet,
     program,
     checker,
     options,
@@ -172,6 +240,7 @@ export function buildProject(root: string, rels: string[], texts: Map<string, st
     decls,
     sourceFor: (rel) => program.getSourceFile(abs(rel)),
     mapOutput: outputMapper(root, options, rels),
+    sourceOf: declarationSources(root, relSet, decls),
   };
 }
 
@@ -206,6 +275,122 @@ function outputMapper(root: string, options: ts.CompilerOptions, rels: string[])
   const srcDir = options.rootDir ? projectPath(root, options.rootDir) : commonDir(rels.filter((r) => !r.endsWith(".d.ts")));
   if (!outDir || srcDir === undefined) return () => undefined;
   return (rel) => (rel.startsWith(`${outDir}/`) ? joinPath(srcDir, rel.slice(outDir.length + 1)) : undefined);
+}
+
+/** Where a package's compiler writes its output and reads its sources, as project paths. */
+interface OutputLayout {
+  outDir: string;
+  srcDir: string;
+}
+
+/** The suffixes of a declaration file, and the source suffixes it can have been built from. */
+const DECL_SUFFIX = /\.d\.[mc]?ts$/;
+const SOURCE_SUFFIXES = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
+
+/** The path with symbolic links resolved, or the path itself when it cannot be resolved. */
+function realOf(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+/**
+ * A package's output and source directories, from its tsconfig.json `outDir` and `rootDir`. Without a config, or
+ * without those options, they default to `dist` and `src`. Undefined when either lies outside the project.
+ */
+function readOutputLayout(root: string, pkgDir: string): OutputLayout | undefined {
+  const pkgAbs = join(root, pkgDir);
+  let options: ts.CompilerOptions = {};
+  const config = join(pkgAbs, "tsconfig.json");
+  if (existsSync(config)) {
+    const read = ts.readConfigFile(config, ts.sys.readFile);
+    // Clearing files and include stops reading the config from scanning the package for inputs.
+    if (!read.error) options = ts.parseJsonConfigFileContent({ ...read.config, files: [], include: [] }, ts.sys, pkgAbs).options;
+  }
+  const outDir = projectPath(root, options.outDir ?? join(pkgAbs, "dist"));
+  const srcDir = projectPath(root, options.rootDir ?? join(pkgAbs, "src"));
+  if (!outDir || srcDir === undefined) return undefined;
+  return { outDir, srcDir };
+}
+
+/** The indexed source file that a declaration file under a layout's output directory was built from. */
+function sourceIn(layout: OutputLayout, dts: string, rels: Set<string>): string | undefined {
+  const prefix = `${layout.outDir}/`;
+  if (!dts.startsWith(prefix)) return undefined;
+  const base = joinPath(layout.srcDir, dts.slice(prefix.length).replace(DECL_SUFFIX, ""));
+  return SOURCE_SUFFIXES.map((suffix) => base + suffix).find((candidate) => rels.has(candidate));
+}
+
+/**
+ * The qualified name a declaration-file node has in the source it was built from, named as assignDecls names it:
+ * `Class.member` for a member, `default` for an unnamed declaration. Undefined for a node no source declaration matches.
+ */
+function declFileQname(node: ts.Node): string | undefined {
+  let own: string | undefined;
+  if (ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) {
+    own = node.name?.text ?? "default";
+  } else if (ts.isInterfaceDeclaration(node)) {
+    own = node.name.text;
+  } else if (ts.isConstructorDeclaration(node)) {
+    own = "constructor";
+  } else if (ts.isMethodDeclaration(node) || ts.isGetAccessorDeclaration(node) || ts.isSetAccessorDeclaration(node) || ts.isPropertyDeclaration(node)) {
+    own = propName(node.name);
+  } else if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
+    own = node.name.text;
+  }
+  if (own === undefined) return undefined;
+  const names = [own];
+  for (let p = node.parent; p !== undefined && !ts.isSourceFile(p); p = p.parent) {
+    if (ts.isClassDeclaration(p)) names.unshift(p.name?.text ?? "default");
+  }
+  return names.join(".");
+}
+
+/**
+ * Maps a declaration in a built `.d.ts` file to the declaration its source defines. A declaration file inside a
+ * package's output directory is mapped to the source under that package's rootDir, and the declaration there with the
+ * same qualified name is the answer. Declaration files under node_modules, outside the project, or with no indexed
+ * source are not mapped. Each file's mapping and each package's config are read once.
+ */
+function declarationSources(root: string, rels: Set<string>, decls: Map<ts.Node, Decl>): (node: ts.Node) => Decl | undefined {
+  const byId = new Map<string, Decl>();
+  for (const d of decls.values()) byId.set(d.id, d);
+  const realRoot = realOf(root);
+  const layouts = new Map<string, OutputLayout | undefined>();
+  const layoutOf = (dir: string): OutputLayout | undefined => {
+    if (!layouts.has(dir)) layouts.set(dir, readOutputLayout(root, dir));
+    return layouts.get(dir);
+  };
+  /**
+   * The source file of a declaration file, by its path. Walks up from the file to the nearest directory with a
+   * package.json or tsconfig.json whose output directory holds it. A package.json inside a build output does not own it.
+   */
+  const mapFile = (fileName: string): string | undefined => {
+    const dts = projectPath(realRoot, realOf(fileName));
+    if (dts === undefined || !DECL_SUFFIX.test(dts) || dts.split("/").includes("node_modules")) return undefined;
+    let dir = dirOf(dts);
+    for (;;) {
+      if (existsSync(join(root, joinPath(dir, "package.json"))) || existsSync(join(root, joinPath(dir, "tsconfig.json")))) {
+        const layout = layoutOf(dir);
+        const source = layout && sourceIn(layout, dts, rels);
+        if (source) return source;
+      }
+      if (dir === "") return undefined;
+      dir = dirOf(dir);
+    }
+  };
+  const mapped = new Map<string, string | undefined>();
+  return (node) => {
+    const sf = node.getSourceFile();
+    if (!sf.isDeclarationFile) return undefined;
+    const qname = declFileQname(node);
+    if (qname === undefined) return undefined;
+    if (!mapped.has(sf.fileName)) mapped.set(sf.fileName, mapFile(sf.fileName));
+    const source = mapped.get(sf.fileName);
+    return source === undefined ? undefined : byId.get(`${source}#${qname}`);
+  };
 }
 
 /** Joins a relative path onto a project directory and normalises it. Undefined when it climbs above the project root. */
@@ -327,7 +512,9 @@ function declOf(project: Project, sym: ts.Symbol | undefined): Decl | undefined 
     }
   }
   const declNode = resolved?.valueDeclaration ?? resolved?.declarations?.[0];
-  return declNode ? project.decls.get(declNode) : undefined;
+  if (!declNode) return undefined;
+  // A workspace package's call resolves to its built .d.ts, which is not indexed: its source declaration is the target.
+  return project.decls.get(declNode) ?? project.sourceOf(declNode);
 }
 
 /** The function that `new` runs: the function itself, or a class's own constructor. A class without one has none. */
@@ -569,7 +756,8 @@ export function emitFile(project: Project, rel: string): IRBatch {
 
     const emitCall = (call: ts.CallExpression) => {
       const callee = call.expression;
-      const target = declOf(project, project.checker.getSymbolAtLocation(nameOf(callee)));
+      const sym = project.checker.getSymbolAtLocation(nameOf(callee));
+      const target = declOf(project, sym);
       if (target?.entity.type === "function") {
         pushEdge({
           from: fn,
@@ -581,6 +769,26 @@ export function emitFile(project: Project, rel: string): IRBatch {
           provenance: PROV,
         });
         dependOn(target.rel);
+      } else {
+        // A call through an interface or abstract member: every implementation the project declares is a candidate.
+        const dispatch = dispatchFor(project, sym, ts.isPropertyAccessExpression(callee) ? callee.expression : undefined);
+        if (dispatch !== undefined && dispatch.targets.length > 0) {
+          const kept = dispatch.targets.slice(0, MAX_DISPATCH_TARGETS).map((t) => t.id);
+          const [first, ...rest] = kept as [NodeId, ...NodeId[]];
+          const truncated = dispatch.targets.length > MAX_DISPATCH_TARGETS;
+          pushEdge({
+            from: fn,
+            to: { candidates: [first, ...rest] },
+            facet: "calls",
+            kind: "calls.call",
+            attrs: { callee: callee.getText(sf).slice(0, 200), how: "interface", ...(truncated ? { truncated: true } : {}) },
+            span: spanOf(rel, sf, callee),
+            provenance: { frontend: FRONTEND_ID, confidence: "heuristic" },
+          });
+          // The candidate list depends on every implementation and on the type that declares the member, dropped ones included.
+          for (const t of dispatch.targets) dependOn(t.rel);
+          dependOn(dispatch.owner.rel);
+        }
       }
       const effect = matchCall(call, imports);
       if (effect) {

@@ -58,7 +58,7 @@ describe("anonymous functions", () => {
       "src/lambdas.ts#schedule.λ24:24": ["λ24:24", "src/lambdas.ts#schedule"],
       "src/lambdas.ts#kick.λ29:9": ["λ29:9", "src/lambdas.ts#kick"],
       "src/lambdas.ts#wait.λ35:17": ["λ35:17", "src/lambdas.ts#wait"],
-      "src/lambdas.ts#λ52:7": ["λ52:7", "src/lambdas.ts"],
+      "src/lambdas.ts#λ62:13": ["λ62:13", "src/lambdas.ts"],
       "src/lambdas.ts#λ56:16": ["λ56:16", "src/lambdas.ts"],
     });
   });
@@ -75,8 +75,8 @@ describe("anonymous functions", () => {
 
   it("makes the function that creates each lambda reach it by a closure edge, the file for module-level lambdas", async () => {
     expect(labelled((await extract()).edges, "calls.reference")).toEqual([
-      "src/lambdas.ts -> src/lambdas.ts#λ52:7 (closure)",
       "src/lambdas.ts -> src/lambdas.ts#λ56:16 (closure)",
+      "src/lambdas.ts -> src/lambdas.ts#λ62:13 (closure)",
       "src/lambdas.ts#filtered -> src/lambdas.ts#filtered.λ14:23 (closure)",
       "src/lambdas.ts#kick -> src/lambdas.ts#kick.λ29:9 (closure)",
       "src/lambdas.ts#outer -> src/lambdas.ts#outer.λ6:20 (closure)",
@@ -90,6 +90,7 @@ describe("anonymous functions", () => {
 
   it("attributes each call inside a lambda to the lambda, and leaves the creator with only the calls it makes itself", async () => {
     expect(pairs((await extract()).edges, "calls.call")).toEqual([
+      "src/lambdas.ts -> src/lambdas.ts#takes",
       "src/lambdas.ts#kick.λ29:9 -> src/tasks.ts#fetchUser",
       "src/lambdas.ts#schedule -> src/tasks.ts#fetchUser",
       "src/lambdas.ts#schedule.λ22:14 -> src/tasks.ts#onTick",

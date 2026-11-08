@@ -36,21 +36,20 @@ describe("object-literal methods, this-method calls, factories and decorators", 
     expect(pairs(await edges(), "calls.call")).toEqual([
       "src/factory.ts#useFactory -> src/factory.ts#makeStore",
       "src/obj.ts#Local.go -> src/obj.ts#Local.step",
-      "src/obj.ts#callRun -> src/obj.ts#run",
-      "src/obj.ts#useApi -> src/obj.ts#onClick",
+      "src/obj.ts#callRun -> src/obj.ts#handlers.run",
+      "src/obj.ts#useApi -> src/obj.ts#api.onClick",
       "src/obj.ts#viaProp -> src/obj.ts#pass",
     ]);
   });
 
   it("records an object-literal method passed as a value, a factory's new (made inside its arrow), and a decorator", async () => {
-    // The object-literal arrows are anonymous functions: the file closes over each one, and its `new` is the arrow's own.
+    // Methods and arrows of a literal bound to a name are named by the binding: `api.onClick`, `factory.build`. The
+    // creator no longer closes over them, and the `new` belongs to the named arrow.
     expect(pairs(await edges(), "calls.reference")).toEqual([
-      "src/factory.ts -> src/factory.ts#λ9:10 (closure)",
       "src/factory.ts#Decorated.m -> src/dec.ts#log (value)",
+      "src/factory.ts#factory.build -> src/store.ts#Store.constructor (new)",
       "src/factory.ts#makeStore -> src/store.ts#Store.constructor (new)",
-      "src/factory.ts#λ9:10 -> src/store.ts#Store.constructor (new)",
-      "src/obj.ts -> src/obj.ts#λ5:9 (closure)",
-      "src/obj.ts#viaProp -> src/obj.ts#onClick (value)",
+      "src/obj.ts#viaProp -> src/obj.ts#api.onClick (value)",
     ]);
   });
 });
