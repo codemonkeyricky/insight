@@ -413,7 +413,11 @@ describe("execModel: anonymous functions and runtime", () => {
       reached: [lam, "src/w.ts#helper", "src/w.ts#work"],
       spawn: { status: "resolved", how: "thread" },
     });
-    expect(model.functions.find((f) => f.id === lam)).toEqual({ id: lam, name: "λ3:3", file, line: 3, inScope: true, anonymous: true, parent: main, runtime: "thread" });
+    expect(model.functions.find((f) => f.id === lam)).toMatchObject({ id: lam, name: "λ3:3", file, line: 3, inScope: true, anonymous: true, parent: main, runtime: "thread" });
+    // The anonymous function has a chart (a start and an end at least), so its ref carries the chart's size.
+    const chart = model.functions.find((f) => f.id === lam)?.chart;
+    expect(chart?.[0]).toBeGreaterThan(0);
+    expect(chart?.[1]).toBeGreaterThan(0);
     expect(model.stats).toMatchObject({ functionsInScope: 4, functionsThreaded: 4, functionsCoroutineOnly: 0, functionsUnthreaded: 0 });
   });
 

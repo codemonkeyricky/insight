@@ -2,7 +2,7 @@
 // drawn for an open set: frames, boxes and the edges between the visible boxes. See scene.ts for the model.
 import { PROJECT_ID, type Rect, type ScopeLink, type ScopeTree } from "./scope-map.js";
 import { LAYERED, ZOOM_SIZE, edgeCurve, frameSize, readLayout, type ContainerLayout, type LayoutGraph, type Placed, type PlacedEdge, type PlacedItem, type Size } from "./zoom-layout.js";
-import type { Scene, SceneEdge, SceneEdgeKind, SceneLayout, SceneNode } from "./scene.js";
+import { CHART_HEAD, CHART_PAD, type Scene, type SceneEdge, SceneEdgeKind, SceneLayout, SceneNode } from "./scene.js";
 
 /** What a solver answers for one container graph: ELK's shape, reduced to what readLayout reads. */
 export interface SolvedGraph {
@@ -23,10 +23,16 @@ export interface SceneMapEdge {
   how?: string;
 }
 
-/** The box size of a node with no children: its level's box, or a function box when the scene has no such level. */
+/**
+ * The box size of a node with no children: its level's box, or a function box when the scene has no such level. A node
+ * with a chart is at least large enough to hold it, under a header for its name.
+ */
 export function sceneLeafSize(scene: Scene, id: string): Size {
-  const kind = scene.nodes.get(id)?.kind;
-  return (kind === undefined ? undefined : scene.levels[kind]?.box) ?? ZOOM_SIZE.fn;
+  const node = scene.nodes.get(id);
+  const box = (node === undefined ? undefined : scene.levels[node.kind]?.box) ?? ZOOM_SIZE.fn;
+  const chart = node?.chart;
+  if (chart === undefined) return box;
+  return { w: Math.max(box.w, chart.w + 2 * CHART_PAD), h: Math.max(box.h, CHART_HEAD + chart.h + 2 * CHART_PAD) };
 }
 
 /** The ELK options the container `id` lays its children out with: its level's layout, else LAYERED. */
@@ -237,8 +243,16 @@ export function layoutCovers(scene: Scene, layout: SceneLayout): boolean {
     if (n.children.length === 0) continue;
     const own = layout.containers[id];
     if (!own) return false;
-    const slots = new Set(own.slots.map((s) => s.id));
-    for (const c of n.children) if (!slots.has(c)) return false;
+    const slots = new Map(own.slots.map((s) => [s.id, s]));
+    for (const c of n.children) {
+      const slot = slots.get(c);
+      if (!slot) return false;
+      // A leaf's slot must still have the leaf's size: a layout saved before a chart changed would overlap its neighbours.
+      if (scene.nodes.get(c)?.children.length === 0) {
+        const s = sceneLeafSize(scene, c);
+        if (slot.w !== s.w || slot.h !== s.h) return false;
+      }
+    }
   }
   return true;
 }

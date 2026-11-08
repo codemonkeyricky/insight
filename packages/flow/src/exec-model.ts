@@ -2,6 +2,8 @@ import type { IREdge, IRNode } from "@insight/ir";
 import { edgeTargets } from "@insight/sdk";
 import { insideScope } from "./scope-map.js";
 import { isNoisePath } from "./scope.js";
+import { factsForFile } from "./build.js";
+import { layoutFunction } from "./layout.js";
 
 /**
  * The execution model of one scope: the threads its code starts, the functions each thread runs, and the
@@ -53,6 +55,11 @@ export interface ExecFunctionRef {
   parent?: string;
   /** How the function runs. See ExecRuntime. */
   runtime: ExecRuntime;
+  /**
+   * The width and height of the function's control-flow chart, in chart units. Absent when the IR has no chart for it
+   * (no steps, or too many to chart). The canvas sizes the function's box to hold the chart.
+   */
+  chart?: [number, number];
 }
 
 /** The spawn that starts a thread. */
@@ -620,6 +627,20 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
   // The function table. Threads are cut in order, so the first threads keep their full lists when the cap is hit.
   const table = new Map<string, ExecFunctionRef>();
   let truncated = false;
+  // Chart sizes by file, computed on first use: the chart layout is cheap, but only files with a listed function need it.
+  const chartSizes = new Map<string, Map<string, [number, number]>>();
+  const chartOf = (file: string, id: string): [number, number] | undefined => {
+    if (file === "") return undefined;
+    let sizes = chartSizes.get(file);
+    if (sizes === undefined) {
+      sizes = new Map();
+      for (const f of factsForFile(file, nodes, edges).map(layoutFunction)) {
+        if (!f.tooLarge && f.nodes.length > 0) sizes.set(f.id, [f.width, f.height]);
+      }
+      chartSizes.set(file, sizes);
+    }
+    return sizes.get(id);
+  };
   const take = (id: string): boolean => {
     if (table.has(id)) return true;
     const fn = fns.get(id);
@@ -628,6 +649,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       truncated = true;
       return false;
     }
+    const chart = chartOf(fn.file ?? "", id);
     table.set(id, {
       id,
       name: fn.name,
@@ -637,6 +659,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       ...(fn.noise ? { noise: true as const } : {}),
       ...(fn.anonymous ? { anonymous: true as const, ...(fn.parent !== undefined ? { parent: fn.parent } : {}) } : {}),
       runtime: runtimeOf(id),
+      ...(chart !== undefined ? { chart } : {}),
     });
     return true;
   };

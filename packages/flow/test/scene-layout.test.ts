@@ -385,6 +385,21 @@ describe("layoutScene", () => {
     }
   });
 
+  it("a saved layout from before a chart was sized does not cover the scene", async () => {
+    const saved = await layoutScene(exec, solveElk);
+    const next: Scene = { ...exec, nodes: new Map(exec.nodes) };
+    const f1 = exec.nodes.get("f1");
+    if (f1 === undefined) throw new Error("no f1");
+    next.nodes.set("f1", { ...f1, chart: { w: 500, h: 400 } });
+    expect(layoutCovers(next, saved)).toBe(false);
+    // Laid out again with the chart, the box is the chart's size and the layout covers.
+    const fresh = await layoutScene(next, solveElk);
+    expect(layoutCovers(next, fresh)).toBe(true);
+    const slot = fresh.containers.C1?.slots.find((s) => s.id === "f1");
+    expect(slot?.w).toBeGreaterThanOrEqual(500);
+    expect(slot?.h).toBeGreaterThanOrEqual(400);
+  });
+
   it("gives the same layout twice", async () => {
     const a = await layoutScene(exec, solveElk);
     const b = await layoutScene(exec, solveElk);

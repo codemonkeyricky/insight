@@ -15,7 +15,8 @@ import {
   MAX_SYNC_EDGES_PER_RESOURCE,
 } from "../src/exec-scene.js";
 import type { ExecFunctionRef, ExecModel, ExecModelStats, ExecProgram, ExecResource, ExecThread } from "../src/exec-model.js";
-import type { Scene } from "../src/scene.js";
+import { CHART_HEAD, CHART_PAD, type Scene } from "../src/scene.js";
+import { sceneLeafSize } from "../src/scene-layout.js";
 
 const ZERO_STATS: ExecModelStats = {
   threads: 0,
@@ -143,6 +144,36 @@ describe("exec scene ids", () => {
     expect(execThreadId("main")).toBe("thread:main");
     expect(execCoroutineId("main", "co")).toBe("co:main:co");
     expect(execFnId("thread:main", "a")).toBe("thread:main>a");
+  });
+});
+
+describe("function charts", () => {
+  const withChart = (id: string, chart: [number, number]): Scene => {
+    const m = basic();
+    const f = m.functions.find((x) => x.id === id);
+    if (f === undefined) throw new Error(`no ${id}`);
+    f.chart = chart;
+    return buildExecScene(m);
+  };
+  const placedOf = (scene: Scene, ref: string) => [...scene.nodes.values()].find((n) => n.kind === "function" && n.ref === ref);
+
+  it("a function with a chart gets its size on the scene node, and a box that holds it", () => {
+    const scene = withChart("a", [400, 300]);
+    const a = placedOf(scene, "a");
+    expect(a?.chart).toEqual({ w: 400, h: 300 });
+    expect(sceneLeafSize(scene, a?.id ?? "")).toEqual({ w: 400 + 2 * CHART_PAD, h: CHART_HEAD + 300 + 2 * CHART_PAD });
+    // A function without a chart keeps the level's box.
+    const work = placedOf(scene, "work");
+    expect(work?.chart).toBeUndefined();
+    expect(sceneLeafSize(scene, work?.id ?? "")).toEqual(scene.levels.function?.box);
+  });
+
+  it("a chart smaller than the level's box never shrinks the box", () => {
+    const scene = withChart("a", [10, 10]);
+    const box = scene.levels.function?.box ?? { w: 0, h: 0 };
+    const size = sceneLeafSize(scene, placedOf(scene, "a")?.id ?? "");
+    expect(size.w).toBeGreaterThanOrEqual(box.w);
+    expect(size.h).toBeGreaterThanOrEqual(box.h);
   });
 });
 

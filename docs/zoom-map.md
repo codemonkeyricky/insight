@@ -9,9 +9,17 @@ The Flow tab draws the execution canvas of the scope: program, threads, coroutin
   place. A `mode` parameter from the old views is ignored.
 - Roots only: a checkbox above the canvas writes `roots=1`. Each thread then shows only the functions it starts in
   (`execRootsOnly` in `packages/flow/src/scene-filter.ts`). The layout of that cut is solved in the browser.
+- A function's control-flow chart is drawn inside its box on the canvas. The exec model gives each function the
+  chart's size (`ExecFunctionRef.chart`, from `layoutFunction` in `packages/flow/src/layout.ts`), the scene node keeps
+  it (`SceneNode.chart`), and `sceneLeafSize` makes the box large enough to hold the chart under a header for the name.
+  Zoomed out, a function is just that box with its name. Once the box is 160 px wide on screen (`CHART_MIN_PX` in
+  `apps/web/src/components/zoom/BoxChart.tsx`), the chart is loaded through the flow store and drawn in the box at its
+  natural scale, so it grows with the camera. A function with no chart, or one too large to chart, keeps the plain
+  box. A saved layout whose function boxes have other sizes does not cover the scene (`layoutCovers`), so a demo or
+  server layout from before the charts is solved again.
 - A function's panel sits below the canvas. It shows the function's name and source line, where it runs ("Runs on
-  <thread>", with the coroutine it runs in), the other places it runs, and its control-flow chart. A function in the
-  no-runtime group says "Plain call with no runtime context. Zoom out to see where it runs."
+  <thread>", with the coroutine it runs in), the other places it runs, and the chart's stats and legend. A function in
+  the no-runtime group says "Plain call with no runtime context. Zoom out to see where it runs."
   (`apps/web/src/components/zoom/ExecFunctionPanel.tsx`).
 - The function panel also shows the call trail from its thread's roots and its Calls and Called by lists. A file
   group, coroutine, thread or the no-runtime group shows its functions as pills and a sortable table
