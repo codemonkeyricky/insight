@@ -64,7 +64,7 @@ Base kinds shipped by the core:
 | `structure.file` | structure | node | – | A source file. Created by discovery before any frontend runs. |
 | `structure.namespace` | structure | node | – |  |
 | `structure.type` | structure | node | – |  |
-| `structure.function` | structure | node | – | A function, method or constructor. `attrs.anonymous` marks a function expression, arrow function or lambda with no declaration of its own (named `λ<line>:<col>`); its parent is the enclosing function, or the file at module level. |
+| `structure.function` | structure | node | – | A function, method or constructor. `attrs.anonymous` marks a function expression, arrow function or lambda with no declaration of its own (named `λ<line>:<col>`); its parent is the enclosing function, or the file at module level. A function-valued property of an object literal bound to a name (a variable, a class property or `export default`) is named `<binding>.<prop>`, as a class member is `Class.member`, and is not anonymous; a literal passed inline keeps its lambdas. |
 | `flow.block` | flow | node | – | A labelled region: the try, catch or finally part of a try, or a loop body. |
 | `flow.branch` | flow | node | – | if / else, or any two-way choice. |
 | `flow.branch-arm` | flow | node | – | One arm of a branch or switch: then, else, a case or the default. |
@@ -84,7 +84,7 @@ Base kinds shipped by the core:
 | `calls.call-site` | calls | node | – |  |
 | `calls.dynamic-dispatch` | calls | node | – |  |
 | `calls.callback-registration` | calls | node | – |  |
-| `calls.call` | calls | edge | – | Caller function to callee function. |
+| `calls.call` | calls | edge | – | Caller function to callee function. A call through an interface member, or an abstract class member, has no body to call, so its `to` is `{"candidates": [...]}` with the implementations (`attrs.how` is `interface`, provenance `heuristic`). The candidates are every indexed class that implements the interface, directly, through an extended interface, or through a base class, and that declares the member or inherits it from its nearest base class; or, for an abstract member, every indexed concrete subclass of the abstract class and what it inherits or overrides. A receiver typed by an interface is matched against that interface's implementers, not the interface that declares the member. A set is sorted by id and holds at most 32 targets; `attrs.truncated` is `true` when the set was cut. A set always has at least one target, even when there is one implementation. Not covered: structural matches (a class that fits an interface without `implements`), classes in files outside the index, class expressions, and a new implementer in another file, which reaches a call site only when that call site's file is extracted again. |
 | `calls.reference` | calls | edge | – | Caller to a function it refers to without calling it. `attrs.how` is `new`, `jsx`, `value` or `closure`. Caller is the enclosing function, or the file for module-level code. `closure` runs from a function to an anonymous function created inside it, so the creator still reaches what the closure calls. |
 | `calls.contains-call` | calls | edge | – |  |
 | `concurrency.spawn-thread` | concurrency | node | – |  |
@@ -92,11 +92,11 @@ Base kinds shipped by the core:
 | `concurrency.coroutine` | concurrency | node | – |  |
 | `concurrency.async-task` | concurrency | node | – |  |
 | `concurrency.await` | concurrency | node | – |  |
-| `concurrency.channel-send` | concurrency | node | – |  |
-| `concurrency.channel-recv` | concurrency | node | – |  |
+| `concurrency.channel-send` | concurrency | node | – | A send on a channel. `attrs.channel` names the channel; the execution model groups sends and receives by it. |
+| `concurrency.channel-recv` | concurrency | node | – | A receive on a channel. `attrs.channel` names the channel, as for a send. |
 | `concurrency.spawns` | concurrency | edge | – | Spawn node to the function (or script file) it runs. `attrs.how` is `thread`, `process` or `async`. The spawning function is the spawn node's owner. Only emitted when the target resolves. |
 | `concurrency.dispatches` | concurrency | edge | – | Function to the coroutine, async function or callback it hands work to. `attrs.how` is `await`, `start`, `callback`, `timer` or `microtask`. |
-| `sync.lock-acquire` | sync | node | – |  |
+| `sync.lock-acquire` | sync | node | – | Takes a lock. `attrs.lock` names the lock; the execution model and the lock-order lens group acquires by it. |
 | `sync.lock-release` | sync | node | – |  |
 | `sync.rwlock-acquire` | sync | node | `sync.lock-acquire` |  |
 | `sync.semaphore` | sync | node | – |  |

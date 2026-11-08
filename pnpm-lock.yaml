@@ -41,6 +41,9 @@ importers:
       '@insight/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
+      elkjs:
+        specifier: 0.12.0
+        version: 0.12.0
       fastify:
         specifier: ^5.12.8
         version: 5.12.8
@@ -156,6 +159,9 @@ importers:
       '@insight/frontend-typescript':
         specifier: workspace:*
         version: link:../frontend-typescript
+      elkjs:
+        specifier: 0.12.0
+        version: 0.12.0
 
   packages/frontend-bazel:
     dependencies:

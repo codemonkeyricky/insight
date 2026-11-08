@@ -96,6 +96,12 @@ export interface ExecThread {
   /** Those functions, sorted by id. Shorter than `reach` only when the model is truncated. */
   reached: string[];
   coroutines: ExecCoroutine[];
+  /**
+   * The functions this thread reaches only through its coroutines, sorted by id: `reached` without the functions the
+   * thread runs on its own. Each one is a coroutine's target or callee. The thread's own functions are `reached`
+   * without these.
+   */
+  coroutineOnly: string[];
 }
 
 /** One dispatch edge whose source lies in the scope. */
@@ -109,16 +115,71 @@ export interface ExecDispatch {
   line: number;
 }
 
+/**
+ * A program: a build target that links an executable (targetKind `add_executable` or a `*_binary` rule). Tests and
+ * libraries are not programs. Only targets with a file inside the scope are listed.
+ */
+export interface ExecProgram {
+  /** The build target's node id. */
+  id: string;
+  name: string;
+  /** The rule or command, such as `cc_binary`, `py_binary` or `add_executable`. */
+  targetKind: string;
+  /** The files the target contains, sorted. Not limited to the scope. */
+  files: string[];
+  /** The id of a function named `main` defined in one of the program's files (first by id), when the IR has one. */
+  main?: string;
+  /**
+   * The threads that belong to the program: its own main thread (`main:<id>`) when it has `main`, then every spawn thread
+   * whose spawn lies in one of its files or in a function its main thread reaches. A thread can belong to several programs.
+   */
+  threads: string[];
+}
+
+/**
+ * A lock or channel the listed functions use. A lock is identified by `attrs.lock` of its `sync.lock-acquire` and
+ * `sync.rwlock-acquire` nodes; a channel by `attrs.channel` of its `concurrency.channel-send` and `channel-recv` nodes.
+ * A resource is listed when one of its sites lies in a listed function.
+ */
+export interface ExecResource {
+  /** `lock:<identity>` or `channel:<identity>`. */
+  id: string;
+  kind: "lock" | "channel";
+  /** The identity the IR gives the lock or channel. */
+  name: string;
+  /** The threads that run a function with a site, in thread order. Empty when only unthreaded functions use it. */
+  threads: string[];
+  /** Every site in a listed function, sorted by fn, then line. */
+  sites: ExecResourceSite[];
+}
+
+/** One operation on a resource, in the function that performs it. */
+export interface ExecResourceSite {
+  /** The function that performs the operation. */
+  fn: string;
+  /** `acquire` for a lock, `send` or `recv` for a channel. */
+  op: "acquire" | "send" | "recv";
+  file: string;
+  /** 1-based line. 0 when the node has no span. */
+  line: number;
+}
+
 /** Counts over the listed model. */
 export interface ExecModelStats {
   threads: number;
   spawns: number;
+  /** The programs the model lists. */
+  programs: number;
   resolved: number;
   outside: number;
   unresolved: number;
   candidates: number;
   coroutines: number;
   dispatches: number;
+  /** The lock resources the model lists. */
+  locks: number;
+  /** The channel resources the model lists. */
+  channels: number;
   /** Functions whose file lies in the scope. */
   functionsInScope: number;
   /** Of those, the ones some thread runs, coroutines included. */
@@ -143,9 +204,27 @@ export interface ExecModel {
   truncated: boolean;
   /** Every function the model names, each once. Thread and coroutine lists refer to these by id. */
   functions: ExecFunctionRef[];
-  /** The main thread first, then one thread per spawn in scope, sorted by spawn id. */
+  /**
+   * The general main thread first, then one main thread per program that has `main` (sorted by program id), then one
+   * thread per spawn in scope, sorted by spawn id.
+   */
   threads: ExecThread[];
+  /** The programs in scope, sorted by id. Empty when the IR has no build targets. */
+  programs: ExecProgram[];
   dispatches: ExecDispatch[];
+  /**
+   * The calls and references between listed functions, as index pairs into `functions`: [caller, callee]. Closures
+   * count, except a closure that is a spawn or dispatch target. Each pair once, sorted, with no self-calls. Index
+   * pairs keep the JSON small, since a scope can have thousands.
+   */
+  calls: [number, number][];
+  /**
+   * The in-scope functions no thread runs (runtime "none"), sorted by id. Test, fixture and sample functions are left
+   * out unless the scope is one of those. Listed after the threads, so the cap cuts these first.
+   */
+  unthreaded: string[];
+  /** The locks and channels the listed functions use, sorted by id. Empty when the IR has no such nodes. */
+  resources: ExecResource[];
   stats: ExecModelStats;
 }
 
@@ -194,6 +273,17 @@ interface Plan {
 const SPAWN_KINDS: ReadonlySet<string> = new Set(["concurrency.spawn-thread", "concurrency.spawn-process"]);
 const DISPATCH_HOWS: readonly ExecDispatchHow[] = ["await", "start", "callback", "timer", "microtask"];
 const SPAWN_HOWS: readonly ExecSpawnHow[] = ["thread", "process", "async"];
+
+/** The sync and channel nodes that are resource sites: the node kind, what it does, and the attribute naming the resource. */
+const RESOURCE_SITES: Readonly<Record<string, { kind: ExecResource["kind"]; op: ExecResourceSite["op"]; attr: string }>> = {
+  "sync.lock-acquire": { kind: "lock", op: "acquire", attr: "lock" },
+  "sync.rwlock-acquire": { kind: "lock", op: "acquire", attr: "lock" },
+  // The C++ frontend's RAII guards (lock_guard, unique_lock, scoped_lock, shared_lock). The kind extends
+  // sync.lock-acquire in frontend-cpp's kinds.json, but the model reads raw kinds with no registry, so it is named here.
+  "x-cpp.scoped-lock": { kind: "lock", op: "acquire", attr: "lock" },
+  "concurrency.channel-send": { kind: "channel", op: "send", attr: "channel" },
+  "concurrency.channel-recv": { kind: "channel", op: "recv", attr: "channel" },
+};
 
 /** Code-unit order, so sorts do not depend on the locale. */
 const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -408,9 +498,45 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     return out;
   };
 
+  // Programs: the build targets that link an executable, with the files they contain. Their `main` is the root of
+  // the program's own main thread, so it is taken out of the general main thread's roots below.
+  const contains = new Map<string, Set<string>>();
+  for (const e of edges) {
+    if (e.kind !== "packaging.target-contains") continue;
+    const files = contains.get(e.from) ?? new Set<string>();
+    for (const file of edgeTargets(e).nodes) files.add(file);
+    contains.set(e.from, files);
+  }
+  const programs: ExecProgram[] = [];
+  for (const n of nodes) {
+    if (n.kind !== "packaging.build-target") continue;
+    const targetKind = strAttr(n.attrs, "targetKind");
+    if (targetKind === undefined || !(targetKind === "add_executable" || targetKind.endsWith("_binary"))) continue;
+    const files = [...(contains.get(n.id) ?? [])].sort(byText);
+    if (!files.some((f) => insideScope(f, scope))) continue;
+    // A program built only from test, fixture or sample files is left out unless the scope is one of those, as their
+    // functions are left out of the main roots: at a project's root, every test binary and fixture would crowd it.
+    if (!scopeNoise && files.every((f) => isNoisePath(f))) continue;
+    const inFiles = new Set(files);
+    const main = [...fns.values()]
+      .filter((f) => f.name === "main" && f.file !== undefined && inFiles.has(f.file))
+      .map((f) => f.id)
+      .sort(byText)[0];
+    programs.push({
+      id: n.id,
+      name: strAttr(n.attrs, "name") ?? n.id,
+      targetKind,
+      files,
+      ...(main !== undefined ? { main } : {}),
+      threads: [],
+    });
+  }
+  programs.sort((a, b) => byText(a.id, b.id));
+  const programMains = new Set(programs.flatMap((p) => (p.main !== undefined ? [p.main] : [])));
+
   // An anonymous function is never a main root: whatever runs it is its creator, a spawn or a dispatch.
   const mainRoots = [...fns.values()]
-    .filter((f) => f.inScope && !f.anonymous && !referenced.has(f.id) && (scopeNoise || !f.noise))
+    .filter((f) => f.inScope && !f.anonymous && !referenced.has(f.id) && (scopeNoise || !f.noise) && !programMains.has(f.id))
     .map((f) => f.id)
     .sort(byText);
   const planOf = (kind: ExecThreadKind, id: string, roots: string[], spawn?: ExecSpawn): Plan => ({
@@ -423,6 +549,13 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     coroutines: coroutinesOf(roots),
   });
   const plans: Plan[] = [planOf("main", "main", mainRoots)];
+  const programPlans = new Map<string, Plan>();
+  for (const p of programs) {
+    if (p.main === undefined) continue;
+    const plan = planOf("main", `main:${p.id}`, [p.main]);
+    programPlans.set(p.id, plan);
+    plans.push(plan);
+  }
 
   // Spawn threads are not filtered by noise. A spawn in a test file is still a fact of the code, and filtering it
   // would make a scope's threads depend on whether the scope is noise, which breaks monotonicity across scopes.
@@ -458,6 +591,21 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       ...(script !== undefined ? { script } : {}),
     };
     plans.push(planOf(how, n.id, rootList, spawn));
+  }
+
+  // A program's threads: its main thread, and each spawn that lies in one of its files or in a function its main reaches.
+  for (const prog of programs) {
+    const own = programPlans.get(prog.id);
+    const inFiles = new Set(prog.files);
+    const threadIds: string[] = own !== undefined ? [own.id] : [];
+    for (const p of plans) {
+      const s = p.spawn;
+      if (s === undefined) continue;
+      const viaFile = inFiles.has(s.file);
+      const viaMain = own !== undefined && s.owner !== undefined && own.reach.has(s.owner);
+      if (viaFile || viaMain) threadIds.push(p.id);
+    }
+    prog.threads = threadIds;
   }
 
   // A function runs on a thread when some thread reaches it on its own, and as a coroutine when only a coroutine does.
@@ -496,6 +644,11 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
   const threads: ExecThread[] = plans.map((p) => {
     const roots = p.roots.filter(take);
     const reached = [...p.reach].sort(byText).filter(take);
+    // A subset of `reached`, so every id was already offered to the table: filter by it instead of taking again.
+    const coroutineOnly = [...p.reach]
+      .filter((id) => !p.plain.has(id))
+      .sort(byText)
+      .filter((id) => table.has(id));
     const coroutines: ExecCoroutine[] = [];
     for (const co of p.coroutines) {
       if (!take(co.target)) continue;
@@ -509,6 +662,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       reach: p.reach.size,
       reached,
       coroutines,
+      coroutineOnly,
     };
   });
 
@@ -521,6 +675,59 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     line: d.line,
   }));
 
+  // Taken after the threads and dispatches, so the cap cuts these first.
+  const unthreaded = [...fns.values()]
+    .filter((f) => f.inScope && (scopeNoise || !f.noise) && runtimeOf(f.id) === "none")
+    .map((f) => f.id)
+    .sort(byText)
+    .filter(take);
+
+  // The table is final here. Callers that are files, not functions, are never in it.
+  const listed = [...table.keys()];
+  const indexOf = new Map(listed.map((id, i) => [id, i]));
+  const pairs = new Set<string>();
+  const calls: [number, number][] = [];
+  listed.forEach((a, i) => {
+    for (const b of callsOf(a)) {
+      const j = indexOf.get(b);
+      if (j === undefined || b === a) continue;
+      const key = `${i}:${j}`;
+      if (pairs.has(key)) continue;
+      pairs.add(key);
+      calls.push([i, j]);
+    }
+  });
+  calls.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+
+  // Locks and channels. A site is an acquire, send or receive whose parent is a listed function: module-level code
+  // (a file parent) runs on no thread, so it is not a site. The resource's threads are the threads that reach a site.
+  const sitesOf = new Map<string, { kind: ExecResource["kind"]; name: string; sites: ExecResourceSite[] }>();
+  for (const n of nodes) {
+    const spec = RESOURCE_SITES[n.kind];
+    if (spec === undefined) continue;
+    const fn = n.parent;
+    if (fn === undefined || !fns.has(fn) || !table.has(fn)) continue;
+    const name = strAttr(n.attrs, spec.attr);
+    if (name === undefined || name === "") continue;
+    const id = `${spec.kind}:${name}`;
+    const r = sitesOf.get(id) ?? { kind: spec.kind, name, sites: [] };
+    r.sites.push({ fn, op: spec.op, file: n.span?.file ?? "", line: n.span ? n.span.start[0] + 1 : 0 });
+    sitesOf.set(id, r);
+  }
+  const reachSets = threads.map((t) => ({ id: t.id, reached: new Set(t.reached) }));
+  const resources: ExecResource[] = [...sitesOf]
+    .map(([id, r]) => {
+      const sites = r.sites.sort((a, b) => byText(a.fn, b.fn) || a.line - b.line || byText(a.op, b.op) || byText(a.file, b.file));
+      return {
+        id,
+        kind: r.kind,
+        name: r.name,
+        threads: reachSets.filter((t) => sites.some((s) => t.reached.has(s.fn))).map((t) => t.id),
+        sites,
+      };
+    })
+    .sort((a, b) => byText(a.id, b.id));
+
   const inScopeFns = [...fns.values()].filter((f) => f.inScope);
   const functionsThreaded = inScopeFns.filter((f) => reachedAll.has(f.id)).length;
   const functionsCoroutineOnly = inScopeFns.filter((f) => runtimeOf(f.id) === "coroutine").length;
@@ -532,16 +739,23 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     truncated,
     functions: [...table.values()],
     threads,
+    programs,
     dispatches,
+    calls,
+    unthreaded,
+    resources,
     stats: {
       threads: threads.length,
       spawns: spawned.length,
+      programs: programs.length,
       resolved: countStatus("resolved"),
       outside: countStatus("outside"),
       unresolved: countStatus("unresolved"),
       candidates: spawned.filter((x) => x.candidates).length,
       coroutines: threads.reduce((n, t) => n + t.coroutines.length, 0),
       dispatches: dispatches.length,
+      locks: resources.filter((r) => r.kind === "lock").length,
+      channels: resources.filter((r) => r.kind === "channel").length,
       functionsInScope: inScopeFns.length,
       functionsThreaded,
       functionsCoroutineOnly,

@@ -22,6 +22,15 @@ function dispatchEdge(from: string, to: IREdge["to"], how: string, file: string,
   return { from, to, facet: "concurrency", kind: "concurrency.dispatches", attrs: { how }, span: spanAt(file, line), provenance: PROVENANCE };
 }
 
+/** A build target, as the Bazel and CMake frontends emit it: `targetKind` is the rule or command. */
+function targetNode(id: string, targetKind: string, name = id.split(":")[1] ?? id): IRNode {
+  return { id, facet: "packaging", kind: "packaging.build-target", attrs: { name, label: id, targetKind, source: "static" }, provenance: PROVENANCE };
+}
+/** The target contains the file. The frontends emit one edge per source. */
+function containsEdge(target: string, file: string): IREdge {
+  return { from: target, to: file, facet: "packaging", kind: "packaging.target-contains", provenance: PROVENANCE };
+}
+
 const names = (m: ExecModel, ids: readonly string[]) => ids.map((id) => m.functions.find((f) => f.id === id)?.name ?? id);
 
 /** The id of the anonymous function on `line` of `file`. Its name is `λ<line>:3`, as the frontends write it. */
@@ -230,7 +239,8 @@ describe("execModel: limits and ordering", () => {
   it("has only the main thread, with nothing in it, for an empty project", () => {
     const model = execModel([], [], "");
     expect(model).toMatchObject({ truncated: false, functions: [], dispatches: [] });
-    expect(model.threads).toEqual([{ id: "main", kind: "main", roots: [], reach: 0, reached: [], coroutines: [] }]);
+    expect(model.threads).toEqual([{ id: "main", kind: "main", roots: [], reach: 0, reached: [], coroutines: [], coroutineOnly: [] }]);
+    expect(model).toMatchObject({ calls: [], unthreaded: [] });
     expect(model.stats).toMatchObject({ threads: 1, spawns: 0, functionsInScope: 0, functionsThreaded: 0 });
   });
 
@@ -449,10 +459,12 @@ describe("execModel: anonymous functions and runtime", () => {
   it("never makes an anonymous function a main root, even one nothing creates", () => {
     const file = "src/m.ts";
     const nodes = [fnNode(file, "main", 0), anonNode(file, 6, file)];
-    // With no edges, a named function nothing calls would be a root. The lambda is not, and no thread runs it.
+    // With no edges, a named function nothing calls would be a root. The lambda is not, and no thread runs it,
+    // so it is listed as unthreaded.
     const model = execModel(nodes, [], "");
     expect(model.threads[0]).toMatchObject({ roots: [`${file}#main`], reach: 1 });
-    expect(model.functions.find((f) => f.id === anonId(file, 6))).toBeUndefined();
+    expect(model.functions.find((f) => f.id === anonId(file, 6))).toMatchObject({ anonymous: true, runtime: "none" });
+    expect(model.unthreaded).toEqual([anonId(file, 6)]);
     // Module-level code that hands it to a timer lists it, and it runs on no thread.
     const timed = execModel(nodes, [dispatchEdge(file, anonId(file, 6), "timer", file, 7)], "");
     expect(timed.threads[0]?.roots).toEqual([`${file}#main`]);
@@ -488,7 +500,15 @@ describe("execModel: anonymous functions and runtime", () => {
       dispatchEdge(at("p"), at("r"), "timer", file, 14),
     ];
     const model = execModel(nodes, edges, "");
-    expect(runtimes(model)).toEqual({ [at("main")]: "thread", [at("y")]: "thread", [at("x")]: "coroutine", [at("r")]: "none" });
+    expect(runtimes(model)).toEqual({
+      [at("main")]: "thread",
+      [at("y")]: "thread",
+      [at("x")]: "coroutine",
+      [at("p")]: "none",
+      [at("q")]: "none",
+      [at("r")]: "none",
+    });
+    expect(model.unthreaded).toEqual([at("p"), at("q"), at("r")]);
     expect(model.stats).toMatchObject({ functionsInScope: 6, functionsThreaded: 3, functionsCoroutineOnly: 1, functionsUnthreaded: 3 });
   });
 
@@ -524,5 +544,439 @@ describe("execModel: anonymous functions and runtime", () => {
     const wide = execModel(nodes, edges, "src");
     expect(wide.threads[0]?.roots).toEqual([]);
     expect(wide.stats).toMatchObject({ functionsInScope: 2, functionsThreaded: 0, functionsUnthreaded: 2 });
+  });
+});
+
+describe("execModel: canvas fields", () => {
+  /** The model's call pairs, mapped back to function ids. */
+  const callIds = (m: ExecModel): [string, string][] =>
+    m.calls.map(([a, b]) => [m.functions[a]?.id ?? `?${a}`, m.functions[b]?.id ?? `?${b}`]);
+
+  it("lists the functions a thread reaches only through its coroutines, sorted by id", () => {
+    const file = "src/m.ts";
+    const at = (name: string) => `${file}#${name}`;
+    const nodes = ["main", "a", "co", "h"].map((n, i) => fnNode(file, n, i * 4));
+    const edges = [callEdge(at("main"), at("a"), file, 1), dispatchEdge(at("main"), at("co"), "await", file, 2), callEdge(at("co"), at("h"), file, 9)];
+    const model = execModel(nodes, edges, "src");
+    expect(model.threads[0]?.reached).toEqual([at("a"), at("co"), at("h"), at("main")]);
+    expect(model.threads[0]?.coroutineOnly).toEqual([at("co"), at("h")]);
+  });
+
+  it("does not count a function as coroutine-only when the thread also calls it directly", () => {
+    const file = "src/m.ts";
+    const at = (name: string) => `${file}#${name}`;
+    const nodes = ["main", "both", "co"].map((n, i) => fnNode(file, n, i * 4));
+    const edges = [
+      callEdge(at("main"), at("both"), file, 1),
+      dispatchEdge(at("main"), at("both"), "await", file, 2),
+      dispatchEdge(at("main"), at("co"), "await", file, 3),
+    ];
+    const model = execModel(nodes, edges, "src");
+    expect(model.threads[0]?.coroutines.map((c) => c.target)).toEqual([at("both"), at("co")]);
+    expect(model.threads[0]?.coroutineOnly).toEqual([at("co")]);
+    expect(runtimeIn(model, at("both"))).toBe("thread");
+  });
+
+  it("lists a function called only from module-level code as unthreaded, with runtime none", () => {
+    const nodes = [fnNode("src/m.ts", "main", 0), fnNode("src/m.ts", "f", 4)];
+    const model = execModel(nodes, [callEdge("src/m.ts", "src/m.ts#f", "src/m.ts", 10)], "src");
+    expect(model.threads[0]?.roots).toEqual(["src/m.ts#main"]);
+    expect(model.unthreaded).toEqual(["src/m.ts#f"]);
+    expect(model.functions.find((f) => f.id === "src/m.ts#f")).toMatchObject({ inScope: true, runtime: "none" });
+    expect(model.stats).toMatchObject({ functionsUnthreaded: 1 });
+  });
+
+  it("leaves unthreaded test functions out unless the scope is the test file or folder", () => {
+    const nodes = [fnNode("src/m.ts", "f", 0), fnNode("src/x.test.ts", "t", 0), fnNode("tests/y.ts", "u", 0)];
+    const edges = [
+      callEdge("src/m.ts", "src/m.ts#f", "src/m.ts", 10),
+      callEdge("src/x.test.ts", "src/x.test.ts#t", "src/x.test.ts", 10),
+      callEdge("tests/y.ts", "tests/y.ts#u", "tests/y.ts", 10),
+    ];
+    expect(isNoisePath("src")).toBe(false);
+    expect(isNoisePath("src/x.test.ts")).toBe(true);
+    const wide = execModel(nodes, edges, "src");
+    expect(wide.unthreaded).toEqual(["src/m.ts#f"]);
+    expect(wide.functions.map((f) => f.id)).toEqual(["src/m.ts#f"]);
+    expect(execModel(nodes, edges, "").unthreaded).toEqual(["src/m.ts#f"]);
+    expect(execModel(nodes, edges, "src/x.test.ts").unthreaded).toEqual(["src/x.test.ts#t"]);
+    expect(execModel(nodes, edges, "tests").unthreaded).toEqual(["tests/y.ts#u"]);
+  });
+
+  it("lists calls between listed functions as sorted index pairs, once each, with no self-calls", () => {
+    const file = "src/m.ts";
+    const at = (name: string) => `${file}#${name}`;
+    const main = at("main");
+    const lam = anonId(file, 2);
+    const spawned = anonId(file, 3);
+    const nodes = [fnNode(file, "main", 0), fnNode(file, "b", 8), fnNode(file, "a", 12), anonNode(file, 2, main), anonNode(file, 3, main), spawnNode(file, 3, main)];
+    const edges = [
+      callEdge(main, at("a"), file, 1),
+      callEdge(main, at("a"), file, 5),
+      callEdge(at("a"), at("b"), file, 13),
+      callEdge(at("b"), at("b"), file, 9),
+      callEdge(at("b"), at("a"), file, 10),
+      // Module-level code is no function, so its call makes no pair.
+      callEdge(file, at("b"), file, 20),
+      closureEdge(main, lam, file, 2),
+      closureEdge(main, spawned, file, 3),
+      spawnEdge(file, 3, spawned),
+    ];
+    const model = execModel(nodes, edges, "src");
+    expect(model.functions.map((f) => f.id)).toEqual(expect.arrayContaining([main, at("a"), at("b"), lam, spawned]));
+    const idx = (id: string) => model.functions.findIndex((f) => f.id === id);
+    const expected: [string, string][] = [
+      [main, at("a")],
+      [main, lam],
+      [at("a"), at("b")],
+      [at("b"), at("a")],
+    ];
+    // Each pair once, no self-call of b, and nothing for the spawned closure or the module-level call.
+    expect(model.calls).toEqual(expected.map(([x, y]): [number, number] => [idx(x), idx(y)]).sort(([x0, x1], [y0, y1]) => x0 - y0 || x1 - y1));
+    expect(callIds(model)).toHaveLength(4);
+    expect(callIds(model)).toEqual(expect.arrayContaining(expected));
+  });
+
+  it("cuts unthreaded functions before thread functions, and keeps call indexes inside the table", () => {
+    const file = "src/m.ts";
+    const at = (name: string) => `${file}#${name}`;
+    const nodes = ["main", "a", "u1", "u2"].map((n, i) => fnNode(file, n, i * 4));
+    const edges = [
+      callEdge(at("main"), at("a"), file, 1),
+      callEdge(file, at("u1"), file, 20),
+      callEdge(file, at("u2"), file, 21),
+      callEdge(at("u1"), at("u2"), file, 9),
+    ];
+    const full = execModel(nodes, edges, "src");
+    expect(full.unthreaded).toEqual([at("u1"), at("u2")]);
+    expect(callIds(full)).toEqual(expect.arrayContaining([[at("u1"), at("u2")]]));
+    const cut = execModel(nodes, edges, "src", { maxFunctions: 3 });
+    expect(cut.truncated).toBe(true);
+    expect(cut.threads[0]?.reached).toEqual([at("a"), at("main")]);
+    expect(cut.unthreaded).toEqual([at("u1")]);
+    expect(cut.functions.map((f) => f.id)).toEqual([at("main"), at("a"), at("u1")]);
+    const tight = execModel(nodes, edges, "src", { maxFunctions: 2 });
+    expect(tight.unthreaded).toEqual([]);
+    expect(tight.threads[0]?.reached).toEqual([at("a"), at("main")]);
+    for (const m of [full, cut, tight]) {
+      for (const [a, b] of m.calls) {
+        expect(a).toBeLessThan(m.functions.length);
+        expect(b).toBeLessThan(m.functions.length);
+      }
+    }
+    expect(callIds(tight)).toEqual([[at("main"), at("a")]]);
+  });
+});
+
+describe("execModel: programs", () => {
+  const SERVER_MAIN = "src/server/main.cc#main";
+  const CLIENT_MAIN = "src/client/main.cc#main";
+  const SHARED = "src/core/core.cc#shared";
+  const POLL_SPAWN = spawnId("src/server/main.cc", 2);
+  const BG_SPAWN = spawnId("src/core/core.cc", 3);
+
+  /**
+   * Two cc_binary programs, a cc_library and a cc_test. Each binary's main calls `shared`, which is in the library, and
+   * the server spawns `pollLoop`. `shared` spawns `background`, so both programs reach that spawn. `serve` is called by
+   * nothing, and the test's own `main` is not a program's main.
+   */
+  function programIr(): { nodes: IRNode[]; edges: IREdge[] } {
+    const nodes: IRNode[] = [
+      targetNode("app:server", "cc_binary"),
+      targetNode("app:client", "cc_binary"),
+      targetNode("lib:core", "cc_library"),
+      targetNode("app:core_test", "cc_test"),
+      fnNode("src/server/main.cc", "main", 0),
+      fnNode("src/server/main.cc", "serve", 8),
+      spawnNode("src/server/main.cc", 2, SERVER_MAIN),
+      fnNode("src/server/util.cc", "pollLoop", 0),
+      fnNode("src/server/util.cc", "helper", 4),
+      fnNode("src/client/main.cc", "main", 0),
+      fnNode("src/client/net.cc", "connect", 0),
+      fnNode("src/core/core.cc", "shared", 0),
+      spawnNode("src/core/core.cc", 3, SHARED),
+      fnNode("src/core/core.cc", "background", 8),
+      fnNode("src/core/core_test.cc", "main", 0),
+    ];
+    const edges: IREdge[] = [
+      containsEdge("app:server", "src/server/main.cc"),
+      containsEdge("app:server", "src/server/util.cc"),
+      containsEdge("app:client", "src/client/main.cc"),
+      containsEdge("app:client", "src/client/net.cc"),
+      containsEdge("lib:core", "src/core/core.cc"),
+      containsEdge("app:core_test", "src/core/core_test.cc"),
+      callEdge(SERVER_MAIN, SHARED, "src/server/main.cc", 6),
+      spawnEdge("src/server/main.cc", 2, "src/server/util.cc#pollLoop"),
+      callEdge("src/server/util.cc#pollLoop", "src/server/util.cc#helper", "src/server/util.cc", 1),
+      callEdge(CLIENT_MAIN, "src/client/net.cc#connect", "src/client/main.cc", 1),
+      callEdge(CLIENT_MAIN, SHARED, "src/client/main.cc", 2),
+      spawnEdge("src/core/core.cc", 3, "src/core/core.cc#background"),
+    ];
+    return { nodes, edges };
+  }
+
+  it("lists each cc_binary as a program, with its files and main, and not the library or the test", () => {
+    const { nodes, edges } = programIr();
+    const model = execModel(nodes, edges, "");
+    expect(model.programs).toEqual([
+      {
+        id: "app:client",
+        name: "client",
+        targetKind: "cc_binary",
+        files: ["src/client/main.cc", "src/client/net.cc"],
+        main: CLIENT_MAIN,
+        threads: ["main:app:client", BG_SPAWN],
+      },
+      {
+        id: "app:server",
+        name: "server",
+        targetKind: "cc_binary",
+        files: ["src/server/main.cc", "src/server/util.cc"],
+        main: SERVER_MAIN,
+        threads: ["main:app:server", BG_SPAWN, POLL_SPAWN],
+      },
+    ]);
+    expect(model.stats.programs).toBe(2);
+  });
+
+  it("gives each program with a main its own main thread, and takes the mains out of the general main roots", () => {
+    const { nodes, edges } = programIr();
+    const model = execModel(nodes, edges, "");
+    // The general main first, then the program mains by program id, then the spawns by spawn id.
+    expect(model.threads.map((t) => t.id)).toEqual(["main", "main:app:client", "main:app:server", BG_SPAWN, POLL_SPAWN]);
+    // The test's main is a general root: a cc_test is not a program, so its main is not one either.
+    expect(model.threads[0]).toMatchObject({ kind: "main", roots: ["src/core/core_test.cc#main", "src/server/main.cc#serve"] });
+    expect(model.threads[1]).toMatchObject({ id: "main:app:client", kind: "main", roots: [CLIENT_MAIN], reach: 3 });
+    expect(model.threads[1]?.reached).toEqual([CLIENT_MAIN, "src/client/net.cc#connect", SHARED]);
+    expect(model.threads[2]).toMatchObject({ id: "main:app:server", kind: "main", roots: [SERVER_MAIN], reach: 2 });
+    expect(model.threads[2]?.reached).toEqual([SHARED, SERVER_MAIN]);
+    expect(runtimeIn(model, SERVER_MAIN)).toBe("thread");
+    expect(runtimeIn(model, "src/server/main.cc#serve")).toBe("thread");
+  });
+
+  it("keeps a spawn thread's roots and reach, and lists it under each program that reaches it", () => {
+    const { nodes, edges } = programIr();
+    const model = execModel(nodes, edges, "");
+    expect(model.threads.find((t) => t.id === POLL_SPAWN)).toMatchObject({
+      kind: "thread",
+      roots: ["src/server/util.cc#pollLoop"],
+      reached: ["src/server/util.cc#helper", "src/server/util.cc#pollLoop"],
+    });
+    expect(model.threads.find((t) => t.id === BG_SPAWN)?.roots).toEqual(["src/core/core.cc#background"]);
+    expect(model.programs.map((p) => p.threads.includes(BG_SPAWN))).toEqual([true, true]);
+  });
+
+  it("lists only the programs with a file in the scope, and the threads that start in the scope", () => {
+    const { nodes, edges } = programIr();
+    expect(execModel(nodes, edges, "src/server").programs.map((p) => p.id)).toEqual(["app:server"]);
+    expect(execModel(nodes, edges, "src/client").programs.map((p) => p.id)).toEqual(["app:client"]);
+    expect(execModel(nodes, edges, "src/core").programs).toEqual([]);
+    // BG_SPAWN starts in core.cc, which is outside this scope, so no thread for it is listed here.
+    expect(execModel(nodes, edges, "src/server").programs[0]?.threads).toEqual(["main:app:server", POLL_SPAWN]);
+  });
+
+  it("gives the same programs whatever order the nodes and edges arrive in", () => {
+    const { nodes, edges } = programIr();
+    const a = execModel(nodes, edges, "");
+    const b = execModel([...nodes].reverse(), [...edges].reverse(), "");
+    expect(b.programs).toEqual(a.programs);
+    expect(b.threads.map((t) => t.id)).toEqual(a.threads.map((t) => t.id));
+  });
+
+  it("lists a program with no main, with only the spawns that start in its files", () => {
+    const tick = spawnId("src/tiny/run.py", 2);
+    const nodes = [
+      targetNode("app:tiny", "py_binary"),
+      fnNode("src/tiny/run.py", "run", 0),
+      spawnNode("src/tiny/run.py", 2, "src/tiny/run.py#run"),
+      fnNode("src/tiny/tick.py", "tick", 0),
+    ];
+    const edges = [containsEdge("app:tiny", "src/tiny/run.py"), spawnEdge("src/tiny/run.py", 2, "src/tiny/tick.py#tick")];
+    const model = execModel(nodes, edges, "");
+    expect(model.programs).toEqual([{ id: "app:tiny", name: "tiny", targetKind: "py_binary", files: ["src/tiny/run.py"], threads: [tick] }]);
+    expect(model.threads.map((t) => t.id)).toEqual(["main", tick]);
+  });
+
+  it("treats a CMake add_executable target as a program, and not an add_library target", () => {
+    const nodes = [
+      targetNode("CMakeLists.txt:tool", "add_executable"),
+      targetNode("CMakeLists.txt:util", "add_library"),
+      fnNode("tools/tool.c", "main", 0),
+      fnNode("tools/util.c", "util", 0),
+    ];
+    const edges = [containsEdge("CMakeLists.txt:tool", "tools/tool.c"), containsEdge("CMakeLists.txt:util", "tools/util.c")];
+    const model = execModel(nodes, edges, "");
+    expect(model.programs).toEqual([
+      {
+        id: "CMakeLists.txt:tool",
+        name: "tool",
+        targetKind: "add_executable",
+        files: ["tools/tool.c"],
+        main: "tools/tool.c#main",
+        threads: ["main:CMakeLists.txt:tool"],
+      },
+    ]);
+    expect(model.threads.map((t) => t.id)).toEqual(["main", "main:CMakeLists.txt:tool"]);
+    expect(model.threads[0]?.roots).toEqual(["tools/util.c#util"]);
+  });
+
+  it("leaves out a program built only from test or sample files, unless the scope is one of them", () => {
+    const nodes = [
+      fnNode("samples/demo/main.cc", "main", 0),
+      { id: "//samples/demo:demo", facet: "packaging", kind: "packaging.build-target", attrs: { name: "demo", targetKind: "cc_binary" }, provenance: PROVENANCE } as IRNode,
+    ];
+    const edges = [{ from: "//samples/demo:demo", to: "samples/demo/main.cc", facet: "packaging", kind: "packaging.target-contains", provenance: PROVENANCE } as IREdge];
+    expect(execModel(nodes, edges, "").programs).toEqual([]);
+    expect(execModel(nodes, edges, "samples").programs.map((p) => p.id)).toEqual(["//samples/demo:demo"]);
+  });
+
+  it("has no programs, and the same main thread, when the IR has no build targets", () => {
+    const nodes = [fnNode("src/m.ts", "main", 0), fnNode("src/m.ts", "a", 4)];
+    const edges = [callEdge("src/m.ts#main", "src/m.ts#a", "src/m.ts", 1)];
+    const model = execModel(nodes, edges, "src");
+    expect(model.programs).toEqual([]);
+    expect(model.stats.programs).toBe(0);
+    expect(model.threads.map((t) => t.id)).toEqual(["main"]);
+    expect(model.threads[0]?.roots).toEqual(["src/m.ts#main"]);
+  });
+});
+
+/** A lock acquire on `line` of `file`, in `parent`: the node the C++ frontend emits for `.lock()`. */
+function lockNode(file: string, line: number, parent: string, lock: string, kind = "sync.lock-acquire", mode = "exclusive"): IRNode {
+  return { id: `${file}@lock:${line + 1}:2:${kind}`, facet: "sync", kind, parent, span: spanAt(file, line), attrs: { lock, mode }, provenance: PROVENANCE };
+}
+/** A channel send or receive on `line` of `file`, in `parent`. The channel is named by `attrs.channel`. */
+function channelNode(file: string, line: number, parent: string, channel: string, op: "send" | "recv"): IRNode {
+  const kind = op === "send" ? "concurrency.channel-send" : "concurrency.channel-recv";
+  return { id: `${file}@${op}:${line + 1}:2`, facet: "concurrency", kind, parent, span: spanAt(file, line), attrs: { channel }, provenance: PROVENANCE };
+}
+
+describe("execModel: locks and channels", () => {
+  it("lists one lock resource for two threads that both lock the same mutex, with each site", () => {
+    const nodes = [
+      fnNode("src/m.ts", "main", 0),
+      lockNode("src/m.ts", 1, "src/m.ts#main", "m"),
+      spawnNode("src/m.ts", 3, "src/m.ts#main"),
+      fnNode("src/w.ts", "work", 0),
+      lockNode("src/w.ts", 2, "src/w.ts#work", "m"),
+    ];
+    const edges = [spawnEdge("src/m.ts", 3, "src/w.ts#work")];
+    const model = execModel(nodes, edges, "src");
+    expect(model.resources).toEqual([
+      {
+        id: "lock:m",
+        kind: "lock",
+        name: "m",
+        threads: ["main", spawnId("src/m.ts", 3)],
+        sites: [
+          { fn: "src/m.ts#main", op: "acquire", file: "src/m.ts", line: 2 },
+          { fn: "src/w.ts#work", op: "acquire", file: "src/w.ts", line: 3 },
+        ],
+      },
+    ]);
+    expect(model.stats).toMatchObject({ locks: 1, channels: 0 });
+  });
+
+  it("lists a lock that one thread uses, with that one thread", () => {
+    const nodes = [fnNode("src/m.ts", "main", 0), lockNode("src/m.ts", 1, "src/m.ts#main", "solo")];
+    const model = execModel(nodes, [], "src");
+    expect(model.resources).toMatchObject([{ id: "lock:solo", kind: "lock", name: "solo", threads: ["main"], sites: [{ fn: "src/m.ts#main", op: "acquire" }] }]);
+    expect(model.stats).toMatchObject({ locks: 1 });
+  });
+
+  it("counts a read-write lock acquire as a lock site, and joins it with a plain lock of the same name", () => {
+    const nodes = [
+      fnNode("src/m.ts", "main", 0),
+      lockNode("src/m.ts", 1, "src/m.ts#main", "rw", "sync.rwlock-acquire", "shared"),
+      spawnNode("src/m.ts", 3, "src/m.ts#main"),
+      fnNode("src/w.ts", "work", 0),
+      lockNode("src/w.ts", 2, "src/w.ts#work", "rw"),
+    ];
+    const model = execModel(nodes, [spawnEdge("src/m.ts", 3, "src/w.ts#work")], "src");
+    expect(model.resources).toHaveLength(1);
+    expect(model.resources[0]).toMatchObject({ id: "lock:rw", threads: ["main", spawnId("src/m.ts", 3)] });
+    expect(model.resources[0]?.sites.map((s) => s.op)).toEqual(["acquire", "acquire"]);
+  });
+
+  it("counts a C++ RAII guard (x-cpp.scoped-lock) as a lock site, joined with .lock() on the same mutex", () => {
+    const nodes = [
+      fnNode("src/m.cc", "main", 0),
+      lockNode("src/m.cc", 1, "src/m.cc#main", "Store::mu", "x-cpp.scoped-lock"),
+      spawnNode("src/m.cc", 3, "src/m.cc#main"),
+      fnNode("src/w.cc", "work", 0),
+      lockNode("src/w.cc", 2, "src/w.cc#work", "Store::mu"),
+    ];
+    const model = execModel(nodes, [spawnEdge("src/m.cc", 3, "src/w.cc#work")], "src");
+    expect(model.resources).toHaveLength(1);
+    expect(model.resources[0]).toMatchObject({ id: "lock:Store::mu", threads: ["main", spawnId("src/m.cc", 3)] });
+  });
+
+  it("lists a channel with its send in one thread and its receive in another, sorted by id before the locks", () => {
+    const nodes = [
+      fnNode("src/m.ts", "main", 0),
+      channelNode("src/m.ts", 1, "src/m.ts#main", "jobs", "send"),
+      lockNode("src/m.ts", 2, "src/m.ts#main", "m"),
+      spawnNode("src/m.ts", 4, "src/m.ts#main"),
+      fnNode("src/w.ts", "work", 0),
+      channelNode("src/w.ts", 2, "src/w.ts#work", "jobs", "recv"),
+    ];
+    const model = execModel(nodes, [spawnEdge("src/m.ts", 4, "src/w.ts#work")], "src");
+    expect(model.resources.map((r) => r.id)).toEqual(["channel:jobs", "lock:m"]);
+    expect(model.resources[0]).toEqual({
+      id: "channel:jobs",
+      kind: "channel",
+      name: "jobs",
+      threads: ["main", spawnId("src/m.ts", 4)],
+      sites: [
+        { fn: "src/m.ts#main", op: "send", file: "src/m.ts", line: 2 },
+        { fn: "src/w.ts#work", op: "recv", file: "src/w.ts", line: 3 },
+      ],
+    });
+    expect(model.stats).toMatchObject({ locks: 1, channels: 1 });
+  });
+
+  it("gives the same lock resource whatever order the nodes arrive in, with sites sorted by function then line", () => {
+    const nodes = [
+      fnNode("src/m.ts", "main", 0),
+      fnNode("src/a.ts", "alpha", 0),
+      lockNode("src/m.ts", 3, "src/m.ts#main", "m"),
+      lockNode("src/m.ts", 1, "src/m.ts#main", "m"),
+      lockNode("src/a.ts", 2, "src/a.ts#alpha", "m"),
+    ];
+    const forward = execModel(nodes, [callEdge("src/m.ts#main", "src/a.ts#alpha", "src/m.ts", 5)], "src");
+    const backward = execModel([...nodes].reverse(), [callEdge("src/m.ts#main", "src/a.ts#alpha", "src/m.ts", 5)], "src");
+    expect(forward.resources).toEqual(backward.resources);
+    expect(forward.resources[0]?.sites.map((s) => [s.fn, s.line])).toEqual([
+      ["src/a.ts#alpha", 3],
+      ["src/m.ts#main", 2],
+      ["src/m.ts#main", 4],
+    ]);
+  });
+
+  it("lists a lock used only by a function no thread runs, with no threads", () => {
+    // helper is called only from module-level code of the file, so no thread runs it.
+    const nodes = [fnNode("src/m.ts", "main", 0), fnNode("src/m.ts", "helper", 6), lockNode("src/m.ts", 7, "src/m.ts#helper", "m")];
+    const model = execModel(nodes, [callEdge("src/m.ts", "src/m.ts#helper", "src/m.ts", 9)], "src");
+    expect(model.unthreaded).toEqual(["src/m.ts#helper"]);
+    expect(model.resources).toMatchObject([{ id: "lock:m", threads: [], sites: [{ fn: "src/m.ts#helper" }] }]);
+  });
+
+  it("skips a lock at module level, a lock with no identity, and a channel with no name", () => {
+    const nodes = [
+      fnNode("src/m.ts", "main", 0),
+      lockNode("src/m.ts", 9, "src/m.ts", "top"),
+      { ...lockNode("src/m.ts", 2, "src/m.ts#main", ""), id: "src/m.ts@anon" },
+      { ...channelNode("src/m.ts", 3, "src/m.ts#main", "", "send"), id: "src/m.ts@nameless" },
+    ];
+    const model = execModel(nodes, [], "src");
+    expect(model.resources).toEqual([]);
+    expect(model.stats).toMatchObject({ locks: 0, channels: 0 });
+  });
+
+  it("has no resources, and zero counts, when the IR has no lock or channel nodes", () => {
+    const nodes = [fnNode("src/m.ts", "main", 0), fnNode("src/m.ts", "a", 4)];
+    const model = execModel(nodes, [callEdge("src/m.ts#main", "src/m.ts#a", "src/m.ts", 1)], "src");
+    expect(model.resources).toEqual([]);
+    expect(model.stats).toMatchObject({ locks: 0, channels: 0 });
   });
 });

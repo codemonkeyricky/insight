@@ -8,8 +8,11 @@ export { MAX_NODES } from "./layout.js";
 export { SCOPE_FUNCTION_LIMIT, isNoisePath, summarizeScope } from "./scope.js";
 export * from "./scope-map.js";
 export * from "./zoom-layout.js";
-export * from "./entry-map.js";
 export * from "./exec-model.js";
+export * from "./scene.js";
+export * from "./scene-layout.js";
+export * from "./exec-scene.js";
+export * from "./scene-filter.js";
 
 /**
  * The control-flow chart of every function in one source file, rebuilt from the IR.
