@@ -31,6 +31,11 @@ export type ExecThreadKind = "main" | ExecSpawnHow;
  * unresolved: the frontend found no target, or the target has no code in the IR.
  */
 export type ExecSpawnStatus = "resolved" | "outside" | "unresolved";
+/**
+ * How a function runs. "thread": some thread runs it on its own, through calls, closures or same-thread callbacks.
+ * "coroutine": only an awaited or started coroutine runs it. "none": no thread reaches it.
+ */
+export type ExecRuntime = "thread" | "coroutine" | "none";
 
 /** A function the model names. `file` is "" and `line` 0 for a function the IR has no source for. */
 export interface ExecFunctionRef {
@@ -42,6 +47,12 @@ export interface ExecFunctionRef {
   inScope: boolean;
   /** Set for a function in a test, fixture or sample file. */
   noise?: true;
+  /** Set for an anonymous function: a function expression, arrow function or lambda with no declaration of its own. */
+  anonymous?: true;
+  /** For an anonymous function, the function, or the file for module-level code, it is written in. */
+  parent?: string;
+  /** How the function runs. See ExecRuntime. */
+  runtime: ExecRuntime;
 }
 
 /** The spawn that starts a thread. */
@@ -80,7 +91,7 @@ export interface ExecThread {
   spawn?: ExecSpawn;
   /** The functions the thread starts in. */
   roots: string[];
-  /** The number of distinct functions the thread runs, roots included. Exact even when `reached` is cut. */
+  /** The number of distinct functions the thread runs, roots and coroutines included. Exact even when `reached` is cut. */
   reach: number;
   /** Those functions, sorted by id. Shorter than `reach` only when the model is truncated. */
   reached: string[];
@@ -110,8 +121,13 @@ export interface ExecModelStats {
   dispatches: number;
   /** Functions whose file lies in the scope. */
   functionsInScope: number;
-  /** Of those, the ones some thread runs. */
+  /** Of those, the ones some thread runs, coroutines included. */
   functionsThreaded: number;
+  /**
+   * Of those, the ones only a coroutine runs: an awaited or started function that no thread runs on its own. A subset
+   * of `functionsThreaded`.
+   */
+  functionsCoroutineOnly: number;
   /**
    * Of those, the ones no thread runs. A function called only from module-level code, such as a script's `main()`
    * call at the bottom of the file, is in this count: it is referenced by its file, so it is no thread's root.
@@ -145,6 +161,8 @@ interface Fn {
   line: number;
   inScope: boolean;
   noise: boolean;
+  anonymous: boolean;
+  parent: string | undefined;
 }
 
 interface Dispatch {
@@ -166,7 +184,10 @@ interface Plan {
   id: string;
   spawn?: ExecSpawn;
   roots: string[];
+  /** Every function the thread runs, coroutines included. */
   reach: Set<string>;
+  /** The functions the thread runs on its own: calls, closures and same-thread callbacks. */
+  plain: Set<string>;
   coroutines: ExecCoroutine[];
 }
 
@@ -186,6 +207,9 @@ function strAttr(attrs: Readonly<Record<string, unknown>> | undefined, key: stri
   return typeof v === "string" ? v : undefined;
 }
 
+/** Await and start make a coroutine. The other dispatches run on the dispatching thread. */
+const isCoroutine = (how: ExecDispatchHow): boolean => how === "await" || how === "start";
+
 /** A sort key that covers everything the model reads from an edge, so the order is fixed by content alone. */
 function edgeKey(e: IREdge): string {
   return [e.kind, e.from, JSON.stringify(e.to), e.span?.file ?? "", e.span?.start.join(":") ?? "", JSON.stringify(e.attrs ?? {})].join("\0");
@@ -195,6 +219,22 @@ function push<K, V>(m: Map<K, V[]>, k: K, v: V): void {
   const list = m.get(k);
   if (list) list.push(v);
   else m.set(k, [v]);
+}
+
+/** The functions reached from `roots` through `next`, roots included. Iterative, so cycles are safe. */
+function reachBy(roots: readonly string[], next: (id: string) => readonly string[]): Set<string> {
+  const seen = new Set(roots);
+  const stack = [...roots];
+  while (stack.length > 0) {
+    const cur = stack.pop() as string;
+    for (const to of next(cur)) {
+      if (!seen.has(to)) {
+        seen.add(to);
+        stack.push(to);
+      }
+    }
+  }
+  return seen;
 }
 
 export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], scope: string, opts: ExecModelOptions = {}): ExecModel {
@@ -209,6 +249,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     byId.set(n.id, n);
     if (n.kind !== "structure.function") continue;
     const file = n.span?.file;
+    const anonymous = n.attrs?.anonymous === true;
     fns.set(n.id, {
       id: n.id,
       name: strAttr(n.attrs, "name") ?? (n.id.split("#")[1] ?? n.id),
@@ -216,6 +257,8 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       line: n.span ? n.span.start[0] + 1 : 0,
       inScope: file !== undefined && insideScope(file, scope),
       noise: file !== undefined && isNoisePath(file),
+      anonymous,
+      parent: anonymous ? n.parent : undefined,
     });
   }
 
@@ -236,28 +279,49 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     const file = fileOf(id);
     return file !== undefined && insideScope(file, scope);
   };
+  const noiseId = (id: string): boolean => {
+    const file = fileOf(id);
+    return file !== undefined && isNoisePath(file);
+  };
+
+  // Each edge with its targets, in content order.
+  const keyed = edges
+    .map((e) => ({ e, k: edgeKey(e) }))
+    .sort((a, b) => byText(a.k, b.k))
+    .map(({ e }) => {
+      const t = edgeTargets(e);
+      return { e, ids: [...t.nodes, ...t.candidates], candidates: t.candidates.length > 0 };
+    });
 
   // Adjacency covers the whole IR, so a thread's reach does not depend on the scope it is seen from.
+  // The targets of every spawn and dispatch in the IR. A closure that is one of them is not its creator's to run:
+  // a spawned lambda runs on its own thread, and an awaited one is a coroutine.
+  const boundary = new Set<string>();
+  for (const { e, ids } of keyed) {
+    if (e.kind === "concurrency.spawns" || e.kind === "concurrency.dispatches") for (const id of ids) boundary.add(id);
+  }
+
   const callOut = new Map<string, Set<string>>();
+  const closureOut = new Map<string, Set<string>>();
   const dispatchOut = new Map<string, Dispatch[]>();
   const spawnsOf = new Map<string, Spawns>();
   const dispatchSites: Array<Dispatch & { from: string }> = [];
   // A function is referenced when a caller in the scope names it. A reference from outside the scope does not
   // count, so a function the scope's own code never calls is a root of the scope even when another folder calls it.
+  // Test, fixture and sample code counts only in a noise scope, as its functions are roots only there.
   const referenced = new Set<string>();
 
-  const keyed = edges.map((e) => ({ e, k: edgeKey(e) })).sort((a, b) => byText(a.k, b.k));
-  for (const { e } of keyed) {
-    const t = edgeTargets(e);
-    const ids = [...t.nodes, ...t.candidates];
+  for (const { e, ids, candidates } of keyed) {
     const from = e.from;
     const local = inScopeId(from);
-    const candidates = t.candidates.length > 0;
+    const counted = local && (scopeNoise || !noiseId(from));
     if (e.kind === "calls.call" || e.kind === "calls.reference") {
-      const callees = callOut.get(from) ?? new Set<string>();
+      const closure = e.kind === "calls.reference" && strAttr(e.attrs, "how") === "closure";
+      const out = closure ? closureOut : callOut;
+      const callees = out.get(from) ?? new Set<string>();
       for (const to of ids) if (fns.has(to)) callees.add(to);
-      callOut.set(from, callees);
-      if (local) for (const to of ids) if (to !== from) referenced.add(to);
+      out.set(from, callees);
+      if (counted) for (const to of ids) if (to !== from) referenced.add(to);
     } else if (e.kind === "concurrency.dispatches") {
       const d: Dispatch = {
         how: pick(e.attrs?.how, DISPATCH_HOWS) ?? "callback",
@@ -267,36 +331,31 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
         line: e.span ? e.span.start[0] + 1 : 0,
       };
       push(dispatchOut, from, d);
-      if (local) {
-        dispatchSites.push({ from, ...d });
-        for (const to of ids) if (to !== from) referenced.add(to);
-      }
+      if (local) dispatchSites.push({ from, ...d });
+      if (counted) for (const to of ids) if (to !== from) referenced.add(to);
     } else if (e.kind === "concurrency.spawns") {
       const s = spawnsOf.get(from) ?? { targets: new Set<string>(), candidates: false, how: undefined };
       for (const to of ids) s.targets.add(to);
       s.candidates = s.candidates || candidates;
       s.how = s.how ?? pick(e.attrs?.how, SPAWN_HOWS);
       spawnsOf.set(from, s);
-      if (local) for (const to of ids) referenced.add(to);
+      if (counted) for (const to of ids) referenced.add(to);
     }
   }
 
-  /** The functions a thread runs from `roots`: calls, references and every dispatch. Spawns start other threads, so they are not followed. */
-  const neighbours = (id: string): string[] => [...(callOut.get(id) ?? []), ...(dispatchOut.get(id) ?? []).flatMap((d) => d.targets)];
-  const reachOf = (roots: readonly string[]): Set<string> => {
-    const seen = new Set(roots);
-    const stack = [...roots];
-    while (stack.length > 0) {
-      const cur = stack.pop() as string;
-      for (const next of neighbours(cur)) {
-        if (!seen.has(next)) {
-          seen.add(next);
-          stack.push(next);
-        }
-      }
-    }
-    return seen;
+  /** Calls and references from `id`, closures included unless the closure is a spawn or dispatch target. */
+  const callsOf = (id: string): string[] => {
+    const out = [...(callOut.get(id) ?? [])];
+    for (const to of closureOut.get(id) ?? []) if (!boundary.has(to)) out.push(to);
+    return out;
   };
+  /** Full reach: calls, closures and every dispatch. Spawns start other threads, so they are not followed. */
+  const neighbours = (id: string): string[] => [...callsOf(id), ...(dispatchOut.get(id) ?? []).flatMap((d) => d.targets)];
+  /** Plain reach: the same, except that awaited and started coroutines are left out, since they are not run on the thread's own. */
+  const plainNeighbours = (id: string): string[] => [
+    ...callsOf(id),
+    ...(dispatchOut.get(id) ?? []).filter((d) => !isCoroutine(d.how)).flatMap((d) => d.targets),
+  ];
 
   /**
    * The coroutines of one thread. Each target is listed once, and a target already listed is not expanded again,
@@ -311,7 +370,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       const stack = [...entries];
       while (stack.length > 0) {
         const cur = stack.pop() as string;
-        for (const next of callOut.get(cur) ?? []) {
+        for (const next of callsOf(cur)) {
           if (!region.has(next)) {
             region.add(next);
             stack.push(next);
@@ -319,7 +378,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
         }
         for (const d of dispatchOut.get(cur) ?? []) {
           for (const target of d.targets) {
-            if (d.how === "await" || d.how === "start") {
+            if (isCoroutine(d.how)) {
               const known = byTarget.get(target);
               if (known) {
                 if (!known.dispatchedBy.includes(cur)) known.dispatchedBy.push(cur);
@@ -327,7 +386,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
               }
               const co: ExecCoroutine = {
                 target,
-                how: d.how,
+                how: d.how === "await" ? "await" : "start",
                 ...(parent !== undefined ? { parent } : {}),
                 dispatchedBy: [cur],
                 callees: [],
@@ -349,11 +408,21 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     return out;
   };
 
+  // An anonymous function is never a main root: whatever runs it is its creator, a spawn or a dispatch.
   const mainRoots = [...fns.values()]
-    .filter((f) => f.inScope && !referenced.has(f.id) && (scopeNoise || !f.noise))
+    .filter((f) => f.inScope && !f.anonymous && !referenced.has(f.id) && (scopeNoise || !f.noise))
     .map((f) => f.id)
     .sort(byText);
-  const plans: Plan[] = [{ kind: "main", id: "main", roots: mainRoots, reach: reachOf(mainRoots), coroutines: coroutinesOf(mainRoots) }];
+  const planOf = (kind: ExecThreadKind, id: string, roots: string[], spawn?: ExecSpawn): Plan => ({
+    kind,
+    id,
+    ...(spawn !== undefined ? { spawn } : {}),
+    roots,
+    reach: reachBy(roots, neighbours),
+    plain: reachBy(roots, plainNeighbours),
+    coroutines: coroutinesOf(roots),
+  });
+  const plans: Plan[] = [planOf("main", "main", mainRoots)];
 
   // Spawn threads are not filtered by noise. A spawn in a test file is still a fact of the code, and filtering it
   // would make a scope's threads depend on whether the scope is noise, which breaks monotonicity across scopes.
@@ -372,7 +441,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
         continue;
       }
       script = t;
-      for (const c of callOut.get(t) ?? []) roots.add(c);
+      for (const c of callsOf(t)) roots.add(c);
     }
     const rootList = [...roots].sort(byText);
     const status: ExecSpawnStatus =
@@ -388,8 +457,17 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       ...(n.parent !== undefined ? { owner: n.parent } : {}),
       ...(script !== undefined ? { script } : {}),
     };
-    plans.push({ kind: how, id: n.id, spawn, roots: rootList, reach: reachOf(rootList), coroutines: coroutinesOf(rootList) });
+    plans.push(planOf(how, n.id, rootList, spawn));
   }
+
+  // A function runs on a thread when some thread reaches it on its own, and as a coroutine when only a coroutine does.
+  const reachedOnThread = new Set<string>();
+  const reachedAll = new Set<string>();
+  for (const p of plans) {
+    for (const id of p.plain) reachedOnThread.add(id);
+    for (const id of p.reach) reachedAll.add(id);
+  }
+  const runtimeOf = (id: string): ExecRuntime => (reachedOnThread.has(id) ? "thread" : reachedAll.has(id) ? "coroutine" : "none");
 
   // The function table. Threads are cut in order, so the first threads keep their full lists when the cap is hit.
   const table = new Map<string, ExecFunctionRef>();
@@ -409,6 +487,8 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       line: fn.line,
       inScope: fn.inScope,
       ...(fn.noise ? { noise: true as const } : {}),
+      ...(fn.anonymous ? { anonymous: true as const, ...(fn.parent !== undefined ? { parent: fn.parent } : {}) } : {}),
+      runtime: runtimeOf(id),
     });
     return true;
   };
@@ -442,9 +522,8 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
   }));
 
   const inScopeFns = [...fns.values()].filter((f) => f.inScope);
-  const threaded = new Set<string>();
-  for (const p of plans) for (const id of p.reach) threaded.add(id);
-  const functionsThreaded = inScopeFns.filter((f) => threaded.has(f.id)).length;
+  const functionsThreaded = inScopeFns.filter((f) => reachedAll.has(f.id)).length;
+  const functionsCoroutineOnly = inScopeFns.filter((f) => runtimeOf(f.id) === "coroutine").length;
   const spawned = plans.flatMap((p) => (p.spawn !== undefined ? [p.spawn] : []));
   const countStatus = (s: ExecSpawnStatus) => spawned.filter((x) => x.status === s).length;
 
@@ -465,6 +544,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       dispatches: dispatches.length,
       functionsInScope: inScopeFns.length,
       functionsThreaded,
+      functionsCoroutineOnly,
       functionsUnthreaded: inScopeFns.length - functionsThreaded,
       functionsListed: table.size,
     },

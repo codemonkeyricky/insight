@@ -108,6 +108,11 @@ export interface ScopeFunction {
   exits: number;
   /** Set when a call from outside the scope reaches this function. Such a function is not an entry. */
   calledFromOutside?: true;
+  /**
+   * Set for an anonymous function: a function expression, arrow function or lambda with no declaration of its own. It
+   * is never unreferenced and never an entry. Its calls count as those of the function or file it is written in.
+   */
+  anonymous?: true;
 }
 
 /**
@@ -193,7 +198,8 @@ export interface ScopeFlow {
   functions: ScopeFunction[];
   /**
    * The functions that no function in the scope calls, sorted like `functions`. Computed at every granularity, so a
-   * large scope still has its entry points. Test rows are included and marked; the stats count them apart.
+   * large scope still has its entry points. Test rows are included and marked; the stats count them apart. Anonymous
+   * functions are never listed.
    */
   unreferenced: UnreferencedFunction[];
   calls: ScopeCall[];

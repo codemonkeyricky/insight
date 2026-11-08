@@ -28,7 +28,7 @@ export function chain(): void {
   fetchUser("u3").then(onDone).catch(onError).finally(onFlush);
 }
 
-// An inline arrow is not a declaration, so a callback written inline makes no edge.
+// An inline arrow is an anonymous function. A callback written inline is that function, so the edge targets the arrow.
 export function inline(): void {
   setTimeout(() => onTick(), 10);
   queueMicrotask(() => onFlush());

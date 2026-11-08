@@ -42,11 +42,14 @@ describe("object-literal methods, this-method calls, factories and decorators", 
     ]);
   });
 
-  it("records an object-literal method passed as a value, a factory's new, and a decorator", async () => {
+  it("records an object-literal method passed as a value, a factory's new (made inside its arrow), and a decorator", async () => {
+    // The object-literal arrows are anonymous functions: the file closes over each one, and its `new` is the arrow's own.
     expect(pairs(await edges(), "calls.reference")).toEqual([
-      "src/factory.ts -> src/store.ts#Store.constructor (new)",
+      "src/factory.ts -> src/factory.ts#λ9:10 (closure)",
       "src/factory.ts#Decorated.m -> src/dec.ts#log (value)",
       "src/factory.ts#makeStore -> src/store.ts#Store.constructor (new)",
+      "src/factory.ts#λ9:10 -> src/store.ts#Store.constructor (new)",
+      "src/obj.ts -> src/obj.ts#λ5:9 (closure)",
       "src/obj.ts#viaProp -> src/obj.ts#onClick (value)",
     ]);
   });

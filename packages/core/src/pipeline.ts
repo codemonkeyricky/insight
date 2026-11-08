@@ -66,19 +66,6 @@ function errorRecord(file: string, message: string): IRRecord {
   return { finding: { severity: "error", message, span: { file, start: [0, 0], end: [0, 0] } } };
 }
 
-/** Candidate paths a relative import could resolve to. Used as dependencies, so creating one re-extracts the importer. */
-export function importCandidates(fromFile: string, specifier: string): string[] {
-  const base = join(fromFile, "..", specifier).split("\\").join("/");
-  const normal = base.replace(/^\.\//, "");
-  const exts = [".ts", ".tsx", ".d.ts", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"];
-  const out = new Set<string>([normal]);
-  for (const e of exts) {
-    out.add(`${normal}${e}`);
-    out.add(`${normal}/index${e}`);
-  }
-  return [...out];
-}
-
 /**
  * Indexes a project. Each frontend's files are extracted only when their shard is stale, so an
  * unchanged project does no extraction. The linked graph is rebuilt from the shards every run.

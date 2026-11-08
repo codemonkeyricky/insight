@@ -60,14 +60,15 @@ function reachFrom(start: string, edges: ReadonlyMap<string, readonly string[]>)
  * The functions that no function in the scope calls or refers to, each with its reach. `calledInScope` maps a callee to
  * its callers in the scope, where module-level code counts as a caller; a self-call or self-reference is not in it.
  * `calls` are the scope's call and reference rows, from which the reach graph is built: in-scope, function to function,
- * self-edges left out.
+ * self-edges left out. The callers and callees given here are already read through anonymous functions (see
+ * `summarizeScope`), so an anonymous function is in neither, and is never listed.
  */
 function unreferencedOf(
   functions: readonly ScopeFunction[],
   calledInScope: ReadonlyMap<string, ReadonlySet<string>>,
   calls: Iterable<ScopeCall>,
 ): UnreferencedFunction[] {
-  const local = new Set(functions.map((f) => f.id));
+  const local = new Set(functions.filter((f) => !f.anonymous).map((f) => f.id));
   const callees = new Map<string, string[]>();
   for (const c of calls) {
     if (c.external || c.from === c.to || !local.has(c.from) || !local.has(c.to)) continue;
@@ -75,7 +76,7 @@ function unreferencedOf(
   }
   const out: UnreferencedFunction[] = [];
   for (const f of functions) {
-    if (calledInScope.has(f.id)) continue;
+    if (f.anonymous || calledInScope.has(f.id)) continue;
     const noise = isNoisePath(f.file);
     out.push({ ...f, reach: reachFrom(f.id, callees), ...(noise ? { noise: true as const } : {}) });
   }
@@ -141,6 +142,21 @@ export function summarizeScope(nodes: Iterable<IRNode>, edges: Iterable<IREdge>,
   // A caller is in scope when it is a local function, or a file in scope (module-level code).
   const inScope = (id: string) => !stubs.has(id) && (fnNodes.has(id) || fileSet.has(id));
 
+  // An anonymous function belongs to the function or file it is written in, so its calls and references count as
+  // that owner's. A function reached only through a lambda then has the same callers and reach as if the lambda's
+  // body were written inline in its owner.
+  const anonymousParent = new Map<string, string>();
+  for (const n of fnNodes.values()) if (n.attrs?.anonymous === true && n.parent !== undefined) anonymousParent.set(n.id, n.parent);
+  const ownerOf = (id: string): string => {
+    let cur = id;
+    for (let hops = 0; hops <= anonymousParent.size; hops++) {
+      const up = anonymousParent.get(cur);
+      if (up === undefined) break;
+      cur = up;
+    }
+    return cur;
+  };
+
   const totals = { calls: 0, resolved: 0, external: 0, unresolved: 0, inbound: 0 };
   const rows = new Map<string, ScopeCall>();
   // Callers of each function in scope, other than the function itself.
@@ -166,11 +182,12 @@ export function summarizeScope(nodes: Iterable<IRNode>, edges: Iterable<IREdge>,
     }
     if (targets.some((t) => fnNodes.has(t))) totals.resolved++;
     else totals.external++;
+    const caller = ownerOf(e.from);
     for (const t of targets) {
       const local = fnNodes.has(t);
-      if (local && t !== e.from) {
+      if (local && t !== caller) {
         const set = calledInScope.get(t) ?? new Set<string>();
-        set.add(e.from);
+        set.add(caller);
         calledInScope.set(t, set);
       }
       const key = `${e.from}\0${t}\0${candidate}`;
@@ -189,10 +206,11 @@ export function summarizeScope(nodes: Iterable<IRNode>, edges: Iterable<IREdge>,
       for (const t of targets) if (fnNodes.has(t)) calledFromOutside.add(t);
       continue;
     }
+    const caller = ownerOf(e.from);
     for (const t of targets) {
-      if (!fnNodes.has(t) || t === e.from) continue;
+      if (!fnNodes.has(t) || t === caller) continue;
       const set = calledInScope.get(t) ?? new Set<string>();
-      set.add(e.from);
+      set.add(caller);
       calledInScope.set(t, set);
       referenceRows.push({ from: e.from, to: t, count: 1, external: false });
     }
@@ -214,7 +232,8 @@ export function summarizeScope(nodes: Iterable<IRNode>, edges: Iterable<IREdge>,
       // Module-level code is not a function: it counts toward its file and appears as a caller.
       if (fn.id === file) continue;
       fr.functions++;
-      functions.push(functionRow(fn, file, s, calledFromOutside.has(fn.id)));
+      const anonymous = fnNodes.get(fn.id)?.attrs?.anonymous === true;
+      functions.push(functionRow(fn, file, s, calledFromOutside.has(fn.id), anonymous));
     }
   }
   functions.sort((a, b) => cmpText(a.file, b.file) || a.line - b.line || cmpText(a.id, b.id));
@@ -245,7 +264,8 @@ export function summarizeScope(nodes: Iterable<IRNode>, edges: Iterable<IREdge>,
   const entries = granularity === "functions" ? entryFunctions(functions, calledInScope, calledFromOutside) : entryFiles(fileList, calledInScope, calledFromOutside, fileOf);
 
   // Built from the function rows, not the payload rows, so it holds at every granularity.
-  const unreferenced = unreferencedOf(functions, calledInScope, [...rows.values(), ...referenceRows]);
+  const readThroughAnonymous = (c: ScopeCall): ScopeCall => ({ ...c, from: ownerOf(c.from), to: ownerOf(c.to) });
+  const unreferenced = unreferencedOf(functions, calledInScope, [...rows.values(), ...referenceRows].map(readThroughAnonymous));
   const unreferencedNoise = unreferenced.filter((f) => f.noise).length;
   const functionsNoise = functions.filter((f) => isNoisePath(f.file)).length;
   const stats: ScopeFlowStats = {
@@ -276,7 +296,7 @@ export function summarizeScope(nodes: Iterable<IRNode>, edges: Iterable<IREdge>,
   };
 }
 
-function functionRow(fn: FunctionFacts, file: string, s: FlowStats, fromOutside: boolean): ScopeFunction {
+function functionRow(fn: FunctionFacts, file: string, s: FlowStats, fromOutside: boolean, anonymous: boolean): ScopeFunction {
   const roles = { awaits: 0, spawns: 0, effects: 0 };
   countRoles(fn.items, roles);
   const span: FlowSpan | undefined = fn.span;
@@ -296,6 +316,7 @@ function functionRow(fn: FunctionFacts, file: string, s: FlowStats, fromOutside:
     effects: roles.effects,
     exits: s.exits,
     ...(fromOutside ? { calledFromOutside: true as const } : {}),
+    ...(anonymous ? { anonymous: true as const } : {}),
   };
 }
 
@@ -314,9 +335,9 @@ function aggregateByFile(rows: Iterable<ScopeCall>, fileOf: (id: string) => stri
   return [...agg.values()];
 }
 
-/** A function is an entry when nothing in the scope calls it and nothing outside does. */
+/** A function is an entry when nothing in the scope calls it and nothing outside does. An anonymous function is never one. */
 function entryFunctions(functions: ScopeFunction[], calledInScope: Map<string, Set<string>>, calledFromOutside: Set<string>): string[] {
-  return functions.filter((f) => !calledInScope.has(f.id) && !calledFromOutside.has(f.id)).map((f) => f.id);
+  return functions.filter((f) => !f.anonymous && !calledInScope.has(f.id) && !calledFromOutside.has(f.id)).map((f) => f.id);
 }
 
 /** A file is an entry when no other file in the scope calls into it and nothing outside does. */

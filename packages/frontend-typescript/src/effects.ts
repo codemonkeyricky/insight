@@ -98,12 +98,23 @@ export function matchEnvRead(node: ts.PropertyAccessExpression, imports: Map<str
   return node.name.text;
 }
 
+/**
+ * A script a spawn runs, named by a relative path. A `file` path is relative to the file that makes the call, which is
+ * what `new URL(p, import.meta.url)` and `join(__dirname, p)` mean. A `cwd` path is a plain literal, which the runtime
+ * resolves against the working directory.
+ */
+export interface ScriptPath {
+  base: "file" | "cwd";
+  /** A relative path such as `./w.js` or `../w.js`. Never absolute, and never a URL with a scheme. */
+  path: string;
+}
+
 export interface WorkerMatch {
   api: string;
   /** The spawn node's target, as it has always been: the literal path, or <dynamic>. */
   target: string;
-  /** The path the worker runs, when it names one relative to the file. The caller resolves it. */
-  script?: string;
+  /** The script the worker runs, when the call names one statically and relatively. */
+  script?: ScriptPath;
 }
 
 const isImportMetaUrl = (e: ts.Expression): boolean =>
@@ -112,18 +123,75 @@ const isImportMetaUrl = (e: ts.Expression): boolean =>
   ts.isMetaProperty(e.expression) &&
   e.expression.keywordToken === ts.SyntaxKind.ImportKeyword;
 
-/**
- * The path a Worker argument names: a string literal, or the first argument of
- * `new URL("./w.js", import.meta.url)`. Anything else, such as a variable or a URL with another base, names none.
- */
-function workerScript(arg: ts.Expression | undefined): string | undefined {
-  if (!arg) return undefined;
-  if (ts.isStringLiteralLike(arg)) return arg.text;
-  if (ts.isNewExpression(arg) && ts.isIdentifier(arg.expression) && arg.expression.text === "URL") {
-    const [path, base] = arg.arguments ?? [];
-    if (path && ts.isStringLiteralLike(path) && base && isImportMetaUrl(base)) return path.text;
+/** A path with no leading slash and no URL scheme: relative to some base. */
+const isRelativePath = (p: string): boolean => p !== "" && !p.startsWith("/") && !/^[A-Za-z][A-Za-z0-9+.-]*:/.test(p);
+
+/** `__dirname`, or `import.meta.dirname`: the directory of the file that holds the call. */
+function isDirArg(e: ts.Expression, imports: Map<string, ImportBinding>): boolean {
+  if (ts.isIdentifier(e)) return e.text === "__dirname" && !imports.has("__dirname");
+  return (
+    ts.isPropertyAccessExpression(e) &&
+    e.name.text === "dirname" &&
+    ts.isMetaProperty(e.expression) &&
+    e.expression.keywordToken === ts.SyntaxKind.ImportKeyword
+  );
+}
+
+/** The export a callee names, when that export comes from one of `modules`: a named import, or a member of a namespace or default import. */
+function exportName(callee: ts.Expression, imports: Map<string, ImportBinding>, modules: string[]): string | undefined {
+  if (ts.isIdentifier(callee)) {
+    const b = imports.get(callee.text);
+    if (b && b.name !== undefined && modules.includes(b.module)) return b.name;
+    return undefined;
+  }
+  if (ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression)) {
+    const b = imports.get(callee.expression.text);
+    if (b && b.name === undefined && modules.includes(b.module)) return callee.name.text;
   }
   return undefined;
+}
+
+/**
+ * The file-relative path an expression names: `new URL(p, import.meta.url)`, `fileURLToPath` of one,
+ * `join` or `resolve` of `__dirname` with literal segments, or a template of `__dirname` and a literal tail.
+ */
+function fileRelativePath(e: ts.Expression, imports: Map<string, ImportBinding>): string | undefined {
+  if (ts.isNewExpression(e)) {
+    if (!ts.isIdentifier(e.expression) || e.expression.text !== "URL") return undefined;
+    const [path, base] = e.arguments ?? [];
+    return path && base && ts.isStringLiteralLike(path) && isImportMetaUrl(base) && isRelativePath(path.text)
+      ? path.text
+      : undefined;
+  }
+  if (ts.isTemplateExpression(e)) {
+    const span = e.templateSpans[0];
+    if (e.head.text === "" && e.templateSpans.length === 1 && span && isDirArg(span.expression, imports) && span.literal.text.startsWith("/")) {
+      return `.${span.literal.text}`;
+    }
+    return undefined;
+  }
+  if (!ts.isCallExpression(e)) return undefined;
+  if (exportName(e.expression, imports, ["url"]) === "fileURLToPath") {
+    const [only] = e.arguments;
+    return e.arguments.length === 1 && only ? fileRelativePath(only, imports) : undefined;
+  }
+  const fn = exportName(e.expression, imports, ["path"]);
+  const [dir, ...rest] = e.arguments;
+  if ((fn !== "join" && fn !== "resolve") || !dir || !isDirArg(dir, imports) || rest.length === 0) return undefined;
+  const segments = rest.map((a) => (ts.isStringLiteralLike(a) ? a.text : undefined));
+  if (!segments.every((s): s is string => s !== undefined && isRelativePath(s))) return undefined;
+  return [".", ...segments].join("/");
+}
+
+/**
+ * The script a spawn argument names, when it names one statically. A plain relative literal is cwd-relative;
+ * the forms `fileRelativePath` accepts are file-relative. A variable, an absolute path or a URL with another base names none.
+ */
+export function scriptPath(arg: ts.Expression | undefined, imports: Map<string, ImportBinding>): ScriptPath | undefined {
+  if (!arg) return undefined;
+  if (ts.isStringLiteralLike(arg)) return isRelativePath(arg.text) ? { base: "cwd", path: arg.text } : undefined;
+  const path = fileRelativePath(arg, imports);
+  return path === undefined ? undefined : { base: "file", path };
 }
 
 /** `new Worker(file)` from worker_threads, as a named or namespace import. Returns the script it runs. */
@@ -142,7 +210,7 @@ export function matchWorker(node: ts.NewExpression, imports: Map<string, ImportB
   return {
     api: "worker_threads.Worker",
     target: first && ts.isStringLiteralLike(first) ? first.text : DYNAMIC,
-    script: workerScript(first),
+    script: scriptPath(first, imports),
   };
 }
 

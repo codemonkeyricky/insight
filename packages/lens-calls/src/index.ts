@@ -60,7 +60,22 @@ export const lensCalls: Lens = {
       entries = functions.filter((f) => f.attrs.exported === true).map((f) => f.id);
     }
 
-    const reach = view.trace(entries, { follow: ["calls.call"], direction: "out", uncertain: "may" });
+    let reach = view.trace(entries, { follow: ["calls.call"], direction: "out", uncertain: "may" });
+    // A closure exists once its creator runs, so what it calls is reachable too. The creator is a function, or
+    // the file for module-level code, which runs when the file loads. Reaching a new closure can reach more
+    // closures, so repeat until none is added.
+    const closures = view
+      .edges({ facet: "calls", kind: "calls.reference" })
+      .filter((e) => e.attrs?.how === "closure")
+      .map((e) => ({ from: e.from, to: edgeTargets(e).nodes[0] }))
+      .filter((c): c is { from: NodeId; to: NodeId } => c.to !== undefined && known.has(c.to));
+    const starts = new Set<NodeId>(entries);
+    for (;;) {
+      const added = closures.filter((c) => !starts.has(c.to) && (known.has(c.from) ? reach.nodes.has(c.from) : view.node(c.from)?.kind === "structure.file"));
+      if (added.length === 0) break;
+      for (const c of added) starts.add(c.to);
+      reach = view.trace([...starts], { follow: ["calls.call"], direction: "out", uncertain: "may" });
+    }
     const entrySet = new Set(entries);
     const outside = partial ? calledFromOutside(view, known) : new Set<NodeId>();
 

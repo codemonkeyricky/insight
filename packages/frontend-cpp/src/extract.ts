@@ -4,6 +4,7 @@ import type { IRBatch } from "@insight/sdk";
 type Confidence = Provenance["confidence"];
 import type { SyntaxNode } from "./parser.js";
 import {
+  blockOf,
   effectCatalog,
   FRONTEND_ID,
   lockIdentity,
@@ -58,10 +59,10 @@ class Ids {
   }
 }
 
-/** The first argument in a parenthesised argument list, as written. */
+/** The first argument in a parenthesised or braced argument list, as written. */
 function firstArgument(list: string | undefined): string | undefined {
   if (list === undefined) return undefined;
-  const inner = list.trim().replace(/^\(/, "").replace(/\)$/, "");
+  const inner = list.trim().replace(/^[({]/, "").replace(/[)}]$/, "");
   let depth = 0;
   let out = "";
   for (const ch of inner) {
@@ -76,11 +77,6 @@ function firstArgument(list: string | undefined): string | undefined {
 /** The named children of an argument list, without comments. */
 const namedArgs = (list: SyntaxNode | null | undefined): SyntaxNode[] => (list?.namedChildren ?? []).filter((n) => n.type !== "comment");
 const argsOf = (call: SyntaxNode): SyntaxNode[] => namedArgs(call.childForFieldName("arguments"));
-
-const blockOf = (node: SyntaxNode): SyntaxNode | null => {
-  for (let p = node.parent; p; p = p.parent) if (p.type === "compound_statement") return p;
-  return null;
-};
 
 /** A set of candidate functions, and how sure the frontend is that one of them is the target. */
 interface Resolved {
@@ -127,8 +123,8 @@ function resolveCallee(project: Project, fnNode: SyntaxNode): Resolved | undefin
 }
 
 /**
- * The function name a thread or task start names, past the `&`, casts and parentheses around it.
- * Lambdas and other expressions name no function, so they give undefined.
+ * The function name a thread or task start names, past the `&`, casts, `+` and parentheses around it.
+ * A lambda names itself. Other expressions name no function, so they give undefined.
  */
 function functionNameOf(arg: SyntaxNode): SyntaxNode | undefined {
   let n: SyntaxNode | null = arg;
@@ -138,6 +134,7 @@ function functionNameOf(arg: SyntaxNode): SyntaxNode | undefined {
       case "identifier":
       case "type_identifier":
       case "qualified_identifier":
+      case "lambda_expression":
         return n;
       case "template_function":
         n = n.childForFieldName("name");
@@ -145,6 +142,10 @@ function functionNameOf(arg: SyntaxNode): SyntaxNode | undefined {
       case "pointer_expression":
         // Only `&f` names a function. `*p` does not.
         n = n.childForFieldName("operator")?.text === "&" ? n.childForFieldName("argument") : null;
+        break;
+      case "unary_expression":
+        // `+[]{}` converts a captureless lambda to a function pointer, as pthread_create takes one.
+        n = n.childForFieldName("operator")?.text === "+" ? n.childForFieldName("argument") : null;
         break;
       case "cast_expression":
         n = n.childForFieldName("value");
@@ -159,10 +160,45 @@ function functionNameOf(arg: SyntaxNode): SyntaxNode | undefined {
   return undefined;
 }
 
-/** The function a thread or async target names, when the project defines it. */
-function resolveSpawnTarget(project: Project, arg: SyntaxNode): { name: SyntaxNode; resolved: Resolved } | undefined {
+const isPrefix = (prefix: string[], path: string[]): boolean => prefix.length <= path.length && prefix.every((s, i) => s === path[i]);
+
+/**
+ * The lambda a name refers to, when a variable of this name holds one and is visible at the use. A
+ * variable is visible inside its block after its declaration. One at namespace or file scope is visible
+ * within its namespaces. The innermost visible variable wins, as in C++ name lookup. An assigned lambda
+ * is heuristic: the variable may have been set again.
+ */
+function boundLambda(project: Project, rel: string, use: SyntaxNode): { decl: FnDecl; confidence: Confidence } | undefined {
+  const scopePath = scopeOf(use).path;
+  let best: { decl: FnDecl; confidence: Confidence; block: number; declEnd: number } | undefined;
+  for (const decl of project.lambdaBindings.get(norm(use.text)) ?? []) {
+    const b = decl.binding;
+    if (!b || decl.rel !== rel) continue;
+    if (b.block) {
+      const [start, end] = b.block;
+      if (use.startIndex < start || use.endIndex > end || use.startIndex < b.declEnd) continue;
+    } else if (!isPrefix(b.scope, scopePath)) {
+      continue;
+    }
+    const block = b.block?.[0] ?? -1;
+    if (best && (block < best.block || (block === best.block && b.declEnd <= best.declEnd))) continue;
+    best = { decl, confidence: b.assigned ? "heuristic" : "exact", block, declEnd: b.declEnd };
+  }
+  return best && { decl: best.decl, confidence: best.confidence };
+}
+
+/** The function a thread or async target names, when the project defines it or a visible variable holds it. */
+function resolveSpawnTarget(project: Project, rel: string, arg: SyntaxNode): { name: SyntaxNode; resolved: Resolved } | undefined {
   const name = functionNameOf(arg);
   if (!name) return undefined;
+  if (name.type === "lambda_expression") {
+    const decl = project.fns.get(`${rel}|${nodeKey(name)}`);
+    return decl ? { name, resolved: { targets: [decl], confidence: "exact" } } : undefined;
+  }
+  if (name.type === "identifier" || name.type === "type_identifier") {
+    const bound = boundLambda(project, rel, name);
+    if (bound) return { name, resolved: { targets: [bound.decl], confidence: bound.confidence } };
+  }
   const resolved = resolveName(project, stripTemplates(norm(name.text)).replace(/^::/, ""), name.type === "qualified_identifier");
   return resolved ? { name, resolved } : undefined;
 }
@@ -234,7 +270,7 @@ export function emitUnit(project: Project, rel: string): IRBatch {
       span: spanOf(rel, n),
       provenance: prov,
     });
-    const hit = targetArg ? resolveSpawnTarget(project, targetArg) : undefined;
+    const hit = targetArg ? resolveSpawnTarget(project, rel, targetArg) : undefined;
     if (!hit) return;
     for (const t of hit.resolved.targets) if (t.rel !== rel) deps.add(t.rel);
     edge({
@@ -349,8 +385,11 @@ export function emitUnit(project: Project, rel: string): IRBatch {
           only?.type === "parameter_declaration" && !only.childForFieldName("declarator") ? only.childForFieldName("type") : null;
         spawn(decl, container, "thread", firstArgument(params?.text), nameArg ?? undefined);
       } else if (declarator?.type === "init_declarator") {
+        // `std::thread t{f, x}` holds its arguments in an initializer list. `std::thread t{}` starts nothing.
         const value = declarator.childForFieldName("value");
-        if (value?.type === "argument_list") spawn(decl, container, "thread", firstArgument(value.text), namedArgs(value)[0]);
+        if (value?.type === "argument_list" || (value?.type === "initializer_list" && namedArgs(value).length > 0)) {
+          spawn(decl, container, "thread", firstArgument(value.text), namedArgs(value)[0]);
+        }
       }
     }
 
@@ -463,6 +502,27 @@ export function emitUnit(project: Project, rel: string): IRBatch {
             span: spanOf(rel, n),
             provenance: prov,
           });
+          nextContainer = decl.id;
+          nextFn = decl;
+        }
+        break;
+      }
+      case "lambda_expression": {
+        const decl = project.fns.get(`${rel}|${nodeKey(n)}`);
+        if (decl) {
+          const span = spanOf(rel, n);
+          node({
+            id: decl.id,
+            facet: "structure",
+            kind: "structure.function",
+            parent: container,
+            attrs: { name: decl.simple, qualifiedName: decl.qname, anonymous: true },
+            span,
+            provenance: prov,
+          });
+          // The creator reaches the closure. At module level the creator is the file.
+          edge({ from: fn ? fn.id : rel, to: decl.id, facet: "calls", kind: "calls.reference", attrs: { how: "closure" }, span, provenance: prov });
+          // Everything in the body belongs to the lambda: its calls, spawns, locks, and any co_await.
           nextContainer = decl.id;
           nextFn = decl;
         }

@@ -66,23 +66,32 @@ describe("concurrency.spawns", () => {
     }
   });
 
-  it("keeps each spawn node's attrs.target as it was, including the unresolved ones", async () => {
+  it("keeps each spawn node's attrs.target as the literal was written, including the unresolved ones", async () => {
     const spawnNodes = (await extract()).nodes.filter(
       (n) => n.kind === "concurrency.spawn-thread" || n.kind === "concurrency.spawn-process",
     );
     expect(Object.fromEntries(spawnNodes.map((n) => [n.id, n.attrs?.target]))).toEqual({
-      "src/spawns.ts@spawn:5:9": "./crunch.js",
+      "src/spawns.ts@spawn:5:9": "./src/crunch.js",
       "src/spawns.ts@spawn:10:9": "<dynamic>",
-      "src/spawns.ts@spawn:15:9": "./missing.js",
-      "src/spawns.ts@spawn:19:2": "./child.js",
-      "src/spawns.ts@spawn:24:2": "./absent.js",
+      "src/spawns.ts@spawn:15:9": "./src/missing.js",
+      "src/spawns.ts@spawn:19:2": "./src/child.js",
+      "src/spawns.ts@spawn:24:2": "./src/absent.js",
+    });
+  });
+
+  it("marks a URL-form worker exact, and a worker or fork named by a cwd-relative literal heuristic", async () => {
+    const edges = (await extract()).edges.filter((e) => e.kind === "concurrency.spawns");
+    expect(Object.fromEntries(edges.map((e) => [e.from, e.provenance.confidence]))).toEqual({
+      "src/spawns.ts@spawn:5:9": "heuristic",
+      "src/spawns.ts@spawn:10:9": "exact",
+      "src/spawns.ts@spawn:19:2": "heuristic",
     });
   });
 });
 
 describe("concurrency.dispatches", () => {
-  it("records awaited, unawaited, timer, microtask and promise-callback dispatches, and nothing else", async () => {
-    // Inline arrow callbacks make no edge; a module-level call has the file as its source.
+  it("records awaited, started, timer, microtask and promise-callback dispatches, inline callbacks included, and nothing else", async () => {
+    // An inline callback dispatches to its own anonymous function; a module-level call has the file as its source.
     expect(labelled((await extract()).edges, "concurrency.dispatches")).toEqual([
       "src/dispatch.ts -> src/tasks.ts#onDone (timer)",
       "src/dispatch.ts#Job.run -> src/dispatch.ts#Job.finish (callback)",
@@ -91,6 +100,9 @@ describe("concurrency.dispatches", () => {
       "src/dispatch.ts#chain -> src/tasks.ts#onDone (callback)",
       "src/dispatch.ts#chain -> src/tasks.ts#onError (callback)",
       "src/dispatch.ts#chain -> src/tasks.ts#onFlush (callback)",
+      "src/dispatch.ts#inline -> src/dispatch.ts#inline.λ33:14 (timer)",
+      "src/dispatch.ts#inline -> src/dispatch.ts#inline.λ34:18 (microtask)",
+      "src/dispatch.ts#inline -> src/dispatch.ts#inline.λ35:24 (callback)",
       "src/dispatch.ts#inline -> src/tasks.ts#fetchUser (start)",
       "src/dispatch.ts#kickoff -> src/tasks.ts#fetchUser (start)",
       "src/dispatch.ts#load -> src/tasks.ts#fetchUser (await)",
@@ -100,26 +112,29 @@ describe("concurrency.dispatches", () => {
     ]);
   });
 
-  it("leaves calls.call exactly as before: calls are never also dispatches", async () => {
+  it("keeps calls.call to named functions, and puts a call inside a lambda on the lambda: calls are never also dispatches", async () => {
     expect(pairs((await extract()).edges, "calls.call")).toEqual([
       "src/dispatch.ts#Job.run -> src/tasks.ts#fetchUser",
       "src/dispatch.ts#chain -> src/tasks.ts#fetchUser",
       "src/dispatch.ts#inline -> src/tasks.ts#fetchUser",
-      "src/dispatch.ts#inline -> src/tasks.ts#onFlush",
-      "src/dispatch.ts#inline -> src/tasks.ts#onTick",
+      "src/dispatch.ts#inline.λ33:14 -> src/tasks.ts#onTick",
+      "src/dispatch.ts#inline.λ34:18 -> src/tasks.ts#onFlush",
       "src/dispatch.ts#kickoff -> src/tasks.ts#fetchUser",
       "src/dispatch.ts#load -> src/tasks.ts#fetchUser",
       "src/dispatch.ts#plain -> src/tasks.ts#syncValue",
     ]);
   });
 
-  it("leaves calls.reference exactly as before: a callback passed by name is still a reference", async () => {
+  it("keeps calls.reference to a callback passed by name, and adds a closure edge from each creator to the inline function it makes", async () => {
     expect(labelled((await extract()).edges, "calls.reference")).toEqual([
       "src/dispatch.ts -> src/tasks.ts#onDone (value)",
       "src/dispatch.ts#Job.run -> src/dispatch.ts#Job.finish (value)",
       "src/dispatch.ts#chain -> src/tasks.ts#onDone (value)",
       "src/dispatch.ts#chain -> src/tasks.ts#onError (value)",
       "src/dispatch.ts#chain -> src/tasks.ts#onFlush (value)",
+      "src/dispatch.ts#inline -> src/dispatch.ts#inline.λ33:14 (closure)",
+      "src/dispatch.ts#inline -> src/dispatch.ts#inline.λ34:18 (closure)",
+      "src/dispatch.ts#inline -> src/dispatch.ts#inline.λ35:24 (closure)",
       "src/dispatch.ts#schedule -> src/tasks.ts#onFlush (value)",
       "src/dispatch.ts#schedule -> src/tasks.ts#onTick (value)",
       "src/dispatch.ts#schedule -> src/tasks.ts#onTick (value)",
@@ -129,7 +144,7 @@ describe("concurrency.dispatches", () => {
   it("gives each dispatch edge the concurrency facet, frontend provenance and a span in its source file", async () => {
     const { edges } = await extract();
     const dispatches = edges.filter((e) => e.kind === "concurrency.dispatches");
-    expect(dispatches).toHaveLength(13);
+    expect(dispatches).toHaveLength(16);
     for (const e of dispatches) {
       expect(e.facet).toBe("concurrency");
       expect(e.provenance).toEqual({ frontend: "frontend-typescript", confidence: "exact" });

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { IREdge, IRNode } from "@insight/ir";
-import { SCOPE_FUNCTION_LIMIT, isNoisePath, summarizeScope, type ScopeFlow } from "../src/index.js";
-import { callEdge, flowOfScope, fnNode } from "./synthetic.js";
+import { SCOPE_FUNCTION_LIMIT, isNoisePath, summarizeScope, type ScopeFlow, type UnreferencedFunction } from "../src/index.js";
+import { PROVENANCE, callEdge, flowOfScope, fnNode } from "./synthetic.js";
 
 /**
  * A small project. `main` is called by a test, `parse` by `main`, and `lex` by `parse` in another file. `format` is
@@ -180,6 +180,60 @@ describe("unreferenced functions across nested scopes", () => {
     expect(namesOf(flowAt(""))).not.toContain("lex");
   });
 
+});
+
+/** An anonymous function on `line` of `file`, written in `parent`: a function id, or the file for module-level code. */
+function anonNode(file: string, line: number, parent: string): IRNode {
+  const name = `λ${line + 1}:3`;
+  return { ...fnNode(file, name, line), parent, attrs: { name, anonymous: true } };
+}
+
+/** A closure edge: `from` creates the anonymous function `to`, on `line` of `file`. */
+function closureEdge(from: string, to: string, file: string, line: number): IREdge {
+  return {
+    from,
+    to,
+    facet: "calls",
+    kind: "calls.reference",
+    span: { file, start: [line, 2], end: [line, 8] },
+    attrs: { how: "closure" },
+    provenance: PROVENANCE,
+  };
+}
+
+describe("anonymous functions in the unreferenced rows", () => {
+  it("gives a named function the same row whether it calls through a lambda or directly", () => {
+    const file = "src/a.ts";
+    const named = [fnNode(file, "outer", 0), fnNode(file, "inner", 8)];
+    const direct = summarizeScope(named, [callEdge(`${file}#outer`, `${file}#inner`, file, 1)], [file]);
+    // The same call, made inside a lambda that outer creates. The lambda is not a row, and its call is outer's.
+    const lam = anonNode(file, 4, `${file}#outer`);
+    const viaLambda = summarizeScope(
+      [...named, lam],
+      [closureEdge(`${file}#outer`, lam.id, file, 4), callEdge(lam.id, `${file}#inner`, file, 5)],
+      [file],
+    );
+    for (const flow of [direct, viaLambda]) {
+      expect(flow.unreferenced.map((f) => [f.name, f.reach])).toEqual([["outer", 1]]);
+      expect(flow.stats).toMatchObject({ unreferenced: 1, unreferencedOutside: 0 });
+    }
+    // The row's identity and reach are the same. Its body measures (steps and the rest) are not: the call sits in the
+    // lambda's body, which is the lambda's own function, so outer's steps no longer count it.
+    const identity = (f: UnreferencedFunction) => ({ id: f.id, name: f.name, file: f.file, line: f.line, reach: f.reach, calledFromOutside: f.calledFromOutside });
+    expect(viaLambda.unreferenced.map(identity)).toEqual(direct.unreferenced.map(identity));
+    expect(viaLambda.functions.find((f) => f.id === lam.id)).toMatchObject({ anonymous: true });
+  });
+
+  it("never lists an anonymous function as unreferenced or as an entry, even one nothing creates", () => {
+    const file = "src/c.ts";
+    // A lambda in f, and one at module level. Neither has a creator edge, so nothing in the scope names either.
+    const nodes = [fnNode(file, "f", 0), anonNode(file, 4, `${file}#f`), anonNode(file, 8, file)];
+    const flow = summarizeScope(nodes, [], [file]);
+    expect(flow.unreferenced.map((f) => f.name)).toEqual(["f"]);
+    expect(flow.entries).toEqual([`${file}#f`]);
+    expect(flow.functions.filter((f) => f.anonymous)).toHaveLength(2);
+    expect(flow.stats.functions).toBe(3);
+  });
 });
 
 /** True when a scope lies inside another. The project's scope "" holds every scope. */

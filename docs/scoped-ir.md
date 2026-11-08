@@ -297,6 +297,11 @@ when no function inside `S` calls it or refers to it:
   The stats count them apart. `unreferenced` and `unreferencedOutside` leave them out,
   `unreferencedNoise` counts them, `functionsTotal` counts all functions, `functionsNoise` counts
   the noise ones, and `functionsNonNoise` is the rest.
+- An anonymous function (a function expression, arrow function or lambda with no declaration of its own)
+  is never listed, and never an entry. Its calls and references count as those of its `parent`, the
+  function or file it is written in. A named function that a lambda calls therefore has the same row
+  identity and `reach` as when that call is written in its own body. The body measures (`steps`,
+  `decisions` and the rest) count in the lambda, since it is its own function.
 
 Widening a scope can only remove functions from the unreferenced set: a function unreferenced in a
 wider scope is unreferenced in every narrower scope that holds it, because each caller inside the
@@ -323,10 +328,10 @@ which has no spawns, and `functions` is in the order the threads list them.
   "scope": "src",
   "truncated": false,
   "functions": [
-    { "id": "src/b.ts#d", "name": "d", "file": "src/b.ts", "line": 5, "inScope": true },
-    { "id": "lib/c.ts#c", "name": "c", "file": "lib/c.ts", "line": 1, "inScope": false },
-    { "id": "src/a.ts#a", "name": "a", "file": "src/a.ts", "line": 3, "inScope": true },
-    { "id": "src/b.ts#b", "name": "b", "file": "src/b.ts", "line": 2, "inScope": true }
+    { "id": "src/b.ts#d", "name": "d", "file": "src/b.ts", "line": 5, "inScope": true, "runtime": "thread" },
+    { "id": "lib/c.ts#c", "name": "c", "file": "lib/c.ts", "line": 1, "inScope": false, "runtime": "thread" },
+    { "id": "src/a.ts#a", "name": "a", "file": "src/a.ts", "line": 3, "inScope": true, "runtime": "thread" },
+    { "id": "src/b.ts#b", "name": "b", "file": "src/b.ts", "line": 2, "inScope": true, "runtime": "thread" }
   ],
   "threads": [
     {
@@ -341,16 +346,21 @@ which has no spawns, and `functions` is in the order the threads list them.
   "stats": {
     "threads": 1, "spawns": 0, "resolved": 0, "outside": 0, "unresolved": 0, "candidates": 0,
     "coroutines": 0, "dispatches": 0,
-    "functionsInScope": 3, "functionsThreaded": 3, "functionsUnthreaded": 0, "functionsListed": 4
+    "functionsInScope": 3, "functionsThreaded": 3, "functionsCoroutineOnly": 0, "functionsUnthreaded": 0, "functionsListed": 4
   }
 }
 ```
 
 - **Threads.** The `main` thread starts at the in-scope functions that no in-scope caller references.
   A function is referenced when an in-scope function or file calls it, refers to it, dispatches to it
-  or spawns it. Module-level code is a file, so a function that module-level code calls is referenced
-  and starts no thread. Each spawn node in scope starts one thread after `main`, sorted by spawn id,
-  whether or not the spawn resolves. Its `kind` is the spawn's `how`: `thread`, `process` or `async`.
+  or spawns it. A caller outside the scope does not count. Module-level code is a file, so a function
+  that module-level code calls is referenced and starts no thread. A caller in a test, fixture or sample
+  file counts only when the scope is such a folder. Each spawn node in scope starts one thread after
+  `main`, sorted by spawn id, whether or not the spawn resolves. Its `kind` is the spawn's `how`:
+  `thread`, `process` or `async`.
+- **Anonymous functions.** An anonymous function is never a main root. Whatever runs it is its creator,
+  a spawn or a dispatch. A lambda that a spawn starts runs on its own thread, and one that an `await` or
+  `start` dispatch starts is a coroutine. Its `parent` is the function or file it is written in.
 - **Roots and status.** A spawn's roots are its targets. A function target is a root. A script file
   target, such as a worker's file, has the functions its top-level code calls as roots, and `spawn.script`
   names it. A spawn with several targets has all of them as roots and sets `candidates`. The status is
@@ -358,17 +368,27 @@ which has no spawns, and `functions` is in the order the threads list them.
   scope, and `unresolved` when it has none. An `outside` thread keeps its out-of-scope roots, so it still
   shows what the spawn runs.
 - **Reach.** `reach` is the number of distinct functions a thread runs by calls, references and
-  dispatches, roots included. It does not follow spawns, since those start other threads. Reach follows
-  the whole graph, so it can leave the scope. `reached` lists the same functions sorted by id.
+  dispatches, roots included. A closure is a `calls.reference` with `how: "closure"`, from a function to
+  an anonymous function it creates, so the creator runs what the closure calls. A closure that is a spawn
+  or dispatch target is left out of its creator's reach. Reach does not follow spawns, since those start
+  other threads. Reach follows the whole graph, so it can leave the scope. `reached` lists the same
+  functions sorted by id.
+- **Runtime.** Each function entry has `runtime`. `thread` means a thread runs it on its own, through
+  calls, closures, references, or a `callback`, `timer` or `microtask` dispatch. `coroutine` means only an
+  `await` or `start` coroutine runs it. `none` means no thread reaches it, as with a function only
+  module-level code calls. The `functions` table names only the functions the model reaches: those in a
+  thread's roots or reach, its coroutines, and the targets of the dispatches in scope.
 - **Coroutines.** Each `await` or `start` dispatch that a thread reaches starts a coroutine, listed once
   per thread. Its `callees` are the functions it reaches by calls, without the coroutines it awaits,
   which are nested through `parent`. A cycle of awaits is cut where it repeats. `dispatchedBy` lists
   every function or file that starts the coroutine. `callback`, `timer` and `microtask` dispatches run on
-  the dispatching thread, so they are not coroutines.
+  the dispatching thread, so they are not coroutines. The TypeScript frontend emits `.then` as `callback`.
 - **Dispatches.** The flat list holds each dispatch whose source is in scope, in a fixed order. `from` is
   the function, or the file for module-level code, that dispatches. `file` and `line` are the site.
-- **Stats.** `functionsInScope` counts the functions whose file lies in scope, `functionsThreaded` those a
-  thread runs, and `functionsUnthreaded` the rest. `functionsListed` is the size of the `functions` table.
+- **Stats.** `functionsInScope` counts the functions whose file lies in scope, anonymous ones included.
+  `functionsThreaded` counts those some thread runs, coroutines included. `functionsCoroutineOnly` counts
+  those only a coroutine runs, a part of `functionsThreaded`. `functionsUnthreaded` is the rest.
+  `functionsListed` is the size of the `functions` table.
 - **Order.** The result does not depend on the order of the edges they arrive in. Edges are sorted by
   content first, and threads, roots and `reached` are sorted by id.
 - **Cap.** At most `MAX_EXEC_FUNCTIONS` (2000) distinct functions are listed. Past that, later functions
@@ -377,11 +397,17 @@ which has no spawns, and `functions` is in the order the threads list them.
 - **Widening.** A function that is a main root of a wider scope is a main root of every narrower scope
   that holds it. Each spawn thread is the same in every scope that holds its spawn, with the same roots,
   reach and coroutines. The narrower scope's function and spawn counts are never larger than the wider's.
+  A function on a thread in a narrower scope is on a thread or a coroutine in every wider scope, except
+  test code seen from a project, which is no root there. Two cases break that, and tests pin both: a
+  function only a wider scope's module-level code calls, and a function whose only wider-scope caller sits
+  in a cycle that nothing roots. Adding a caller makes a function referenced, and a caller that starts no
+  thread gives it none back. A function on no thread in a narrower scope can run on one in a wider scope,
+  but only through a thread or a root the wider scope adds.
 
 Module-level code does not start a thread. A function that only top-level code calls, such as a script's
 `main()` at the bottom of the file, or a React component tree rendered from a module-level `render` call,
-is in no thread, and neither is anything only it reaches. These functions are counted in
-`functionsUnthreaded`. Test, fixture and sample functions are not roots of a project or folder scope
+is in no thread, and neither is anything only it reaches. They are counted in `functionsUnthreaded`. `functions`
+lists one only when a dispatch names it, and then with `runtime: "none"`. Test, fixture and sample functions are not roots of a project or folder scope
 that is not itself test, fixture or sample code. They are roots of a scope that is, so their threads
 show in that scope.
 

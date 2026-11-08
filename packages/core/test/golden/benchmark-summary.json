@@ -21,10 +21,10 @@
         "frontend-cpp"
       ],
       "filesScanned": 121,
-      "filesWithRecords": 87,
+      "filesWithRecords": 88,
       "filesWithErrors": 0,
       "nodes": 0,
-      "edges": 1544
+      "edges": 1625
     },
     {
       "facet": "concurrency",
@@ -35,7 +35,7 @@
       "filesWithRecords": 4,
       "filesWithErrors": 0,
       "nodes": 5,
-      "edges": 2
+      "edges": 3
     },
     {
       "facet": "effects",
@@ -81,7 +81,7 @@
       "filesScanned": 225,
       "filesWithRecords": 225,
       "filesWithErrors": 0,
-      "nodes": 1507,
+      "nodes": 1578,
       "edges": 0
     },
     {
@@ -100,7 +100,7 @@
     {
       "id": "lens-calls",
       "status": "ok",
-      "findings": 355
+      "findings": 365
     },
     {
       "id": "lens-concurrency-map",
@@ -147,9 +147,10 @@
     "asyncWithoutAwait": 0
   },
   "recordsByKind": {
-    "calls.call": 1544,
+    "calls.call": 1554,
+    "calls.reference": 71,
     "concurrency.spawn-thread": 5,
-    "concurrency.spawns": 2,
+    "concurrency.spawns": 3,
     "effects.clock.read": 12,
     "effects.env.read": 7,
     "effects.fs.write": 1,
@@ -165,7 +166,7 @@
     "packaging.include": 889,
     "packaging.target-contains": 113,
     "structure.file": 225,
-    "structure.function": 967,
+    "structure.function": 1038,
     "structure.namespace": 191,
     "structure.type": 124,
     "sync.lock-acquire": 4,

@@ -64,7 +64,7 @@ Base kinds shipped by the core:
 | `structure.file` | structure | node | – | A source file. Created by discovery before any frontend runs. |
 | `structure.namespace` | structure | node | – |  |
 | `structure.type` | structure | node | – |  |
-| `structure.function` | structure | node | – |  |
+| `structure.function` | structure | node | – | A function, method or constructor. `attrs.anonymous` marks a function expression, arrow function or lambda with no declaration of its own (named `λ<line>:<col>`); its parent is the enclosing function, or the file at module level. |
 | `flow.block` | flow | node | – | A labelled region: the try, catch or finally part of a try, or a loop body. |
 | `flow.branch` | flow | node | – | if / else, or any two-way choice. |
 | `flow.branch-arm` | flow | node | – | One arm of a branch or switch: then, else, a case or the default. |
@@ -85,10 +85,8 @@ Base kinds shipped by the core:
 | `calls.dynamic-dispatch` | calls | node | – |  |
 | `calls.callback-registration` | calls | node | – |  |
 | `calls.call` | calls | edge | – | Caller function to callee function. |
-| `calls.reference` | calls | edge | – | Caller to a function it refers to without calling it. `attrs.how` is `new`, `jsx` or `value`. Caller is the enclosing function, or the file for module-level code. |
+| `calls.reference` | calls | edge | – | Caller to a function it refers to without calling it. `attrs.how` is `new`, `jsx`, `value` or `closure`. Caller is the enclosing function, or the file for module-level code. `closure` runs from a function to an anonymous function created inside it, so the creator still reaches what the closure calls. |
 | `calls.contains-call` | calls | edge | – |  |
-
-`calls.reference` has no parent on purpose. A query for a parent also returns its extensions, so extending `calls.call` would make every call query return references too.
 | `concurrency.spawn-thread` | concurrency | node | – |  |
 | `concurrency.spawn-process` | concurrency | node | – |  |
 | `concurrency.coroutine` | concurrency | node | – |  |
@@ -112,6 +110,8 @@ Base kinds shipped by the core:
 | `effects.env.read` | effects | node | – |  |
 | `effects.clock.read` | effects | node | – |  |
 | `effects.unknown` | effects | node | – | An external call no catalog recognises. Kept rather than dropped. |
+
+`calls.reference` has no parent on purpose. A query for a parent also returns its extensions, so extending `calls.call` would make every call query return references too.
 
 ## Writing a kind definition
 

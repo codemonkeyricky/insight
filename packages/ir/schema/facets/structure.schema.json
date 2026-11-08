@@ -9,6 +9,6 @@
     "StructureFile": { "type": "object", "required": ["path"], "properties": { "path": { "type": "string", "minLength": 1 }, "language": { "type": "string" }, "parseStatus": { "enum": ["ok", "error"] } } },
     "StructureNamespace": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string", "minLength": 1 } } },
     "StructureType": { "type": "object", "required": ["name", "typeKind"], "properties": { "name": { "type": "string", "minLength": 1 }, "typeKind": { "enum": ["class", "interface", "struct", "enum", "alias"] } } },
-    "StructureFunction": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string", "minLength": 1 }, "qualifiedName": { "type": "string" }, "async": { "type": "boolean" }, "exported": { "type": "boolean" } } }
+    "StructureFunction": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string", "minLength": 1 }, "qualifiedName": { "type": "string" }, "async": { "type": "boolean" }, "generator": { "type": "boolean" }, "anonymous": { "type": "boolean" }, "exported": { "type": "boolean" } } }
   }
 }

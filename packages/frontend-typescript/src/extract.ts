@@ -1,18 +1,19 @@
 import { existsSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 import ts from "typescript";
 import type { IREdge, IRFinding, IRNode, IRRecord, NodeId, Provenance, Span, UnresolvedRef } from "@insight/ir";
 import type { IRBatch } from "@insight/sdk";
-import { importBindings, matchCall, matchEnvRead, matchSchedule, matchWorker, type ImportBinding } from "./effects.js";
+import { importBindings, matchCall, matchEnvRead, matchSchedule, matchWorker, scriptPath, type ImportBinding, type ScriptPath } from "./effects.js";
 import { scriptKind } from "./digest.js";
 
 export const FRONTEND_ID = "frontend-typescript";
 export const SOURCE_RE = /\.(?:[mc]?[jt]sx?)$/;
 const PROV: Provenance = { frontend: FRONTEND_ID, confidence: "exact" };
+type Confidence = Provenance["confidence"];
 
 type Entity =
   | { type: "type"; name: string; typeKind: "class" | "interface" | "enum" | "alias" }
-  | { type: "function"; name: string; async: boolean; generator: boolean; exported: boolean };
+  | { type: "function"; name: string; async: boolean; generator: boolean; exported: boolean; anonymous: boolean };
 
 interface Decl {
   id: NodeId;
@@ -32,6 +33,8 @@ export interface Project {
   host: ts.CompilerHost;
   decls: Map<ts.Node, Decl>;
   sourceFor(rel: string): ts.SourceFile | undefined;
+  /** Maps a path under the compiler's output directory to the same path under its source directory. Undefined for other paths. */
+  mapOutput(rel: string): string | undefined;
 }
 
 const propName = (name: ts.PropertyName): string => name.getText();
@@ -39,15 +42,24 @@ const isFnInit = (n: ts.Expression): boolean => ts.isArrowFunction(n) || ts.isFu
 const hasModifier = (node: ts.Node, kind: ts.SyntaxKind): boolean =>
   ts.canHaveModifiers(node) && (ts.getModifiers(node)?.some((m) => m.kind === kind) ?? false);
 
+/** A function expression that its parent declaration names: the variable or class property it initializes. */
+function namedByParent(node: ts.ArrowFunction | ts.FunctionExpression): boolean {
+  const parent = node.parent;
+  if (ts.isVariableDeclaration(parent)) return parent.initializer === node && ts.isIdentifier(parent.name);
+  if (ts.isPropertyDeclaration(parent)) return parent.initializer === node;
+  return false;
+}
+
 /** Decides whether a node becomes a structure node. Shared by the declaration pass and the emit pass. */
-function classify(node: ts.Node): Entity | undefined {
+function classify(node: ts.Node, sf: ts.SourceFile): Entity | undefined {
   // fnNode carries the async modifier; owner carries the export modifier (for a variable, its statement).
-  const fn = (name: string, owner: ts.Node, fnNode: ts.Node): Entity => ({
+  const fn = (name: string, owner: ts.Node, fnNode: ts.Node, anonymous = false): Entity => ({
     type: "function",
     name,
     async: hasModifier(fnNode, ts.SyntaxKind.AsyncKeyword),
     generator: (fnNode as ts.FunctionLikeDeclaration).asteriskToken !== undefined,
     exported: (ts.getCombinedModifierFlags(owner as ts.Declaration) & ts.ModifierFlags.Export) !== 0,
+    anonymous,
   });
   if (ts.isClassDeclaration(node)) return { type: "type", name: node.name?.text ?? "default", typeKind: "class" };
   if (ts.isInterfaceDeclaration(node)) return { type: "type", name: node.name.text, typeKind: "interface" };
@@ -64,6 +76,11 @@ function classify(node: ts.Node): Entity | undefined {
   if (ts.isPropertyDeclaration(node) && node.initializer && isFnInit(node.initializer)) {
     return fn(propName(node.name), node, node.initializer);
   }
+  // A function expression that no declaration names is a lambda. It is named by where it starts, 1-based like an editor.
+  if ((ts.isArrowFunction(node) || ts.isFunctionExpression(node)) && !namedByParent(node)) {
+    const at = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+    return fn(`λ${at.line + 1}:${at.character + 1}`, node, node, true);
+  }
   return undefined;
 }
 
@@ -72,7 +89,7 @@ function assignDecls(rel: string, sf: ts.SourceFile, out: Map<ts.Node, Decl>): v
   const counts = new Map<string, number>();
   const visit = (node: ts.Node, container: { qname: string } | undefined): void => {
     let next = container;
-    const entity = classify(node);
+    const entity = classify(node, sf);
     if (entity) {
       const qname = container ? `${container.qname}.${entity.name}` : entity.name;
       const n = (counts.get(qname) ?? 0) + 1;
@@ -154,7 +171,137 @@ export function buildProject(root: string, rels: string[], texts: Map<string, st
     host,
     decls,
     sourceFor: (rel) => program.getSourceFile(abs(rel)),
+    mapOutput: outputMapper(root, options, rels),
   };
+}
+
+const dirOf = (rel: string): string => (rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "");
+const joinPath = (dir: string, name: string): string => (dir === "" ? name : `${dir}/${name}`);
+
+/** A path relative to the project root, with forward slashes. Undefined when it lies outside the project. */
+function projectPath(root: string, abs: string): string | undefined {
+  const rel = relative(root, abs).split(sep).join("/");
+  return rel === ".." || rel.startsWith("../") || isAbsolute(rel) ? undefined : rel;
+}
+
+/** The directory the files share, or undefined when there are none. Empty when they share only the root. */
+function commonDir(files: string[]): string | undefined {
+  if (files.length === 0) return undefined;
+  const dirs = files.map((f) => dirOf(f).split("/").filter((s) => s !== ""));
+  let common = dirs[0] ?? [];
+  for (const d of dirs) {
+    let i = 0;
+    while (i < common.length && i < d.length && common[i] === d[i]) i++;
+    common = common.slice(0, i);
+  }
+  return common.join("/");
+}
+
+/**
+ * Maps a project path under the compiler's output directory back to the same path under its source directory:
+ * `rootDir` when set, otherwise the directory the sources share, as tsc infers it. Other paths map to nothing.
+ */
+function outputMapper(root: string, options: ts.CompilerOptions, rels: string[]): (rel: string) => string | undefined {
+  const outDir = options.outDir ? projectPath(root, options.outDir) : undefined;
+  const srcDir = options.rootDir ? projectPath(root, options.rootDir) : commonDir(rels.filter((r) => !r.endsWith(".d.ts")));
+  if (!outDir || srcDir === undefined) return () => undefined;
+  return (rel) => (rel.startsWith(`${outDir}/`) ? joinPath(srcDir, rel.slice(outDir.length + 1)) : undefined);
+}
+
+/** Joins a relative path onto a project directory and normalises it. Undefined when it climbs above the project root. */
+function joinRel(dir: string, spec: string): string | undefined {
+  const parts: string[] = [];
+  for (const seg of [dir, spec].join("/").split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg !== "..") {
+      parts.push(seg);
+    } else if (parts.length > 0) {
+      parts.pop();
+    } else {
+      return undefined;
+    }
+  }
+  return parts.join("/");
+}
+
+/**
+ * The project paths a normalised path may name, in order: its source name first (`w.js` is `w.ts`), then the path
+ * itself, then with each extension and as an index file.
+ */
+function candidatesAt(base: string): string[] {
+  if (base === "") return [];
+  const out = new Set<string>();
+  for (const [output, source] of SOURCE_FOR_OUTPUT) {
+    if (base.endsWith(output)) out.add(base.slice(0, -output.length) + source);
+  }
+  out.add(base);
+  for (const e of [".ts", ".tsx", ".d.ts", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"]) {
+    out.add(`${base}${e}`);
+    out.add(`${base}/index${e}`);
+  }
+  return [...out];
+}
+
+/**
+ * The nearest directory, from a file's own up to the root, that holds a package.json. Each manifest it checks is
+ * recorded in `tried`, because creating one can change the answer.
+ */
+function nearestPackageDir(project: Project, rel: string, tried: string[]): string {
+  let dir = dirOf(rel);
+  for (;;) {
+    const manifest = joinPath(dir, "package.json");
+    tried.push(manifest);
+    if (existsSync(join(project.root, manifest))) return dir;
+    if (dir === "") return "";
+    dir = dirOf(dir);
+  }
+}
+
+/** Where a script path resolves, and how sure that is. `tried` lists every candidate considered, for dependencies. */
+interface Resolution {
+  to?: string;
+  confidence?: Confidence;
+  tried: string[];
+}
+
+/**
+ * Resolves a script path to a project file. A `file` path is tried from its file's directory: exact. A `cwd` path
+ * is tried from the nearest package directory, then from the project root: heuristic. When neither names a project
+ * file, each path is mapped from the output directory back to the source directory: inferred.
+ */
+function resolveScript(project: Project, rel: string, script: ScriptPath): Resolution {
+  const tried: string[] = [];
+  const bases: { dir: string; confidence: Confidence }[] = [];
+  if (script.base === "file") {
+    bases.push({ dir: dirOf(rel), confidence: "exact" });
+  } else {
+    const pkg = nearestPackageDir(project, rel, tried);
+    bases.push({ dir: pkg, confidence: "heuristic" });
+    if (pkg !== "") bases.push({ dir: "", confidence: "heuristic" });
+  }
+  const paths = bases.flatMap(({ dir, confidence }) => {
+    const at = joinRel(dir, script.path);
+    return at === undefined ? [] : [{ at, confidence }];
+  });
+  const plain = paths.map(({ at, confidence }) => ({ confidence, names: candidatesAt(at) }));
+  const mapped = paths.flatMap(({ at }) => {
+    const source = project.mapOutput(at);
+    return source === undefined ? [] : [{ confidence: "inferred" as const, names: candidatesAt(source) }];
+  });
+  // Every candidate is recorded, so that creating any of them re-extracts the file. The first hit in order wins.
+  for (const group of [...plain, ...mapped]) tried.push(...group.names);
+  for (const group of [...plain, ...mapped]) {
+    const hit = group.names.find((name) => project.rels.has(name));
+    if (hit !== undefined) return { to: hit, confidence: group.confidence, tried };
+  }
+  return { tried };
+}
+
+/** The expression inside any parentheses around it. */
+function unwrap(e: ts.Expression): ts.Expression {
+  let inner = e;
+  while (ts.isParenthesizedExpression(inner)) inner = inner.expression;
+  return inner;
 }
 
 function pos(sf: ts.SourceFile, offset: number): [number, number] {
@@ -264,19 +411,14 @@ export function emitFile(project: Project, rel: string): IRBatch {
   };
 
   /**
-   * The project file a spawn's script path names. Undefined for a path that is not relative, or that names no
-   * project file. When none matches, every candidate becomes a dependency, so creating one re-extracts this file.
+   * The project file a spawn's script names, with the confidence of that resolution. Every candidate the resolution
+   * considers becomes a dependency, so creating one re-extracts this file.
    */
-  const scriptTarget = (spec: string | undefined): string | undefined => {
-    if (spec === undefined || !(spec.startsWith("./") || spec.startsWith("../"))) return undefined;
-    const candidates = importCandidates(rel, spec);
-    const hit = candidates.find((c) => project.rels.has(c));
-    if (hit !== undefined) {
-      dependOn(hit);
-    } else {
-      for (const c of candidates) deps.add(c);
-    }
-    return hit;
+  const scriptTarget = (script: ScriptPath | undefined): { to: string; confidence: Confidence } | undefined => {
+    if (script === undefined) return undefined;
+    const found = resolveScript(project, rel, script);
+    for (const name of found.tried) dependOn(name);
+    return found.to !== undefined && found.confidence !== undefined ? { to: found.to, confidence: found.confidence } : undefined;
   };
 
   const emitModule = (from: string, spec: string, specNode: ts.Node, typeOnly: boolean, dynamic: boolean, kind: "packaging.import" | "packaging.re-export") => {
@@ -323,10 +465,15 @@ export function emitFile(project: Project, rel: string): IRBatch {
             qualifiedName: decl.qname,
             async: decl.entity.async,
             exported: decl.entity.exported,
+            ...(decl.entity.anonymous ? { anonymous: true } : {}),
           },
           span,
           provenance: PROV,
         });
+        if (decl.entity.anonymous) {
+          // The function is made here, so its creator reaches whatever it calls: a closure edge from the enclosing function.
+          pushEdge({ from: fn, to: decl.id, facet: "calls", kind: "calls.reference", attrs: { how: "closure" }, span, provenance: PROV });
+        }
         nextFn = decl.id;
         if (decl.entity.async) {
           push({
@@ -383,10 +530,16 @@ export function emitFile(project: Project, rel: string): IRBatch {
       dependOn(target.rel);
     };
 
-    /** The project function a callback names, when it is an identifier or property reference. An inline function names none. */
+    /** The project function a callback names: an inline function, or an identifier or property reference to one. */
     const callbackTarget = (arg: ts.Expression | undefined): Decl | undefined => {
-      if (!arg || !(ts.isIdentifier(arg) || ts.isPropertyAccessExpression(arg))) return undefined;
-      const target = declOf(project, project.checker.getSymbolAtLocation(nameOf(arg)));
+      if (!arg) return undefined;
+      const e = unwrap(arg);
+      if (ts.isArrowFunction(e) || ts.isFunctionExpression(e)) {
+        const inline = project.decls.get(e);
+        return inline?.entity.type === "function" ? inline : undefined;
+      }
+      if (!(ts.isIdentifier(e) || ts.isPropertyAccessExpression(e))) return undefined;
+      const target = declOf(project, project.checker.getSymbolAtLocation(nameOf(e)));
       return target?.entity.type === "function" ? target : undefined;
     };
 
@@ -396,6 +549,11 @@ export function emitFile(project: Project, rel: string): IRBatch {
       // An async function runs as a task of its own, so calling it hands it work whether or not the call is awaited.
       if (target?.entity.type === "function" && target.entity.async) {
         dispatch(target, isAwaited(call) ? "await" : "start", call);
+      }
+      // An async function expression called on the spot (an async IIFE) is a task of its own, the same way.
+      const iife = project.decls.get(unwrap(call.expression));
+      if (iife?.entity.type === "function" && iife.entity.async) {
+        dispatch(iife, isAwaited(call) ? "await" : "start", call);
       }
       // A callee the project declares is that declaration, not the runtime's scheduler, so it schedules nothing.
       const sched = matchSchedule(call, imports);
@@ -448,10 +606,9 @@ export function emitFile(project: Project, rel: string): IRBatch {
             provenance: PROV,
           });
           // fork runs a script rather than a command, so a project file it names is the code the process runs.
-          const forked = effect.attrs.api === "child_process.fork" && typeof effect.attrs.command === "string" ? effect.attrs.command : undefined;
-          const to = scriptTarget(forked);
-          if (to !== undefined) {
-            pushEdge({ from: spawnId, to, facet: "concurrency", kind: "concurrency.spawns", attrs: { how: "process" }, span: spanOf(rel, sf, call), provenance: PROV });
+          const forked = effect.attrs.api === "child_process.fork" ? scriptTarget(scriptPath(call.arguments[0], imports)) : undefined;
+          if (forked !== undefined) {
+            pushEdge({ from: spawnId, to: forked.to, facet: "concurrency", kind: "concurrency.spawns", attrs: { how: "process" }, span: spanOf(rel, sf, call), provenance: { frontend: FRONTEND_ID, confidence: forked.confidence } });
           }
         }
       }
@@ -536,9 +693,9 @@ export function emitFile(project: Project, rel: string): IRBatch {
           span: spanOf(rel, sf, node),
           provenance: PROV,
         });
-        const to = scriptTarget(worker.script);
-        if (to !== undefined) {
-          pushEdge({ from: spawnId, to, facet: "concurrency", kind: "concurrency.spawns", attrs: { how: "thread" }, span: spanOf(rel, sf, node), provenance: PROV });
+        const script = scriptTarget(worker.script);
+        if (script !== undefined) {
+          pushEdge({ from: spawnId, to: script.to, facet: "concurrency", kind: "concurrency.spawns", attrs: { how: "thread" }, span: spanOf(rel, sf, node), provenance: { frontend: FRONTEND_ID, confidence: script.confidence } });
         }
       }
       const ctor = callableOf(project, declOf(project, project.checker.getSymbolAtLocation(nameOf(node.expression))));
@@ -608,26 +765,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
 
 /** Paths a relative import could resolve to. Creating one of them re-extracts the importer. */
 export function importCandidates(fromFile: string, specifier: string): string[] {
-  const dir = fromFile.includes("/") ? fromFile.slice(0, fromFile.lastIndexOf("/")) : "";
-  const joined = [dir, specifier].filter((p) => p !== "").join("/");
-  const parts: string[] = [];
-  for (const seg of joined.split("/")) {
-    if (seg === "" || seg === ".") continue;
-    if (seg === "..") parts.pop();
-    else parts.push(seg);
-  }
-  const base = parts.join("/");
-  const exts = [".ts", ".tsx", ".d.ts", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"];
-  // The source name comes before the literal path, because TypeScript resolves `./w.js` to `w.ts` first.
-  const out = new Set<string>();
-  for (const [output, source] of SOURCE_FOR_OUTPUT) {
-    if (base.endsWith(output)) out.add(base.slice(0, -output.length) + source);
-  }
-  out.add(base);
-  for (const e of exts) {
-    out.add(`${base}${e}`);
-    out.add(`${base}/index${e}`);
-  }
-  return [...out];
+  const at = joinRel(dirOf(fromFile), specifier);
+  return at === undefined ? [] : candidatesAt(at);
 }
 

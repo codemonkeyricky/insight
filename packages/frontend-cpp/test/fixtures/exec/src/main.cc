@@ -15,7 +15,7 @@ void* launch(Foo& foo) {
   auto fut = std::async(std::launch::async, square, 5);
   pthread_t tid;
   pthread_create(&tid, nullptr, pthread_body, nullptr);
-  std::thread lambda([] { worker(3); });             // lambda: no edge
+  std::thread lambda([] { worker(3); });             // inline lambda: edge to the lambda
   std::thread gone(unknown_fn);                      // not defined in the project: no edge
   std::thread shared(drain);                         // two definitions: candidates
   return nullptr;
