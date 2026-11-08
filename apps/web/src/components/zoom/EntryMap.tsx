@@ -1,7 +1,7 @@
 // The entry view of the flow tab: the functions that nothing in a scope calls, as boxes in file frames, with the ladder
 // of the scope's ancestors above them. A plain grid, so it needs no camera or layout worker. Each box links to its
 // function, and an open function's chart and detail sit below the grid.
-import { useEffect, useMemo, useState, type KeyboardEvent as KeyEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as KeyEvent } from "react";
 import {
   ZOOM_SIZE,
   entrySummary,
@@ -40,8 +40,8 @@ interface Props {
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
 const rungName = (name: string) => (name === "project" ? "Project" : name);
-/** The file path, cut from the front when it would not fit in its frame's header. */
-const shortPath = (file: string) => (file.length > 44 ? `…${file.slice(-43)}` : file);
+/** The file path, cut from the front when it would not fit in its frame's header. A 260 px frame holds about 34 wide characters. */
+const shortPath = (file: string) => (file.length > 34 ? `…${file.slice(-33)}` : file);
 const shortName = (name: string) => (name.length > 26 ? `${name.slice(0, 25)}…` : name);
 
 const countsOf = (flow: ScopeFlow | undefined): EntryCount | undefined =>
@@ -67,6 +67,17 @@ export function EntryMap({ id, store, scope, fn }: Props) {
   const [includeTests, setIncludeTests] = useState(false);
   const [chain, setChain] = useState<{ scope: string; error?: string }>();
   const [chart, setChart] = useState<ChartState>();
+  // The width the grid wraps at: the width of this view, so the frames fit it instead of running off the right edge.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState<number>();
+
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setWidth(el.clientWidth));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   // The scope's flow and each ancestor's, for the grid and the ladder counts.
   useEffect(() => {
@@ -103,7 +114,9 @@ export function EntryMap({ id, store, scope, fn }: Props) {
 
   const ready = chain?.scope === scope ? chain : undefined;
   const flow = ready !== undefined && ready.error === undefined ? store.flowOf(scope) : undefined;
-  const layout = useMemo(() => (flow ? layoutEntries(flow, { includeTests }) : undefined), [flow, includeTests]);
+  // A frame wider than the wrap takes a row to itself, so the narrowest wrap is only a floor against a near-zero width.
+  const wrap = width === undefined ? undefined : Math.max(260, Math.floor(width) - 4);
+  const layout = useMemo(() => (flow ? layoutEntries(flow, { includeTests, wrap }) : undefined), [flow, includeTests, wrap]);
   const summary = flow ? entrySummary(flow, includeTests) : undefined;
   const rungs = ladderOf(scope, (s) => countsOf(store.flowOf(s)));
   const fromOutside = flow?.unreferenced.some((f) => f.id === fn && f.calledFromOutside) ?? false;
@@ -119,7 +132,7 @@ export function EntryMap({ id, store, scope, fn }: Props) {
   };
 
   return (
-    <div className="em" onKeyDown={onKey}>
+    <div className="em" ref={rootRef} onKeyDown={onKey}>
       <nav className="em-ladder" aria-label="Scopes from the project down to this one">
         <ol>
           {rungs.map((r) => (

@@ -88,14 +88,17 @@ modes keep the scope and function.
 - Escape closes the open function first, and goes up one scope when none is open.
 - The entry view draws no edges. Two unreferenced functions in one scope cannot call each other, since the caller
   would make the callee referenced.
+- The grid wraps at the measured width of the view, so the frames stay on screen. A frame wider than the view, such as
+  a file with several columns of boxes, takes a row to itself and scrolls sideways inside the grid. A file path longer
+  than 34 characters is cut from the front, with an ellipsis, and its full path is the frame's tooltip.
 
 `FlowView` owns one `ZoomStore` and passes it to both modes, so a flow loaded for one is not loaded again for the
 other. The hierarchy mode writes `mode=hierarchy` into every URL it sets.
 
 ## Verification
 
-- `pnpm -r build` and `pnpm -r test` pass. `@insight/flow` has 77 tests across 4 files, and `@insight/web` has
-  54 tests across 4 files. The other packages pass too, with no failures.
+- `pnpm -r build` and `pnpm -r test` pass. `@insight/flow` has 101 tests across 6 files, and `@insight/web` has
+  55 tests across 4 files. The other packages pass too, with no failures.
 - `pnpm --filter @insight/web build:demo` builds. The demo is served from `apps/web/dist-demo` on a static port.
 - A playwright-core script drove the demo through real wheel, drag and keyboard input. It checked, with no console or
   page errors:
@@ -106,6 +109,10 @@ other. The hierarchy mode writes `mode=hierarchy` into every URL it sets.
   - the minimap and breadcrumb are clickable;
   - the page has no horizontal scroll at phone width.
 - Screenshots were checked for each level, the minimap and the breadcrumb.
+- The entry view was checked the same way at the file, folder, package and project scopes: the ladder counts and
+  boxes match each scope's flow, a box opens its chart and Escape closes it, the tests toggle adds the test boxes, the
+  grid fits its stage, and the phone width has no page overflow. A check of the per-function monotone rule over the
+  captured demo found no problems.
 
 ## Timings
 
