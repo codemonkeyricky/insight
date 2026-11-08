@@ -8,6 +8,7 @@
     "CallsDynamicDispatch": { "type": "object", "properties": { "receiver": { "type": "string" }, "method": { "type": "string" } } },
     "CallsCallbackRegistration": { "type": "object", "properties": { "api": { "type": "string" } } },
     "CallsCall": { "type": "object", "properties": { "callee": { "type": "string" } } },
+    "CallsReference": { "type": "object", "properties": { "how": { "enum": ["new", "jsx", "value"] } } },
     "CallsContainsCall": { "type": "object" }
   }
 }

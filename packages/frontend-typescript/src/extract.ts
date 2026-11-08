@@ -19,6 +19,7 @@ interface Decl {
   rel: string;
   qname: string;
   entity: Entity;
+  node: ts.Node;
 }
 
 /** A parsed set of project files, with a checker and every declaration that can be a call target. */
@@ -77,7 +78,7 @@ function assignDecls(rel: string, sf: ts.SourceFile, out: Map<ts.Node, Decl>): v
       const n = (counts.get(qname) ?? 0) + 1;
       counts.set(qname, n);
       const id = n === 1 ? `${rel}#${qname}` : `${rel}#${qname}~${n}`;
-      out.set(node, { id, rel, qname, entity });
+      out.set(node, { id, rel, qname, entity, node });
       next = { qname };
     }
     ts.forEachChild(node, (child) => {
@@ -164,6 +165,62 @@ function pos(sf: ts.SourceFile, offset: number): [number, number] {
 function spanOf(rel: string, sf: ts.SourceFile, node: ts.Node): Span {
   return { file: rel, start: pos(sf, node.getStart(sf)), end: pos(sf, node.getEnd()) };
 }
+
+/** The name node of a callee or tag: `b` for `a.b`, the node itself otherwise. */
+const nameOf = (e: ts.Expression): ts.Node => (ts.isPropertyAccessExpression(e) ? e.name : e);
+
+/** The declaration a symbol names, following an import alias. Undefined when the project does not declare it. */
+function declOf(project: Project, sym: ts.Symbol | undefined): Decl | undefined {
+  let resolved = sym;
+  if (resolved && resolved.flags & ts.SymbolFlags.Alias) {
+    try {
+      resolved = project.checker.getAliasedSymbol(resolved);
+    } catch {
+      // an unresolvable alias simply has no target
+    }
+  }
+  const declNode = resolved?.valueDeclaration ?? resolved?.declarations?.[0];
+  return declNode ? project.decls.get(declNode) : undefined;
+}
+
+/** The function that `new` runs: the function itself, or a class's own constructor. A class without one has none. */
+function callableOf(project: Project, decl: Decl | undefined): Decl | undefined {
+  if (!decl) return undefined;
+  if (decl.entity.type === "function") return decl;
+  if (decl.entity.type === "type" && decl.entity.typeKind === "class") {
+    const ctor = (decl.node as ts.ClassDeclaration).members.find((m) => ts.isConstructorDeclaration(m) && m.body !== undefined);
+    return ctor ? project.decls.get(ctor) : undefined;
+  }
+  return undefined;
+}
+
+/** The outermost property access that `id` is the name of: `a.b` for the `b` in `a.b.c`. */
+function headOf(id: ts.Node): ts.Node {
+  let e = id;
+  while (ts.isPropertyAccessExpression(e.parent) && e.parent.name === e) e = e.parent;
+  return e;
+}
+
+/**
+ * True when an identifier names something rather than uses it: a declaration, import or export name,
+ * or the callee of a call or `new`, or a JSX tag. Those are recorded by other edges or not at all.
+ */
+function isNonUse(id: ts.Identifier): boolean {
+  const parent = id.parent;
+  if (ts.isShorthandPropertyAssignment(parent)) return false;
+  if (ts.isImportSpecifier(parent) || ts.isImportClause(parent) || ts.isNamespaceImport(parent) || ts.isImportEqualsDeclaration(parent) || ts.isExportSpecifier(parent)) {
+    return true;
+  }
+  if (!ts.isPropertyAccessExpression(parent) && (parent as ts.NamedDeclaration).name === id) return true;
+  const head = headOf(id);
+  const up = head.parent;
+  if (ts.isCallExpression(up) || ts.isNewExpression(up)) return up.expression === head;
+  if (ts.isJsxOpeningElement(up) || ts.isJsxSelfClosingElement(up) || ts.isJsxClosingElement(up)) return up.tagName === head;
+  return false;
+}
+
+/** JSX tags starting with a lowercase letter, or containing a dash, are host elements, not components. */
+const isIntrinsicTag = (name: string): boolean => /^[a-z]/.test(name) || name.includes("-");
 
 /** Records and dependencies for one file. */
 export function emitFile(project: Project, rel: string): IRBatch {
@@ -262,20 +319,24 @@ export function emitFile(project: Project, rel: string): IRBatch {
       nextContainer = decl.id;
     }
 
+    /** A function that `fn` refers to without calling it: constructed, rendered as JSX, or used as a value. */
+    const reference = (target: Decl, how: "new" | "jsx" | "value", at: ts.Node) => {
+      pushEdge({
+        from: fn,
+        to: target.id,
+        facet: "calls",
+        kind: "calls.reference",
+        attrs: { how },
+        span: spanOf(rel, sf, at),
+        provenance: PROV,
+      });
+      dependOn(target.rel);
+    };
+
     const emitCall = (call: ts.CallExpression) => {
       const callee = call.expression;
-      const nameNode = ts.isPropertyAccessExpression(callee) ? callee.name : callee;
-      let sym = project.checker.getSymbolAtLocation(nameNode);
-      if (sym && sym.flags & ts.SymbolFlags.Alias) {
-        try {
-          sym = project.checker.getAliasedSymbol(sym);
-        } catch {
-          // an unresolvable alias simply has no target
-        }
-      }
-      const declNode = sym?.valueDeclaration ?? sym?.declarations?.[0];
-      const target = declNode ? project.decls.get(declNode) : undefined;
-      if (target && target.entity.type === "function") {
+      const target = declOf(project, project.checker.getSymbolAtLocation(nameOf(callee)));
+      if (target?.entity.type === "function") {
         pushEdge({
           from: fn,
           to: target.id,
@@ -392,6 +453,24 @@ export function emitFile(project: Project, rel: string): IRBatch {
           provenance: PROV,
         });
       }
+      const ctor = callableOf(project, declOf(project, project.checker.getSymbolAtLocation(nameOf(node.expression))));
+      if (ctor) reference(ctor, "new", node.expression);
+    }
+
+    if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
+      const tag = node.tagName;
+      if ((ts.isIdentifier(tag) && !isIntrinsicTag(tag.text)) || ts.isPropertyAccessExpression(tag)) {
+        const component = callableOf(project, declOf(project, project.checker.getSymbolAtLocation(nameOf(tag))));
+        if (component) reference(component, "jsx", tag);
+      }
+    }
+
+    if (ts.isIdentifier(node) && !isNonUse(node)) {
+      const sym = ts.isShorthandPropertyAssignment(node.parent)
+        ? project.checker.getShorthandAssignmentValueSymbol(node.parent)
+        : project.checker.getSymbolAtLocation(node);
+      const target = declOf(project, sym);
+      if (target?.entity.type === "function") reference(target, "value", node);
     }
 
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {

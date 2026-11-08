@@ -56,9 +56,10 @@ function reachFrom(start: string, edges: ReadonlyMap<string, readonly string[]>)
 }
 
 /**
- * The functions that no function in the scope calls, each with its reach. `calledInScope` maps a callee to its callers
- * in the scope, where module-level code counts as a caller; a self-call is not in it. `calls` are the scope's call rows,
- * from which the reach graph is built: in-scope, function to function, self-calls left out.
+ * The functions that no function in the scope calls or refers to, each with its reach. `calledInScope` maps a callee to
+ * its callers in the scope, where module-level code counts as a caller; a self-call or self-reference is not in it.
+ * `calls` are the scope's call and reference rows, from which the reach graph is built: in-scope, function to function,
+ * self-edges left out.
  */
 function unreferencedOf(
   functions: readonly ScopeFunction[],
@@ -130,7 +131,11 @@ export function summarizeScope(nodes: Iterable<IRNode>, edges: Iterable<IREdge>,
   }
 
   const callEdges: IREdge[] = [];
-  for (const e of edges) if (e.kind === "calls.call") callEdges.push(e);
+  const refEdges: IREdge[] = [];
+  for (const e of edges) {
+    if (e.kind === "calls.call") callEdges.push(e);
+    else if (e.kind === "calls.reference") refEdges.push(e);
+  }
 
   // A caller is in scope when it is a local function, or a file in scope (module-level code).
   const inScope = (id: string) => !stubs.has(id) && (fnNodes.has(id) || fileSet.has(id));
@@ -171,6 +176,24 @@ export function summarizeScope(nodes: Iterable<IRNode>, edges: Iterable<IREdge>,
       const row = rows.get(key);
       if (row) row.count++;
       else rows.set(key, { from: e.from, to: t, count: 1, external: !local, ...(candidate ? { candidate: true as const } : {}) });
+    }
+  }
+
+  // A reference makes its target referenced without a call. It counts for unreferenced, entries and reach, but adds no call row.
+  const referenceRows: ScopeCall[] = [];
+  for (const e of refEdges) {
+    const { nodes: direct, candidates } = edgeTargets(e);
+    const targets = direct.length > 0 ? direct : candidates;
+    if (!inScope(e.from)) {
+      for (const t of targets) if (fnNodes.has(t)) calledFromOutside.add(t);
+      continue;
+    }
+    for (const t of targets) {
+      if (!fnNodes.has(t) || t === e.from) continue;
+      const set = calledInScope.get(t) ?? new Set<string>();
+      set.add(e.from);
+      calledInScope.set(t, set);
+      referenceRows.push({ from: e.from, to: t, count: 1, external: false });
     }
   }
 
@@ -221,7 +244,7 @@ export function summarizeScope(nodes: Iterable<IRNode>, edges: Iterable<IREdge>,
   const entries = granularity === "functions" ? entryFunctions(functions, calledInScope, calledFromOutside) : entryFiles(fileList, calledInScope, calledFromOutside, fileOf);
 
   // Built from the function rows, not the payload rows, so it holds at every granularity.
-  const unreferenced = unreferencedOf(functions, calledInScope, rows.values());
+  const unreferenced = unreferencedOf(functions, calledInScope, [...rows.values(), ...referenceRows]);
   const unreferencedTests = unreferenced.filter((f) => f.test).length;
   const stats: ScopeFlowStats = {
     functions: functions.length,

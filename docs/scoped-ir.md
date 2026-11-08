@@ -166,7 +166,8 @@ Granularity:
   path.
 
 Entries are the roots of the call graph: the functions (or, in `files` granularity, the files) with
-no caller in the scope and no caller outside it.
+no caller or referrer in the scope and no caller or referrer outside it. A referrer is a
+`calls.reference` edge (see below).
 
 Module-level code, meaning statements that run when a module loads, is not a function row. Its calls
 have the file path as `from`, and its counts go to the file's row in `files`.
@@ -273,17 +274,22 @@ example. The shape is exact.
 `functions` is empty in `files` granularity. `calledFromOutside` appears only when it is true. A
 `span` is `{ file, start: [line, column], end: [line, column] }`, with 0-based positions.
 
-`unreferenced` lists the functions that no function in the scope calls, at either granularity. It is
-the entry set of the scope's Flow view. A function is unreferenced in a scope `S` when no function
-inside `S` calls it:
+`unreferenced` lists the functions that no function in the scope calls or refers to, at either
+granularity. It is the entry set of the scope's Flow view. A function is unreferenced in a scope `S`
+when no function inside `S` calls it or refers to it:
 
 - Calls are the `calls.call` edges, resolved the way `calls` resolves them. A call with several
   possible targets references each candidate.
-- A self-call does not count. Module-level code in a file in `S` counts as a caller.
+- References are the `calls.reference` edges that the TypeScript frontend records for a function
+  used without a call: constructed with `new` (its constructor), rendered as a JSX element, or used
+  as a value, such as a callback, an exported name read through an import, or a decorator. A
+  reference is not a call row, so it never appears in `calls`.
+- A self-call or self-reference does not count. Module-level code in a file in `S` counts as a
+  caller or referrer.
 - A caller outside `S` does not count. Such a function is still unreferenced and is flagged with
   `calledFromOutside`; it resolves when the scope widens.
-- `reach` is the number of distinct functions it reaches through calls inside `S`, not counting
-  itself. Cycles are safe.
+- `reach` is the number of distinct functions it reaches through calls and references inside `S`,
+  not counting itself. Cycles are safe.
 - A function defined in a test or fixture file is marked `test: true`. Test files are a directory
   named `test`, `tests`, `__tests__` or `fixtures` on the path, or a file named `*.test.*` or
   `*.spec.*`. The stats count them apart: `unreferenced` and `unreferencedOutside` leave them out,
@@ -292,7 +298,8 @@ inside `S` calls it:
 Widening a scope can only remove functions from the unreferenced set: a function unreferenced in a
 wider scope is unreferenced in every narrower scope that holds it, because each caller inside the
 narrower scope is also inside the wider one. The count for a scope can still rise when the scope
-widens, because the wider scope holds more functions. `entries` is unchanged.
+widens, because the wider scope holds more functions. `entries` follows the same rule, so a referenced
+function is never an entry.
 
 The result is kept in memory for up to 32 scopes, keyed by snapshot and scope. A snapshot does not
 change, so a kept result is never stale. The errors are the same as the lens routes.
