@@ -98,8 +98,36 @@ export function matchEnvRead(node: ts.PropertyAccessExpression, imports: Map<str
   return node.name.text;
 }
 
+export interface WorkerMatch {
+  api: string;
+  /** The spawn node's target, as it has always been: the literal path, or <dynamic>. */
+  target: string;
+  /** The path the worker runs, when it names one relative to the file. The caller resolves it. */
+  script?: string;
+}
+
+const isImportMetaUrl = (e: ts.Expression): boolean =>
+  ts.isPropertyAccessExpression(e) &&
+  e.name.text === "url" &&
+  ts.isMetaProperty(e.expression) &&
+  e.expression.keywordToken === ts.SyntaxKind.ImportKeyword;
+
+/**
+ * The path a Worker argument names: a string literal, or the first argument of
+ * `new URL("./w.js", import.meta.url)`. Anything else, such as a variable or a URL with another base, names none.
+ */
+function workerScript(arg: ts.Expression | undefined): string | undefined {
+  if (!arg) return undefined;
+  if (ts.isStringLiteralLike(arg)) return arg.text;
+  if (ts.isNewExpression(arg) && ts.isIdentifier(arg.expression) && arg.expression.text === "URL") {
+    const [path, base] = arg.arguments ?? [];
+    if (path && ts.isStringLiteralLike(path) && base && isImportMetaUrl(base)) return path.text;
+  }
+  return undefined;
+}
+
 /** `new Worker(file)` from worker_threads, as a named or namespace import. Returns the script it runs. */
-export function matchWorker(node: ts.NewExpression, imports: Map<string, ImportBinding>): { api: string; target: string } | undefined {
+export function matchWorker(node: ts.NewExpression, imports: Map<string, ImportBinding>): WorkerMatch | undefined {
   const callee = node.expression;
   let isWorker = false;
   if (ts.isIdentifier(callee)) {
@@ -111,5 +139,40 @@ export function matchWorker(node: ts.NewExpression, imports: Map<string, ImportB
   }
   if (!isWorker) return undefined;
   const first = node.arguments?.[0];
-  return { api: "worker_threads.Worker", target: first && ts.isStringLiteralLike(first) ? first.text : DYNAMIC };
+  return {
+    api: "worker_threads.Worker",
+    target: first && ts.isStringLiteralLike(first) ? first.text : DYNAMIC,
+    script: workerScript(first),
+  };
+}
+
+/** A call that hands a callback to the runtime to run later. `callbacks` lists the argument positions that may hold one. */
+export interface ScheduleMatch {
+  how: "timer" | "microtask" | "callback";
+  callbacks: number[];
+}
+
+const TIMER_GLOBALS = new Set(["setTimeout", "setInterval", "setImmediate"]);
+
+/**
+ * Matches a call that schedules a callback: the timer and microtask globals, `process.nextTick`, and the
+ * Promise methods `then`, `catch` and `finally`. A name the file imports is not the global, so it does not match.
+ */
+export function matchSchedule(call: ts.CallExpression, imports: Map<string, ImportBinding>): ScheduleMatch | undefined {
+  const callee = call.expression;
+  if (ts.isIdentifier(callee)) {
+    if (imports.has(callee.text)) return undefined;
+    if (TIMER_GLOBALS.has(callee.text)) return { how: "timer", callbacks: [0] };
+    if (callee.text === "queueMicrotask") return { how: "microtask", callbacks: [0] };
+    return undefined;
+  }
+  if (!ts.isPropertyAccessExpression(callee)) return undefined;
+  const name = callee.name.text;
+  // then takes onFulfilled and onRejected; catch and finally take one callback.
+  if (name === "then") return { how: "callback", callbacks: [0, 1] };
+  if (name === "catch" || name === "finally") return { how: "callback", callbacks: [0] };
+  if (name === "nextTick" && ts.isIdentifier(callee.expression) && callee.expression.text === "process" && !imports.has("process")) {
+    return { how: "microtask", callbacks: [0] };
+  }
+  return undefined;
 }

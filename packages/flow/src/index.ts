@@ -9,6 +9,7 @@ export { SCOPE_FUNCTION_LIMIT, isNoisePath, summarizeScope } from "./scope.js";
 export * from "./scope-map.js";
 export * from "./zoom-layout.js";
 export * from "./entry-map.js";
+export * from "./exec-model.js";
 
 /**
  * The control-flow chart of every function in one source file, rebuilt from the IR.

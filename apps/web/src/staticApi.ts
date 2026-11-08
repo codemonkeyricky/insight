@@ -4,6 +4,7 @@ import { ApiError } from "./apiError";
 import type {
   Annotation,
   Compare,
+  ExecModel,
   FileEntry,
   FileFlow,
   FileFlowSummary,
@@ -23,7 +24,7 @@ import type {
   SourceSlice,
   TargetType,
 } from "./api";
-import { scopeKey, scopeProblem } from "./scopeKey";
+import { canonicalScope, scopeKey, scopeProblem } from "./scopeKey";
 
 interface RawNode {
   id: string;
@@ -137,6 +138,34 @@ function recordOf(row: ScopeLensRow): LensRecord {
   if (row.status === "ok") return { id: row.id, title: row.title, status: "ok", reused: false, result: { findings: [], views: [], metrics: {} } };
   if (row.status === "unavailable" || row.status === "error") return { id: row.id, title: row.title, status: row.status, reason: row.reason, reused: false };
   return { id: row.id, title: row.title, status: "unavailable", reason: "Not captured for this scope in the demo.", reused: false };
+}
+
+/**
+ * The exec model of a scope with no functions, as execModel answers it. The main thread is always listed, so
+ * the empty model has one thread with nothing in it. The web build cannot call execModel, so this is written out.
+ */
+function emptyScopeExec(scope: string): ExecModel {
+  return {
+    scope: canonicalScope(scope),
+    truncated: false,
+    functions: [],
+    threads: [{ id: "main", kind: "main", roots: [], reach: 0, reached: [], coroutines: [] }],
+    dispatches: [],
+    stats: {
+      threads: 1,
+      spawns: 0,
+      resolved: 0,
+      outside: 0,
+      unresolved: 0,
+      candidates: 0,
+      coroutines: 0,
+      dispatches: 0,
+      functionsInScope: 0,
+      functionsThreaded: 0,
+      functionsUnthreaded: 0,
+      functionsListed: 0,
+    },
+  };
 }
 
 /** The flow of a scope with no functions. The capture writes no flow file for such a scope. */
@@ -286,6 +315,13 @@ export const staticApi = {
     const problem = scopeProblem(scope);
     if (problem) throw new ApiError(400, problem);
     return (await scopeFile<ScopeFlow>(scope, "flow.json")) ?? EMPTY_SCOPE_FLOW;
+  },
+  /** A scope's execution model as the capture saved it. A scope with no functions has no file, which is the empty model. */
+  getScopeExec: async (id: string, scope: string): Promise<ExecModel> => {
+    await checkProject(id);
+    const problem = scopeProblem(scope);
+    if (problem) throw new ApiError(400, problem);
+    return (await scopeFile<ExecModel>(scope, "exec.json")) ?? emptyScopeExec(scope);
   },
   // Comparing commits and keeping review decisions and notes need a git history and a writable
   // store, which the static demo does not have. The tabs are hidden in demo mode; these keep the

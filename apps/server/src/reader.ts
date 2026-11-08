@@ -19,7 +19,7 @@ import {
   type LoadedPlugins,
   type ScopeStats,
 } from "@insight/core";
-import { buildFileFlow, summarizeFlows, summarizeScope, type FileFlow, type FileFlowSummary, type ScopeFlow } from "@insight/flow";
+import { buildFileFlow, execModel, summarizeFlows, summarizeScope, type ExecModel, type FileFlow, type FileFlowSummary, type ScopeFlow } from "@insight/flow";
 import { edgeTargets, isExternal, type ProjectRoot } from "@insight/sdk";
 import type { IREdge, IRDocument, IRFinding, IRNode, IRRecord, NodeId } from "@insight/ir";
 import { statSync } from "node:fs";
@@ -390,6 +390,35 @@ export function scopeFlowOf(root: string, snapshot: string, path: string): Scope
   const view: ScopeFlowView = { scope, kind, flow: summarizeScope(cut.doc.nodes, cut.doc.edges, files) };
   scopeFlows.set(key, view);
   if (scopeFlows.size > SCOPE_FLOW_LIMIT) scopeFlows.delete(scopeFlows.keys().next().value as string);
+  return view;
+}
+
+/** The execution model of one scope, and the scope it names. */
+export interface ScopeExecView {
+  scope: string;
+  kind: ScopeKind;
+  exec: ExecModel;
+}
+
+const SCOPE_EXEC_LIMIT = 32;
+const scopeExecs = new Map<string, ScopeExecView>();
+
+/**
+ * The execution model of a scope: its threads, coroutines and dispatches (see docs/exec-model.md). It reads the
+ * whole snapshot, not the cut, because a thread's reach follows calls out of the scope. A snapshot never changes,
+ * so each scope's model is kept until enough other scopes push it out.
+ */
+export function scopeExecOf(root: string, snapshot: string, path: string): ScopeExecView {
+  const scope = normalizeScope(path);
+  const key = `${root}\0${snapshot}\0${scope}`;
+  const hit = scopeExecs.get(key);
+  if (hit) return hit;
+  const snap = loadSnapshot(root, snapshot);
+  const kind = scopeKindOf(snap, scope);
+  if (!kind) throw new ProjectError(404, "no such scope");
+  const view: ScopeExecView = { scope, kind, exec: execModel([...snap.nodes.values()], snap.edges, scope) };
+  scopeExecs.set(key, view);
+  if (scopeExecs.size > SCOPE_EXEC_LIMIT) scopeExecs.delete(scopeExecs.keys().next().value as string);
   return view;
 }
 

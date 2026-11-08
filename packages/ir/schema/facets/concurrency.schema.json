@@ -11,6 +11,7 @@
     "ConcurrencyAwait": { "type": "object" },
     "ConcurrencyChannelSend": { "type": "object", "properties": { "channel": { "type": "string" } } },
     "ConcurrencyChannelRecv": { "type": "object", "properties": { "channel": { "type": "string" } } },
-    "ConcurrencySpawns": { "type": "object" }
+    "ConcurrencySpawns": { "type": "object", "properties": { "how": { "enum": ["thread", "process", "async"] } } },
+    "ConcurrencyDispatches": { "type": "object", "properties": { "how": { "enum": ["await", "start", "callback", "timer", "microtask"] } } }
   }
 }

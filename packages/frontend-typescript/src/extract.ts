@@ -3,7 +3,7 @@ import { join, relative, sep } from "node:path";
 import ts from "typescript";
 import type { IREdge, IRFinding, IRNode, IRRecord, NodeId, Provenance, Span, UnresolvedRef } from "@insight/ir";
 import type { IRBatch } from "@insight/sdk";
-import { importBindings, matchCall, matchEnvRead, matchWorker, type ImportBinding } from "./effects.js";
+import { importBindings, matchCall, matchEnvRead, matchSchedule, matchWorker, type ImportBinding } from "./effects.js";
 import { scriptKind } from "./digest.js";
 
 export const FRONTEND_ID = "frontend-typescript";
@@ -222,6 +222,26 @@ function isNonUse(id: ts.Identifier): boolean {
 /** JSX tags starting with a lowercase letter, or containing a dash, are host elements, not components. */
 const isIntrinsicTag = (name: string): boolean => /^[a-z]/.test(name) || name.includes("-");
 
+/** Whether a call's value is awaited, looking through parentheses and type assertions. */
+function isAwaited(call: ts.CallExpression): boolean {
+  let up: ts.Node = call;
+  while (ts.isParenthesizedExpression(up.parent) || ts.isAsExpression(up.parent) || ts.isNonNullExpression(up.parent)) {
+    up = up.parent;
+  }
+  return ts.isAwaitExpression(up.parent);
+}
+
+/** How a function hands work to another: awaited, started without waiting, or scheduled to run later. */
+type Dispatch = "await" | "start" | "callback" | "timer" | "microtask";
+
+/** Compiled output names its source, which TypeScript resolves to: `./w.js` is `w.ts` in the project. */
+const SOURCE_FOR_OUTPUT: [string, string][] = [
+  [".js", ".ts"],
+  [".jsx", ".tsx"],
+  [".mjs", ".mts"],
+  [".cjs", ".cts"],
+];
+
 /** Records and dependencies for one file. */
 export function emitFile(project: Project, rel: string): IRBatch {
   const sf = project.sourceFor(rel);
@@ -241,6 +261,22 @@ export function emitFile(project: Project, rel: string): IRBatch {
 
   const dependOn = (target: string) => {
     if (target !== rel) deps.add(target);
+  };
+
+  /**
+   * The project file a spawn's script path names. Undefined for a path that is not relative, or that names no
+   * project file. When none matches, every candidate becomes a dependency, so creating one re-extracts this file.
+   */
+  const scriptTarget = (spec: string | undefined): string | undefined => {
+    if (spec === undefined || !(spec.startsWith("./") || spec.startsWith("../"))) return undefined;
+    const candidates = importCandidates(rel, spec);
+    const hit = candidates.find((c) => project.rels.has(c));
+    if (hit !== undefined) {
+      dependOn(hit);
+    } else {
+      for (const c of candidates) deps.add(c);
+    }
+    return hit;
   };
 
   const emitModule = (from: string, spec: string, specNode: ts.Node, typeOnly: boolean, dynamic: boolean, kind: "packaging.import" | "packaging.re-export") => {
@@ -333,6 +369,46 @@ export function emitFile(project: Project, rel: string): IRBatch {
       dependOn(target.rel);
     };
 
+    /** A hand-off from the enclosing function to a project function. Each call site gets its own edge. */
+    const dispatch = (target: Decl, how: Dispatch, at: ts.Node) => {
+      pushEdge({
+        from: fn,
+        to: target.id,
+        facet: "concurrency",
+        kind: "concurrency.dispatches",
+        attrs: { how },
+        span: spanOf(rel, sf, at),
+        provenance: PROV,
+      });
+      dependOn(target.rel);
+    };
+
+    /** The project function a callback names, when it is an identifier or property reference. An inline function names none. */
+    const callbackTarget = (arg: ts.Expression | undefined): Decl | undefined => {
+      if (!arg || !(ts.isIdentifier(arg) || ts.isPropertyAccessExpression(arg))) return undefined;
+      const target = declOf(project, project.checker.getSymbolAtLocation(nameOf(arg)));
+      return target?.entity.type === "function" ? target : undefined;
+    };
+
+    /** The hand-offs one call makes: an async callee, awaited or started, and the callbacks it schedules. */
+    const emitDispatches = (call: ts.CallExpression) => {
+      const target = declOf(project, project.checker.getSymbolAtLocation(nameOf(call.expression)));
+      // An async function runs as a task of its own, so calling it hands it work whether or not the call is awaited.
+      if (target?.entity.type === "function" && target.entity.async) {
+        dispatch(target, isAwaited(call) ? "await" : "start", call);
+      }
+      // A callee the project declares is that declaration, not the runtime's scheduler, so it schedules nothing.
+      const sched = matchSchedule(call, imports);
+      if (sched && target === undefined) {
+        const callbacks = new Set<Decl>();
+        for (const i of sched.callbacks) {
+          const cb = callbackTarget(call.arguments[i]);
+          if (cb) callbacks.add(cb);
+        }
+        for (const cb of callbacks) dispatch(cb, sched.how, call);
+      }
+    };
+
     const emitCall = (call: ts.CallExpression) => {
       const callee = call.expression;
       const target = declOf(project, project.checker.getSymbolAtLocation(nameOf(callee)));
@@ -361,8 +437,9 @@ export function emitFile(project: Project, rel: string): IRBatch {
         });
         if (effect.kind === "effects.proc.exec") {
           // Running a command starts a child process, which is also a concurrency fact.
+          const spawnId = uniqueId(`spawn:${pos(sf, call.getStart(sf)).join(":")}`);
           push({
-            id: uniqueId(`spawn:${pos(sf, call.getStart(sf)).join(":")}`),
+            id: spawnId,
             facet: "concurrency",
             kind: "concurrency.spawn-process",
             parent: container,
@@ -370,6 +447,12 @@ export function emitFile(project: Project, rel: string): IRBatch {
             span: spanOf(rel, sf, call),
             provenance: PROV,
           });
+          // fork runs a script rather than a command, so a project file it names is the code the process runs.
+          const forked = effect.attrs.api === "child_process.fork" && typeof effect.attrs.command === "string" ? effect.attrs.command : undefined;
+          const to = scriptTarget(forked);
+          if (to !== undefined) {
+            pushEdge({ from: spawnId, to, facet: "concurrency", kind: "concurrency.spawns", attrs: { how: "process" }, span: spanOf(rel, sf, call), provenance: PROV });
+          }
         }
       }
     };
@@ -443,8 +526,9 @@ export function emitFile(project: Project, rel: string): IRBatch {
     if (ts.isNewExpression(node)) {
       const worker = matchWorker(node, imports);
       if (worker !== undefined) {
+        const spawnId = uniqueId(`spawn:${pos(sf, node.getStart(sf)).join(":")}`);
         push({
-          id: uniqueId(`spawn:${pos(sf, node.getStart(sf)).join(":")}`),
+          id: spawnId,
           facet: "concurrency",
           kind: "concurrency.spawn-thread",
           parent: container,
@@ -452,6 +536,10 @@ export function emitFile(project: Project, rel: string): IRBatch {
           span: spanOf(rel, sf, node),
           provenance: PROV,
         });
+        const to = scriptTarget(worker.script);
+        if (to !== undefined) {
+          pushEdge({ from: spawnId, to, facet: "concurrency", kind: "concurrency.spawns", attrs: { how: "thread" }, span: spanOf(rel, sf, node), provenance: PROV });
+        }
       }
       const ctor = callableOf(project, declOf(project, project.checker.getSymbolAtLocation(nameOf(node.expression))));
       if (ctor) reference(ctor, "new", node.expression);
@@ -482,6 +570,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
         emitModule(rel, node.arguments[0].text, node.arguments[0], false, true, "packaging.import");
       }
       emitCall(node);
+      emitDispatches(node);
     } else if (ts.isPropertyAccessExpression(node)) {
       const name = matchEnvRead(node, imports);
       if (name !== undefined) {
@@ -529,7 +618,12 @@ export function importCandidates(fromFile: string, specifier: string): string[] 
   }
   const base = parts.join("/");
   const exts = [".ts", ".tsx", ".d.ts", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"];
-  const out = new Set<string>([base]);
+  // The source name comes before the literal path, because TypeScript resolves `./w.js` to `w.ts` first.
+  const out = new Set<string>();
+  for (const [output, source] of SOURCE_FOR_OUTPUT) {
+    if (base.endsWith(output)) out.add(base.slice(0, -output.length) + source);
+  }
+  out.add(base);
   for (const e of exts) {
     out.add(`${base}${e}`);
     out.add(`${base}/index${e}`);

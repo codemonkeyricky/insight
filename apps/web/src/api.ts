@@ -1,9 +1,21 @@
-import type { FileFlow, FileFlowSummary, ScopeFlow } from "@insight/flow";
+import type { ExecModel, FileFlow, FileFlowSummary, ScopeFlow } from "@insight/flow";
 import { ApiError } from "./apiError";
 import { staticApi } from "./staticApi";
 
 // Types only: the flow package is not bundled, its charts are drawn by components/FlowChart.tsx.
 export type {
+  ExecCoroutine,
+  ExecDispatch,
+  ExecDispatchHow,
+  ExecFunctionRef,
+  ExecHow,
+  ExecModel,
+  ExecModelStats,
+  ExecSpawn,
+  ExecSpawnHow,
+  ExecSpawnStatus,
+  ExecThread,
+  ExecThreadKind,
   FileFlow,
   FileFlowSummary,
   FlowEdge,
@@ -377,6 +389,8 @@ const liveApi = {
     call<{ snapshot: string | null; files: FileFlowSummary[] }>("GET", `/api/projects/${id}/flow-summary`).then((r) => r.files),
   // The server adds snapshot, scope and kind to the flow; the page does not use them.
   scopeFlow: (id: string, scope: string) => call<ScopeFlow>("GET", `/api/projects/${id}/scope/flow?path=${encodeURIComponent(scope)}`),
+  // The server adds snapshot and kind to the model; the page does not use them.
+  getScopeExec: (id: string, scope: string) => call<ExecModel>("GET", `/api/projects/${id}/scope/exec?path=${encodeURIComponent(scope)}`),
   node: (id: string, nodeId: string) => call<NodeFacts>("GET", `/api/projects/${id}/nodes/${nodeId.split("/").map(encodeURIComponent).join("/")}`),
   compare: (id: string, base: string, head: string) => call<Compare>("GET", `/api/projects/${id}/compare${q({ base, head })}`),
   review: (id: string, snapshot?: string) => call<Review>("GET", `/api/projects/${id}/review${q({ snapshot })}`),
