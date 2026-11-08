@@ -17,6 +17,7 @@ import type {
   Project,
   Review,
   ReviewStale,
+  SceneLayout,
   ScopeFlow,
   ScopeLensRow,
   ScopeLenses,
@@ -149,8 +150,12 @@ function emptyScopeExec(scope: string): ExecModel {
     scope: canonicalScope(scope),
     truncated: false,
     functions: [],
-    threads: [{ id: "main", kind: "main", roots: [], reach: 0, reached: [], coroutines: [] }],
+    threads: [{ id: "main", kind: "main", roots: [], reach: 0, reached: [], coroutines: [], coroutineOnly: [] }],
     dispatches: [],
+    calls: [],
+    unthreaded: [],
+    programs: [],
+    resources: [],
     stats: {
       threads: 1,
       spawns: 0,
@@ -165,6 +170,9 @@ function emptyScopeExec(scope: string): ExecModel {
       functionsCoroutineOnly: 0,
       functionsUnthreaded: 0,
       functionsListed: 0,
+      programs: 0,
+      locks: 0,
+      channels: 0,
     },
   };
 }
@@ -323,6 +331,13 @@ export const staticApi = {
     const problem = scopeProblem(scope);
     if (problem) throw new ApiError(400, problem);
     return (await scopeFile<ExecModel>(scope, "exec.json")) ?? emptyScopeExec(scope);
+  },
+  /** A scope's execution scene laid out whole, as the capture saved it. Undefined when it saved none. */
+  scopeExecLayout: async (id: string, scope: string): Promise<SceneLayout | undefined> => {
+    await checkProject(id);
+    const problem = scopeProblem(scope);
+    if (problem) throw new ApiError(400, problem);
+    return scopeFile<SceneLayout>(scope, "exec-layout.json");
   },
   // Comparing commits and keeping review decisions and notes need a git history and a writable
   // store, which the static demo does not have. The tabs are hidden in demo mode; these keep the

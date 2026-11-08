@@ -1,4 +1,4 @@
-import type { ExecModel, FileFlow, FileFlowSummary, ScopeFlow } from "@insight/flow";
+import type { ExecModel, FileFlow, FileFlowSummary, SceneLayout, ScopeFlow } from "@insight/flow";
 import { ApiError } from "./apiError";
 import { staticApi } from "./staticApi";
 
@@ -33,6 +33,7 @@ export type {
   ScopeFlowStats,
   ScopeFunction,
   ScopeGranularity,
+  SceneLayout,
 } from "@insight/flow";
 
 /** True in the read-only demo build (VITE_STATIC=1): one fixed project, served from JSON files. */
@@ -391,6 +392,13 @@ const liveApi = {
   scopeFlow: (id: string, scope: string) => call<ScopeFlow>("GET", `/api/projects/${id}/scope/flow?path=${encodeURIComponent(scope)}`),
   // The server adds snapshot and kind to the model; the page does not use them.
   getScopeExec: (id: string, scope: string) => call<ExecModel>("GET", `/api/projects/${id}/scope/exec?path=${encodeURIComponent(scope)}`),
+  // The server lays the execution scene out whole and keeps it per snapshot. Any failure, a 404 included, gives undefined,
+  // and the page then lays the scene out in its worker.
+  scopeExecLayout: (id: string, scope: string): Promise<SceneLayout | undefined> =>
+    call<SceneLayout>("GET", `/api/projects/${id}/scope/exec-layout?path=${encodeURIComponent(scope)}`).then(
+      (r) => ({ containers: r.containers }),
+      () => undefined,
+    ),
   node: (id: string, nodeId: string) => call<NodeFacts>("GET", `/api/projects/${id}/nodes/${nodeId.split("/").map(encodeURIComponent).join("/")}`),
   compare: (id: string, base: string, head: string) => call<Compare>("GET", `/api/projects/${id}/compare${q({ base, head })}`),
   review: (id: string, snapshot?: string) => call<Review>("GET", `/api/projects/${id}/review${q({ snapshot })}`),

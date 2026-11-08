@@ -56,7 +56,7 @@ export function ReviewPage({ id }: { id: string }) {
 
   return (
     <section>
-      <h2>Review findings</h2>
+      <h2>Triage findings</h2>
       <p className="muted small">
         Each finding is decided by its key, the lens and the finding id. A dismissal needs a note saying why. A finding whose id
         includes a line number gets a new key when its line moves, so its old decision is listed under stale.{" "}

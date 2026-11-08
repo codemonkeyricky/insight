@@ -11,15 +11,17 @@
 // lens listing under scope/<key>/lenses.json, and each lens result that has something to show gets
 // scope/<key>/<lensId>.json. Those are read through the real server, so the demo matches the live app.
 // A scope with at least one function also gets its call flow under scope/<key>/flow.json and its
-// execution model (threads, coroutines, reach) under scope/<key>/exec.json.
+// execution model (threads, coroutines, reach) under scope/<key>/exec.json, and the execution canvas's
+// layout of that model under scope/<key>/exec-layout.json, so the static demo does not lay it out on load.
 import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildServer, loadSnapshot, resolveSnapshot } from "../apps/server/dist/index.js";
 import { edgeTargets } from "../packages/sdk/dist/index.js";
-import { buildFileFlow, summarizeFlows } from "../packages/flow/dist/index.js";
+import { buildExecScene, buildFileFlow, layoutScene, summarizeFlows } from "../packages/flow/dist/index.js";
 import { scopeKey } from "../apps/web/src/scopeKey.ts";
 import { resultHasContent } from "../apps/web/src/scopeLenses.ts";
 
@@ -27,9 +29,27 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(ROOT, "apps", "web", "public", "demo");
 const REPO_URL = "https://github.com/codemonkeyricky/insight";
 const MAX_FILE_BYTES = 256 * 1024;
-/** The size budget for the whole demo. Over it, file scopes keep only KEEP_FILE_LENSES. */
+/**
+ * The size budget for the whole demo. Over it, file scopes keep only KEEP_FILE_LENSES; still over it, folder scopes do
+ * too. The project scope always keeps every lens.
+ */
 const MAX_DEMO_BYTES = 40 * 1024 * 1024;
-const KEEP_FILE_LENSES = new Set(["lens-execution", "lens-flow-complexity"]);
+// lens-execution is not here: the execution canvas replaced its tab, and its links redirect to the flow tab.
+const KEEP_FILE_LENSES = new Set(["lens-flow-complexity"]);
+/** How far the budget trims: 0 keeps everything, 1 trims file scopes, 2 trims folder scopes too. */
+const TRIM_LEVELS = ["none", "file scopes", "file and folder scopes"];
+// The same elkjs the web app's worker runs, in its bundled form, which works under Node.
+const ELK = createRequire(join(ROOT, "apps", "web", "package.json"))("elkjs/lib/elk.bundled.js");
+
+/** Positions to a tenth of a unit: a layout's JSON is mostly numbers, and the page draws no finer than that. */
+function roundLayout(layout) {
+  const r = (n) => Math.round(n * 10) / 10;
+  const containers = {};
+  for (const [id, c] of Object.entries(layout.containers)) {
+    containers[id] = { w: r(c.w), h: r(c.h), slots: c.slots.map((s) => ({ id: s.id, x: r(s.x), y: r(s.y), w: r(s.w), h: r(s.h) })) };
+  }
+  return { containers };
+}
 
 /** File count and bytes under a directory, or zeros when it does not exist. */
 function dirStats(dir) {
@@ -182,9 +202,18 @@ try {
     const flow = await get(`${base}/scope/flow${q}`);
     const hasFunctions = flow.stats.functions > 0;
     const exec = hasFunctions ? await get(`${base}/scope/exec${q}`) : undefined;
-    return { scope, kind: listing.kind, listing, runs, flow: hasFunctions ? flow : undefined, exec };
+    // The canvas lays the whole scene out once; zoom only changes what is drawn open, so this one layout serves it.
+    let execLayout;
+    if (exec) {
+      const t0 = performance.now();
+      execLayout = roundLayout(await layoutScene(buildExecScene(exec), (g) => elk.layout(g)));
+      layoutTimes.push({ scope, ms: performance.now() - t0 });
+    }
+    return { scope, kind: listing.kind, listing, runs, flow: hasFunctions ? flow : undefined, exec, execLayout };
   };
 
+  const elk = new ELK();
+  const layoutTimes = [];
   const captured = [];
   for (const scope of scopes) {
     captured.push(await captureScope(scope));
@@ -237,12 +266,12 @@ try {
   }
   put("meta.json", { capturedAt: new Date().toISOString(), commit, nodes: nodes.length, edges: snap.edges.length, files: Object.keys(sources).length });
 
-  /** The scope files. Over the size budget, file scopes keep only KEEP_FILE_LENSES; the rest read as not captured. */
-  const scopeFiles = (dropFileLenses) => {
+  /** The scope files. Over the size budget, trimmed scopes keep only KEEP_FILE_LENSES; the rest read as not captured. */
+  const scopeFiles = (trim) => {
     const out = new Map();
     for (const c of captured) {
       const dir = `scope/${scopeKey(c.scope)}`;
-      const dropping = dropFileLenses && c.kind === "file";
+      const dropping = (trim >= 1 && c.kind === "file") || (trim >= 2 && c.kind === "folder");
       const rows = c.listing.lenses.map((row) => {
         const run = c.runs.get(row.id);
         const captures = row.status === "ok" && row.hasContent === true && run !== undefined;
@@ -253,13 +282,14 @@ try {
       out.set(`${dir}/lenses.json`, JSON.stringify({ ...c.listing, lenses: rows }));
       if (c.flow) out.set(`${dir}/flow.json`, JSON.stringify(c.flow));
       if (c.exec) out.set(`${dir}/exec.json`, JSON.stringify(c.exec));
+      if (c.execLayout) out.set(`${dir}/exec-layout.json`, JSON.stringify(c.execLayout));
     }
     return out;
   };
 
-  const assemble = (dropFileLenses) => {
+  const assemble = (trim) => {
     const all = new Map(staticFiles);
-    for (const [rel, text] of scopeFiles(dropFileLenses)) {
+    for (const [rel, text] of scopeFiles(trim)) {
       if (all.has(rel)) throw new Error(`two demo files share the path ${rel}`);
       all.set(rel, text);
     }
@@ -267,12 +297,12 @@ try {
     return all;
   };
 
-  let out = assemble(false);
+  let out = assemble(0);
   const fullBytes = totalBytes(out);
-  let capped = false;
-  if (fullBytes > MAX_DEMO_BYTES) {
-    out = assemble(true);
-    capped = true;
+  let trimmed = 0;
+  while (totalBytes(out) > MAX_DEMO_BYTES && trimmed < TRIM_LEVELS.length - 1) {
+    trimmed += 1;
+    out = assemble(trimmed);
   }
   const scopeEntries = [...out].filter(([rel]) => rel.startsWith("scope/"));
   const scopeBytes = scopeEntries.reduce((sum, [, text]) => sum + Buffer.byteLength(text), 0);
@@ -280,6 +310,11 @@ try {
   const execEntries = [...out].filter(([rel]) => rel.startsWith("scope/") && rel.endsWith("/exec.json"));
   const execBytes = execEntries.reduce((sum, [, text]) => sum + Buffer.byteLength(text), 0);
   const execLargest = execEntries.reduce((max, [rel, text]) => (Buffer.byteLength(text) > max.bytes ? { rel, bytes: Buffer.byteLength(text) } : max), { rel: "", bytes: 0 });
+
+  const layoutEntries = [...out].filter(([rel]) => rel.startsWith("scope/") && rel.endsWith("/exec-layout.json"));
+  const layoutBytes = layoutEntries.reduce((sum, [, text]) => sum + Buffer.byteLength(text), 0);
+  const layoutMs = layoutTimes.reduce((sum, t) => sum + t.ms, 0);
+  const slowest = layoutTimes.reduce((max, t) => (t.ms > max.ms ? t : max), { scope: "", ms: 0 });
 
   rmSync(OUT, { recursive: true, force: true });
   for (const [rel, text] of out) {
@@ -298,9 +333,15 @@ try {
     `exec models: ${execEntries.length} files, ${megabytes(execBytes)}, largest ${execLargest.rel} ${megabytes(execLargest.bytes)}; ` +
       `demo without them: ${out.size - execEntries.length} files, ${megabytes(totalBytes(out) - execBytes)}`,
   );
-  if (capped) {
+  console.log(
+    `exec layouts: ${layoutEntries.length} files, ${megabytes(layoutBytes)}, ${(layoutMs / 1000).toFixed(1)} s to lay out, ` +
+      `slowest ${slowest.scope === "" ? "(project)" : slowest.scope} ${slowest.ms.toFixed(0)} ms`,
+  );
+  if (trimmed > 0) {
     console.log(
-      `over ${megabytes(MAX_DEMO_BYTES)} with every scope capture (${megabytes(fullBytes)}): file scopes keep only ${[...KEEP_FILE_LENSES].join(", ")}`,
+      `over ${megabytes(MAX_DEMO_BYTES)} with every scope capture (${megabytes(fullBytes)}): ` +
+        `${TRIM_LEVELS[trimmed]} keep only ${[...KEEP_FILE_LENSES].join(", ")}; now ${megabytes(totalBytes(out))}` +
+        (totalBytes(out) > MAX_DEMO_BYTES ? " (still over the budget)" : ""),
     );
   }
   console.log(`demo files: ${before.files} files, ${megabytes(before.bytes)} before -> ${after.files} files, ${megabytes(after.bytes)} after`);

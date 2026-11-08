@@ -148,7 +148,7 @@ export function ComparePage({ id, base, head }: { id: string; base?: string; hea
             </ul>
           )}
           <p className="small">
-            <a href={hrefReview(id)}>Review findings</a> to accept or dismiss what is new.
+            <a href={hrefReview(id)}>Triage the findings</a> to accept or dismiss what is new.
           </p>
 
           <h2>Lenses</h2>

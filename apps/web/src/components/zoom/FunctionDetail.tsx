@@ -3,25 +3,14 @@ import { outsideSteps, type OutsideStep } from "../../flowTargets";
 import { hrefFile, hrefView } from "../../router";
 
 /**
- * The text beside a function's chart on the map: its stats, the calls in it that leave the scope, and the legend.
- * The chart itself is drawn in the map at the function's slot.
+ * The stats of a function's chart, the calls in it that leave the scope, and the chart's legend. The chart is drawn
+ * above it, and the function's name and source line are the heading of the panel that holds both.
  */
-export function FunctionDetail({ id, fn, scope, calledFromOutside }: { id: string; fn: FunctionFlow; scope: string; calledFromOutside: boolean }) {
+export function FunctionDetail({ id, fn, scope }: { id: string; fn: FunctionFlow; scope: string }) {
   const s = fn.stats;
   const steps = outsideSteps(fn, scope);
   return (
-    <section className="flow-panel zm-detail" aria-label="Function">
-      <h2>
-        {fn.name}
-        {fn.async && <span className="kind">async</span>}
-      </h2>
-      {fn.span && (
-        <p className="small">
-          <a className="mono" href={hrefFile(id, fn.span.file, fn.span.start[0] + 1)}>
-            {fn.span.file}:{fn.span.start[0] + 1}
-          </a>
-        </p>
-      )}
+    <div className="exec-chart-detail">
       <div className="stats">
         <Stat label="Steps" value={s.steps} />
         <Stat label="Decisions" value={s.decisions} />
@@ -35,10 +24,9 @@ export function FunctionDetail({ id, fn, scope, calledFromOutside }: { id: strin
       ) : fn.nodes.length === 0 ? (
         <p className="muted">No steps to chart.</p>
       ) : null}
-      {calledFromOutside && <p className="muted small">Also called from outside this scope.</p>}
       {steps.length > 0 && <OutsideList id={id} steps={steps} />}
       <ChartLegend />
-    </section>
+    </div>
   );
 }
 

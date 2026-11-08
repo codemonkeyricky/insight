@@ -1,9 +1,21 @@
 import { posix } from "node:path";
 import type { Span } from "@insight/ir";
-import { globsIn, stringsIn, topLevelCalls, tokenize, type Tok } from "./starlark.js";
+import { globsIn, labelsIn, stringsIn, topLevelCalls, tokenize, type Tok } from "./starlark.js";
 
 /** Rules whose names start with cc_ are C++ targets: cc_library, cc_binary, cc_test, and so on. */
-const RULE_PREFIX = "cc_";
+const CC_PREFIX = "cc_";
+/** Any other *_binary rule is a program too: py_binary, java_binary, go_binary, sh_binary, and so on. */
+const BINARY_SUFFIX = "_binary";
+
+/** Whether the rule is one the model reads: a cc_* rule, or a *_binary rule of another language. */
+export function isModelledRule(name: string): boolean {
+  return name.startsWith(CC_PREFIX) || name.endsWith(BINARY_SUFFIX);
+}
+
+/** Whether the rule is a C++ rule, read with its headers and include directories. */
+export function isCcRule(kind: string): boolean {
+  return kind.startsWith(CC_PREFIX);
+}
 
 export interface BazelTarget {
   /** //package:name, the label. */
@@ -22,7 +34,7 @@ export interface BazelTarget {
   deps: string[];
   /** Labels from other repositories (@name//...). Never resolved here. */
   externalDeps: string[];
-  /** Include directories this target adds for itself and, through deps, for its dependents. */
+  /** Include directories this target adds for itself and, through deps, for its dependents. Only cc_* rules have them. */
   includes: string[];
   /** Directory stripped from header paths when they are exposed to includes. */
   stripPrefix?: string;
@@ -116,24 +128,34 @@ function fileList(toks: Tok[], pkg: string, files: string[], subpackages: Set<st
   return [...out].sort();
 }
 
-/** Reads one BUILD file and returns the cc_* targets it declares. */
+/**
+ * Reads one BUILD file and returns the targets it declares: the cc_* rules, and the *_binary rules of
+ * other languages. A non-cc binary's `main` file is one of its sources.
+ */
 export function parseBuildFile(buildFile: string, text: string, files: string[], subpackages: Set<string>): BazelTarget[] {
   const pkg = packageOf(buildFile);
   const targets: BazelTarget[] = [];
   for (const call of topLevelCalls(tokenize(text))) {
-    if (!call.name.startsWith(RULE_PREFIX)) continue;
+    if (!isModelledRule(call.name)) continue;
+    const cc = isCcRule(call.name);
     const arg = (key: string): Tok[] => call.args.find((a) => a.key === key)?.tokens ?? [];
     const name = stringsIn(arg("name"))[0];
     if (name === undefined) continue;
     const deps: string[] = [];
     const externalDeps: string[] = [];
-    for (const label of stringsIn(arg("deps"))) {
+    // Outside C++, a deps entry can be a call such as requirement("numpy"), which is not a label.
+    for (const label of cc ? stringsIn(arg("deps")) : labelsIn(arg("deps"))) {
       const target = labelOf(label, pkg);
       if ("external" in target) externalDeps.push(target.external);
       else deps.push(target.id);
     }
-    const strip = stringsIn(arg("strip_include_prefix"))[0];
-    const prefix = stringsIn(arg("include_prefix"))[0];
+    const strip = cc ? stringsIn(arg("strip_include_prefix"))[0] : undefined;
+    const prefix = cc ? stringsIn(arg("include_prefix"))[0] : undefined;
+    // py_binary names its entry file in `main`; it is one of the binary's sources.
+    const main = cc ? undefined : stringsIn(arg("main"))[0];
+    const mainFile = main === undefined ? undefined : fileOf(main, pkg);
+    const srcs = fileList(arg("srcs"), pkg, files, subpackages);
+    if (mainFile !== undefined && !srcs.includes(mainFile)) srcs.push(mainFile);
     targets.push({
       id: `//${pkg}:${name}`,
       name,
@@ -145,11 +167,11 @@ export function parseBuildFile(buildFile: string, text: string, files: string[],
         start: [call.nameTok.line, call.nameTok.col],
         end: [call.endTok.endLine, call.endTok.endCol],
       },
-      srcs: fileList(arg("srcs"), pkg, files, subpackages),
-      hdrs: fileList(arg("hdrs"), pkg, files, subpackages),
+      srcs: srcs.sort(),
+      hdrs: cc ? fileList(arg("hdrs"), pkg, files, subpackages) : [],
       deps,
       externalDeps,
-      includes: stringsIn(arg("includes")).map((d) => joinPath(pkg, d)),
+      includes: cc ? stringsIn(arg("includes")).map((d) => joinPath(pkg, d)) : [],
       ...(strip !== undefined ? { stripPrefix: strip.startsWith("/") ? strip.slice(1) : joinPath(pkg, strip) } : {}),
       ...(prefix !== undefined ? { includePrefix: prefix.replace(/^\/+|\/+$/g, "") } : {}),
     });

@@ -2,7 +2,7 @@
   "name": "insight",
   "version": "0.1.0",
   "private": true,
-  "description": "Insight: a design review tool for code an AI wrote",
+  "description": "Insight: see how code an AI wrote runs: its programs, threads, coroutines and calls",
   "license": "MIT",
   "type": "module",
   "engines": {

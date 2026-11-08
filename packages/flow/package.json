@@ -23,6 +23,7 @@
     "@insight/sdk": "workspace:*"
   },
   "devDependencies": {
-    "@insight/frontend-typescript": "workspace:*"
+    "@insight/frontend-typescript": "workspace:*",
+    "elkjs": "0.12.0"
   }
 }

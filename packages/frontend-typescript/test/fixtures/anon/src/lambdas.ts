@@ -47,10 +47,16 @@ export const named = function helper(): number {
   return 2;
 };
 
-// An arrow in an object literal is named by no declaration, so it is a lambda parented by the file.
+// An arrow in an object literal bound to a name is named by the binding: `handler.go`, parented by the file.
 export const handler = {
   go: () => 3,
 };
 
 // Module level: a lambda with no enclosing function is parented by the file.
 [1, 2].forEach((n) => onTick());
+
+// An object literal passed inline is bound to no name, so its arrow stays a lambda, parented by the file.
+export function takes(o: { go(): number }): number {
+  return o.go();
+}
+takes({ go: () => 4 });

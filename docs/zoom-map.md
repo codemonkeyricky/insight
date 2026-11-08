@@ -1,5 +1,40 @@
 # Zoom map
 
+## The Flow tab now
+
+The Flow tab draws the execution canvas of the scope: program, threads, coroutines and functions, as one zoom map.
+`apps/web/src/components/views/FlowView.tsx` holds it.
+
+- The tab opens on the canvas. `#/projects/:id/view/flow?scope=X` opens at X, and `fn=` opens on that function's first
+  place. A `mode` parameter from the old views is ignored.
+- Roots only: a checkbox above the canvas writes `roots=1`. Each thread then shows only the functions it starts in
+  (`execRootsOnly` in `packages/flow/src/scene-filter.ts`). The layout of that cut is solved in the browser.
+- A function's panel sits below the canvas. It shows the function's name and source line, where it runs ("Runs on
+  <thread>", with the coroutine it runs in), the other places it runs, and its control-flow chart. A function in the
+  no-runtime group says "Plain call with no runtime context. Zoom out to see where it runs."
+  (`apps/web/src/components/zoom/ExecFunctionPanel.tsx`).
+- The function panel also shows the call trail from its thread's roots and its Calls and Called by lists. A file
+  group, coroutine, thread or the no-runtime group shows its functions as pills and a sortable table
+  (`ExecContainerPanel.tsx`, `ExecLists.tsx`, helpers in `execMap.ts`).
+- With build targets in the IR, the root is a project holding one node per executable (Bazel `*_binary`, CMake
+  `add_executable`), each with its own main thread and the threads it spawns.
+- Threads that take the same lock (including C++ RAII guards) are joined by a dotted `sync` edge; a channel joins its
+  sender to its receiver with a solid one.
+- Labels fit their box's on-screen width and drop out when too small (`apps/web/src/zoom/lod.ts`). A gesture or Enter
+  over a gap opens the nearest box within 60 px.
+- Layouts: the demo reads `scope/<key>/exec-layout.json`; the live app asks the server
+  (`GET /api/projects/:id/scope/exec-layout`), which solves in a worker thread and caches per snapshot and scope. The
+  browser solves only when neither has one.
+- For a folder or the project, the table of files sits below the canvas.
+- A focus carries its scope: `execFocus(scope, nodeId)` in `apps/web/src/zoom/execMap.ts`. A node id is unique only
+  within one scope's scene. `MapSource.focusOf` turns a clicked node id into a focus.
+- Retired: the Hierarchy and Entry points views, and the Execution lens tab. An old `lens-execution` link (under
+  `view/` or `lenses/`) redirects to the flow tab for the same scope (`redirectFor` in `router.ts`). The lens itself
+  stays for the CLI.
+
+The sections below are the history of the scope map and the entry view. Their code is removed, except the renderer
+(`ZoomMap`) and the scene engine in `packages/flow`, which the canvas uses.
+
 The zoom map replaces the Flow tab's hand-drawn call graph with one camera over the project. Zooming in moves from
 the project to a folder, from a folder to its files, from a file to its functions, and from a function to its
 control-flow chart (CFG). Zooming out moves back up the same chain. The URL follows the focus, and the camera follows
@@ -69,72 +104,12 @@ CFG is shown.
 Replaced and removed: `CallGraph.tsx`, `flowGraph.ts` and `flowGraph.test.ts` are deleted, and so are
 `apps/web/spike.html` and `apps/web/src/spike/`. `FlowView.tsx` now renders the zoom map.
 
-### Entry points (default mode)
+## Retired views
 
-The Flow tab opens on an entry-point view: the functions that nothing in the scope calls, as boxes grouped by file.
-The mode is the URL's `mode` query. `mode=hierarchy` selects the zoom map above, and the default has no `mode`
-parameter, so the entry view's links stay short. A two-link switch at the top of the tab moves between them, and both
-modes keep the scope and function.
-
-- `apps/web/src/components/zoom/EntryMap.tsx` draws it: an SVG grid under one d3-zoom camera, with no layout worker
-  (see Entry points camera below). The scene is pure: `packages/flow/src/entry-map.ts` (`entryBoxes`, `entryFrames`,
-  `layoutEntries`, `entrySummary`, `ladderOf`, and the camera helpers `entryBoxAt`, `entryFrameOf`, `entryCard` and
-  `entryDecision`).
-- A ladder across the top lists the project and each folder down to the scope, with the counts of each ancestor's
-  flow, as `unreferenced/total`: for example `Project 14/1100 › packages 31/700 › index.ts 4/9`. The total is the
-  functions in scope, leaving out test, fixture and sample files while the toggle is off and counting them when it is
-  on. The unreferenced count follows the same rule. The ratio falls as the scope widens, since a wider scope resolves
-  references. A legend line under the ladder says so. The counts come from the flows the store has loaded, and
-  `ensureChain` loads every ancestor.
-- Each box shows its name and a muted `reaches N` line: the number of distinct functions it reaches through calls and
-  references inside the scope. All boxes are the same size.
-- The summary line counts the boxes shown, the files and the functions also called from outside the scope.
-- `Include tests and samples (N)` shows the functions in test, fixture and sample files, which are hidden by default.
-  `N` counts them in the scope. The checkbox is local state, so it is not in the URL.
-- Each box links to its function, `scope` and `fn` in the URL. An open function's chart opens in a card on the grid,
-  and its detail sits below the grid.
-- Escape closes the open function first, and goes up one scope when none is open.
-- The entry view draws no edges. Two unreferenced functions in one scope cannot call each other, since the caller
-  would make the callee referenced.
-- The grid wraps at the measured width of the view, so the frames stay on screen. A frame wider than the wrap, such as
-  a file with several columns of boxes, takes a row to itself, and the camera pans to it. A file path longer than 34
-  characters is cut from the front, with an ellipsis, and its full path is the frame's tooltip.
-
-## Entry points camera
-
-The entry grid has the same kind of camera as the hierarchy map. A d3-zoom behaviour owns the transform, which is
-written straight onto the world `<g>`, so React re-renders only when the layout, the toggle or the open function
-changes.
-
-- The grid sits in `.em-stage`. It has a fixed height (`clamp(360px, 68vh, 720px)`, or 360 px at phone width) and
-  `overflow: hidden`. Scale runs from 0.1 to 16. Wheel and drag zoom and pan, and the svg has `touch-action: none`.
-- Three buttons overlay the top right of the stage: `+` (aria-label "Zoom in"), `−` ("Zoom out") and `Fit` ("Reset
-  view"). Fit returns the camera to the identity transform. It does not close the open function.
-- With the stage focused, `+` or `=` zoom in, `-` or `_` zoom out, and the arrow keys pan 80 px. `Enter` opens the box
-  under the middle of the view, when nothing is open. A key pressed on a focused box or button keeps its own meaning.
-  Escape works anywhere in the view: it closes the open function, or goes up one scope when none is open.
-- A key or button step is a gesture of its own. It judges the scale it starts from, not the scale of an earlier gesture.
-- Opening is semantic. A box opens once it is wider than `ENTRY_OPEN_PX` (360 px) on screen, judged at the end of a
-  gesture that zoomed in or panned. The box is the one under the wheel pointer, or under the middle of the view for drag
-  and keys. A gesture that zoomed out opens nothing, so a zoom out does not reopen the box it just left.
-- Only one function is open at a time. Its card closes once it is narrower than `ENTRY_CLOSE_PX` (200 px). The gap
-  between the two thresholds stops a box at the edge from flickering.
-- The card sits at the box's top-left, in world units, so it scales with the grid. It is as wide as the box or the chart
-  with its padding, whichever is wider. It shows the function's name in a header and its control-flow chart below. A
-  chart that is too large to draw, or has no steps, gets a message in the card instead. The card is drawn last, over the
-  boxes beneath it. `FunctionDetail` stays below the grid.
-- The camera flies to fit the card, over 450 ms, once for each pair of function and layout, unless the card already
-  covers the stage. A close by Escape flies back to the frame of the box, at a scale of 1 or less. A close by zooming
-  out leaves the camera where the user put it.
-- A layout change (the scope, the Include toggle, or the width of the view) snaps the camera back to the identity at
-  once.
-- A click that does not move the camera decides nothing. A click on a box follows its link, and the box does not open
-  first.
-- Opening and closing write the function into the URL with `history.replaceState` and dispatch a `hashchange`, as the
-  hierarchy map does.
-
-`FlowView` owns one `ZoomStore` and passes it to both modes, so a flow loaded for one is not loaded again for the
-other. The hierarchy mode writes `mode=hierarchy` into every URL it sets.
+The entry-point view (`EntryMap.tsx`, `packages/flow/src/entry-map.ts`) and the hierarchy map's source
+(`scopeSource.ts`, `ZoomStore.build` and its layout cache) are removed. The hierarchy's camera and open-set rules
+remain in `packages/flow/src/scope-map.ts` and `zoom-layout.ts`, which the scene engine and the tests still use.
+The entry view's design, camera and checks are in the git history before the Phase 4 change.
 
 ## Verification
 
@@ -202,17 +177,18 @@ Camera updates (culling plus the transform) took 0.1 to 0.6 ms per update in eve
 
 ## Known limitations
 
+These describe the execution canvas, which is what the Flow tab draws now. The hierarchy map's own limitations went
+with it (see Retired views).
+
 - No anchoring: `show` fits the new focus rather than keeping the old one in place.
-- Labels are not level-of-detail: the same labels draw at every zoom, and long names are not truncated.
-- The ELK cache is cleared on each scope load, because each snapshot version has its own keys.
-- The function level shows boxes and call edges, and the CFG chart text scales with its diagram (by design).
-- Colour bands apply to file boxes only. Folder boxes stay white.
+- Labels fit their boxes per quarter-octave of zoom (`apps/web/src/zoom/lod.ts`), from an estimated 7.2 px per
+  character rather than measured text, so a wide-glyph name can still overrun a little.
+- The CFG chart lives in the function panel below the canvas, not in the function's slot on the canvas.
 - The minimap overlays the bottom-right of the content.
 - Child boxes touch the frame header with no gap.
-- The old Flow tab extras are gone: the Trail, the chips, the CallLists and the per-function table. The explorer-level
-  CFG list is gone too.
 - The `ScopeNote` description is still shown above the flow tab.
-- Enter does nothing when the centre of the view is in a gap between boxes.
+- The roots-only view is laid out in the browser on every open (it is small, but not precomputed or cached by the
+  server).
 - The packages `ir` build externalises `node:url`, `node:fs` and `node:path` for the browser. The warnings are
   harmless, because the loaders that use them are not called in the browser.
 
@@ -242,3 +218,17 @@ Removed:
 Dependencies in `apps/web/package.json`: d3-zoom 3.0.0, d3-selection 3.0.0, d3-transition 3.0.1,
 d3-interpolate 3.0.1, elkjs 0.12.0, plus exact d3 type pins. Transitive d3 packages are pinned in
 `pnpm-workspace.yaml` `overrides` because their latest releases are less than two weeks old.
+
+## Execution canvas (Phase 3)
+
+The renderer draws the execution canvas, `program ▸ thread ▸ coroutine ▸ function`, built from a scope's exec model.
+It is the Flow tab's view since Phase 4 (see `.claude/plans/execution-canvas.md`).
+
+- `ZoomMap` reads a `MapSource` (`apps/web/src/zoom/source.ts`): `resolve`, `ensureFocus`, `build`, `url` and
+  `focusOf`. The canvas's source is `ExecStore`.
+- The canvas uses the generic engine in `packages/flow/src/scene.ts` and `scene-layout.ts`: the whole scene is laid
+  out once, and zoom only changes which containers draw open, so nothing moves as the camera goes in.
+- `buildExecScene` (`packages/flow/src/exec-scene.ts`) groups a big container's functions by file, and a layered
+  container past 150 children is packed instead, because ELK's layered algorithm takes seconds past a few hundred.
+- The demo capture saves each scope's layout as `scope/<key>/exec-layout.json`; the page uses it when it covers the
+  scene, else it solves in the elkjs worker.

@@ -6,8 +6,8 @@ import { createCoreRegistry, type IRRecord } from "@insight/ir";
 import { runFrontendConformance, type IRBatch, type ProjectRoot } from "@insight/sdk";
 import frontend from "../src/index.js";
 import { resolver } from "../src/resolve.js";
-import { globRegex, labelOf } from "../src/model.js";
-import { globsIn, stringsIn, tokenize, topLevelCalls } from "../src/starlark.js";
+import { buildModel, globRegex, labelOf, parseBuildFile } from "../src/model.js";
+import { globsIn, labelsIn, stringsIn, tokenize, topLevelCalls } from "../src/starlark.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "fixtures", "sample-bazel");
@@ -101,6 +101,13 @@ describe("frontend-bazel", () => {
 });
 
 describe("starlark subset", () => {
+  it("reads labels but not the arguments of a call other than select()", () => {
+    const [call] = topLevelCalls(tokenize('py_binary(deps = [":a", requirement("numpy"), select({"//c:d": ":e"})])'));
+    const deps = call?.args.find((a) => a.key === "deps")?.tokens ?? [];
+    expect(labelsIn(deps)).toEqual([":a", ":e"]);
+    expect(stringsIn(deps)).toEqual([":a", "numpy", ":e"]);
+  });
+
   it("reads strings with escapes, skips comments and select keys, and expands glob patterns", () => {
     const src = '# comment\ncc_library(name = "a", srcs = glob(["x/*.cc"]), copts = select({"//c:d": ["-O2\\n"]}))';
     const [call] = topLevelCalls(tokenize(src));
@@ -123,5 +130,86 @@ describe("starlark subset", () => {
     expect(globRegex("src/*.cc").test("src/a.cc")).toBe(true);
     expect(globRegex("src/*.cc").test("src/x/a.cc")).toBe(false);
     expect(globRegex("src/**/*.h").test("src/x/y/a.h")).toBe(true);
+  });
+});
+
+describe("non-cc binaries", () => {
+  // tools/ has a py_binary with a main file, a binary that depends on another binary, a java_binary that
+  // globs its sources, a py_library (not a program), and a pip requirement inside deps.
+  const toolsBuild = [
+    'py_library(name = "gbench", srcs = ["gbench/__init__.py"])',
+    'py_binary(',
+    '    name = "compare",',
+    '    srcs = ["compare.py"],',
+    '    main = "run.py",',
+    '    deps = [":gbench", requirement("numpy")],',
+    ")",
+    'py_binary(name = "helper", srcs = ["helper.py"], deps = [":compare", "@rules_python//python/runfiles"])',
+    'java_binary(name = "tool", srcs = glob(["java/*.java"]), main_class = "x.Tool")',
+    'sh_binary(name = "lint", srcs = ["lint.sh"])',
+    'cc_binary(name = "app", srcs = ["app.cc"], deps = [":core"])',
+  ].join("\n");
+  const toolsFiles = ["tools/compare.py", "tools/run.py", "tools/helper.py", "tools/java/Tool.java", "tools/lint.sh", "tools/app.cc", "tools/gbench/__init__.py"];
+
+  it("models every *_binary rule as a target, with its srcs and main file", () => {
+    const targets = parseBuildFile("tools/BUILD.bazel", toolsBuild, toolsFiles, new Set(["tools"]));
+    const byName = new Map(targets.map((t) => [t.name, t]));
+    expect([...byName.keys()].sort()).toEqual(["app", "compare", "helper", "lint", "tool"]);
+    expect(byName.get("compare")).toMatchObject({ id: "//tools:compare", kind: "py_binary", srcs: ["tools/compare.py", "tools/run.py"] });
+    expect(byName.get("tool")).toMatchObject({ kind: "java_binary", srcs: ["tools/java/Tool.java"] });
+    expect(byName.get("lint")?.srcs).toEqual(["tools/lint.sh"]);
+  });
+
+  it("gives a non-cc binary no headers, includes or prefixes, and keeps cc_binary's", () => {
+    const build = 'cc_binary(name = "app", srcs = ["app.cc"], hdrs = ["app.h"], includes = ["inc"], strip_include_prefix = "inc")';
+    const [app] = parseBuildFile("tools/BUILD.bazel", build, ["tools/app.cc", "tools/app.h"], new Set(["tools"]));
+    expect(app).toMatchObject({ hdrs: ["tools/app.h"], includes: ["tools/inc"], stripPrefix: "tools/inc" });
+    const [py] = parseBuildFile("tools/BUILD.bazel", 'py_binary(name = "p", srcs = ["p.py"], hdrs = ["p.py"], includes = ["x"])', ["tools/p.py"], new Set(["tools"]));
+    expect(py).toMatchObject({ srcs: ["tools/p.py"], hdrs: [], includes: [] });
+    expect(py?.stripPrefix).toBeUndefined();
+  });
+
+  it("does not read a pip requirement in deps as a label", () => {
+    const [compare] = parseBuildFile("tools/BUILD.bazel", toolsBuild, toolsFiles, new Set(["tools"])).filter((t) => t.name === "compare");
+    expect(compare?.deps).toEqual(["//tools:gbench"]);
+    expect(compare?.externalDeps).toEqual([]);
+  });
+
+  it("emits target-contains edges for existing files and dep-edges only to known targets", async () => {
+    const files = [...toolsFiles, "tools/BUILD.bazel"];
+    const texts = new Map([["tools/BUILD.bazel", toolsBuild]]);
+    const model = buildModel(texts, files);
+    expect(model.targets.has("//tools:gbench")).toBe(false);
+    const ctx = {
+      root: { path: "/nonexistent", name: "tools", allowBuildTools: false },
+      files,
+      listFiles: () => [...files],
+      readFile: async () => toolsBuild,
+      log: () => undefined,
+    };
+    const batches: IRBatch[] = [];
+    for await (const batch of frontend.extract(ctx)) batches.push(batch);
+    const records = allRecords(batches);
+    const edges = records.flatMap((r) => ("edge" in r ? [r.edge] : []));
+    const nodes = records.flatMap((r) => ("node" in r ? [r.node] : []));
+    expect(nodes.filter((n) => n.kind === "packaging.build-target").map((n) => n.id).sort()).toEqual([
+      "//tools:app",
+      "//tools:compare",
+      "//tools:helper",
+      "//tools:lint",
+      "//tools:tool",
+    ]);
+    const contains = (from: string) => edges.filter((e) => e.kind === "packaging.target-contains" && e.from === from).map((e) => e.to).sort();
+    expect(contains("//tools:compare")).toEqual(["tools/compare.py", "tools/run.py"]);
+    expect(contains("//tools:tool")).toEqual(["tools/java/Tool.java"]);
+    // helper depends on compare, a known binary: an edge. Its external label is not recorded for a non-cc rule.
+    expect(edges).toContainEqual(expect.objectContaining({ kind: "packaging.dep-edge", from: "//tools:helper", to: "//tools:compare" }));
+    expect(edges.filter((e) => e.from === "//tools:helper" && e.kind === "packaging.dep-edge")).toHaveLength(1);
+    // compare's only dependency, gbench, is a py_library and not modelled: no edge.
+    expect(edges.filter((e) => e.from === "//tools:compare" && e.kind === "packaging.dep-edge")).toEqual([]);
+    // cc_binary keeps its dependency edge, resolved or unresolved, as before.
+    expect(edges).toContainEqual(
+      expect.objectContaining({ kind: "packaging.dep-edge", from: "//tools:app", to: { unresolved: { scheme: "bazel.label", text: "//tools:core" } } }),
+    );
   });
 });
