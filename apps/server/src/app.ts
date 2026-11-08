@@ -34,6 +34,7 @@ import {
   publicProject,
   resolveSnapshot,
   runScopedLens,
+  scopeArchOf,
   scopeExecLayoutOf,
   scopeExecOf,
   scopeFlowOf,
@@ -269,6 +270,17 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
     if (!snapshot) throw new ProjectError(404, "project has no snapshot yet");
     const { kind, layout } = await scopeExecLayoutOf(rootFor(p), snapshot, path);
     return { snapshot, kind, ...layout };
+  });
+
+  // The package-level architecture: packages by layer, the imports between them, unresolved imports and rule violations.
+  // The model covers the whole snapshot, so the scope gives only the path check. Same path, snapshot and errors as the exec route.
+  app.get<{ Params: ProjectParams; Querystring: SnapshotQuery & { path?: string } }>("/api/projects/:id/scope/arch", async (req) => {
+    const p = project(req.params.id);
+    const path = scopePathOf(req.query.path);
+    const snapshot = resolveSnapshot(rootFor(p), req.query.snapshot);
+    if (!snapshot) throw new ProjectError(404, "project has no snapshot yet");
+    const { scope, kind, arch } = scopeArchOf(rootFor(p), snapshot, path);
+    return { snapshot, scope, kind, ...arch };
   });
 
   app.get<{ Params: ProjectParams; Querystring: SnapshotQuery & { lens?: string; severity?: string } }>(

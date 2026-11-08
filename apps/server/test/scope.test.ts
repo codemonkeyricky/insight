@@ -456,4 +456,48 @@ describe("scoped IR routes", () => {
       expect(bareLayout.body.error).toBe("project has no snapshot yet");
     });
   });
+
+  describe("the architecture route", () => {
+    interface ArchListing {
+      snapshot: string;
+      scope: string;
+      kind: string;
+      layers: string[];
+      packages: { id: string; path: string; layer: string; fileCount: number }[];
+      edges: unknown[];
+      unresolved: unknown[];
+      violations: unknown[];
+    }
+    const archUrl = (path: string) => `/api/projects/${id}/scope/arch?path=${encodeURIComponent(path)}`;
+
+    it("answers the same status and error as the exec route for a bad path, an unknown scope, snapshot or project", async () => {
+      const cases: string[] = ["", "?path=", "?path=nope", "?path=src&path=lib", "?path=../outside", "?path=src/a.ts/x", "?path=src&snapshot=nope"];
+      for (const query of cases) {
+        const exec = await get<{ error: string }>(`/api/projects/${id}/scope/exec${query}`);
+        const arch = await get<{ error: string }>(`/api/projects/${id}/scope/arch${query}`);
+        expect(arch.status, query).toBe(exec.status);
+        expect(arch.body.error, query).toBe(exec.body.error);
+      }
+      const bareArch = await get<{ error: string }>(`/api/projects/${bareId}/scope/arch?path=`);
+      expect(bareArch.status).toBe(404);
+      expect(bareArch.body.error).toBe("project has no snapshot yet");
+    });
+
+    it("models the project from its package.json files: the fixture has one package at the root, so no import crosses packages", async () => {
+      const project = await get<ArchListing>(archUrl(""));
+      expect(project.status).toBe(200);
+      expect(project.body).toMatchObject({ scope: "", kind: "project", edges: [], unresolved: [], violations: [] });
+      expect(project.body.layers).toEqual(["project", "frontend", "ir", "lens", "app"]);
+      expect(project.body.packages).toHaveLength(1);
+      expect(project.body.packages[0]).toMatchObject({ id: ".", path: ".", layer: "project" });
+      expect(project.body.packages[0]?.fileCount).toBeGreaterThanOrEqual(3);
+    });
+
+    it("answers the same model for a folder inside the project, since the model covers the whole snapshot", async () => {
+      const project = await get<ArchListing>(archUrl(""));
+      const folder = await get<ArchListing>(archUrl("src"));
+      expect(folder.body).toMatchObject({ scope: "src", kind: "folder", snapshot: project.body.snapshot });
+      expect(folder.body.packages).toEqual(project.body.packages);
+    });
+  });
 });

@@ -190,7 +190,12 @@ describe("hash router", () => {
   });
 
   it("lists the built-in tabs; any other tab id is a lens", () => {
-    expect([...BUILTIN_TABS]).toEqual(["overview", "source", "flow", "findings", "compare", "review"]);
+    expect([...BUILTIN_TABS]).toEqual(["overview", "source", "flow", "arch", "findings", "compare", "review"]);
+  });
+
+  it("parses the arch tab as a view, with no scope needed", () => {
+    expect(parseRoute("#/projects/p1/view/arch")).toEqual({ name: "workspace", id: "p1", tab: "arch", scope: "" });
+    expect(hrefView("p1", "arch")).toBe("#/projects/p1/view/arch");
   });
 
   it("scopes a path to a folder or a file", () => {
