@@ -47,6 +47,18 @@ export function functionDeclarator(fn: SyntaxNode): SyntaxNode | null {
   return d;
 }
 
+/** Where a lambda bound to a variable can be named. */
+export interface LambdaBinding {
+  /** Namespace and class names around the lambda, outermost first. */
+  scope: string[];
+  /** The block that holds the variable, as start and end offsets. Undefined at namespace, class or file scope. */
+  block?: [number, number];
+  /** Offset where the declaration or assignment ends. A use before it does not see the variable. */
+  declEnd: number;
+  /** True when the lambda is assigned to an existing variable rather than declared with it. */
+  assigned: boolean;
+}
+
 export interface FnDecl {
   id: NodeId;
   rel: string;
@@ -56,6 +68,10 @@ export interface FnDecl {
   cls?: string;
   exported: boolean;
   key: string;
+  /** True for a lambda. It has no declaration of its own, so its name comes from the variable it is bound to, or its position. */
+  anonymous?: boolean;
+  /** For a lambda bound to a variable, where that variable can be named. */
+  binding?: LambdaBinding;
 }
 
 export interface Unit {
@@ -77,6 +93,8 @@ export interface Project {
   members: Map<string, Set<string>>;
   /** Functions whose body suspends. A call to one creates a coroutine rather than running it. */
   coroutines: Set<NodeId>;
+  /** Lambdas bound to a variable, by the variable's name. Lambdas are kept out of byQName and bySimple, so a call never reaches one. */
+  lambdaBindings: Map<string, FnDecl[]>;
 }
 
 const walk = (node: SyntaxNode, visit: (n: SyntaxNode) => void): void => {
@@ -120,16 +138,94 @@ function collectMembers(root: SyntaxNode, scopeOfClass: (n: SyntaxNode) => strin
 const SUSPENDING = ["co_await_expression", "co_yield_statement", "co_return_statement"];
 
 /**
- * The function a node belongs to: its nearest enclosing definition that the project records. This
- * is the same rule the emitter uses to find the caller, so both agree on which functions suspend.
+ * The function a node belongs to: its nearest enclosing definition or lambda that the project records.
+ * This is the same rule the emitter uses to find the caller, so both agree on which functions suspend.
  */
 function ownerOf(node: SyntaxNode, fns: Map<string, FnDecl>, rel: string): FnDecl | undefined {
   for (let p = node.parent; p; p = p.parent) {
-    if (p.type !== "function_definition") continue;
+    if (p.type !== "function_definition" && p.type !== "lambda_expression") continue;
     const decl = fns.get(`${rel}|${nodeKey(p)}`);
     if (decl) return decl;
   }
   return undefined;
+}
+
+/** The compound statement a node sits in, if any. */
+export function blockOf(node: SyntaxNode): SyntaxNode | null {
+  for (let p = node.parent; p; p = p.parent) if (p.type === "compound_statement") return p;
+  return null;
+}
+
+const sameNode = (a: SyntaxNode | null, b: SyntaxNode): boolean => a !== null && nodeKey(a) === nodeKey(b);
+const blockRange = (node: SyntaxNode): { block?: [number, number] } => {
+  const block = blockOf(node);
+  return block ? { block: [block.startIndex, block.endIndex] } : {};
+};
+
+/**
+ * The variable a lambda is bound to: the whole initializer of a declared name, or the whole right side
+ * of an assignment to a name. Anything else, such as an argument or a member, binds none.
+ */
+function boundTo(lambda: SyntaxNode): ({ name: string; declEnd: number; assigned: boolean } & { block?: [number, number] }) | undefined {
+  let value: SyntaxNode = lambda;
+  while (value.parent?.type === "parenthesized_expression") value = value.parent;
+  const parent = value.parent;
+  if (parent?.type === "init_declarator" && sameNode(parent.childForFieldName("value"), value)) {
+    const name = parent.childForFieldName("declarator");
+    return name?.type === "identifier" ? { name: name.text, ...blockRange(parent), declEnd: parent.endIndex, assigned: false } : undefined;
+  }
+  if (parent?.type === "assignment_expression" && sameNode(parent.childForFieldName("right"), value)) {
+    const name = parent.childForFieldName("left");
+    return name?.type === "identifier" ? { name: name.text, ...blockRange(parent), declEnd: parent.endIndex, assigned: true } : undefined;
+  }
+  return undefined;
+}
+
+/** `base` when no function or lambda has it yet, else the same name with the line, then a counter. */
+function uniqueId(base: string, line: number, taken: Set<string>): string {
+  if (!taken.has(base)) return base;
+  let id = `${base}@${line}`;
+  for (let n = 2; taken.has(id); n++) id = `${base}@${line}~${n}`;
+  return id;
+}
+
+/**
+ * Registers the lambdas of one file, in source order, so an enclosing function or lambda is always
+ * registered before the lambdas inside it. A lambda bound to a variable takes that variable's name.
+ * Any other is named `λ<line>:<col>`, 1-based as an editor shows positions.
+ */
+function addLambdas(rel: string, lambdas: SyntaxNode[], fns: Map<string, FnDecl>, list: FnDecl[], bindings: Map<string, FnDecl[]>): void {
+  const taken = new Set(list.map((d) => d.id));
+  for (const node of lambdas) {
+    const enclosing = ownerOf(node, fns, rel);
+    const scope = scopeOf(node);
+    const bound = boundTo(node);
+    const simple = bound?.name ?? `λ${node.startPosition.row + 1}:${node.startPosition.column + 1}`;
+    const qname = enclosing ? `${enclosing.qname}.${simple}` : [...scope.path, simple].join("::");
+    const cls = scope.cls ?? enclosing?.cls;
+    const id = uniqueId(`${rel}#${qname}`, node.startPosition.row + 1, taken);
+    taken.add(id);
+    const decl: FnDecl = {
+      id,
+      rel,
+      qname,
+      simple,
+      ...(cls !== undefined ? { cls } : {}),
+      exported: false,
+      key: `${rel}|${nodeKey(node)}`,
+      anonymous: true,
+      ...(bound
+        ? { binding: { scope: scope.path, ...(bound.block ? { block: bound.block } : {}), declEnd: bound.declEnd, assigned: bound.assigned } }
+        : {}),
+    };
+    fns.set(decl.key, decl);
+    list.push(decl);
+    if (bound) {
+      const same = bindings.get(simple) ?? [];
+      same.push(decl);
+      bindings.set(simple, same);
+    }
+  }
 }
 
 /** Parses every C or C++ file and collects the function definitions that calls can target. */
@@ -151,10 +247,13 @@ export async function buildProject(texts: Map<string, string>): Promise<Project>
   const byQName = new Map<string, FnDecl[]>();
   const bySimple = new Map<string, FnDecl[]>();
   const members = new Map<string, Set<string>>();
+  const lambdaBindings = new Map<string, FnDecl[]>();
 
   for (const unit of units.values()) {
     const pending: { node: SyntaxNode; qname: string; simple: string; scope: Scope }[] = [];
+    const lambdas: SyntaxNode[] = [];
     walk(unit.root, (node) => {
+      if (node.type === "lambda_expression") lambdas.push(node);
       if (node.type !== "function_definition") return;
       const names = declaredName(node);
       if (!names) return;
@@ -191,6 +290,7 @@ export async function buildProject(texts: Map<string, string>): Promise<Project>
       simple.push(decl);
       bySimple.set(p.simple, simple);
     });
+    addLambdas(unit.rel, lambdas, fns, list, lambdaBindings);
     fnsByFile.set(unit.rel, list);
     collectMembers(unit.root, (n) => {
       const scope = scopeOf(n);
@@ -209,7 +309,7 @@ export async function buildProject(texts: Map<string, string>): Promise<Project>
     }
   }
 
-  return { units, fns, fnsByFile, byQName, bySimple, members, coroutines };
+  return { units, fns, fnsByFile, byQName, bySimple, members, coroutines, lambdaBindings };
 }
 
 /** A lock name for a mutex expression. Members of the enclosing class are qualified by that class. */

@@ -58,6 +58,7 @@ describe("frontend-cpp execution edges", () => {
       { from: "src/main.cc@spawn:13:2", to: "src/work.cc#exec::Foo::run", kind: "concurrency.spawns", how: "thread" },
       { from: "src/main.cc@spawn:14:13", to: "src/work.cc#exec::square", kind: "concurrency.spawns", how: "async" },
       { from: "src/main.cc@spawn:16:2", to: "src/main.cc#exec::pthread_body", kind: "concurrency.spawns", how: "thread" },
+      { from: "src/main.cc@spawn:17:2", to: "src/main.cc#exec::launch.λ18:22", kind: "concurrency.spawns", how: "thread" },
       {
         from: "src/main.cc@spawn:19:2",
         to: { candidates: ["src/legacy.cc#legacy::drain", "src/work.cc#exec::drain"] },
