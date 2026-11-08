@@ -298,9 +298,18 @@
     "kind": "concurrency.spawns",
     "facet": "concurrency",
     "on": "edge",
-    "description": "Spawning function to the thing it starts.",
+    "description": "A spawn node (concurrency.spawn-thread or concurrency.spawn-process) to the function it runs, or to the file whose top-level code runs when the target is a script. The spawning function is the spawn node's owner. Emitted only when the target resolves; an unresolved target stays as the string attrs.target on the spawn node.",
     "attrs": {
       "$ref": "https://insight.dev/ir/facets/concurrency.json#/$defs/ConcurrencySpawns"
+    }
+  },
+  {
+    "kind": "concurrency.dispatches",
+    "facet": "concurrency",
+    "on": "edge",
+    "description": "A function to a coroutine, async function or callback it hands work to: awaited, started, or scheduled on an event loop. The caller is the enclosing function. Separate from calls.call, so call queries do not change.",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/concurrency.json#/$defs/ConcurrencyDispatches"
     }
   },
   {

@@ -96,7 +96,8 @@ Base kinds shipped by the core:
 | `concurrency.await` | concurrency | node | – |  |
 | `concurrency.channel-send` | concurrency | node | – |  |
 | `concurrency.channel-recv` | concurrency | node | – |  |
-| `concurrency.spawns` | concurrency | edge | – | Spawning function to the thing it starts. |
+| `concurrency.spawns` | concurrency | edge | – | Spawn node to the function (or script file) it runs. `attrs.how` is `thread`, `process` or `async`. The spawning function is the spawn node's owner. Only emitted when the target resolves. |
+| `concurrency.dispatches` | concurrency | edge | – | Function to the coroutine, async function or callback it hands work to. `attrs.how` is `await`, `start`, `callback`, `timer` or `microtask`. |
 | `sync.lock-acquire` | sync | node | – |  |
 | `sync.lock-release` | sync | node | – |  |
 | `sync.rwlock-acquire` | sync | node | `sync.lock-acquire` |  |
