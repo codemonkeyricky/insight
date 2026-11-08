@@ -62,7 +62,9 @@ beforeAll(async () => {
     recordsByKind: Object.fromEntries(Object.entries(recordsByKind).sort(([a], [b]) => a.localeCompare(b))),
   };
   if (process.env.UPDATE_GOLDEN === "1") writeFileSync(golden, JSON.stringify(summary, null, 2) + "\n");
-});
+  // Indexing the whole sample takes about 6 s alone; under `pnpm -r test` every package runs at once, and the
+  // default 10 s hook limit was not enough.
+}, 60_000);
 
 afterAll(() => {
   // Remove only this suite's scratch, since the other core suites run in parallel workers.

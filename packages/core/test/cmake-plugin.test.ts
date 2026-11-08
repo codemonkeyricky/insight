@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { IRRecord } from "@insight/ir";
 import { projectPaths, readSnapshot, runIndex } from "../src/index.js";
+import { buildCmakeModel } from "../../../plugins/frontend-cmake/parse.js";
 
 // The real frontend-cmake plugin is loaded from plugins/ through the normal loader, so `pnpm -r test`
 // covers it. Scratch lives inside this package and is removed after the tests.
@@ -83,5 +84,112 @@ describe("frontend-cmake resolver", () => {
       confidence: "inferred",
       note: "via CMake include directories",
     });
+  });
+});
+
+// Macros and functions are read from the parser directly: each case is a small CMakeLists.txt at the root.
+describe("frontend-cmake macros and functions", () => {
+  const targetsOf = (text: string, files: string[] = []) =>
+    buildCmakeModel(new Map([["CMakeLists.txt", text]]), ["CMakeLists.txt", ...files]).targets;
+
+  it("runs a macro body at each call, with its parameter bound", () => {
+    const targets = targetsOf(
+      [
+        "macro(compile_test name)",
+        '  add_executable(${name} "${name}.cc")',
+        "  target_link_libraries(${name} benchmark::benchmark)",
+        "endmacro(compile_test)",
+        "compile_test(alpha)",
+        "compile_test(beta)",
+      ].join("\n"),
+      ["alpha.cc", "beta.cc"],
+    );
+    expect([...targets.keys()].sort()).toEqual(["alpha", "beta"]);
+    expect(targets.get("alpha")).toMatchObject({ id: "cmake://:alpha", kind: "add_executable", sources: ["alpha.cc"] });
+    expect(targets.get("beta")?.links).toEqual([{ name: "benchmark::benchmark", propagates: true }]);
+  });
+
+  it("matches a call to a macro or function regardless of case", () => {
+    const targets = targetsOf(["function(MakeLib name)", "  add_library(${name} ${name}.cc)", "endfunction()", "MAKELIB(core)", "makelib(util)"].join("\n"), [
+      "core.cc",
+      "util.cc",
+    ]);
+    expect([...targets.keys()].sort()).toEqual(["core", "util"]);
+    expect(targets.get("util")?.sources).toEqual(["util.cc"]);
+  });
+
+  it("runs a macro called from inside another macro", () => {
+    const targets = targetsOf(
+      [
+        "macro(inner name)",
+        "  add_library(${name} STATIC ${name}.cpp)",
+        "endmacro()",
+        "macro(outer name)",
+        "  inner(${name}_lib)",
+        "  target_link_libraries(${name}_lib PUBLIC ${name}_dep)",
+        "endmacro()",
+        "outer(net)",
+      ].join("\n"),
+      ["net_lib.cpp"],
+    );
+    expect(targets.get("net_lib")?.sources).toEqual(["net_lib.cpp"]);
+    expect(targets.get("net_lib")?.links).toEqual([{ name: "net_dep", propagates: true }]);
+  });
+
+  it("keeps a function's variable sets to itself, and lets a macro's reach the caller", () => {
+    const targets = targetsOf(
+      [
+        "set(dir_var one)",
+        "function(make_lib name)",
+        "  set(dir_var two)",
+        "  add_library(${name} ${dir_var}.cc)",
+        "endfunction()",
+        "make_lib(fnlib)",
+        "add_library(after ${dir_var}.cc)",
+        "macro(set_mode)",
+        "  set(mode_var macro_value)",
+        "endmacro()",
+        "set_mode()",
+        "add_library(leak ${mode_var}.cc)",
+      ].join("\n"),
+      ["two.cc", "one.cc", "macro_value.cc"],
+    );
+    expect(targets.get("fnlib")?.sources).toEqual(["two.cc"]);
+    expect(targets.get("after")?.sources).toEqual(["one.cc"]);
+    expect(targets.get("leak")?.sources).toEqual(["macro_value.cc"]);
+  });
+
+  it("binds ARGN to the arguments after the named parameters", () => {
+    const targets = targetsOf(["function(add_all name)", "  add_executable(${name} ${ARGN})", "endfunction()", "add_all(tool a.cc b.cc)"].join("\n"), [
+      "a.cc",
+      "b.cc",
+    ]);
+    expect(targets.get("tool")?.sources).toEqual(["a.cc", "b.cc"]);
+  });
+
+  it("binds ARGV, ARGV0 and ARGC to every argument of the call", () => {
+    const targets = targetsOf(
+      ["function(by_argv)", "  add_library(${ARGV0} ${ARGV1}.cc ${ARGV2}.cc)", "  set(count ${ARGC})", "endfunction()", "by_argv(packed x y)"].join("\n"),
+      ["x.cc", "y.cc"],
+    );
+    expect([...targets.keys()]).toEqual(["packed"]);
+    expect(targets.get("packed")?.sources).toEqual(["x.cc", "y.cc"]);
+  });
+
+  it("stops a recursive macro at the depth limit", () => {
+    // Each level declares one more target name. The limit is 16 nested calls, so 16 targets, not an endless loop.
+    const targets = targetsOf(["macro(chain n)", "  add_library(${n} ${n}.cc)", "  chain(${n}x)", "endmacro()", "chain(a)"].join("\n"), []);
+    expect(targets.size).toBe(16);
+    expect(targets.has("a")).toBe(true);
+    expect(targets.has(`a${"x".repeat(15)}`)).toBe(true);
+    expect(targets.has(`a${"x".repeat(16)}`)).toBe(false);
+  });
+
+  it("returns from a macro body at return() and reads the rest of the file", () => {
+    const targets = targetsOf(["macro(early)", "  add_library(first first.cc)", "  return()", "  add_library(never never.cc)", "endmacro()", "early()", "add_library(last last.cc)"].join("\n"), [
+      "first.cc",
+      "last.cc",
+    ]);
+    expect([...targets.keys()].sort()).toEqual(["first", "last"]);
   });
 });

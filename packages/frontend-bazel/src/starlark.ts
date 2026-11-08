@@ -184,6 +184,26 @@ export function stringsIn(toks: Tok[]): string[] {
   return out;
 }
 
+/**
+ * The label strings in an argument. Like stringsIn, but the arguments of any call other than select()
+ * are skipped too: requirement("numpy") names a pip package, not a label in this repository.
+ */
+export function labelsIn(toks: Tok[]): string[] {
+  const out: string[] = [];
+  for (let k = 0; k < toks.length; k++) {
+    const t = toks[k] as Tok;
+    const next = toks[k + 1];
+    if (t.kind === "id" && next?.kind === "op" && next.value === "(" && t.value !== "select") {
+      const close = matchClose(toks, k + 1);
+      if (close < 0) break;
+      k = close;
+      continue;
+    }
+    if (t.kind === "str" && !(next?.kind === "op" && next.value === ":")) out.push(t.value);
+  }
+  return out;
+}
+
 export interface GlobCall {
   include: string[];
   exclude: string[];

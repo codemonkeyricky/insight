@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { IRRecord, NodeId } from "@insight/ir";
 import type { ExtractContext, Frontend, IRBatch, ProjectRoot } from "@insight/sdk";
-import { buildModel, isBuildFile, type BazelModel, type BazelTarget } from "./model.js";
+import { buildModel, isBuildFile, isCcRule, type BazelModel, type BazelTarget } from "./model.js";
 
 export { resolver } from "./resolve.js";
 
@@ -45,13 +45,17 @@ function batchFor(file: string, model: BazelModel, files: Set<string>): IRBatch 
         edge: { from: t.id, to: f, facet: "packaging", kind: "packaging.target-contains", provenance: PROV },
       });
     }
+    // A cc_* rule's dependencies are all recorded, resolved or not. A binary of another language records
+    // only the dependencies that name a target this model knows.
+    const cc = isCcRule(t.kind);
     for (const dep of t.deps) {
+      if (!cc && !model.targets.has(dep)) continue;
       const to: NodeId | { unresolved: { scheme: string; text: string } } = model.targets.has(dep)
         ? dep
         : { unresolved: { scheme: "bazel.label", text: dep } };
       records.push({ edge: { from: t.id, to, facet: "packaging", kind: "packaging.dep-edge", provenance: PROV } });
     }
-    for (const ext of t.externalDeps) {
+    for (const ext of cc ? t.externalDeps : []) {
       records.push({
         edge: {
           from: t.id,

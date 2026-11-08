@@ -67,10 +67,10 @@
         "frontend-cpp"
       ],
       "filesScanned": 128,
-      "filesWithRecords": 123,
+      "filesWithRecords": 124,
       "filesWithErrors": 0,
-      "nodes": 10,
-      "edges": 1021
+      "nodes": 63,
+      "edges": 1173
     },
     {
       "facet": "structure",
@@ -161,10 +161,10 @@
     "flow.switch": 12,
     "flow.throw": 8,
     "flow.try": 1,
-    "packaging.build-target": 10,
-    "packaging.dep-edge": 19,
+    "packaging.build-target": 63,
+    "packaging.dep-edge": 99,
     "packaging.include": 889,
-    "packaging.target-contains": 113,
+    "packaging.target-contains": 185,
     "structure.file": 225,
     "structure.function": 1038,
     "structure.namespace": 191,

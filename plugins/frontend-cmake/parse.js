@@ -1,7 +1,11 @@
 // Static reader for CMakeLists.txt. It follows the commands that declare targets, their sources,
 // link items and include directories. It does not evaluate generator expressions or run cmake.
-// Limits: variables set in a parent directory are not visible in a subdirectory, and absolute
-// paths outside the project are read as if they were project-relative.
+// macro() and function() bodies are recorded and run at each call, with the call's arguments bound
+// (${name}, ${ARGN}, ${ARGV}, ${ARGC}, ${ARGV0}...). Their variables are approximated: a macro's sets
+// reach the caller, a function's do not, and PARENT_SCOPE is not honoured.
+// Limits: variables and macros set in a parent directory are not visible in a subdirectory, if() and
+// foreach() are not evaluated (every command in them is read), return() stops only the innermost
+// macro or function body, absolute paths outside the project are read as if they were project-relative.
 import { posix } from "node:path";
 
 const WS = new Set([" ", "\t", "\r", "\n"]);
@@ -11,6 +15,10 @@ const TARGET_KEYWORDS = new Set([
   "LINK_PRIVATE", "LINK_INTERFACE_LIBRARIES", "SYSTEM", "BEFORE", "AFTER", "debug", "optimized", "general",
 ]);
 const SET_STOP = new Set(["CACHE", "PARENT_SCOPE"]);
+/** How deeply macro and function calls may nest. A call past this depth is skipped, so recursion ends. */
+const MAX_CALL_DEPTH = 16;
+/** Most macro and function calls one file may run, against a recursion that branches at every level. */
+const MAX_INVOCATIONS = 10000;
 
 export function isCMakeFile(path) {
   return posix.basename(path) === "CMakeLists.txt";
@@ -152,6 +160,11 @@ function expand(args, vars) {
   return out;
 }
 
+/** The variable name a command writes to: its argument with variables substituted, as CMake does. */
+function nameOf(arg, vars) {
+  return arg === undefined ? "" : (expand([arg], vars)[0] ?? "");
+}
+
 /** A path as CMake sees it: a leading slash is project-root relative, anything else is relative to the directory. */
 function resolvePath(p, dir) {
   if (p.startsWith("/")) return joinPath(p.replace(/^\/+/, ""));
@@ -165,23 +178,48 @@ function includeItem(p, dir) {
   return resolvePath(p, dir);
 }
 
+/** The index of the endmacro() or endfunction() that closes the definition at `start`, or -1. */
+function endOf(cmds, start) {
+  let depth = 0;
+  for (let k = start + 1; k < cmds.length; k++) {
+    const name = cmds[k].name;
+    if (name === "macro" || name === "function") depth++;
+    else if (name === "endmacro" || name === "endfunction") {
+      if (depth === 0) return k;
+      depth--;
+    }
+  }
+  return -1;
+}
+
 /**
- * Reads one CMakeLists.txt. Targets it declares are returned as definitions. Commands that touch
- * a target, such as target_sources, are returned as operations to apply once every file is read.
+ * Runs a list of commands in one variable scope. A macro or function defined here is recorded, and a
+ * command that names one runs its body. Returns "return" when return() ends this list early.
  */
-function readFile(dir, buildFile, text, files) {
-  const vars = new Map([
-    ["CMAKE_CURRENT_SOURCE_DIR", [`/${dir}`]],
-    ["CMAKE_CURRENT_LIST_DIR", [`/${dir}`]],
-    ["CMAKE_SOURCE_DIR", ["/"]],
-    ["PROJECT_SOURCE_DIR", ["/"]],
-  ]);
-  const defs = [];
-  const ops = [];
-  for (const cmd of parseCommands(text)) {
+function runCommands(cmds, vars, ctx, depth) {
+  for (let i = 0; i < cmds.length; i++) {
+    const cmd = cmds[i];
     const args = cmd.args;
     const raw = (k) => args[k]?.text ?? "";
     switch (cmd.name) {
+      case "macro":
+      case "function": {
+        const end = endOf(cmds, i);
+        // An unterminated definition ends the file, as it is an error in CMake.
+        if (end < 0) return undefined;
+        const name = raw(0).toLowerCase();
+        if (name !== "") {
+          ctx.callables.set(name, {
+            kind: cmd.name,
+            params: args.slice(1).map((a) => a.text),
+            body: cmds.slice(i + 1, end),
+          });
+        }
+        i = end;
+        break;
+      }
+      case "return":
+        return "return";
       case "set": {
         if (args.length === 0) break;
         const values = [];
@@ -189,12 +227,12 @@ function readFile(dir, buildFile, text, files) {
           if (SET_STOP.has(v)) break;
           values.push(v);
         }
-        vars.set(raw(0), values);
+        vars.set(nameOf(args[0], vars), values);
         break;
       }
       case "list": {
         if (raw(0).toUpperCase() !== "APPEND" || args.length < 2) break;
-        const name = raw(1);
+        const name = nameOf(args[1], vars);
         vars.set(name, [...(vars.get(name) ?? []), ...expand(args.slice(2), vars)]);
         break;
       }
@@ -206,35 +244,38 @@ function readFile(dir, buildFile, text, files) {
         for (const p of patterns) {
           const rel = p.replace(/^\/+/, "");
           let re;
-          if (op === "GLOB") re = globRegex(joinPath(dir, rel));
+          if (op === "GLOB") re = globRegex(joinPath(ctx.dir, rel));
           else {
             const slash = rel.lastIndexOf("/");
             const head = slash >= 0 ? rel.slice(0, slash) : "";
             const base = slash >= 0 ? rel.slice(slash + 1) : rel;
-            re = globRegex(joinPath(dir, head, "**", base));
+            re = globRegex(joinPath(ctx.dir, head, "**", base));
           }
-          for (const f of files) if (re.test(f)) matches.add(`/${f}`);
+          for (const f of ctx.files) if (re.test(f)) matches.add(`/${f}`);
         }
-        vars.set(raw(1), [...matches].sort());
+        vars.set(nameOf(args[1], vars), [...matches].sort());
         break;
       }
       case "add_library":
       case "add_executable": {
-        const name = raw(0);
+        const name = nameOf(args[0], vars);
         const rest = expand(args.slice(1), vars);
         const upper = rest.map((v) => v.toUpperCase());
         if (name === "" || upper.includes("ALIAS") || upper.includes("IMPORTED")) break;
-        const sources = rest.filter((v) => !TARGET_KEYWORDS.has(v) && !TARGET_KEYWORDS.has(v.toUpperCase()) && !v.startsWith("$<")).map((p) => resolvePath(p, dir));
-        defs.push({ name, kind: cmd.name, dir, buildFile, span: cmd.span, sources });
+        const sources = rest
+          .filter((v) => !TARGET_KEYWORDS.has(v) && !TARGET_KEYWORDS.has(v.toUpperCase()) && !v.startsWith("$<"))
+          .map((p) => resolvePath(p, ctx.dir));
+        ctx.out.defs.push({ name, kind: cmd.name, dir: ctx.dir, buildFile: ctx.buildFile, span: cmd.span, sources });
         break;
       }
       case "target_sources": {
         const items = expand(args.slice(1), vars).filter((v) => !TARGET_KEYWORDS.has(v.toUpperCase()) && !v.startsWith("$<"));
-        ops.push({ op: "sources", name: raw(0), paths: items.map((p) => resolvePath(p, dir)) });
+        ctx.out.ops.push({ op: "sources", name: nameOf(args[0], vars), paths: items.map((p) => resolvePath(p, ctx.dir)) });
         break;
       }
       case "target_include_directories": {
         // The scope keyword applies to the items after it, so one command may mix PUBLIC and PRIVATE.
+        const name = nameOf(args[0], vars);
         let scope = "PUBLIC";
         for (const v of expand(args.slice(1), vars)) {
           const u = v.toUpperCase();
@@ -243,13 +284,14 @@ function readFile(dir, buildFile, text, files) {
             continue;
           }
           if (u === "SYSTEM" || u === "BEFORE" || u === "AFTER") continue;
-          const d = includeItem(v, dir);
+          const d = includeItem(v, ctx.dir);
           if (d === undefined) continue;
-          ops.push({ op: "include", name: raw(0), usage: scope !== "PRIVATE", local: scope !== "INTERFACE", dir: d });
+          ctx.out.ops.push({ op: "include", name, usage: scope !== "PRIVATE", local: scope !== "INTERFACE", dir: d });
         }
         break;
       }
       case "target_link_libraries": {
+        const name = nameOf(args[0], vars);
         let scope = "PUBLIC";
         for (const v of expand(args.slice(1), vars)) {
           const u = v.toUpperCase();
@@ -258,15 +300,67 @@ function readFile(dir, buildFile, text, files) {
             continue;
           }
           if (["LINK_PUBLIC", "LINK_PRIVATE", "LINK_INTERFACE_LIBRARIES", "DEBUG", "OPTIMIZED", "GENERAL"].includes(u)) continue;
-          ops.push({ op: "link", name: raw(0), propagates: scope !== "PRIVATE", items: [v] });
+          ctx.out.ops.push({ op: "link", name, propagates: scope !== "PRIVATE", items: [v] });
         }
         break;
       }
-      default:
+      default: {
+        const callee = ctx.callables.get(cmd.name);
+        if (callee !== undefined) invoke(callee, cmd, vars, ctx, depth);
         break;
+      }
     }
   }
-  return { defs, ops };
+  return undefined;
+}
+
+/**
+ * Runs a macro or function body for one call. The formal parameters take the call's arguments (missing
+ * ones are empty), and ARGN, ARGC and ARGV hold the rest. A function runs in a copy of the caller's
+ * variables, so its sets stay inside it. A macro runs in the caller's variables, so its sets reach the
+ * caller, and its parameters are put back afterwards.
+ */
+function invoke(callee, cmd, vars, ctx, depth) {
+  if (depth >= MAX_CALL_DEPTH || ctx.invocations >= MAX_INVOCATIONS) return;
+  ctx.invocations++;
+  const argv = expand(cmd.args, vars);
+  const bindings = new Map();
+  bindings.set("ARGC", [String(argv.length)]);
+  bindings.set("ARGV", argv);
+  argv.forEach((v, k) => bindings.set(`ARGV${k}`, [v]));
+  bindings.set("ARGN", argv.slice(callee.params.length));
+  callee.params.forEach((p, k) => bindings.set(p, k < argv.length ? [argv[k]] : []));
+
+  if (callee.kind === "function") {
+    const scope = new Map(vars);
+    for (const [k, v] of bindings) scope.set(k, v);
+    runCommands(callee.body, scope, ctx, depth + 1);
+    return;
+  }
+  const saved = new Map([...bindings.keys()].map((k) => [k, vars.get(k)]));
+  for (const [k, v] of bindings) vars.set(k, v);
+  runCommands(callee.body, vars, ctx, depth + 1);
+  for (const [k, v] of saved) {
+    if (v === undefined) vars.delete(k);
+    else vars.set(k, v);
+  }
+}
+
+/**
+ * Reads one CMakeLists.txt. Targets it declares are returned as definitions. Commands that touch
+ * a target, such as target_sources, are returned as operations to apply once every file is read.
+ */
+function readFile(dir, buildFile, text, files) {
+  const vars = new Map([
+    ["CMAKE_CURRENT_SOURCE_DIR", [`/${dir}`]],
+    ["CMAKE_CURRENT_LIST_DIR", [`/${dir}`]],
+    ["CMAKE_SOURCE_DIR", ["/"]],
+    ["PROJECT_SOURCE_DIR", ["/"]],
+  ]);
+  const out = { defs: [], ops: [] };
+  const ctx = { dir, buildFile, files, out, callables: new Map(), invocations: 0 };
+  runCommands(parseCommands(text), vars, ctx, 0);
+  return out;
 }
 
 /**
