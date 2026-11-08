@@ -6,3 +6,10 @@ minimumReleaseAgeExclude:
 allowBuilds:
   tree-sitter-c: false
   tree-sitter-cpp: false
+# Transitive d3 packages whose latest releases are less than two weeks old. Pinned to the
+# last releases before that window; drop these once the d3 dependency tree settles.
+overrides:
+  d3-dispatch: 3.0.1
+  d3-timer: 3.0.1
+  d3-ease: 3.0.1
+  d3-color: 3.1.0
