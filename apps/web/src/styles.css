@@ -258,6 +258,50 @@ pre.code > div.flag { box-shadow: inset 3px 0 0 var(--warn); }
 .outline h3:first-child { margin-top: 0; }
 ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 
+/* Zoom map: one camera over the project, with folders, files and functions opening as it reaches them */
+.zm { margin-bottom: 16px; }
+.zm-crumbs ol { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; list-style: none; margin: 0 0 8px; padding: 0; font-size: 0.88rem; }
+.zm-crumbs li + li::before { content: "›"; color: var(--muted); padding: 0 6px; }
+.zm-crumbs a { color: var(--accent); text-decoration: none; }
+.zm-crumbs a:hover { text-decoration: underline; }
+.zm-stage { position: relative; height: clamp(360px, 68vh, 720px); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.zm-stage:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.zm-svg { display: block; cursor: grab; touch-action: none; }
+.zm-svg:active { cursor: grabbing; }
+.zm-frame-body { fill: var(--panel); stroke: var(--line); stroke-width: 1.2; }
+.zm-frame-head { fill: var(--bg); stroke: var(--line); stroke-width: 1; }
+.zm-hit { cursor: pointer; }
+.zm-hit:hover .zm-frame-head { stroke: var(--accent); }
+/* Labels keep the same size on screen at every zoom: the map sets --zinv to 1 / scale on its world group. */
+.zm-label { fill: var(--fg); font-family: system-ui, sans-serif; font-weight: 600; font-size: calc(13px * var(--zinv, 1)); pointer-events: none; }
+.zm-count { fill: var(--muted); font-family: system-ui, sans-serif; font-size: calc(11px * var(--zinv, 1)); pointer-events: none; }
+.zm-box { cursor: pointer; }
+.zm-box-body, .zm-frame-body, .zm-frame-head, .zm-stub-body, .zm-cfg-body { vector-effect: non-scaling-stroke; }
+.zm-box-body { fill: var(--band, var(--panel)); stroke: var(--line); stroke-width: 1.2; }
+.zm-box.zm-function .zm-label { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 500; font-size: calc(12px * var(--zinv, 1)); }
+.zm-box:hover .zm-box-body { stroke: var(--accent); stroke-width: 2; }
+.zm-stub-body { fill: none; stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 6 4; }
+.zm-label-stub { fill: var(--muted); font-weight: 400; font-style: italic; }
+.zm-edge { fill: none; stroke: var(--muted); opacity: 0.75; vector-effect: non-scaling-stroke; }
+.zm-edge.stub { stroke-dasharray: 6 4; }
+.zm-edge.candidate { stroke-dasharray: 2 3; }
+.zm-arrow { fill: var(--muted); }
+.zm-cfg-body { fill: var(--panel); stroke: var(--accent); stroke-width: 1.5; }
+.zm-loading { position: absolute; inset: 0; margin: 0; display: flex; align-items: center; justify-content: center; }
+.zm-mini { position: absolute; right: 10px; bottom: 10px; width: 180px; height: 120px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; cursor: crosshair; touch-action: none; }
+.zm-mini-frame { fill: none; stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.zm-mini-box { fill: var(--muted); opacity: 0.45; }
+.zm-mini-cfg { fill: var(--accent); }
+.zm-mini-view { fill: var(--accent); fill-opacity: 0.12; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.zm-hint { margin: 6px 0 0; }
+.zm-detail { margin-top: 14px; }
+/* The per-file table under the map scrolls sideways inside its own box on a phone rather than widening the page. */
+.flow-table { max-width: 100%; overflow-x: auto; }
+@media (max-width: 600px) {
+  .zm-stage { height: 360px; }
+  .zm-mini { width: 120px; height: 80px; }
+}
+
 @media (max-width: 860px) {
   .split, .ws, .viewer-body { grid-template-columns: minmax(0, 1fr); }
   .side, .outline { position: static; }
