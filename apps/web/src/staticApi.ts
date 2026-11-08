@@ -162,6 +162,7 @@ function emptyScopeExec(scope: string): ExecModel {
       dispatches: 0,
       functionsInScope: 0,
       functionsThreaded: 0,
+      functionsCoroutineOnly: 0,
       functionsUnthreaded: 0,
       functionsListed: 0,
     },

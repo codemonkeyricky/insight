@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { IREdge, IRNode } from "@insight/ir";
-import { MAX_EXEC_FUNCTIONS, execModel, insideScope, type ExecModel } from "../src/index.js";
+import { MAX_EXEC_FUNCTIONS, execModel, insideScope, isNoisePath, type ExecModel } from "../src/index.js";
 import { PROVENANCE, callEdge, fnNode } from "./synthetic.js";
 
 /** The id a spawn node gets in these tests: its file and its 0-based line. */
@@ -23,6 +23,21 @@ function dispatchEdge(from: string, to: IREdge["to"], how: string, file: string,
 }
 
 const names = (m: ExecModel, ids: readonly string[]) => ids.map((id) => m.functions.find((f) => f.id === id)?.name ?? id);
+
+/** The id of the anonymous function on `line` of `file`. Its name is `λ<line>:3`, as the frontends write it. */
+const anonId = (file: string, line: number) => `${file}#λ${line + 1}:3`;
+/** An anonymous function on `line` of `file`, written in `parent`: a function id, or the file for module-level code. */
+function anonNode(file: string, line: number, parent: string): IRNode {
+  const name = `λ${line + 1}:3`;
+  return { ...fnNode(file, name, line), parent, attrs: { name, anonymous: true } };
+}
+/** A closure edge: `from` creates the anonymous function `to`, on `line` of `file`. */
+function closureEdge(from: string, to: string, file: string, line: number): IREdge {
+  return { from, to, facet: "calls", kind: "calls.reference", span: spanAt(file, line), attrs: { how: "closure" }, provenance: PROVENANCE };
+}
+/** Each listed function's runtime, by id. A function the model does not list runs on no thread. */
+const runtimes = (m: ExecModel): Record<string, string> => Object.fromEntries(m.functions.map((f) => [f.id, f.runtime]));
+const runtimeIn = (m: ExecModel, id: string): string => m.functions.find((f) => f.id === id)?.runtime ?? "none";
 
 describe("execModel: threads", () => {
   it("lists the main thread with its two callees", () => {
@@ -143,7 +158,7 @@ describe("execModel: coroutines", () => {
       ["src/c.ts#co", "await", ["src/c.ts#inner"]],
       ["src/c.ts#main", "await", ["src/c.ts#co"]],
     ]);
-    expect(model.stats).toMatchObject({ coroutines: 2, dispatches: 2, functionsThreaded: 6, functionsUnthreaded: 0 });
+    expect(model.stats).toMatchObject({ coroutines: 2, dispatches: 2, functionsThreaded: 6, functionsCoroutineOnly: 5, functionsUnthreaded: 0 });
   });
 
   it("cuts a cycle of awaits, and lists each coroutine that dispatches into the cycle", () => {
@@ -248,6 +263,9 @@ describe("execModel across nested scopes", () => {
     spawnNode("lib/work.ts", 9, "lib/work.ts#work", "concurrency.spawn-process"),
     spawnNode("tests/index.test.ts", 3, "tests/index.test.ts#it"),
     spawnNode("src/boot.ts", 14, "src/boot.ts"),
+    anonNode("app/src/index.ts", 3, "app/src/index.ts#main"),
+    anonNode("lib/format.ts", 6, "lib/format.ts#format"),
+    spawnNode("lib/format.ts", 6, "lib/format.ts#format"),
   ];
   const EDGES: IREdge[] = [
     callEdge("app/src/index.ts#main", "app/src/index.ts#parse", "app/src/index.ts", 1),
@@ -264,6 +282,12 @@ describe("execModel across nested scopes", () => {
     spawnEdge("lib/work.ts", 9, "app/src/index.ts#parse", "process"),
     spawnEdge("tests/index.test.ts", 3, "lib/format.ts#pad"),
     spawnEdge("src/boot.ts", 14, "lib/strings.ts"),
+    // A lambda main creates and passes to a call, and one a format spawns on its own thread.
+    closureEdge("app/src/index.ts#main", anonId("app/src/index.ts", 3), "app/src/index.ts", 3),
+    callEdge(anonId("app/src/index.ts", 3), "app/src/lex.ts#lex", "app/src/index.ts", 3),
+    closureEdge("lib/format.ts#format", anonId("lib/format.ts", 6), "lib/format.ts", 6),
+    spawnEdge("lib/format.ts", 6, anonId("lib/format.ts", 6)),
+    callEdge(anonId("lib/format.ts", 6), "lib/work.ts#step", "lib/format.ts", 7),
   ];
   const SCOPES = [
     "app/src/lex.ts",
@@ -318,5 +342,187 @@ describe("execModel across nested scopes", () => {
       expect(inner.stats.functionsInScope, `${narrow} vs ${wide}`).toBeLessThanOrEqual(outer.stats.functionsInScope);
       expect(outer.dispatches).toEqual(expect.arrayContaining(inner.dispatches));
     }
+  });
+
+  const inScopeIds = (scope: string) => NODES.filter((n) => n.kind === "structure.function" && insideScope(n.span?.file ?? "", scope)).map((n) => n.id);
+  /** Whether a scope applies the test-folder rules, as execModel reads them. */
+  const noiseScope = (s: string) => isNoisePath(s) || isNoisePath(`${s}/`);
+
+  it("keeps a function a narrower scope runs on a thread on a thread or as a coroutine in every wider scope", () => {
+    let checked = 0;
+    for (const [narrow, wide] of nested) {
+      const inner = execModel(NODES, EDGES, narrow);
+      const outer = execModel(NODES, EDGES, wide);
+      for (const f of inner.functions) {
+        if (f.runtime !== "thread") continue;
+        // Test code is a root only where its folder is the scope, so a project does not root its tests' callees.
+        // See "roots a function only a test calls in a project".
+        if (f.noise && !noiseScope(wide)) continue;
+        checked++;
+        expect(["thread", "coroutine"], `${f.id} runs on a thread in ${narrow} but not in ${wide || "the project"}`).toContain(runtimeIn(outer, f.id));
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("gives a function no thread of a narrower scope runs a thread in a wider one only through a thread or root the wider one adds", () => {
+    // The trim case: src/boot.ts's spawn runs lib/strings.ts, a script whose call is trim. That spawn lies in "" and
+    // "src" but not in "lib", so trim is on no thread in "lib" and on the spawn's thread in "". The spawn is the thread added.
+    for (const [narrow, wide] of nested) {
+      const inner = execModel(NODES, EDGES, narrow);
+      const outer = execModel(NODES, EDGES, wide);
+      const innerIds = new Set(inner.threads.map((t) => t.id));
+      const innerMain = inner.threads[0]?.reached ?? [];
+      const outerMain = outer.threads[0]?.reached ?? [];
+      const gained = new Set([
+        ...outer.threads.filter((t) => !innerIds.has(t.id)).flatMap((t) => t.reached),
+        ...outerMain.filter((id) => !innerMain.includes(id)),
+      ]);
+      for (const id of inScopeIds(narrow)) {
+        if (runtimeIn(inner, id) !== "none" || runtimeIn(outer, id) !== "thread") continue;
+        expect(gained.has(id), `${id} runs on no thread in ${narrow} and on one in ${wide || "the project"}, with no thread or root added there`).toBe(true);
+      }
+    }
+  });
+});
+
+describe("execModel: anonymous functions and runtime", () => {
+  it("runs a spawned lambda on its own thread, and its creator does not reach the lambda", () => {
+    const file = "src/app.ts";
+    const main = `${file}#main`;
+    const lam = anonId(file, 2);
+    const nodes = [fnNode(file, "main", 0), anonNode(file, 2, main), spawnNode(file, 2, main), fnNode("src/w.ts", "work", 0), fnNode("src/w.ts", "helper", 4)];
+    const edges = [closureEdge(main, lam, file, 2), spawnEdge(file, 2, lam), callEdge(lam, "src/w.ts#work", file, 3), callEdge("src/w.ts#work", "src/w.ts#helper", "src/w.ts", 1)];
+    const model = execModel(nodes, edges, "");
+    expect(model.threads).toHaveLength(2);
+    // The closure is the spawn's target, so the main thread stops at its creator.
+    expect(model.threads[0]).toMatchObject({ roots: [main], reach: 1, reached: [main] });
+    expect(model.threads[1]).toMatchObject({
+      roots: [lam],
+      reach: 3,
+      reached: [lam, "src/w.ts#helper", "src/w.ts#work"],
+      spawn: { status: "resolved", how: "thread" },
+    });
+    expect(model.functions.find((f) => f.id === lam)).toEqual({ id: lam, name: "λ3:3", file, line: 3, inScope: true, anonymous: true, parent: main, runtime: "thread" });
+    expect(model.stats).toMatchObject({ functionsInScope: 4, functionsThreaded: 4, functionsCoroutineOnly: 0, functionsUnthreaded: 0 });
+  });
+
+  it("runs an awaited lambda as a coroutine, not on the thread", () => {
+    const file = "src/a.ts";
+    const main = `${file}#main`;
+    const lam = anonId(file, 2);
+    const helper = `${file}#helper`;
+    const nodes = [fnNode(file, "main", 0), anonNode(file, 2, main), fnNode(file, "helper", 4)];
+    const edges = [closureEdge(main, lam, file, 2), dispatchEdge(main, lam, "await", file, 2), callEdge(lam, helper, file, 3)];
+    const model = execModel(nodes, edges, "");
+    expect(model.threads[0]).toMatchObject({ roots: [main], reach: 3 });
+    expect(model.threads[0]?.coroutines).toEqual([{ target: lam, how: "await", dispatchedBy: [main], callees: [helper] }]);
+    expect(runtimes(model)).toEqual({ [main]: "thread", [lam]: "coroutine", [helper]: "coroutine" });
+    expect(model.stats).toMatchObject({ functionsThreaded: 3, functionsCoroutineOnly: 2, functionsUnthreaded: 0 });
+  });
+
+  // The TypeScript frontend emits .then as a callback, and setTimeout as a timer, so both run on the dispatching thread.
+  it.each(["callback", "timer", "microtask"] as const)("runs the lambda of a %s dispatch on the dispatching thread", (how) => {
+    const file = "src/a.ts";
+    const main = `${file}#main`;
+    const lam = anonId(file, 2);
+    const after = `${file}#after`;
+    const nodes = [fnNode(file, "main", 0), anonNode(file, 2, main), fnNode(file, "after", 4)];
+    const edges = [closureEdge(main, lam, file, 2), dispatchEdge(main, lam, how, file, 2), callEdge(lam, after, file, 3)];
+    const model = execModel(nodes, edges, "");
+    expect(model.threads[0]).toMatchObject({ roots: [main], reach: 3, coroutines: [] });
+    expect(runtimes(model)).toEqual({ [main]: "thread", [lam]: "thread", [after]: "thread" });
+  });
+
+  it("runs a lambda passed to a call, such as arr.map, on its creator's thread", () => {
+    const file = "src/a.ts";
+    const main = `${file}#main`;
+    const lam = anonId(file, 2);
+    const helper = `${file}#helper`;
+    const nodes = [fnNode(file, "main", 0), anonNode(file, 2, main), fnNode(file, "helper", 4)];
+    const edges = [closureEdge(main, lam, file, 2), callEdge(lam, helper, file, 3)];
+    const model = execModel(nodes, edges, "");
+    expect(model.threads[0]).toMatchObject({ roots: [main], reach: 3, coroutines: [] });
+    expect(runtimes(model)).toEqual({ [main]: "thread", [lam]: "thread", [helper]: "thread" });
+  });
+
+  it("never makes an anonymous function a main root, even one nothing creates", () => {
+    const file = "src/m.ts";
+    const nodes = [fnNode(file, "main", 0), anonNode(file, 6, file)];
+    // With no edges, a named function nothing calls would be a root. The lambda is not, and no thread runs it.
+    const model = execModel(nodes, [], "");
+    expect(model.threads[0]).toMatchObject({ roots: [`${file}#main`], reach: 1 });
+    expect(model.functions.find((f) => f.id === anonId(file, 6))).toBeUndefined();
+    // Module-level code that hands it to a timer lists it, and it runs on no thread.
+    const timed = execModel(nodes, [dispatchEdge(file, anonId(file, 6), "timer", file, 7)], "");
+    expect(timed.threads[0]?.roots).toEqual([`${file}#main`]);
+    expect(timed.functions.find((f) => f.id === anonId(file, 6))).toMatchObject({ anonymous: true, parent: file, runtime: "none" });
+    expect(timed.stats).toMatchObject({ functionsInScope: 2, functionsThreaded: 1, functionsUnthreaded: 1 });
+  });
+
+  it("runs a lambda created inside a spawned lambda on that spawn's thread", () => {
+    const file = "src/m.ts";
+    const main = `${file}#main`;
+    const outer = anonId(file, 2);
+    const inner = anonId(file, 4);
+    const helper = "src/h.ts#helper";
+    const nodes = [fnNode(file, "main", 0), anonNode(file, 2, main), anonNode(file, 4, outer), spawnNode(file, 2, main), fnNode("src/h.ts", "helper", 0)];
+    const edges = [closureEdge(main, outer, file, 2), spawnEdge(file, 2, outer), closureEdge(outer, inner, file, 4), callEdge(inner, helper, file, 5)];
+    const model = execModel(nodes, edges, "");
+    expect(model.threads[0]).toMatchObject({ roots: [main], reach: 1 });
+    expect(model.threads[1]).toMatchObject({ roots: [outer], reach: 3, reached: [helper, outer, inner] });
+    expect(model.functions.find((f) => f.id === inner)).toMatchObject({ anonymous: true, parent: outer, runtime: "thread" });
+    expect(runtimes(model)).toEqual({ [main]: "thread", [outer]: "thread", [inner]: "thread", [helper]: "thread" });
+  });
+
+  it("gives each function a runtime: thread, coroutine or none", () => {
+    const file = "src/r.ts";
+    const at = (name: string) => `${file}#${name}`;
+    const nodes = ["main", "y", "x", "p", "q", "r"].map((n, i) => fnNode(file, n, i * 4));
+    const edges = [
+      callEdge(at("main"), at("y"), file, 1),
+      dispatchEdge(at("main"), at("x"), "await", file, 2),
+      // p and q call each other and nothing else calls them, so no thread reaches them. p starts r on a timer.
+      callEdge(at("p"), at("q"), file, 13),
+      callEdge(at("q"), at("p"), file, 17),
+      dispatchEdge(at("p"), at("r"), "timer", file, 14),
+    ];
+    const model = execModel(nodes, edges, "");
+    expect(runtimes(model)).toEqual({ [at("main")]: "thread", [at("y")]: "thread", [at("x")]: "coroutine", [at("r")]: "none" });
+    expect(model.stats).toMatchObject({ functionsInScope: 6, functionsThreaded: 3, functionsCoroutineOnly: 1, functionsUnthreaded: 3 });
+  });
+
+  it("roots a function only a test calls in a project, and a test folder's test in its own folder", () => {
+    const nodes = [fnNode("src/a.ts", "main", 0), fnNode("src/a.ts", "run", 4), fnNode("tests/a.test.ts", "it", 0)];
+    const edges = [callEdge("src/a.ts#main", "src/a.ts#run", "src/a.ts", 1), callEdge("tests/a.test.ts#it", "src/a.ts#main", "tests/a.test.ts", 1)];
+    // `main` is called only by a test, which is not the program's code, so the project's thread starts at it.
+    const project = execModel(nodes, edges, "");
+    expect(project.threads[0]).toMatchObject({ roots: ["src/a.ts#main"], reach: 2 });
+    expect(runtimes(project)).toEqual({ "src/a.ts#main": "thread", "src/a.ts#run": "thread" });
+    // In the test folder the test is the root, and what it calls is reached from it.
+    expect(execModel(nodes, edges, "tests").threads[0]).toMatchObject({ roots: ["tests/a.test.ts#it"], reach: 3 });
+  });
+
+  it("pins the known gap: a function only a wider scope's module-level code calls runs on no thread there", () => {
+    // In its own file's scope `f` is a main root, since its only caller lies outside the scope. The wider scope holds
+    // the script whose top-level code calls it. Module-level code starts no thread, so `f` runs on none there. This
+    // breaks the thread-stability property on purpose, so a change to the rule shows here.
+    const nodes = [fnNode("src/a.ts", "f", 0)];
+    const edges = [callEdge("src/s.ts", "src/a.ts#f", "src/s.ts", 9)];
+    expect(execModel(nodes, edges, "src/a.ts").threads[0]?.roots).toEqual(["src/a.ts#f"]);
+    const wide = execModel(nodes, edges, "src");
+    expect(wide.threads[0]?.roots).toEqual([]);
+    expect(wide.stats).toMatchObject({ functionsInScope: 1, functionsThreaded: 0, functionsUnthreaded: 1 });
+  });
+
+  it("pins the known gap: a function whose only wider-scope caller sits in an unrooted cycle runs on no thread there", () => {
+    // `f` and `g` call each other, and nothing outside the cycle calls either. In "src/a.ts", where `g` lies outside,
+    // `f` is a root and runs on a thread. In "src", each is referenced by the other, so neither is a root.
+    const nodes = [fnNode("src/a.ts", "f", 0), fnNode("src/b.ts", "g", 0)];
+    const edges = [callEdge("src/a.ts#f", "src/b.ts#g", "src/a.ts", 1), callEdge("src/b.ts#g", "src/a.ts#f", "src/b.ts", 1)];
+    expect(execModel(nodes, edges, "src/a.ts").threads[0]?.roots).toEqual(["src/a.ts#f"]);
+    const wide = execModel(nodes, edges, "src");
+    expect(wide.threads[0]?.roots).toEqual([]);
+    expect(wide.stats).toMatchObject({ functionsInScope: 2, functionsThreaded: 0, functionsUnthreaded: 2 });
   });
 });

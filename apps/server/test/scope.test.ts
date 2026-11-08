@@ -303,10 +303,17 @@ describe("scoped IR routes", () => {
       scope: string;
       kind: string;
       truncated: boolean;
-      functions: { id: string; inScope: boolean }[];
+      functions: { id: string; inScope: boolean; runtime: "thread" | "coroutine" | "none" }[];
       threads: { id: string; kind: string; roots: string[]; reach: number; reached: string[]; coroutines: unknown[] }[];
       dispatches: unknown[];
-      stats: { threads: number; spawns: number; functionsInScope: number; functionsThreaded: number; functionsUnthreaded: number };
+      stats: {
+        threads: number;
+        spawns: number;
+        functionsInScope: number;
+        functionsThreaded: number;
+        functionsCoroutineOnly: number;
+        functionsUnthreaded: number;
+      };
     }
     const execUrl = (path: string) => `/api/projects/${id}/scope/exec?path=${encodeURIComponent(path)}`;
 
@@ -344,7 +351,14 @@ describe("scoped IR routes", () => {
       // d() is the only function nothing calls. From it the thread reaches a(), b() and c(): four functions in all.
       expect(project.body.threads[0]).toMatchObject({ id: "main", kind: "main", roots: ["src/b.ts#d"], reach: 4 });
       expect(project.body.threads[0]?.reached).toEqual(["lib/c.ts#c", "src/a.ts#a", "src/b.ts#b", "src/b.ts#d"]);
-      expect(project.body.stats).toMatchObject({ threads: 1, spawns: 0, functionsInScope: 4, functionsThreaded: 4, functionsUnthreaded: 0 });
+      expect(project.body.stats).toMatchObject({ threads: 1, spawns: 0, functionsInScope: 4, functionsThreaded: 4, functionsCoroutineOnly: 0, functionsUnthreaded: 0 });
+      // Every function the main thread runs is on that thread on its own, so none is a coroutine's alone.
+      expect(Object.fromEntries(project.body.functions.map((f) => [f.id, f.runtime]))).toEqual({
+        "src/b.ts#d": "thread",
+        "lib/c.ts#c": "thread",
+        "src/a.ts#a": "thread",
+        "src/b.ts#b": "thread",
+      });
     });
 
     it("starts a folder's main thread at the functions no caller in the folder reaches, and keeps the functions outside it", async () => {
