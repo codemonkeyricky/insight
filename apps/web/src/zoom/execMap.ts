@@ -53,6 +53,8 @@ export function execMapNode(scene: Scene, id: string, bands?: ReadonlyMap<string
   const node: MapNode = { id, kind: n.kind, label: n.label, title: n.note ?? n.label };
   if (n.detail !== undefined) node.detail = n.detail;
   if (n.parent !== undefined) node.parent = n.parent;
+  if (n.kind === "function" && n.ref !== undefined) node.ref = n.ref;
+  if (n.chart !== undefined) node.chart = n.chart;
   if (n.kind === "file") {
     const band = bands?.get(n.note ?? n.label);
     if (band !== undefined) node.band = band;

@@ -5,11 +5,13 @@ import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type K
 import { select } from "d3-selection";
 import "d3-transition";
 import { zoom, zoomIdentity, type D3ZoomEvent, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
-import { ZOOM_SIZE, fitCamera, nextOpen, visibleWorld, type Camera, type PlacedItem, type Rect } from "@insight/flow";
+import { CHART_HEAD, ZOOM_SIZE, fitCamera, nextOpen, visibleWorld, type Camera, type PlacedItem, type Rect } from "@insight/flow";
 import { nameOfId } from "../../flowTargets";
 import { hrefView } from "../../router";
 import { deepestAt, edgeClass, edgeKey, edgeTitle, edgeWidth, nearestBox, type MapBuild, type MapEdge, type MapNode, type MapSource } from "../../zoom/source";
 import { bucketScale, fitLabel, headerLabels, labelChars, lodBucket } from "../../zoom/lod";
+import type { ZoomStore } from "../../zoom/scene";
+import { BoxChart, CHART_MIN_PX } from "./BoxChart";
 
 /** The camera's scale range: from the whole project down to a single line of a chart. */
 const SCALE: [number, number] = [0.02, 16];
@@ -53,13 +55,22 @@ interface Props {
   fn?: string;
   /** What the page draws below the map for the focus, such as the function panel. `open` moves the map to a node id. */
   detail?: (build: MapBuild, open: (nodeId: string) => void) => ReactNode;
+  /** Where a function box's control-flow chart is loaded from. Without it, function boxes show only their names. */
+  charts?: ChartSource;
+}
+
+/** What a box needs to draw its chart: the project, the scope its links resolve in, and the flow store. */
+export interface ChartSource {
+  id: string;
+  scope: string;
+  store: ZoomStore;
 }
 
 /**
  * The execution map: one camera over a scope's scene. Each node is a focus of the source; the map's items and edges
  * are named by node id, so a click or key that names a node is turned into a focus by the source first (`focusOf`).
  */
-export function ZoomMap({ id, source, scope, fn, detail }: Props) {
+export function ZoomMap({ id, source, scope, fn, detail, charts }: Props) {
   const [build, setBuild] = useState<MapBuild>();
   /** `lod` is the camera's quarter-octave bucket (lod.ts): labels are cut to it, and it changes only with the bucket. */
   const [shown, setShown] = useState<{ build?: MapBuild; items: PlacedItem[]; edges: MapEdge[]; lod: number }>({ items: [], edges: [], lod: 0 });
@@ -458,7 +469,7 @@ export function ZoomMap({ id, source, scope, fn, detail }: Props) {
             ))}
             {drawn("box").map((it) => {
               const node = build?.node(it.id);
-              return node ? <BoxShape key={it.id} item={it} node={node} k={labelScale} onOpen={openNode} /> : null;
+              return node ? <BoxShape key={it.id} item={it} node={node} k={labelScale} onOpen={openNode} charts={charts} /> : null;
             })}
           </g>
         </svg>
@@ -537,19 +548,26 @@ function FrameShape({ item, node, k, onOpen }: { item: PlacedItem; node: MapNode
   );
 }
 
-function BoxShape({ item, node, k, onOpen }: { item: PlacedItem; node: MapNode; k: number; onOpen: (id: string) => void }) {
+/**
+ * A box with a chart (a function that has a control-flow chart) keeps its name in a header and draws the chart below it
+ * once the box is CHART_MIN_PX wide on screen. Any other box has its name in the middle.
+ */
+function BoxShape({ item, node, k, onOpen, charts }: { item: PlacedItem; node: MapNode; k: number; onOpen: (id: string) => void; charts?: ChartSource }) {
   const { rect } = item;
   const style = node.band !== undefined ? ({ "--band": `var(--band-${node.band})` } as CSSProperties) : undefined;
   const label = fitLabel(node.label, labelChars(rect.w * k));
+  const holdsChart = node.chart !== undefined;
+  const showChart = holdsChart && charts !== undefined && node.ref !== undefined && rect.w * k >= CHART_MIN_PX;
   return (
-    <g className={`zm-box zm-${node.kind}`} style={style} onClick={() => onOpen(item.id)}>
+    <g className={`zm-box zm-${node.kind}${holdsChart ? " zm-has-chart" : ""}`} style={style} onClick={() => onOpen(item.id)}>
       <title>{node.title || node.label}</title>
       <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={8} className="zm-box-body" />
       {label !== null && (
-        <text x={rect.x + 12} y={rect.y + rect.h / 2} dominantBaseline="central" className="zm-label">
+        <text x={rect.x + 12} y={holdsChart ? rect.y + CHART_HEAD / 2 : rect.y + rect.h / 2} dominantBaseline="central" className="zm-label">
           {label}
         </text>
       )}
+      {showChart && node.ref !== undefined && <BoxChart id={charts.id} scope={charts.scope} store={charts.store} fnId={node.ref} rect={rect} />}
     </g>
   );
 }

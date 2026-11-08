@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  CHART_HEAD,
+  CHART_PAD,
   EXEC_LEVELS,
   NO_RUNTIME_NOTE,
   NO_RUNTIME_GROUP,
@@ -11,6 +13,7 @@ import {
   type SolvedGraph,
 } from "@insight/flow";
 import { BANDS, execBuild, execFileBands, execFocus, execMapNode, execResolve, execSelected, execUrl, splitExecFocus } from "../src/zoom/execMap.js";
+import { chartOrigin } from "../src/components/zoom/BoxChart.js";
 import { deepestAt, edgeClass, edgeKey, edgeTitle, edgeWidth } from "../src/zoom/source.js";
 
 describe("deepestAt", () => {
@@ -108,6 +111,24 @@ describe("exec map", () => {
     expect(execMapNode(scene, "thread:w>file:b.py", execFileBands(scene))).toMatchObject({ kind: "file", band: 0, title: "src/b.py" });
     expect(execMapNode(scene, "program")?.parent).toBeUndefined();
     expect(execMapNode(scene, "nope")).toBeUndefined();
+  });
+
+  it("carries a function's id and chart size to the box, and no chart to a box without one", () => {
+    const withChart: Scene = { ...scene, nodes: new Map(scene.nodes) };
+    const id = "thread:main>a#help";
+    const helper = scene.nodes.get(id);
+    if (helper === undefined) throw new Error("no helper");
+    withChart.nodes.set(id, { ...helper, chart: { w: 300, h: 200 } });
+    expect(execMapNode(withChart, id)).toMatchObject({ kind: "function", ref: helper.ref, chart: { w: 300, h: 200 } });
+    expect(execMapNode(scene, id)?.chart).toBeUndefined();
+    expect(execMapNode(withChart, "thread:main")?.chart).toBeUndefined();
+  });
+
+  it("puts a chart under the name's header, centred across a wider box", () => {
+    const rect = { x: 100, y: 50, w: 400, h: 300 };
+    expect(chartOrigin(rect, { w: 200, h: 100 })).toEqual({ x: 200, y: 50 + CHART_HEAD + CHART_PAD });
+    // A chart as wide as the box minus its padding sits at the padding.
+    expect(chartOrigin({ x: 0, y: 0, w: 224, h: 200 }, { w: 200, h: 100 })).toEqual({ x: 12, y: CHART_HEAD + CHART_PAD });
   });
 
   it("resolves a function to its first placement, else the root", () => {

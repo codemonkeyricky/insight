@@ -7,6 +7,10 @@
 // in the demo capture under Node.
 import type { ContainerLayout, Size } from "./zoom-layout.js";
 
+/** Room between a function box's edge and its chart, and above the chart for the function's name. */
+export const CHART_PAD = 12;
+export const CHART_HEAD = 28;
+
 /** How one kind of node is drawn and laid out. */
 export interface SceneLevel {
   /** The size of a node of this kind that has no children. A node with children takes its laid-out frame's size. */
@@ -33,6 +37,11 @@ export interface SceneNode {
    * is drawn once in each thread.
    */
   ref?: string;
+  /**
+   * For a function that has a control-flow chart: the chart's natural size. The node's box is sized to hold it (see
+   * `sceneLeafSize`), and the renderer draws the chart inside the box once the box is large on screen.
+   */
+  chart?: Size;
 }
 
 /**

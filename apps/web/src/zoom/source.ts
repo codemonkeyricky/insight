@@ -19,6 +19,13 @@ export interface MapNode {
   parent?: string;
   /** A colour band (0..5, `--band-N` in styles.css) for a file and what it holds. */
   band?: number;
+  /** The entity the box draws, such as the function id whose chart the box holds. */
+  ref?: string;
+  /**
+   * The natural size of the control-flow chart the box holds. A box with a chart is drawn with its name in a header and,
+   * once it is large on screen, the chart below it.
+   */
+  chart?: { w: number; h: number };
 }
 
 /** An edge as the map draws it. A call has no kind (or "call"); spawns and dispatches get their own class. */

@@ -6,6 +6,7 @@ import {
   LAYERED_MAX_CHILDREN,
   PACKED,
   layoutScene,
+  packRows,
   sceneLayoutOptions,
   placeSceneEdges,
   placeSceneLayout,
@@ -385,6 +386,21 @@ describe("layoutScene", () => {
     }
   });
 
+  it("a saved layout from before a chart was sized does not cover the scene", async () => {
+    const saved = await layoutScene(exec, solveElk);
+    const next: Scene = { ...exec, nodes: new Map(exec.nodes) };
+    const f1 = exec.nodes.get("f1");
+    if (f1 === undefined) throw new Error("no f1");
+    next.nodes.set("f1", { ...f1, chart: { w: 500, h: 400 } });
+    expect(layoutCovers(next, saved)).toBe(false);
+    // Laid out again with the chart, the box is the chart's size and the layout covers.
+    const fresh = await layoutScene(next, solveElk);
+    expect(layoutCovers(next, fresh)).toBe(true);
+    const slot = fresh.containers.C1?.slots.find((s) => s.id === "f1");
+    expect(slot?.w).toBeGreaterThanOrEqual(500);
+    expect(slot?.h).toBeGreaterThanOrEqual(400);
+  });
+
   it("gives the same layout twice", async () => {
     const a = await layoutScene(exec, solveElk);
     const b = await layoutScene(exec, solveElk);
@@ -572,5 +588,61 @@ describe("a large scene", () => {
     const s = makeScene(spec, [], { ...LEVELS, group: { box: { w: 100, h: 40 }, layout: own } }, "P");
     expect(sceneLayoutOptions(s, "T")["elk.algorithm"]).toBe("layered");
     expect(sceneLayoutOptions(s, "G")).toBe(own);
+  });
+});
+
+describe("packRows", () => {
+  // The chart heights of the function boxes in the group of packages/flow/test/zoom-layout.test.ts's scope, which ELK's rectpacking never returned for.
+  const HEIGHTS = [82, 82, 82, 442, 142, 82, 622, 82, 502, 82, 142, 450, 82, 202, 82, 82, 82, 322, 442, 82, 502, 142, 502, 382, 262, 82, 142, 82, 202, 82, 142, 82, 202, 202, 82, 262, 142];
+  const graphOfSizes = (sizes: { w: number; h: number }[]): LayoutGraph => ({
+    id: "G",
+    layoutOptions: { "elk.algorithm": "rectpacking", "elk.spacing.nodeNode": "24" },
+    children: sizes.map((s, i) => ({ id: `c${i}`, width: s.w, height: s.h })),
+    edges: [],
+  });
+
+  it("places every child without overlap, in order, and returns at once for the mix ELK's rectpacking hung on", () => {
+    const sizes = HEIGHTS.map((h, i) => ({ w: i === 11 ? 316 : 236, h }));
+    const graph = graphOfSizes(sizes);
+    const t0 = performance.now();
+    const solved = packRows(graph);
+    expect(performance.now() - t0).toBeLessThan(100);
+    const rects = (solved.children ?? []).map((c, i) => ({ id: c.id, x: c.x ?? 0, y: c.y ?? 0, w: sizes[i]!.w, h: sizes[i]!.h }));
+    expect(rects.map((r) => r.id)).toEqual(graph.children.map((c) => c.id));
+    for (let i = 0; i < rects.length; i += 1) {
+      for (let j = i + 1; j < rects.length; j += 1) expect(overlaps(rects[i]!, rects[j]!)).toBe(false);
+    }
+    const right = Math.max(...rects.map((r) => r.x + r.w));
+    const bottom = Math.max(...rects.map((r) => r.y + r.h));
+    expect(solved.width).toBe(right);
+    expect(solved.height).toBe(bottom);
+    // Rows of mixed heights waste some height, so the block comes out squarer than the 1.5 it aims for.
+    expect(right / bottom).toBeGreaterThan(0.5);
+    expect(right / bottom).toBeLessThan(3);
+  });
+
+  it("is deterministic, handles no children, and keeps a child wider than the row on its own row", () => {
+    const sizes = [{ w: 200, h: 50 }, { w: 5000, h: 50 }, { w: 200, h: 50 }];
+    expect(packRows(graphOfSizes(sizes))).toEqual(packRows(graphOfSizes(sizes)));
+    expect(packRows(graphOfSizes([]))).toEqual({ width: 0, height: 0, children: [] });
+    const wide = packRows(graphOfSizes(sizes));
+    expect(wide.children?.map((c) => c.x)).toEqual([0, 0, 0]);
+    expect(wide.width).toBe(5000);
+  });
+
+  it("is used for a rectpacking container, whose solve is never asked for", async () => {
+    const spec: Record<string, { kind: string; parent?: string }> = { P: { kind: "program" }, G: { kind: "group", parent: "P" } };
+    for (let i = 0; i < 6; i += 1) spec[`f${i}`] = { kind: "function", parent: "G" };
+    const levels = { ...LEVELS, group: { box: { w: 100, h: 40 }, layout: { "elk.algorithm": "rectpacking", "elk.spacing.nodeNode": "24" } } };
+    const scene = makeScene(spec, [], levels, "P");
+    for (let i = 0; i < 6; i += 1) scene.nodes.get(`f${i}`)!.chart = { w: 236, h: 82 + 60 * i };
+    const asked: string[] = [];
+    const layout = await layoutScene(scene, (g) => {
+      asked.push(g.id);
+      return gridSolver()(g);
+    });
+    expect(asked).toEqual(["P"]);
+    expect(layout.containers.G?.slots).toHaveLength(6);
+    expect(layoutCovers(scene, layout)).toBe(true);
   });
 });

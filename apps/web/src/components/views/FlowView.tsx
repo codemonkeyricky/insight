@@ -61,6 +61,7 @@ export function FlowView({ id, files, scope, fn, roots }: Props) {
         source={exec}
         scope={scope}
         fn={fn}
+        charts={{ id, scope, store }}
         detail={(build, open) => {
           const view = exec.viewOf(build);
           if (view === undefined) return null;
