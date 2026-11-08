@@ -117,8 +117,9 @@ export function Workspace({ id, tab, scope, line, fn, base, head }: WorkspacePro
   const stats = listing && listing.scope === canonicalScope(scope) ? listing.stats : null;
   // A project-wide tab has no source of its own, so picking a file in the explorer shows that file's source.
   const explorerTab = PROJECT_WIDE.has(tab) ? "source" : tab;
-  // Views remount when the snapshot, view or scope changes, so no state from the last one carries over.
-  const viewKey = `${overview.snapshot?.id ?? "none"}|${tab}|${scope}|${base ?? ""}|${head ?? ""}`;
+  // Views remount when the snapshot, view or scope changes, so no state from the last one carries over. The flow map
+  // follows the scope and function in place, so a scope change animates the camera rather than remounting the map.
+  const viewKey = `${overview.snapshot?.id ?? "none"}|${tab}|${tab === "flow" ? "" : scope}|${base ?? ""}|${head ?? ""}`;
 
   const tabLink = (t: string, label: string) => (
     <a key={t} href={hrefView(id, t, { scope })} className={t === tab ? "tab on" : "tab"} role="tab" aria-selected={t === tab}>
@@ -199,7 +200,8 @@ export function Workspace({ id, tab, scope, line, fn, base, head }: WorkspacePro
               This tab covers the whole project, so the explorer scope does not narrow it. Picking a file or folder in the explorer opens it in Source.
             </p>
           ) : (
-            <ScopeNote id={id} tab={tab} scope={scope} kind={kind} files={files} />
+            // The zoom map draws its own trail, so the flow tab leaves the explorer trail out.
+            <ScopeNote id={id} tab={tab} scope={scope} kind={kind} files={files} trail={tab !== "flow"} />
           )}
           <div key={viewKey}>{renderView()}</div>
         </div>

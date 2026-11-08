@@ -10,7 +10,7 @@ export type * from "./generated/effects.js";
 export { CORE_FACETS, isCoreFacet, isFacetId, type CoreFacet } from "./facets.js";
 export { KindRegistry, KindRegistryError, createIRAjv, type RegisteredKind } from "./registry.js";
 export { validateIR, parseNdjson, type Diagnostic, type IRDocument, type ValidationReport, type ValidateOptions } from "./validate.js";
-export { loadCoreKindDefinitions, loadFacetSchemas, loadCoreSchema, SCHEMA_DIR, CORE_SCHEMA_ID } from "./schemas.js";
+export { loadCoreKindDefinitions, loadFacetSchemas, loadCoreSchema, schemaDir, CORE_SCHEMA_ID } from "./schemas.js";
 
 import { KindRegistry } from "./registry.js";
 import { loadCoreKindDefinitions } from "./schemas.js";

@@ -1,38 +1,92 @@
-# Zoom map: spike notes
+# Zoom map
 
-The zoom map replaces the Flow tab's hand-drawn call graph with one camera over the project. Zooming in moves
-from the project to a folder, from a folder to its files, from a file to its functions, and later to a function's
-control-flow chart. This note records the spike that checked the stack before the scene model and the renderer
-were built.
+The zoom map replaces the Flow tab's hand-drawn call graph with one camera over the project. Zooming in moves from
+the project to a folder, from a folder to its files, from a file to its functions, and from a function to its
+control-flow chart (CFG). Zooming out moves back up the same chain. The URL follows the focus, and the camera follows
+the URL and the Explorer.
 
-## What the spike proves
+The work came in three milestones. M1 was the spike that checked the stack. M2 was the scene model. M3 is the
+renderer described below.
 
-`apps/web/spike.html` (source in `apps/web/src/spike/`) runs on the demo data and does four things:
+## Milestones
 
-1. One d3-zoom camera over a folder (`packages/`, 183 files, 105 calls). The transform is written straight onto a
-   `<g>`, and React re-renders only when the visible or expanded set changes.
-2. Wheel zoom onto a file box. Once the box is 240 px wide on screen, it opens and its functions are laid out
-   with their calls. Zooming back out below 200 px closes it (the hysteresis band).
-3. A switch to the project root (250 files with functions, 485 file-to-file calls) through the same worker path.
-4. A drag pans and leaves the open file alone.
+### M1: spike (commits 2cdfe95 and earlier)
 
-Result: all four work in headless Chromium, with no console errors, under both the Vite dev server and the
-static demo build (`VITE_STATIC=1`).
+The spike checked the stack on the demo data: one d3-zoom camera over a folder, wheel zoom onto a file box that opens
+its functions at 240 px and closes below 200 px, a switch to the project root through the worker, and a drag that
+leaves the open file alone. All four worked in headless Chromium with no console errors, under both the Vite dev
+server and the static demo build.
 
-## Layout in a worker: feasible, no fallback needed
+Layout runs in elkjs's own worker script (`elk-worker.min.js`) through `elk-api.js`, with `new ELK({ workerUrl })`.
+The URL comes from Vite's `?url` import, so it works in dev and in the static build. A hand-written module worker
+that imports `elkjs/lib/elk.bundled.js` does not work: the bundle picks its worker shim by checking for `self`, and
+inside a worker the check takes over `onmessage` and exports nothing (`_Worker is not a constructor`).
 
-The worker is elkjs's own worker script, `elk-worker.min.js`, driven by `elk-api.js` through
-`new ELK({ workerUrl })`. The URL comes from Vite's `?url` import, so it works in dev and in the static build,
-where it is emitted as `assets/elk-worker.min-*.js`.
+### M2: scene model (commit 415c3f5)
 
-What did not work: a hand-written module worker that imports `elkjs/lib/elk.bundled.js`. `elk.bundled.js` picks
-its worker shim by checking for `self`, and inside a worker that check takes over `onmessage` and exports nothing,
-so the worker fails with `_Worker is not a constructor`. The bundled build is kept only for the `?elk=main`
-comparison, and it is loaded with a dynamic import so it stays out of the app bundle.
+The scene model is React-free and lives in `packages/flow/src/scope-map.ts`:
+
+- `buildScopeTree` turns the per-scope flows into one tree of project, folder, file and function nodes.
+- `mergeCalls` merges calls across scopes into links, and `mapEdges` picks which links are drawn for an open set.
+- `frontier`, `boxOf`, `focusAt`, `openFor`, `breadcrumb`, `urlFocus` and `focusFromUrl` answer what is open, what
+  is visible, what is under the pointer, and what a URL names.
+- `nextOpen` is the hysteresis rule: a node opens once it is wider than `EXPAND_PX` (240), and stays open while it is
+  at least `COLLAPSE_PX` (200).
+- `fileBands` assigns each file a colour band.
+
+`packages/flow/src/zoom-layout.ts` builds the ELK graph per container (`layoutGraphOf`), keys it (`layoutKey`), reads
+the solved positions back (`readLayout`), places the scene (`placeScene`), and places the edges (`placeEdges`). Slots
+for expanded frames are reserved in the layout, so an opened container does not overlap its siblings. Stubs for
+calls that leave the open scope are dashed (`stubsFor`).
+
+`apps/web/src/zoom/scene.ts` holds `ZoomStore`. It loads scope flows lazily, caches layouts per container, and runs
+the ELK solves through `apps/web/src/zoom/elk.ts`. `ensureFocus` loads the file of the focused function before its
+CFG is shown.
+
+### M3: renderer
+
+`apps/web/src/components/zoom/ZoomMap.tsx` draws the map:
+
+- A d3-zoom camera. The transform is written straight onto the world `<g>`. React re-renders only when the culled
+  visible set changes.
+- Viewport-culled SVG: only boxes, frames, stubs and edges that intersect the view are rendered.
+- Lazy, cached ELK layouts per container, solved in the worker.
+- Hysteresis expand and collapse at 240 px and 200 px on screen.
+- Animated focus: an Explorer or URL change moves the camera to the new focus.
+- Keyboard: `+` and `-` zoom, arrow keys pan, `Enter` opens the item at the view centre, and `Escape` goes up one
+  level.
+- A breadcrumb (`ZoomMap` draws it; the Flow tab's explorer trail is turned off with `ScopeNote trail={false}`).
+- A minimap, and a resolution meter that reads as text.
+- Dashed external stubs for calls that leave the open scope.
+- File colour bands. Folder boxes stay white.
+- A function's CFG is the deepest leaf. `apps/web/src/components/zoom/FunctionDetail.tsx` renders it with `FlowChart`
+  from `@insight/flow`.
+- URL sync both ways through `replaceState`, so the history does not fill up. An Explorer or URL change animates
+  the camera; a camera gesture does not change the Explorer.
+- `Workspace` gives the flow tab a view key without the scope, so the map stays mounted when the scope changes and
+  the camera animates instead.
+
+Replaced and removed: `CallGraph.tsx`, `flowGraph.ts` and `flowGraph.test.ts` are deleted, and so are
+`apps/web/spike.html` and `apps/web/src/spike/`. `FlowView.tsx` now renders the zoom map.
+
+## Verification
+
+- `pnpm -r build` and `pnpm -r test` pass. `@insight/flow` has 77 tests across 4 files, and `@insight/web` has
+  54 tests across 4 files. The other packages pass too, with no failures.
+- `pnpm --filter @insight/web build:demo` builds. The demo is served from `apps/web/dist-demo` on a static port.
+- A playwright-core script drove the demo through real wheel, drag and keyboard input. It checked, with no console or
+  page errors:
+  - wheel-zoom descends project, folder, file, function, CFG in turn;
+  - zoom-out ascends back the same chain;
+  - the URL `scope` and `fn` follow the focus;
+  - the Explorer and URL changes animate the camera;
+  - the minimap and breadcrumb are clickable;
+  - the page has no horizontal scroll at phone width.
+- Screenshots were checked for each level, the minimap and the breadcrumb.
 
 ## Timings
 
-Times are in milliseconds. "Node" is the solver run in Node 24 on the demo scopes (best of three).
+Times are in milliseconds, from the M1 spike. "Node" is the solver run in Node 24 on the demo scopes (best of three).
 "Browser" is headless Chromium, measured around the call on the main thread.
 
 | Layout | Nodes | Edges | Node (best) | Browser, dev worker | Browser, static worker | Browser, main thread |
@@ -58,28 +112,62 @@ Camera updates (culling plus the transform) took 0.1 to 0.6 ms per update in eve
 
 ## Decisions
 
-- Layout runs in the elkjs worker, not on the main thread. Layouts are about 140 to 210 ms at these sizes, which is
-  a 150 ms stall on the main thread and none in the worker.
+- Layout runs in the elkjs worker, not on the main thread. Layouts take about 140 to 210 ms at these sizes, which
+  is a 150 ms stall on the main thread and none in the worker.
 - The camera is d3-zoom with the transform applied imperatively. React state holds only what is culled or expanded.
-- Expansion hysteresis: open at 240 px on screen, close below 200 px.
-- A drag never changes expansion. Only wheel, click and programmatic zoom decide what is open.
-- The project and folder scenes in the spike are file-level. The design's project view aggregates into folders with
-  summed edges; that is the next milestone's work, not this spike's.
+- Expansion hysteresis: open at 240 px on screen, close below 200 px. The rule is applied at the end of a user
+  gesture only, so a drag never changes expansion.
+- `mayOpen` gating: a child may open only when the gesture did not zoom out. This stops file, folder, file
+  oscillation during a zoom-out.
+- Wheel zoom anchors on the pointer. The world point under the pointer is stored at gesture start, so a wheel
+  over a gap still descends into the box the pointer is over. Keyboard and drag use the view centre.
+- `ensureFocus` runs before `show()` builds the scene, so a function's file is loaded before its CFG is drawn.
+- Labels keep a constant screen size. The world group sets `--zinv` (1/scale) and the label font sizes are
+  `calc()` expressions on it.
+- Strokes use `vector-effect: non-scaling-stroke`, so edges and box outlines stay thin at any zoom. Arrowheads use
+  `markerUnits="userSpaceOnUse"` with a fixed marker size, so they keep a visible size.
+- `Workspace` leaves the scope out of the view key for the flow tab, so scope changes animate instead of remounting.
+- `ScopeNote` takes a `trail` prop. The flow tab turns its explorer trail off, because the map draws its own.
 
-## Known limitations of the spike
+## Known limitations
 
-- Expanded file frames overlap their neighbours. The frame is drawn at the larger of the file's slot and its
-  function layout, and neighbours are not moved. This is accepted for now; the scene model will reserve slots.
-- Function labels are not wrapped or truncated, so long names run past their boxes.
-- The function level shows boxes and call edges only. The control-flow chart is not yet the deepest leaf.
-- Only one file opens at a time, chosen by the pointer position.
-- The spike page is not linked from the app. It is served only at `/spike.html` in dev, or by building with a
-  second entry (the build config used for the static-demo run was temporary and is not committed).
+- No anchoring: `show` fits the new focus rather than keeping the old one in place.
+- Labels are not level-of-detail: the same labels draw at every zoom, and long names are not truncated.
+- The ELK cache is cleared on each scope load, because each snapshot version has its own keys.
+- The function level shows boxes and call edges, and the CFG chart text scales with its diagram (by design).
+- Colour bands apply to file boxes only. Folder boxes stay white.
+- The minimap overlays the bottom-right of the content.
+- Child boxes touch the frame header with no gap.
+- The old Flow tab extras are gone: the Trail, the chips, the CallLists and the per-function table. The explorer-level
+  CFG list is gone too.
+- The `ScopeNote` description is still shown above the flow tab.
+- Enter does nothing when the centre of the view is in a gap between boxes.
+- The packages `ir` build externalises `node:url`, `node:fs` and `node:path` for the browser. The warnings are
+  harmless, because the loaders that use them are not called in the browser.
 
 ## Files
 
-- `apps/web/spike.html`, `apps/web/src/spike/zoomSpike.tsx`, `apps/web/src/spike/scenes.ts`,
-  `apps/web/src/spike/elkClient.ts`
-- Dependencies in `apps/web/package.json`: d3-zoom 3.0.0, d3-selection 3.0.0, d3-transition 3.0.1,
-  d3-interpolate 3.0.1, elkjs 0.12.0, plus exact d3 type pins. Transitive d3 packages are pinned in
-  `pnpm-workspace.yaml` `overrides` because their latest releases are less than two weeks old.
+Milestone 3 changed these files:
+
+- `apps/web/src/components/zoom/ZoomMap.tsx` (new), `apps/web/src/components/zoom/FunctionDetail.tsx` (new)
+- `apps/web/src/components/views/FlowView.tsx`, `apps/web/src/components/Workspace.tsx`,
+  `apps/web/src/components/ScopeNote.tsx`, `apps/web/src/components/FlowChart.tsx`
+- `apps/web/src/styles.css`
+- `apps/web/src/flowTargets.ts` (new) with `apps/web/test/flowTargets.test.ts` (new)
+- `packages/flow/src/index.ts`, `packages/flow/src/zoom-layout.ts` (new) with
+  `packages/flow/test/zoom-layout.test.ts` (new)
+- `packages/ir/src/schemas.ts` and `packages/ir/src/index.ts`: `schemaDir()` replaces a module-level
+  `fileURLToPath` call, which crashed the browser bundle
+
+Milestones 2 and 3 changed these files:
+
+- `packages/flow/src/scope-map.ts` (new), `apps/web/src/zoom/scene.ts` (new), `apps/web/src/zoom/elk.ts` (new)
+
+Removed:
+
+- `apps/web/src/components/CallGraph.tsx`, `apps/web/src/flowGraph.ts`, `apps/web/test/flowGraph.test.ts`
+- `apps/web/spike.html`, `apps/web/src/spike/` (`zoomSpike.tsx`, `scenes.ts`, `elkClient.ts`)
+
+Dependencies in `apps/web/package.json`: d3-zoom 3.0.0, d3-selection 3.0.0, d3-transition 3.0.1,
+d3-interpolate 3.0.1, elkjs 0.12.0, plus exact d3 type pins. Transitive d3 packages are pinned in
+`pnpm-workspace.yaml` `overrides` because their latest releases are less than two weeks old.

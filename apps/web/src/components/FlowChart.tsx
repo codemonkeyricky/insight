@@ -1,6 +1,6 @@
 import { useId, type ReactNode } from "react";
 import type { FlowEdge, FlowNode, FunctionFlow } from "../api";
-import { outsideScope, outsideText } from "../flowGraph";
+import { outsideScope, outsideText } from "../flowTargets";
 import { hrefFile, hrefView } from "../router";
 
 /**

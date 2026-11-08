@@ -17,12 +17,30 @@ const DESCRIBE: Record<ScopeKind, (files: number) => string> = {
   missing: () => "Nothing at this path in the snapshot.",
 };
 
-/** The breadcrumb for the explorer scope, shown above each view that the scope narrows. */
-export function ScopeNote({ id, tab, scope, kind, files }: { id: string; tab: string; scope: string; kind: ScopeKind; files: FileEntry[] }) {
+/**
+ * The breadcrumb for the explorer scope, shown above each view that the scope narrows. A view with its own trail
+ * (the zoom map) passes `trail={false}` and keeps only the description.
+ */
+export function ScopeNote({
+  id,
+  tab,
+  scope,
+  kind,
+  files,
+  trail = true,
+}: {
+  id: string;
+  tab: string;
+  scope: string;
+  kind: ScopeKind;
+  files: FileEntry[];
+  trail?: boolean;
+}) {
   const parts = scope === "" ? [] : scope.split("/");
   const inside = kind === "folder" ? files.filter((f) => inScope(f.path, scope)).length : files.length;
   return (
     <div className="scope">
+      {trail && (
       <nav className="crumbs small" aria-label="Scope">
         {parts.length === 0 ? <strong>All files</strong> : <a href={hrefView(id, tab)}>All files</a>}
         {parts.map((seg, i) => {
@@ -36,6 +54,7 @@ export function ScopeNote({ id, tab, scope, kind, files }: { id: string; tab: st
           );
         })}
       </nav>
+      )}
       <p className="muted small">{DESCRIBE[kind](inside)}</p>
     </div>
   );
