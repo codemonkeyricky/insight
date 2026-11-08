@@ -254,13 +254,45 @@ example. The shape is exact.
   "calls": [{ "from": "src/a.ts#a", "to": "lib/c.ts#c", "count": 1, "external": true }],
   "externals": [{ "id": "lib/c.ts#c", "name": "c", "file": "lib/c.ts" }],
   "entries": ["src/b.ts#d"],
+  "unreferenced": [
+    {
+      "id": "src/b.ts#d", "name": "d", "file": "src/b.ts", "async": false,
+      "span": { "file": "src/b.ts", "start": [4, 0], "end": [4, 22] }, "line": 5,
+      "steps": 1, "decisions": 0, "loops": 0, "tries": 0,
+      "awaits": 0, "spawns": 0, "effects": 0, "exits": 1, "reach": 2
+    }
+  ],
   "files": [{ "file": "src/a.ts", "functions": 1, "decisions": 0, "loops": 0, "tries": 0, "calledFromOutside": true }],
-  "stats": { "functions": 4, "files": 5, "calls": 3, "resolved": 2, "external": 1, "unresolved": 0, "inbound": 0, "entries": 1 }
+  "stats": {
+    "functions": 4, "files": 5, "calls": 3, "resolved": 2, "external": 1, "unresolved": 0, "inbound": 0, "entries": 1,
+    "functionsTotal": 4, "functionsTests": 0, "unreferenced": 1, "unreferencedTests": 0, "unreferencedOutside": 0
+  }
 }
 ```
 
 `functions` is empty in `files` granularity. `calledFromOutside` appears only when it is true. A
 `span` is `{ file, start: [line, column], end: [line, column] }`, with 0-based positions.
+
+`unreferenced` lists the functions that no function in the scope calls, at either granularity. It is
+the entry set of the scope's Flow view. A function is unreferenced in a scope `S` when no function
+inside `S` calls it:
+
+- Calls are the `calls.call` edges, resolved the way `calls` resolves them. A call with several
+  possible targets references each candidate.
+- A self-call does not count. Module-level code in a file in `S` counts as a caller.
+- A caller outside `S` does not count. Such a function is still unreferenced and is flagged with
+  `calledFromOutside`; it resolves when the scope widens.
+- `reach` is the number of distinct functions it reaches through calls inside `S`, not counting
+  itself. Cycles are safe.
+- A function defined in a test or fixture file is marked `test: true`. Test files are a directory
+  named `test`, `tests`, `__tests__` or `fixtures` on the path, or a file named `*.test.*` or
+  `*.spec.*`. The stats count them apart: `unreferenced` and `unreferencedOutside` leave them out,
+  `unreferencedTests` counts them, and `functionsTotal` and `functionsTests` count all functions.
+
+Widening a scope can only remove functions from the unreferenced set: a function unreferenced in a
+wider scope is unreferenced in every narrower scope that holds it, because each caller inside the
+narrower scope is also inside the wider one. The count for a scope can still rise when the scope
+widens, because the wider scope holds more functions. `entries` is unchanged.
 
 The result is kept in memory for up to 32 scopes, keyed by snapshot and scope. A snapshot does not
 change, so a kept result is never stale. The errors are the same as the lens routes.

@@ -44,7 +44,21 @@ const sfn = (id: string, name: string, file: string, line: number): ScopeFunctio
   exits: 1,
 });
 const sfile = (file: string, functions: number): ScopeFile => ({ file, functions, decisions: 0, loops: 0, tries: 0 });
-const flowStats = { functions: 0, files: 0, calls: 0, resolved: 0, external: 0, unresolved: 0, inbound: 0, entries: 0 };
+const flowStats = {
+  functions: 0,
+  files: 0,
+  calls: 0,
+  resolved: 0,
+  external: 0,
+  unresolved: 0,
+  inbound: 0,
+  entries: 0,
+  functionsTotal: 0,
+  functionsTests: 0,
+  unreferenced: 0,
+  unreferencedTests: 0,
+  unreferencedOutside: 0,
+};
 
 const DIFF = "packages/core/src/diff.ts";
 const UTIL = "packages/core/src/util.ts";
@@ -59,6 +73,7 @@ const HELPER = "lib/x.ts#helper";
 const rootFlow: ScopeFlow = {
   granularity: "files",
   functions: [],
+  unreferenced: [],
   calls: [
     { from: DIFF, to: UTIL, count: 3, external: false },
     { from: INDEX, to: DIFF, count: 2, external: false },
@@ -75,6 +90,8 @@ const rootFlow: ScopeFlow = {
 const coreFlow: ScopeFlow = {
   granularity: "functions",
   functions: [sfn(DIFF_A, "diffA", DIFF, 3), sfn(DIFF_B, "diffB", DIFF, 9), sfn(FMT, "fmt", UTIL, 1)],
+  // Every function here is called in its scope: diff.ts calls diffA, diffA calls diffB and fmt.
+  unreferenced: [],
   calls: [
     { from: DIFF, to: DIFF_A, count: 1, external: false },
     { from: DIFF_A, to: DIFF_B, count: 4, external: false },

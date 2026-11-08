@@ -2,7 +2,18 @@ import type { IREdge, IRNode } from "@insight/ir";
 import { edgeTargets, isExternal } from "@insight/sdk";
 import { factsForFile, type FunctionFacts, type Item } from "./build.js";
 import { measure } from "./layout.js";
-import type { FlowSpan, FlowStats, ScopeCall, ScopeExternal, ScopeFile, ScopeFlow, ScopeFlowStats, ScopeFunction, ScopeGranularity } from "./types.js";
+import type {
+  FlowSpan,
+  FlowStats,
+  ScopeCall,
+  ScopeExternal,
+  ScopeFile,
+  ScopeFlow,
+  ScopeFlowStats,
+  ScopeFunction,
+  ScopeGranularity,
+  UnreferencedFunction,
+} from "./types.js";
 
 /** A scope with more functions than this is summarized per file, so the payload and the graph stay small. */
 export const SCOPE_FUNCTION_LIMIT = 400;
@@ -13,6 +24,60 @@ function push<K, V>(m: Map<K, V[]>, k: K, v: V): void {
   const list = m.get(k);
   if (list) list.push(v);
   else m.set(k, [v]);
+}
+
+/** Directory names whose files are tests or fixtures. */
+const TEST_DIRS = new Set(["test", "tests", "__tests__", "fixtures"]);
+
+/**
+ * Whether a file is a test or a fixture: a directory on its path is named `test`, `tests`, `__tests__` or `fixtures`,
+ * or the file is `*.test.*` or `*.spec.*`. Nothing in the code calls such a function; the test runner does.
+ */
+export function isTestPath(file: string): boolean {
+  const parts = file.split("/");
+  const base = parts[parts.length - 1] ?? "";
+  if (parts.slice(0, -1).some((p) => TEST_DIRS.has(p))) return true;
+  return /\.(test|spec)\./.test(base);
+}
+
+/** The distinct functions reached from `start` through `edges`, not counting `start`. Iterative, so cycles are safe. */
+function reachFrom(start: string, edges: ReadonlyMap<string, readonly string[]>): number {
+  const seen = new Set<string>([start]);
+  const stack = [start];
+  while (stack.length > 0) {
+    const cur = stack.pop() as string;
+    for (const next of edges.get(cur) ?? []) {
+      if (seen.has(next)) continue;
+      seen.add(next);
+      stack.push(next);
+    }
+  }
+  return seen.size - 1;
+}
+
+/**
+ * The functions that no function in the scope calls, each with its reach. `calledInScope` maps a callee to its callers
+ * in the scope, where module-level code counts as a caller; a self-call is not in it. `calls` are the scope's call rows,
+ * from which the reach graph is built: in-scope, function to function, self-calls left out.
+ */
+function unreferencedOf(
+  functions: readonly ScopeFunction[],
+  calledInScope: ReadonlyMap<string, ReadonlySet<string>>,
+  calls: Iterable<ScopeCall>,
+): UnreferencedFunction[] {
+  const local = new Set(functions.map((f) => f.id));
+  const callees = new Map<string, string[]>();
+  for (const c of calls) {
+    if (c.external || c.from === c.to || !local.has(c.from) || !local.has(c.to)) continue;
+    push(callees, c.from, c.to);
+  }
+  const out: UnreferencedFunction[] = [];
+  for (const f of functions) {
+    if (calledInScope.has(f.id)) continue;
+    const test = isTestPath(f.file);
+    out.push({ ...f, reach: reachFrom(f.id, callees), ...(test ? { test: true as const } : {}) });
+  }
+  return out;
 }
 
 /** The file of an id such as `src/lib/math.ts#add`: the part before the '#'. */
@@ -155,6 +220,9 @@ export function summarizeScope(nodes: Iterable<IRNode>, edges: Iterable<IREdge>,
 
   const entries = granularity === "functions" ? entryFunctions(functions, calledInScope, calledFromOutside) : entryFiles(fileList, calledInScope, calledFromOutside, fileOf);
 
+  // Built from the function rows, not the payload rows, so it holds at every granularity.
+  const unreferenced = unreferencedOf(functions, calledInScope, rows.values());
+  const unreferencedTests = unreferenced.filter((f) => f.test).length;
   const stats: ScopeFlowStats = {
     functions: functions.length,
     files: fileSet.size,
@@ -164,10 +232,16 @@ export function summarizeScope(nodes: Iterable<IRNode>, edges: Iterable<IREdge>,
     unresolved: totals.unresolved,
     inbound: totals.inbound,
     entries: entries.length,
+    functionsTotal: functions.length,
+    functionsTests: functions.filter((f) => isTestPath(f.file)).length,
+    unreferenced: unreferenced.length - unreferencedTests,
+    unreferencedTests,
+    unreferencedOutside: unreferenced.filter((f) => !f.test && f.calledFromOutside).length,
   };
   return {
     granularity,
     functions: granularity === "functions" ? functions : [],
+    unreferenced,
     calls: callRows,
     externals: [...externals.values()].sort((a, b) => cmpText(a.id, b.id)),
     entries,

@@ -204,11 +204,26 @@ describe("summarizeScope on synthetic IR", () => {
     expect(summarizeScope([], [])).toEqual({
       granularity: "functions",
       functions: [],
+      unreferenced: [],
       calls: [],
       externals: [],
       entries: [],
       files: [],
-      stats: { functions: 0, files: 0, calls: 0, resolved: 0, external: 0, unresolved: 0, inbound: 0, entries: 0 },
+      stats: {
+        functions: 0,
+        files: 0,
+        calls: 0,
+        resolved: 0,
+        external: 0,
+        unresolved: 0,
+        inbound: 0,
+        entries: 0,
+        functionsTotal: 0,
+        functionsTests: 0,
+        unreferenced: 0,
+        unreferencedTests: 0,
+        unreferencedOutside: 0,
+      },
     });
   });
 
@@ -252,7 +267,23 @@ describe("summarizeScope on synthetic IR", () => {
       ["src/a.ts", SCOPE_FUNCTION_LIMIT],
       ["src/b.ts", 1],
     ]);
-    expect(flow.stats).toEqual({ functions: SCOPE_FUNCTION_LIMIT + 1, files: 2, calls: 4, resolved: 3, external: 1, unresolved: 0, inbound: 0, entries: 1 });
+    expect(flow.stats).toEqual({
+      functions: SCOPE_FUNCTION_LIMIT + 1,
+      files: 2,
+      calls: 4,
+      resolved: 3,
+      external: 1,
+      unresolved: 0,
+      inbound: 0,
+      entries: 1,
+      functionsTotal: SCOPE_FUNCTION_LIMIT + 1,
+      functionsTests: 0,
+      // Every f_i of src/a.ts is uncalled; g is called by f0 to f2.
+      unreferenced: SCOPE_FUNCTION_LIMIT,
+      unreferencedTests: 0,
+      unreferencedOutside: 0,
+    });
+    expect(flow.unreferenced).toHaveLength(SCOPE_FUNCTION_LIMIT);
   });
 
   it("counts an unresolved call once and keeps each candidate of an ambiguous call", () => {
