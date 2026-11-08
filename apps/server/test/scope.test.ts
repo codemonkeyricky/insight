@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { buildExecScene, layoutCovers, type ExecModel, type SceneLayout } from "@insight/flow";
 import { buildServer, type InsightServer } from "../src/index.js";
+import { scopeExecLayoutSolves } from "../src/reader.js";
 
 // The scoped IR routes against a real index. This file has its own scratch folder, so it does not
 // race server.test.ts, which removes its own scratch folder when it ends.
@@ -378,6 +380,80 @@ describe("scoped IR routes", () => {
       const pinned = await get<ExecListing>(`${execUrl("src")}&snapshot=${latest.body.snapshot}`);
       expect(pinned.status).toBe(200);
       expect(pinned.body).toEqual(latest.body);
+    });
+  });
+
+  describe("the exec layout route", () => {
+    interface ExecLayout {
+      snapshot: string;
+      kind: string;
+      containers: SceneLayout["containers"];
+    }
+    const layoutUrl = (path: string) => `/api/projects/${id}/scope/exec-layout?path=${encodeURIComponent(path)}`;
+    const execUrl = (path: string) => `/api/projects/${id}/scope/exec?path=${encodeURIComponent(path)}`;
+    const onTenth = (n: number) => Math.abs(n * 10 - Math.round(n * 10)) < 1e-9;
+
+    it("lays the project's exec scene out whole: a container for the scene root and for every container, rounded to a tenth", async () => {
+      const started = performance.now();
+      const first = await get<ExecLayout>(layoutUrl(""));
+      const firstMs = performance.now() - started;
+      console.log(`root scope exec layout, first request: ${firstMs.toFixed(1)} ms`);
+      expect(first.status).toBe(200);
+      expect(first.body).toMatchObject({ kind: "project" });
+      expect(Object.keys(first.body).sort()).toEqual(["containers", "kind", "snapshot"]);
+
+      const exec = await get<ExecModel>(execUrl(""));
+      const scene = buildExecScene(exec.body);
+      expect(layoutCovers(scene, { containers: first.body.containers })).toBe(true);
+      expect(first.body.containers[scene.root]).toBeDefined();
+      const containerIds = [...scene.nodes.values()].filter((n) => n.children.length > 0).map((n) => n.id);
+      for (const cid of containerIds) expect(first.body.containers[cid], cid).toBeDefined();
+      expect(Object.keys(first.body.containers).sort()).toEqual(containerIds.sort());
+
+      for (const c of Object.values(first.body.containers)) {
+        for (const v of [c.w, c.h, ...c.slots.flatMap((s) => [s.x, s.y, s.w, s.h])]) expect(onTenth(v), String(v)).toBe(true);
+      }
+    }, 120_000);
+
+    it("serves a second request from the cache, and a request that arrives during the first solve shares it", async () => {
+      // The folder is new to the cache, so its first request solves once. Two requests in flight at once solve it once in all.
+      const before = scopeExecLayoutSolves();
+      const [a, b] = await Promise.all([get<ExecLayout>(layoutUrl("src")), get<ExecLayout>(layoutUrl("src"))]);
+      expect(scopeExecLayoutSolves() - before).toBe(1);
+      expect(a.status).toBe(200);
+      expect(b.body).toEqual(a.body);
+
+      const again = await get<ExecLayout>(layoutUrl("src"));
+      expect(scopeExecLayoutSolves() - before).toBe(1);
+      expect(again.body).toEqual(a.body);
+
+      // The same scope under its path spelling is the same cache entry.
+      const spelled = await get<ExecLayout>(layoutUrl("./src/"));
+      expect(spelled.body).toEqual(a.body);
+      expect(scopeExecLayoutSolves() - before).toBe(1);
+    }, 120_000);
+
+    it("answers the same status and error as the exec route for a bad path, an unknown scope, snapshot or project", async () => {
+      const cases: string[] = [
+        "",
+        "?path=",
+        "?path=nope",
+        "?path=src&path=lib",
+        "?path=../outside",
+        "?path=src/../../x",
+        "?path=src/a.ts/x",
+        "?path=src&snapshot=nope",
+      ];
+      for (const query of cases) {
+        const exec = await get<{ error: string }>(`/api/projects/${id}/scope/exec${query}`);
+        const layout = await get<{ error: string }>(`/api/projects/${id}/scope/exec-layout${query}`);
+        expect(layout.status, query).toBe(exec.status);
+        expect(layout.body.error, query).toBe(exec.body.error);
+      }
+      const bareExec = await get<{ error: string }>(`/api/projects/${bareId}/scope/exec?path=`);
+      const bareLayout = await get<{ error: string }>(`/api/projects/${bareId}/scope/exec-layout?path=`);
+      expect(bareLayout.status).toBe(bareExec.status);
+      expect(bareLayout.body.error).toBe("project has no snapshot yet");
     });
   });
 });

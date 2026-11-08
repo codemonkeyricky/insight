@@ -34,12 +34,14 @@ import {
   publicProject,
   resolveSnapshot,
   runScopedLens,
+  scopeExecLayoutOf,
   scopeExecOf,
   scopeFlowOf,
   scopeLensRows,
   scopeView,
 } from "./reader.js";
 import { readFileText, sourceSlice } from "./source.js";
+import { closeExecLayoutWorker } from "./exec-layout.js";
 
 export const SERVER_VERSION = "0.1.0";
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -258,6 +260,17 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
     return { snapshot, kind, ...exec };
   });
 
+  // The exec scene of a scope, laid out whole on the server so the page does not solve it in its worker. Same path,
+  // snapshot and errors as the exec route. The answer is the layout's containers, which the page checks against the scene.
+  app.get<{ Params: ProjectParams; Querystring: SnapshotQuery & { path?: string } }>("/api/projects/:id/scope/exec-layout", async (req) => {
+    const p = project(req.params.id);
+    const path = scopePathOf(req.query.path);
+    const snapshot = resolveSnapshot(rootFor(p), req.query.snapshot);
+    if (!snapshot) throw new ProjectError(404, "project has no snapshot yet");
+    const { kind, layout } = await scopeExecLayoutOf(rootFor(p), snapshot, path);
+    return { snapshot, kind, ...layout };
+  });
+
   app.get<{ Params: ProjectParams; Querystring: SnapshotQuery & { lens?: string; severity?: string } }>(
     "/api/projects/:id/findings",
     async (req) => {
@@ -422,6 +435,7 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
     close: async () => {
       jobs.stop();
       await app.close();
+      await closeExecLayoutWorker();
     },
   };
 }

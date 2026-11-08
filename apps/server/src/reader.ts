@@ -19,13 +19,24 @@ import {
   type LoadedPlugins,
   type ScopeStats,
 } from "@insight/core";
-import { buildFileFlow, execModel, summarizeFlows, summarizeScope, type ExecModel, type FileFlow, type FileFlowSummary, type ScopeFlow } from "@insight/flow";
+import {
+  buildFileFlow,
+  execModel,
+  summarizeFlows,
+  summarizeScope,
+  type ExecModel,
+  type FileFlow,
+  type FileFlowSummary,
+  type ScopeFlow,
+  type SceneLayout,
+} from "@insight/flow";
 import { edgeTargets, isExternal, type ProjectRoot } from "@insight/sdk";
 import type { IREdge, IRDocument, IRFinding, IRNode, IRRecord, NodeId } from "@insight/ir";
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import { ProjectError, type ProjectRecord } from "./registry.js";
 import type { JobRunner } from "./jobs.js";
+import { solveExecLayout } from "./exec-layout.js";
 
 /** One snapshot, indexed for reads. */
 export interface LoadedSnapshot {
@@ -420,6 +431,47 @@ export function scopeExecOf(root: string, snapshot: string, path: string): Scope
   scopeExecs.set(key, view);
   if (scopeExecs.size > SCOPE_EXEC_LIMIT) scopeExecs.delete(scopeExecs.keys().next().value as string);
   return view;
+}
+
+let layoutSolves = 0;
+/** How many scene layouts this process has solved, cache hits excluded. Tests read it to see the cache at work. */
+export function scopeExecLayoutSolves(): number {
+  return layoutSolves;
+}
+
+/** The exec scene of one scope laid out whole, and the scope it names. */
+export interface ScopeExecLayoutView {
+  scope: string;
+  kind: ScopeKind;
+  layout: SceneLayout;
+}
+
+/** Layouts are kept per (snapshot, scope). Each one is a few hundred KB at most, so the bound is a count. */
+const SCOPE_EXEC_LAYOUT_LIMIT = 64;
+const scopeExecLayouts = new Map<string, Promise<ScopeExecLayoutView>>();
+
+/**
+ * The exec scene of a scope laid out whole, the way the demo capture lays it out: the model from scopeExecOf, the
+ * scene built and every container solved by elkjs in the layout worker (exec-layout.ts). A snapshot never changes, so the answer is kept
+ * as a promise: a second request, even one that arrives while the first is still solving, waits for the same work.
+ * A failed solve is dropped from the cache, so the next request tries again.
+ */
+export function scopeExecLayoutOf(root: string, snapshot: string, path: string): Promise<ScopeExecLayoutView> {
+  const scope = normalizeScope(path);
+  const key = `${root}\0${snapshot}\0${scope}`;
+  const hit = scopeExecLayouts.get(key);
+  if (hit) return hit;
+  const solved = (async (): Promise<ScopeExecLayoutView> => {
+    const { kind, exec } = scopeExecOf(root, snapshot, scope);
+    layoutSolves += 1;
+    return { scope, kind, layout: await solveExecLayout(exec) };
+  })();
+  scopeExecLayouts.set(key, solved);
+  if (scopeExecLayouts.size > SCOPE_EXEC_LAYOUT_LIMIT) scopeExecLayouts.delete(scopeExecLayouts.keys().next().value as string);
+  solved.catch(() => {
+    if (scopeExecLayouts.get(key) === solved) scopeExecLayouts.delete(key);
+  });
+  return solved;
 }
 
 export interface ScopeLensRow {
