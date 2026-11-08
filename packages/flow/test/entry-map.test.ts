@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   ENTRY_ROWS,
   entryBoxes,
+  entryCount,
   entryFrames,
   entrySummary,
   ladderOf,
@@ -30,9 +31,9 @@ describe("scopeChain and ladderOf", () => {
   });
 
   it("gives the project first and the scope last, marked current, with the counts it knows", () => {
-    const rungs = ladderOf("app/src", (s) => (s === "" ? { unreferenced: 3, noise: 1 } : undefined));
+    const rungs = ladderOf("app/src", (s) => (s === "" ? { unreferenced: 3, total: 9 } : undefined));
     expect(rungs).toEqual([
-      { scope: "", name: "project", current: false, counts: { unreferenced: 3, noise: 1 } },
+      { scope: "", name: "project", current: false, counts: { unreferenced: 3, total: 9 } },
       { scope: "app", name: "app", current: false, counts: undefined },
       { scope: "app/src", name: "src", current: true, counts: undefined },
     ]);
@@ -65,6 +66,11 @@ describe("entry boxes and frames", () => {
   it("summarizes the shown boxes, the frames, the hidden noise and the outside callers", () => {
     expect(entrySummary(flow, false)).toEqual({ shown: 3, files: 2, noise: 1, hiddenNoise: 1, outside: 0 });
     expect(entrySummary(flow, true)).toEqual({ shown: 4, files: 3, noise: 1, hiddenNoise: 0, outside: 0 });
+  });
+
+  it("counts unreferenced over total, leaving noise out unless the toggle includes it", () => {
+    expect(entryCount(flow, false)).toEqual({ unreferenced: 3, total: 3 });
+    expect(entryCount(flow, true)).toEqual({ unreferenced: 4, total: 4 });
   });
 
   it("flags a box that an outside caller reaches, and keeps it shown", () => {

@@ -148,10 +148,20 @@ export function layoutEntries(flow: ScopeFlow, opts: EntryOptions): EntryLayout 
   return { width, height: frames.length === 0 ? 0 : y + rowH, frames: placed };
 }
 
-/** The counts the ladder shows for one scope. `unreferenced` leaves out noise rows; `noise` counts them. */
+/**
+ * The counts the ladder shows for one scope, as `unreferenced/total`. With the toggle off both leave out noise, so the
+ * total is the functions outside test, fixture and sample files. With it on both include them.
+ */
 export interface EntryCount {
   unreferenced: number;
-  noise: number;
+  total: number;
+}
+
+export function entryCount(flow: ScopeFlow, includeNoise: boolean): EntryCount {
+  const s = flow.stats;
+  return includeNoise
+    ? { unreferenced: s.unreferenced + s.unreferencedNoise, total: s.functionsTotal }
+    : { unreferenced: s.unreferenced, total: s.functionsNonNoise };
 }
 
 /** The summary line of the entry view. `hiddenNoise` is what the Include toggle would add. */

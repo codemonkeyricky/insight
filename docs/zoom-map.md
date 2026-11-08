@@ -80,7 +80,13 @@ modes keep the scope and function.
   The scene is pure: `packages/flow/src/entry-map.ts` (`entryBoxes`, `entryFrames`, `layoutEntries`, `entrySummary`,
   `ladderOf`).
 - A ladder across the top lists the project and each folder down to the scope, with the counts of each ancestor's
-  flow. The counts come from the flows the store has loaded, and `ensureChain` loads every ancestor.
+  flow, as `unreferenced/total`: for example `Project 14/1100 › packages 31/700 › index.ts 4/9`. The total is the
+  functions in scope, leaving out test, fixture and sample files while the toggle is off and counting them when it is
+  on. The unreferenced count follows the same rule. The ratio falls as the scope widens, since a wider scope resolves
+  references. A legend line under the ladder says so. The counts come from the flows the store has loaded, and
+  `ensureChain` loads every ancestor.
+- Each box shows its name and a muted `reaches N` line: the number of distinct functions it reaches through calls and
+  references inside the scope. All boxes are the same size.
 - The summary line counts the boxes shown, the files and the functions also called from outside the scope.
 - `Include tests and samples (N)` shows the functions in test, fixture and sample files, which are hidden by default.
   `N` counts them in the scope. The checkbox is local state, so it is not in the URL.

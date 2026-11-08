@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as KeyEvent } from "react";
 import {
   ZOOM_SIZE,
+  entryCount,
   entrySummary,
   ladderOf,
   layoutEntries,
@@ -44,11 +45,13 @@ const rungName = (name: string) => (name === "project" ? "Project" : name);
 const shortPath = (file: string) => (file.length > 34 ? `…${file.slice(-33)}` : file);
 const shortName = (name: string) => (name.length > 26 ? `${name.slice(0, 25)}…` : name);
 
-const countsOf = (flow: ScopeFlow | undefined): EntryCount | undefined =>
-  flow === undefined ? undefined : { unreferenced: flow.stats.unreferenced, noise: flow.stats.unreferencedNoise };
+const countsOf = (flow: ScopeFlow | undefined, includeNoise: boolean): EntryCount | undefined =>
+  flow === undefined ? undefined : entryCount(flow, includeNoise);
 
-const countText = (c: EntryCount) =>
-  `${c.unreferenced} entry ${plural(c.unreferenced, "point", "points")}${c.noise > 0 ? `, ${c.noise} in tests and samples` : ""}`;
+/** A rung's count, `unreferenced/total`, with a tooltip that says it in words. */
+const countText = (c: EntryCount) => `${c.unreferenced}/${c.total}`;
+const countTitle = (c: EntryCount) =>
+  `${c.unreferenced} unreferenced of ${c.total} ${plural(c.total, "function", "functions")} in scope`;
 
 function summaryText(s: EntrySummary): string {
   const outside = s.outside > 0 ? `, ${s.outside} also called from outside this scope` : "";
@@ -118,7 +121,7 @@ export function EntryMap({ id, store, scope, fn }: Props) {
   const wrap = width === undefined ? undefined : Math.max(260, Math.floor(width) - 4);
   const layout = useMemo(() => (flow ? layoutEntries(flow, { includeNoise, wrap }) : undefined), [flow, includeNoise, wrap]);
   const summary = flow ? entrySummary(flow, includeNoise) : undefined;
-  const rungs = ladderOf(scope, (s) => countsOf(store.flowOf(s)));
+  const rungs = ladderOf(scope, (s) => countsOf(store.flowOf(s), includeNoise));
   const fromOutside = flow?.unreferenced.some((f) => f.id === fn && f.calledFromOutside) ?? false;
   const parent = scopeChain(scope)[1];
 
@@ -142,10 +145,16 @@ export function EntryMap({ id, store, scope, fn }: Props) {
               ) : (
                 <a href={hrefView(id, "flow", { scope: r.scope })}>{rungName(r.name)}</a>
               )}
-              {r.counts && <span className="muted small"> {countText(r.counts)}</span>}
+              {r.counts && (
+                <span className="muted small em-count" title={countTitle(r.counts)}>
+                  {" "}
+                  {countText(r.counts)}
+                </span>
+              )}
             </li>
           ))}
         </ol>
+        <p className="muted small em-legend">unreferenced / functions in scope — widening the scope resolves references</p>
       </nav>
       {ready?.error && (
         <p className="error" role="alert">
@@ -214,8 +223,11 @@ function BoxLink({ box, id, scope, selected }: { box: PlacedEntryBox; id: string
     >
       <title>{note}</title>
       <rect x={box.x} y={box.y} width={box.w} height={box.h} rx={8} className="em-box-body" />
-      <text x={box.x + 12} y={box.y + box.h / 2} dominantBaseline="central" className="em-label">
+      <text x={box.x + 12} y={box.y + 16} dominantBaseline="central" className="em-label">
         {shortName(box.name)}
+      </text>
+      <text x={box.x + 12} y={box.y + 32} dominantBaseline="central" className="em-reach">
+        reaches {box.reach}
       </text>
       {box.calledFromOutside && (
         <circle cx={box.x + box.w - 12} cy={box.y + 12} r={4} className="em-outside">

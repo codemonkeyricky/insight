@@ -318,7 +318,10 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 .em-box:focus { outline: none; }
 .em-box.em-noise .em-box-body { stroke-dasharray: 4 3; }
 .em-label { fill: var(--fg); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; pointer-events: none; }
+.em-reach { fill: var(--muted); font-family: system-ui, sans-serif; font-size: 10px; font-variant-numeric: tabular-nums; pointer-events: none; }
 .em-frame.em-noise .em-frame-label, .em-box.em-noise .em-label { fill: var(--muted); font-weight: 400; }
+.em-count { font-variant-numeric: tabular-nums; }
+.em-legend { margin: 0 0 8px; }
 .em-outside { fill: var(--accent); }
 .em-chart { overflow-x: auto; margin-top: 14px; }
 /* The per-file table under the map scrolls sideways inside its own box on a phone rather than widening the page. */
