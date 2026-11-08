@@ -1,6 +1,7 @@
 // The entry view's scene: the unreferenced functions of one scope, as boxes in file frames, and the ladder of the
 // scope's ancestors. Pure data and arithmetic. The view draws no edges: an unreferenced function cannot be the callee
 // of a function in its scope, since that caller would make it referenced, so no two boxes call each other.
+import type { Rect } from "./scope-map.js";
 import { isNoisePath } from "./scope.js";
 import type { ScopeFlow, UnreferencedFunction } from "./types.js";
 import { ZOOM_SIZE, frameSize } from "./zoom-layout.js";
@@ -217,4 +218,59 @@ export function ladderOf(scope: string, countOf: (scope: string) => EntryCount |
       current: s === scope,
       counts: countOf(s),
     }));
+}
+
+/** A box opens when it is wider than this on screen, judged at the end of a gesture that zoomed in or panned. */
+export const ENTRY_OPEN_PX = 360;
+/** An open function closes when its card is narrower than this on screen. The gap to ENTRY_OPEN_PX stops a flicker. */
+export const ENTRY_CLOSE_PX = 200;
+/** Room under a card's header for its message when the chart is too large to draw, or has no steps. */
+const MESSAGE_H = 60;
+
+/** The box whose rectangle holds a world point, or undefined. A point on an edge counts as inside. */
+export function entryBoxAt(layout: EntryLayout, x: number, y: number): PlacedEntryBox | undefined {
+  for (const fr of layout.frames) {
+    for (const b of fr.boxes) {
+      if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) return b;
+    }
+  }
+  return undefined;
+}
+
+/** The frame that holds a box, or undefined when no shown box has that id. */
+export function entryFrameOf(layout: EntryLayout, boxId: string): PlacedEntryFrame | undefined {
+  return layout.frames.find((fr) => fr.boxes.some((b) => b.id === boxId));
+}
+
+/**
+ * The card an open function's chart sits in, in world units, at the box's top-left. It is as wide as the box or the
+ * chart with its padding, whichever is wider, and as tall as the header, the chart and the padding. A chart too large
+ * to draw, or with no steps, gets the box's width and room for a message. So does a chart still loading (`undefined`).
+ */
+export function entryCard(box: PlacedEntryBox, chart: { width: number; height: number; tooLarge?: boolean; empty?: boolean } | undefined): Rect {
+  const { pad, head } = ZOOM_SIZE;
+  if (chart === undefined || chart.tooLarge || chart.empty) return { x: box.x, y: box.y, w: box.w, h: head + MESSAGE_H };
+  return { x: box.x, y: box.y, w: Math.max(box.w, chart.width + 2 * pad), h: head + chart.height + 2 * pad };
+}
+
+/** What a gesture does to the open function: open a box, close the open one, or keep things as they are. */
+export type EntryDecision = { kind: "open"; id: string } | { kind: "close" };
+
+/**
+ * The decision at the end of a user gesture. `open` is the open function, if any, and `cardPx` its card's width on
+ * screen. `under` is the box under the wheel pointer or the view's centre, with its width on screen. `mayOpen` is false
+ * for a gesture that zoomed out, which must not reopen the box it just left. Only one function is open at a time, so a
+ * box opens only when nothing is open, and an open function closes only when its card is narrower than ENTRY_CLOSE_PX.
+ */
+export function entryDecision(input: {
+  open: string | undefined;
+  cardPx: number | undefined;
+  under: { id: string; px: number } | undefined;
+  mayOpen: boolean;
+}): EntryDecision | undefined {
+  if (input.open === undefined) {
+    const under = input.under;
+    return input.mayOpen && under !== undefined && under.px > ENTRY_OPEN_PX ? { kind: "open", id: under.id } : undefined;
+  }
+  return input.cardPx !== undefined && input.cardPx < ENTRY_CLOSE_PX ? { kind: "close" } : undefined;
 }

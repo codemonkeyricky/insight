@@ -76,9 +76,10 @@ The mode is the URL's `mode` query. `mode=hierarchy` selects the zoom map above,
 parameter, so the entry view's links stay short. A two-link switch at the top of the tab moves between them, and both
 modes keep the scope and function.
 
-- `apps/web/src/components/zoom/EntryMap.tsx` draws it. It is a plain SVG grid with no camera and no layout worker.
-  The scene is pure: `packages/flow/src/entry-map.ts` (`entryBoxes`, `entryFrames`, `layoutEntries`, `entrySummary`,
-  `ladderOf`).
+- `apps/web/src/components/zoom/EntryMap.tsx` draws it: an SVG grid under one d3-zoom camera, with no layout worker
+  (see Entry points camera below). The scene is pure: `packages/flow/src/entry-map.ts` (`entryBoxes`, `entryFrames`,
+  `layoutEntries`, `entrySummary`, `ladderOf`, and the camera helpers `entryBoxAt`, `entryFrameOf`, `entryCard` and
+  `entryDecision`).
 - A ladder across the top lists the project and each folder down to the scope, with the counts of each ancestor's
   flow, as `unreferenced/total`: for example `Project 14/1100 › packages 31/700 › index.ts 4/9`. The total is the
   functions in scope, leaving out test, fixture and sample files while the toggle is off and counting them when it is
@@ -90,20 +91,54 @@ modes keep the scope and function.
 - The summary line counts the boxes shown, the files and the functions also called from outside the scope.
 - `Include tests and samples (N)` shows the functions in test, fixture and sample files, which are hidden by default.
   `N` counts them in the scope. The checkbox is local state, so it is not in the URL.
-- Each box links to its function, `scope` and `fn` in the URL. An open function's chart and detail sit below the grid.
+- Each box links to its function, `scope` and `fn` in the URL. An open function's chart opens in a card on the grid,
+  and its detail sits below the grid.
 - Escape closes the open function first, and goes up one scope when none is open.
 - The entry view draws no edges. Two unreferenced functions in one scope cannot call each other, since the caller
   would make the callee referenced.
-- The grid wraps at the measured width of the view, so the frames stay on screen. A frame wider than the view, such as
-  a file with several columns of boxes, takes a row to itself and scrolls sideways inside the grid. A file path longer
-  than 34 characters is cut from the front, with an ellipsis, and its full path is the frame's tooltip.
+- The grid wraps at the measured width of the view, so the frames stay on screen. A frame wider than the wrap, such as
+  a file with several columns of boxes, takes a row to itself, and the camera pans to it. A file path longer than 34
+  characters is cut from the front, with an ellipsis, and its full path is the frame's tooltip.
+
+## Entry points camera
+
+The entry grid has the same kind of camera as the hierarchy map. A d3-zoom behaviour owns the transform, which is
+written straight onto the world `<g>`, so React re-renders only when the layout, the toggle or the open function
+changes.
+
+- The grid sits in `.em-stage`. It has a fixed height (`clamp(360px, 68vh, 720px)`, or 360 px at phone width) and
+  `overflow: hidden`. Scale runs from 0.1 to 16. Wheel and drag zoom and pan, and the svg has `touch-action: none`.
+- Three buttons overlay the top right of the stage: `+` (aria-label "Zoom in"), `−` ("Zoom out") and `Fit` ("Reset
+  view"). Fit returns the camera to the identity transform. It does not close the open function.
+- With the stage focused, `+` or `=` zoom in, `-` or `_` zoom out, and the arrow keys pan 80 px. `Enter` opens the box
+  under the middle of the view, when nothing is open. A key pressed on a focused box or button keeps its own meaning.
+  Escape works anywhere in the view: it closes the open function, or goes up one scope when none is open.
+- A key or button step is a gesture of its own. It judges the scale it starts from, not the scale of an earlier gesture.
+- Opening is semantic. A box opens once it is wider than `ENTRY_OPEN_PX` (360 px) on screen, judged at the end of a
+  gesture that zoomed in or panned. The box is the one under the wheel pointer, or under the middle of the view for drag
+  and keys. A gesture that zoomed out opens nothing, so a zoom out does not reopen the box it just left.
+- Only one function is open at a time. Its card closes once it is narrower than `ENTRY_CLOSE_PX` (200 px). The gap
+  between the two thresholds stops a box at the edge from flickering.
+- The card sits at the box's top-left, in world units, so it scales with the grid. It is as wide as the box or the chart
+  with its padding, whichever is wider. It shows the function's name in a header and its control-flow chart below. A
+  chart that is too large to draw, or has no steps, gets a message in the card instead. The card is drawn last, over the
+  boxes beneath it. `FunctionDetail` stays below the grid.
+- The camera flies to fit the card, over 450 ms, once for each pair of function and layout, unless the card already
+  covers the stage. A close by Escape flies back to the frame of the box, at a scale of 1 or less. A close by zooming
+  out leaves the camera where the user put it.
+- A layout change (the scope, the Include toggle, or the width of the view) snaps the camera back to the identity at
+  once.
+- A click that does not move the camera decides nothing. A click on a box follows its link, and the box does not open
+  first.
+- Opening and closing write the function into the URL with `history.replaceState` and dispatch a `hashchange`, as the
+  hierarchy map does.
 
 `FlowView` owns one `ZoomStore` and passes it to both modes, so a flow loaded for one is not loaded again for the
 other. The hierarchy mode writes `mode=hierarchy` into every URL it sets.
 
 ## Verification
 
-- `pnpm -r build` and `pnpm -r test` pass. `@insight/flow` has 101 tests across 6 files, and `@insight/web` has
+- `pnpm -r build` and `pnpm -r test` pass. `@insight/flow` has 125 tests across 7 files, and `@insight/web` has
   55 tests across 4 files. The other packages pass too, with no failures.
 - `pnpm --filter @insight/web build:demo` builds. The demo is served from `apps/web/dist-demo` on a static port.
 - A playwright-core script drove the demo through real wheel, drag and keyboard input. It checked, with no console or

@@ -1,15 +1,24 @@
 import type { IREdge } from "@insight/ir";
 import { describe, expect, it } from "vitest";
 import {
+  ENTRY_CLOSE_PX,
+  ENTRY_OPEN_PX,
   ENTRY_ROWS,
+  ZOOM_SIZE,
+  entryBoxAt,
   entryBoxes,
+  entryCard,
   entryCount,
+  entryDecision,
+  entryFrameOf,
   entryFrames,
   entrySummary,
   ladderOf,
   layoutEntries,
   scopeChain,
   summarizeScope,
+  type EntryLayout,
+  type PlacedEntryBox,
   type PlacedEntryFrame,
   type ScopeFlow,
 } from "../src/index.js";
@@ -117,5 +126,92 @@ describe("layoutEntries", () => {
   it("gives a frame wider than the wrap width a row of its own", () => {
     const layout = layoutEntries(flowWith({ "src/a.ts": 30, "src/b.ts": 1 }), { includeNoise: false, wrap: 100 });
     expect(layout.frames.map((f) => f.y)[0]).not.toBe(layout.frames.map((f) => f.y)[1]);
+  });
+});
+
+/** The first box of a layout. A layout built from `flowWith` always has one. */
+function firstBox(layout: EntryLayout): PlacedEntryBox {
+  const box = layout.frames[0]?.boxes[0];
+  if (!box) throw new Error("the layout has no box");
+  return box;
+}
+
+describe("entry camera: boxes under a point", () => {
+  const layout = layoutEntries(flowWith({ "src/a.ts": 2, "src/b.ts": 1 }), { includeNoise: false });
+  const [first, second] = layout.frames[0]?.boxes ?? [];
+
+  it("finds the box that holds a world point, and none in a frame header or outside the map", () => {
+    if (!first || !second) throw new Error("expected two boxes");
+    expect(entryBoxAt(layout, first.x + 1, first.y + 1)?.id).toBe(first.id);
+    expect(entryBoxAt(layout, second.x + second.w / 2, second.y + second.h / 2)?.id).toBe(second.id);
+    expect(entryBoxAt(layout, first.x + 1, (layout.frames[0]?.y ?? 0) + 5)).toBeUndefined();
+    expect(entryBoxAt(layout, -1, -1)).toBeUndefined();
+  });
+
+  it("finds the frame of a box, and none for an id the layout does not show", () => {
+    expect(entryFrameOf(layout, "src/a.ts#f0")?.file).toBe("src/a.ts");
+    expect(entryFrameOf(layout, "src/b.ts#f0")?.file).toBe("src/b.ts");
+    expect(entryFrameOf(layout, "nope#f0")).toBeUndefined();
+  });
+});
+
+describe("entry camera: the card", () => {
+  const box = firstBox(layoutEntries(flowWith({ "src/a.ts": 1 }), { includeNoise: false }));
+  const { pad, head } = ZOOM_SIZE;
+
+  it("is as wide as the chart with its padding when the chart is wider than the box", () => {
+    expect(entryCard(box, { width: 800, height: 300 })).toEqual({ x: box.x, y: box.y, w: 800 + 2 * pad, h: head + 300 + 2 * pad });
+  });
+
+  it("is as wide as the box when the chart is narrower than the box", () => {
+    expect(entryCard(box, { width: 100, height: 200 })).toEqual({ x: box.x, y: box.y, w: box.w, h: head + 200 + 2 * pad });
+  });
+
+  it("is the box's width with room for a message when the chart is too large or has no steps", () => {
+    const short = { x: box.x, y: box.y, w: box.w, h: head + 60 };
+    expect(entryCard(box, { width: 0, height: 0, tooLarge: true })).toEqual(short);
+    expect(entryCard(box, { width: 0, height: 0, empty: true })).toEqual(short);
+  });
+
+  it("is the message size while the chart is still loading", () => {
+    expect(entryCard(box, undefined)).toEqual({ x: box.x, y: box.y, w: box.w, h: head + 60 });
+  });
+});
+
+describe("entry camera: the open and close decision", () => {
+  it("keeps the open threshold above the close threshold, so a box at the edge does not flicker", () => {
+    expect(ENTRY_OPEN_PX).toBeGreaterThan(ENTRY_CLOSE_PX);
+  });
+
+  it("opens the box under the pointer once it is wider than ENTRY_OPEN_PX, with nothing open", () => {
+    const under = { id: "src/a.ts#f0", px: ENTRY_OPEN_PX + 1 };
+    expect(entryDecision({ open: undefined, cardPx: undefined, under, mayOpen: true })).toEqual({ kind: "open", id: "src/a.ts#f0" });
+  });
+
+  it("does not open a box exactly at ENTRY_OPEN_PX, or a box after a gesture that zoomed out", () => {
+    const at = { id: "src/a.ts#f0", px: ENTRY_OPEN_PX };
+    expect(entryDecision({ open: undefined, cardPx: undefined, under: at, mayOpen: true })).toBeUndefined();
+    const wide = { id: "src/a.ts#f0", px: ENTRY_OPEN_PX * 2 };
+    expect(entryDecision({ open: undefined, cardPx: undefined, under: wide, mayOpen: false })).toBeUndefined();
+  });
+
+  it("opens nothing when no box is under the pointer", () => {
+    expect(entryDecision({ open: undefined, cardPx: undefined, under: undefined, mayOpen: true })).toBeUndefined();
+  });
+
+  it("holds the band between the thresholds: a box at 250 px neither opens nor closes", () => {
+    expect(entryDecision({ open: undefined, cardPx: undefined, under: { id: "x", px: 250 }, mayOpen: true })).toBeUndefined();
+    expect(entryDecision({ open: "x", cardPx: 250, under: undefined, mayOpen: true })).toBeUndefined();
+  });
+
+  it("closes the open function once its card is narrower than ENTRY_CLOSE_PX", () => {
+    expect(entryDecision({ open: "x", cardPx: ENTRY_CLOSE_PX - 1, under: undefined, mayOpen: false })).toEqual({ kind: "close" });
+    expect(entryDecision({ open: "x", cardPx: ENTRY_CLOSE_PX, under: undefined, mayOpen: true })).toBeUndefined();
+  });
+
+  it("never opens a second function while one is open, and keeps it open when its card size is unknown", () => {
+    const under = { id: "y", px: ENTRY_OPEN_PX * 3 };
+    expect(entryDecision({ open: "x", cardPx: ENTRY_OPEN_PX * 2, under, mayOpen: true })).toBeUndefined();
+    expect(entryDecision({ open: "x", cardPx: undefined, under, mayOpen: true })).toBeUndefined();
   });
 });

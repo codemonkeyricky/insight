@@ -306,28 +306,36 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 .em-bar { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 16px; margin: 0 0 8px; }
 .em-summary { margin: 0; }
 .em-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 0.88rem; cursor: pointer; }
-.em-stage { max-height: min(72vh, 760px); overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+.em-stage { position: relative; height: clamp(360px, 68vh, 720px); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .em-stage:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.em-svg { display: block; }
-.em-frame-body { fill: var(--panel); stroke: var(--line); stroke-width: 1.2; }
+.em-svg { display: block; cursor: grab; touch-action: none; }
+.em-svg:active { cursor: grabbing; }
+.em-controls { position: absolute; top: 10px; right: 10px; display: flex; gap: 4px; }
+.em-controls button { min-width: 2.4em; padding: 4px 8px; background: var(--panel); color: var(--fg); border-color: var(--line); font-size: 0.9rem; line-height: 1; }
+.em-controls button:hover { border-color: var(--accent); }
+.em-controls button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.em-frame-body { fill: var(--panel); stroke: var(--line); stroke-width: 1.2; vector-effect: non-scaling-stroke; }
 .em-frame.em-noise .em-frame-body { stroke-dasharray: 6 4; }
-.em-frame-label { fill: var(--fg); font-family: system-ui, sans-serif; font-size: 12px; font-weight: 600; }
+.em-frame-label { fill: var(--fg); font-family: system-ui, sans-serif; font-size: calc(12px * var(--zinv, 1)); font-weight: 600; }
 .em-box { cursor: pointer; }
-.em-box-body { fill: var(--panel); stroke: var(--line); stroke-width: 1.2; }
+.em-box-body { fill: var(--panel); stroke: var(--line); stroke-width: 1.2; vector-effect: non-scaling-stroke; }
 .em-box:hover .em-box-body, .em-box:focus-visible .em-box-body, .em-box.on .em-box-body { stroke: var(--accent); stroke-width: 2; }
 .em-box:focus { outline: none; }
 .em-box.em-noise .em-box-body { stroke-dasharray: 4 3; }
-.em-label { fill: var(--fg); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; pointer-events: none; }
-.em-reach { fill: var(--muted); font-family: system-ui, sans-serif; font-size: 10px; font-variant-numeric: tabular-nums; pointer-events: none; }
+.em-label { fill: var(--fg); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: calc(12px * var(--zinv, 1)); pointer-events: none; }
+.em-reach { fill: var(--muted); font-family: system-ui, sans-serif; font-size: calc(10px * var(--zinv, 1)); font-variant-numeric: tabular-nums; pointer-events: none; }
 .em-frame.em-noise .em-frame-label, .em-box.em-noise .em-label { fill: var(--muted); font-weight: 400; }
 .em-count { font-variant-numeric: tabular-nums; }
 .em-legend { margin: 0 0 8px; }
 .em-outside { fill: var(--accent); }
-.em-chart { overflow-x: auto; margin-top: 14px; }
+.em-card-body { fill: var(--panel); stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.em-card-title { fill: var(--fg); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: calc(12px * var(--zinv, 1)); font-weight: 600; pointer-events: none; }
+.em-card-message { fill: var(--muted); font-family: system-ui, sans-serif; font-size: calc(12px * var(--zinv, 1)); }
+.em-card .flow-node :is(rect, polygon, circle), .em-card .flow-edge path { vector-effect: non-scaling-stroke; }
 /* The per-file table under the map scrolls sideways inside its own box on a phone rather than widening the page. */
 .flow-table { max-width: 100%; overflow-x: auto; }
 @media (max-width: 600px) {
-  .zm-stage { height: 360px; }
+  .zm-stage, .em-stage { height: 360px; }
   .zm-mini { width: 120px; height: 80px; }
 }
 
