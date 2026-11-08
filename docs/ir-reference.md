@@ -87,8 +87,6 @@ Base kinds shipped by the core:
 | `calls.call` | calls | edge | – | Caller function to callee function. |
 | `calls.reference` | calls | edge | – | Caller to a function it refers to without calling it. `attrs.how` is `new`, `jsx`, `value` or `closure`. Caller is the enclosing function, or the file for module-level code. `closure` runs from a function to an anonymous function created inside it, so the creator still reaches what the closure calls. |
 | `calls.contains-call` | calls | edge | – |  |
-
-`calls.reference` has no parent on purpose. A query for a parent also returns its extensions, so extending `calls.call` would make every call query return references too.
 | `concurrency.spawn-thread` | concurrency | node | – |  |
 | `concurrency.spawn-process` | concurrency | node | – |  |
 | `concurrency.coroutine` | concurrency | node | – |  |
@@ -112,6 +110,8 @@ Base kinds shipped by the core:
 | `effects.env.read` | effects | node | – |  |
 | `effects.clock.read` | effects | node | – |  |
 | `effects.unknown` | effects | node | – | An external call no catalog recognises. Kept rather than dropped. |
+
+`calls.reference` has no parent on purpose. A query for a parent also returns its extensions, so extending `calls.call` would make every call query return references too.
 
 ## Writing a kind definition
 
