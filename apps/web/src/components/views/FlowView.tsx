@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, type FileEntry, type FileFlowSummary } from "../../api";
-import { hrefFlow, hrefView, inScope } from "../../router";
+import { hrefFlow, hrefView, inScope, type FlowMode } from "../../router";
+import { ZoomStore } from "../../zoom/scene";
 import { scopeKind } from "../ScopeNote";
+import { EntryMap } from "../zoom/EntryMap";
 import { Stat } from "../zoom/FunctionDetail";
 import { ZoomMap } from "../zoom/ZoomMap";
 
@@ -28,17 +30,50 @@ function useLoaded<T>(key: string, load: () => Promise<T>): Loaded<T> {
 }
 
 /**
- * The flow tab: a zoom map of the project that opens from the project down to a function's chart. The URL's scope
- * and function name the focus; the map keeps the URL in step. Below the map, a folder or the project lists its files.
+ * The flow tab. Its default mode shows a scope's entry points: the functions nothing in the scope calls. The hierarchy
+ * mode is the zoom map of the project, which opens from the project down to a function's chart; its URL keeps the
+ * focus in step, and below it a folder or the project lists its files. Both modes share one store, so a flow loaded
+ * for one is not loaded again for the other.
  */
-export function FlowView({ id, files, scope, fn }: { id: string; files: FileEntry[]; scope: string; fn?: string }) {
+export function FlowView({ id, files, scope, fn, mode }: { id: string; files: FileEntry[]; scope: string; fn?: string; mode: FlowMode }) {
+  const store = useMemo(() => new ZoomStore(id), [id]);
   const kind = scopeKind(scope, files);
   if (kind === "missing") return <p className="muted">Nothing at this path in the snapshot, so there is no flow to chart.</p>;
   return (
     <div>
-      <ZoomMap id={id} scope={scope} fn={fn} />
-      {kind !== "file" && <FlowFolders id={id} scope={scope} />}
+      <ModeSwitch id={id} scope={scope} fn={fn} mode={mode} />
+      {mode === "hierarchy" ? (
+        <>
+          <ZoomMap id={id} store={store} scope={scope} fn={fn} />
+          {kind !== "file" && <FlowFolders id={id} scope={scope} />}
+        </>
+      ) : (
+        <EntryMap id={id} store={store} scope={scope} fn={fn} />
+      )}
     </div>
+  );
+}
+
+const MODES: { mode: FlowMode; label: string }[] = [
+  { mode: "entries", label: "Entry points" },
+  { mode: "hierarchy", label: "Hierarchy" },
+];
+
+/** The two ways to see a scope. Each link keeps the scope and function, so switching does not lose the place. */
+function ModeSwitch({ id, scope, fn, mode }: { id: string; scope: string; fn?: string; mode: FlowMode }) {
+  return (
+    <nav className="em-modes" aria-label="Flow view">
+      {MODES.map((m) => (
+        <a
+          key={m.mode}
+          href={hrefView(id, "flow", { scope, mode: m.mode, ...(fn ? { fn } : {}) })}
+          className={m.mode === mode ? "em-mode on" : "em-mode"}
+          aria-current={m.mode === mode ? "page" : undefined}
+        >
+          {m.label}
+        </a>
+      ))}
+    </nav>
   );
 }
 

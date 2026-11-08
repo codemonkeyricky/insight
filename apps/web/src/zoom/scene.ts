@@ -107,7 +107,18 @@ export class ZoomStore {
     return focus;
   }
 
-  private ensureScope(path: string): Promise<void> {
+  /** The loaded flow of a scope, or undefined while it is not loaded. */
+  flowOf(scope: string): ScopeFlow | undefined {
+    return this.flows.get(scope);
+  }
+
+  /** A function's chart, loading its file's charts if needed. Undefined when the snapshot has no such function. */
+  async chartOf(fnId: string): Promise<FunctionFlow | undefined> {
+    await this.ensureFunction(fnId);
+    return this.fns.get(fnId);
+  }
+
+  ensureScope(path: string): Promise<void> {
     if (this.flows.has(path)) return Promise.resolve();
     let load = this.scopeLoads.get(path);
     if (load === undefined) {

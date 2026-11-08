@@ -69,6 +69,29 @@ CFG is shown.
 Replaced and removed: `CallGraph.tsx`, `flowGraph.ts` and `flowGraph.test.ts` are deleted, and so are
 `apps/web/spike.html` and `apps/web/src/spike/`. `FlowView.tsx` now renders the zoom map.
 
+### Entry points (default mode)
+
+The Flow tab opens on an entry-point view: the functions that nothing in the scope calls, as boxes grouped by file.
+The mode is the URL's `mode` query. `mode=hierarchy` selects the zoom map above, and the default has no `mode`
+parameter, so the entry view's links stay short. A two-link switch at the top of the tab moves between them, and both
+modes keep the scope and function.
+
+- `apps/web/src/components/zoom/EntryMap.tsx` draws it. It is a plain SVG grid with no camera and no layout worker.
+  The scene is pure: `packages/flow/src/entry-map.ts` (`entryBoxes`, `entryFrames`, `layoutEntries`, `entrySummary`,
+  `ladderOf`).
+- A ladder across the top lists the project and each folder down to the scope, with the counts of each ancestor's
+  flow. The counts come from the flows the store has loaded, and `ensureChain` loads every ancestor.
+- The summary line counts the boxes shown, the files and the functions also called from outside the scope.
+- `Include tests (N)` shows the test and fixture functions, which are hidden by default. The checkbox is local state,
+  so it is not in the URL.
+- Each box links to its function, `scope` and `fn` in the URL. An open function's chart and detail sit below the grid.
+- Escape closes the open function first, and goes up one scope when none is open.
+- The entry view draws no edges. Two unreferenced functions in one scope cannot call each other, since the caller
+  would make the callee referenced.
+
+`FlowView` owns one `ZoomStore` and passes it to both modes, so a flow loaded for one is not loaded again for the
+other. The hierarchy mode writes `mode=hierarchy` into every URL it sets.
+
 ## Verification
 
 - `pnpm -r build` and `pnpm -r test` pass. `@insight/flow` has 77 tests across 4 files, and `@insight/web` has

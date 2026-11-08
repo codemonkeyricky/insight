@@ -1,6 +1,12 @@
 /** The tabs every project has. Any other tab id is a lens id. */
 export const BUILTIN_TABS = ["overview", "source", "flow", "findings", "compare", "review"] as const;
 
+/**
+ * How the flow tab shows a scope: its entry points (the functions nothing in the scope calls), which is the default, or
+ * the hierarchy zoom map. Only `hierarchy` is written to the URL, as `mode=hierarchy`.
+ */
+export type FlowMode = "entries" | "hierarchy";
+
 export type Route =
   | { name: "projects" }
   | {
@@ -13,6 +19,8 @@ export type Route =
       line?: number;
       /** The function open in the flow tab (its IR id). */
       fn?: string;
+      /** The flow tab's mode, when it is not the default. */
+      mode?: FlowMode;
       base?: string;
       head?: string;
     }
@@ -22,6 +30,7 @@ export interface ViewOptions {
   scope?: string;
   line?: number;
   fn?: string;
+  mode?: FlowMode;
   base?: string;
   head?: string;
 }
@@ -57,6 +66,7 @@ export function parseRoute(hash: string): Route {
       scope: query.get("scope") ?? "",
       ...(line ? { line } : {}),
       ...opt("fn", query.get("fn")),
+      ...(query.get("mode") === "hierarchy" ? { mode: "hierarchy" as const } : {}),
       ...opt("base", query.get("base")),
       ...opt("head", query.get("head")),
     };
@@ -82,6 +92,7 @@ export function hrefView(id: string, tab: string, opts: ViewOptions = {}): strin
   if (opts.scope) params.set("scope", opts.scope);
   if (opts.line) params.set("line", String(opts.line));
   if (opts.fn) params.set("fn", opts.fn);
+  if (opts.mode === "hierarchy") params.set("mode", "hierarchy");
   if (opts.base) params.set("base", opts.base);
   if (opts.head) params.set("head", opts.head);
   const qs = params.toString();
