@@ -35,7 +35,7 @@
       "filesWithRecords": 4,
       "filesWithErrors": 0,
       "nodes": 5,
-      "edges": 0
+      "edges": 2
     },
     {
       "facet": "effects",
@@ -149,6 +149,7 @@
   "recordsByKind": {
     "calls.call": 1544,
     "concurrency.spawn-thread": 5,
+    "concurrency.spawns": 2,
     "effects.clock.read": 12,
     "effects.env.read": 7,
     "effects.fs.write": 1,
