@@ -1,8 +1,11 @@
 import type { ExecModel, FileFlow, FileFlowSummary, SceneLayout, ScopeFlow } from "@insight/flow";
+import type { ArchModel } from "@insight/lens-dependencies";
 import { ApiError } from "./apiError";
 import { staticApi } from "./staticApi";
 
 // Types only: the flow package is not bundled, its charts are drawn by components/FlowChart.tsx.
+// The architecture model is plain data from the lens package; the Arch tab draws it in components/views/ArchView.tsx.
+export type { ArchEdge, ArchModel, ArchPackage, ArchUnresolved, ArchViolation } from "@insight/lens-dependencies";
 export type {
   ExecCoroutine,
   ExecDispatch,
@@ -392,6 +395,8 @@ const liveApi = {
   scopeFlow: (id: string, scope: string) => call<ScopeFlow>("GET", `/api/projects/${id}/scope/flow?path=${encodeURIComponent(scope)}`),
   // The server adds snapshot and kind to the model; the page does not use them.
   getScopeExec: (id: string, scope: string) => call<ExecModel>("GET", `/api/projects/${id}/scope/exec?path=${encodeURIComponent(scope)}`),
+  // The server adds scope, snapshot and kind to the model; the page does not use them. The model covers the whole project.
+  getScopeArch: (id: string, scope: string) => call<ArchModel>("GET", `/api/projects/${id}/scope/arch?path=${encodeURIComponent(scope)}`),
   // The server lays the execution scene out whole and keeps it per snapshot. Any failure, a 404 included, gives undefined,
   // and the page then lays the scene out in its worker.
   scopeExecLayout: (id: string, scope: string): Promise<SceneLayout | undefined> =>

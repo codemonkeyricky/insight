@@ -30,8 +30,9 @@ import {
   type ScopeFlow,
   type SceneLayout,
 } from "@insight/flow";
-import { edgeTargets, isExternal, type ProjectRoot } from "@insight/sdk";
-import type { IREdge, IRDocument, IRFinding, IRNode, IRRecord, NodeId } from "@insight/ir";
+import { edgeTargets, IRView, isExternal, type ProjectRoot } from "@insight/sdk";
+import { createCoreRegistry, type IREdge, type IRDocument, type IRFinding, type IRNode, type IRRecord, type KindRegistry, type NodeId } from "@insight/ir";
+import { archModel, type ArchModel } from "@insight/lens-dependencies";
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import { ProjectError, type ProjectRecord } from "./registry.js";
@@ -431,6 +432,38 @@ export function scopeExecOf(root: string, snapshot: string, path: string): Scope
   scopeExecs.set(key, view);
   if (scopeExecs.size > SCOPE_EXEC_LIMIT) scopeExecs.delete(scopeExecs.keys().next().value as string);
   return view;
+}
+
+/** The architecture model of one scope, and the scope it names. The model covers the whole snapshot. */
+export interface ScopeArchView {
+  scope: string;
+  kind: ScopeKind;
+  arch: ArchModel;
+}
+
+const SCOPE_ARCH_LIMIT = 8;
+const scopeArchs = new Map<string, ScopeArchView>();
+let coreRegistry: KindRegistry | undefined;
+
+/**
+ * The package-level architecture of a project (see packages/lens-dependencies/src/arch.ts). It reads the whole
+ * snapshot, not the cut, since packages and the imports between them lie outside any one scope. A snapshot never
+ * changes, so each scope's answer is kept until enough other scopes push it out.
+ */
+export function scopeArchOf(root: string, snapshot: string, path: string): ScopeArchView {
+  const scope = normalizeScope(path);
+  const key = `${root}\0${snapshot}\0${scope}`;
+  const hit = scopeArchs.get(key);
+  if (hit) return hit;
+  const snap = loadSnapshot(root, snapshot);
+  const kind = scopeKindOf(snap, scope);
+  if (!kind) throw new ProjectError(404, "no such scope");
+  coreRegistry ??= createCoreRegistry();
+  const view = new IRView({ nodes: [...snap.nodes.values()], edges: snap.edges, findings: snap.findings, registry: coreRegistry });
+  const result: ScopeArchView = { scope, kind, arch: archModel(view) };
+  scopeArchs.set(key, result);
+  if (scopeArchs.size > SCOPE_ARCH_LIMIT) scopeArchs.delete(scopeArchs.keys().next().value as string);
+  return result;
 }
 
 let layoutSolves = 0;

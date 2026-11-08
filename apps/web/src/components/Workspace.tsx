@@ -11,12 +11,13 @@ import { StatusBadge } from "../pages/Projects";
 import { useProjectEvents, type RunEvent } from "../useEvents";
 import { Explorer } from "./Explorer";
 import { ScopeNote, scopeKind } from "./ScopeNote";
+import { ArchView } from "./views/ArchView";
 import { FindingsView } from "./views/FindingsView";
 import { FlowView } from "./views/FlowView";
 import { SourceView } from "./views/SourceView";
 
 /** Tabs that cover the whole project. The explorer scope does not narrow them. */
-const PROJECT_WIDE = new Set(["overview", "compare", "review"]);
+const PROJECT_WIDE = new Set(["overview", "arch", "compare", "review"]);
 
 export interface WorkspaceProps {
   id: string;
@@ -128,7 +129,7 @@ export function Workspace({ id, tab, scope, line, fn, roots = false, base, head 
   const explorerTab = PROJECT_WIDE.has(tab) ? "source" : tab;
   // Views remount when the snapshot, view or scope changes, so no state from the last one carries over. The flow map
   // follows the scope and function in place, so a scope change animates the camera rather than remounting the map.
-  const viewKey = `${overview.snapshot?.id ?? "none"}|${tab}|${tab === "flow" ? "" : scope}|${base ?? ""}|${head ?? ""}`;
+  const viewKey = `${overview.snapshot?.id ?? "none"}|${tab}|${tab === "flow" || tab === "arch" ? "" : scope}|${base ?? ""}|${head ?? ""}`;
 
   const tabLink = (t: string, label: string) => (
     <a key={t} href={hrefView(id, t, { scope })} className={t === tab ? "tab on" : "tab"} role="tab" aria-selected={t === tab}>
@@ -144,6 +145,8 @@ export function Workspace({ id, tab, scope, line, fn, roots = false, base, head 
         return <SourceView id={id} files={files} scope={scope} line={line} />;
       case "flow":
         return <FlowView id={id} files={files} scope={scope} fn={fn} roots={roots} />;
+      case "arch":
+        return <ArchView id={id} />;
       case "findings":
         return <FindingsView id={id} scope={scope} />;
       case "compare":
@@ -178,6 +181,7 @@ export function Workspace({ id, tab, scope, line, fn, roots = false, base, head 
         {tabLink("overview", "Overview")}
         {tabLink("source", "Source")}
         {tabLink("flow", "Flow")}
+        {tabLink("arch", "Arch")}
         {tabLink("findings", "Findings")}
         {lensTabs.length > 0 && <span className="tab-sep" aria-hidden="true" />}
         {lensTabs.map((t) => (

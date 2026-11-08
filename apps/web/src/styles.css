@@ -205,6 +205,36 @@ a.flow-node:hover :is(rect, polygon, circle) { stroke: var(--accent); stroke-wid
 .flow-node.resolves :is(rect, polygon) { stroke: var(--accent); stroke-width: 1.6; }
 .flow-mark { fill: var(--warn); font: 700 12px system-ui, sans-serif; }
 
+/* The Arch tab: a column per layer, a box per package, an arrow per import. Colours are the same tokens as the flow chart. */
+.arch { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+.arch-scroll { flex: 1 1 100%; min-width: 0; max-height: 75vh; overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+.arch-svg { display: block; max-width: 100%; height: auto; }
+.arch-bg { fill: transparent; }
+.arch-layer { fill: var(--muted); font: 600 12px system-ui, sans-serif; }
+.arch-box { cursor: pointer; }
+.arch-box rect { stroke: var(--muted); stroke-width: 1.2; }
+.arch-box:hover rect, .arch-box.selected rect, .arch-box:focus-visible rect { stroke: var(--accent); stroke-width: 2; }
+.arch-box:focus-visible { outline: none; }
+.arch-box.dim { opacity: 0.35; }
+.arch-name { fill: var(--fg); font: 600 13px system-ui, sans-serif; pointer-events: none; }
+.arch-sub { fill: var(--muted); font: 11px system-ui, sans-serif; pointer-events: none; }
+.arch-arrow { fill: none; stroke: var(--muted); stroke-width: 1.3; }
+.arch-arrow.dashed { stroke-dasharray: 6 4; }
+.arch-arrow.lit { stroke: var(--accent); }
+.arch-arrow.violation { stroke: var(--error); }
+.arch-arrow.dim { opacity: 0.15; }
+.arch-hit { fill: none; stroke: transparent; stroke-width: 12px; cursor: pointer; }
+.arch-count { fill: var(--fg); font: 11px system-ui, sans-serif; cursor: pointer; paint-order: stroke; stroke: var(--panel); stroke-width: 3px; }
+.arch-count.dim { opacity: 0.15; }
+.arch-head { fill: var(--muted); }
+.arch-head.error { fill: var(--error); }
+.arch-panel { flex: 1 1 100%; min-width: 260px; max-width: 100%; }
+.arch-panel h2 { font-size: 1rem; margin: 0 0 6px; overflow-wrap: anywhere; }
+.arch-panel h3 { font-size: 0.9rem; margin: 14px 0 4px; }
+.arch-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.arch-list li { overflow-wrap: anywhere; }
+.arch-link { background: none; border: none; padding: 0; color: var(--accent); font: inherit; cursor: pointer; text-align: left; }
+
 /* The resolution meter at the top of the Flow tab. */
 .meter { margin: 0 0 14px; }
 .meter p { margin: 0 0 6px; }

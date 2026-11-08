@@ -1,7 +1,7 @@
 import { RETIRED_LENSES } from "./scopeLenses";
 
 /** The tabs every project has. Any other tab id is a lens id. */
-export const BUILTIN_TABS = ["overview", "source", "flow", "findings", "compare", "review"] as const;
+export const BUILTIN_TABS = ["overview", "source", "flow", "arch", "findings", "compare", "review"] as const;
 
 export type Route =
   | { name: "projects" }

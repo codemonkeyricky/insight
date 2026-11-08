@@ -13,6 +13,7 @@
 // A scope with at least one function also gets its call flow under scope/<key>/flow.json and its
 // execution model (threads, coroutines, reach) under scope/<key>/exec.json, and the execution canvas's
 // layout of that model under scope/<key>/exec-layout.json, so the static demo does not lay it out on load.
+// The project's package architecture is written once, under the root scope, as scope/@root/arch.json.
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -209,7 +210,9 @@ try {
       execLayout = roundLayout(await layoutScene(buildExecScene(exec), (g) => elk.layout(g)));
       layoutTimes.push({ scope, ms: performance.now() - t0 });
     }
-    return { scope, kind: listing.kind, listing, runs, flow: hasFunctions ? flow : undefined, exec, execLayout };
+    // The architecture covers the whole project, so only the root scope asks for it and writes it.
+    const arch = scope === "" ? await get(`${base}/scope/arch${q}`) : undefined;
+    return { scope, kind: listing.kind, listing, runs, flow: hasFunctions ? flow : undefined, exec, execLayout, arch };
   };
 
   const elk = new ELK();
@@ -283,6 +286,7 @@ try {
       if (c.flow) out.set(`${dir}/flow.json`, JSON.stringify(c.flow));
       if (c.exec) out.set(`${dir}/exec.json`, JSON.stringify(c.exec));
       if (c.execLayout) out.set(`${dir}/exec-layout.json`, JSON.stringify(c.execLayout));
+      if (c.arch) out.set(`${dir}/arch.json`, JSON.stringify(c.arch));
     }
     return out;
   };

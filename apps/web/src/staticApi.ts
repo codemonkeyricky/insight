@@ -3,6 +3,7 @@
 import { ApiError } from "./apiError";
 import type {
   Annotation,
+  ArchModel,
   Compare,
   ExecModel,
   FileEntry,
@@ -177,6 +178,12 @@ function emptyScopeExec(scope: string): ExecModel {
   };
 }
 
+/**
+ * The architecture of a project with no package.json files, as archModel answers it. The layers are the lens
+ * package's DEFAULT_LAYERS, written out here so the web build does not import that package at run time.
+ */
+const EMPTY_ARCH: ArchModel = { layers: ["project", "frontend", "ir", "lens", "app"], packages: [], edges: [], unresolved: [], externals: [], violations: [] };
+
 /** The flow of a scope with no functions. The capture writes no flow file for such a scope. */
 const EMPTY_SCOPE_FLOW: ScopeFlow = {
   granularity: "functions",
@@ -331,6 +338,16 @@ export const staticApi = {
     const problem = scopeProblem(scope);
     if (problem) throw new ApiError(400, problem);
     return (await scopeFile<ExecModel>(scope, "exec.json")) ?? emptyScopeExec(scope);
+  },
+  /**
+   * The architecture model as the capture saved it. The model covers the whole project, so the capture writes it
+   * once, under the root scope, and every scope reads that file. A project with no package.json files has none.
+   */
+  getScopeArch: async (id: string, scope: string): Promise<ArchModel> => {
+    await checkProject(id);
+    const problem = scopeProblem(scope);
+    if (problem) throw new ApiError(400, problem);
+    return (await scopeFile<ArchModel>("", "arch.json")) ?? EMPTY_ARCH;
   },
   /** A scope's execution scene laid out whole, as the capture saved it. Undefined when it saved none. */
   scopeExecLayout: async (id: string, scope: string): Promise<SceneLayout | undefined> => {
