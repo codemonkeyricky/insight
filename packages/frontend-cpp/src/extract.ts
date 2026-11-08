@@ -25,12 +25,13 @@ const GUARDS: Record<string, "exclusive" | "shared"> = {
 /** Arguments of a guard that do not take the lock. */
 const NO_LOCK_ARGS = new Set(["std::defer_lock", "std::try_to_lock", "std::adopt_lock"]);
 const THREAD_TYPES = new Set(["std::thread", "std::jthread"]);
-/** Calls that start a thread. The value is the argument holding the function, or -1 for the first argument that is not a launch policy. */
-const SPAWN_CALLS = new Map<string, number>([
-  ["std::thread", 0],
-  ["std::jthread", 0],
-  ["std::async", -1],
-  ["pthread_create", 2],
+type SpawnHow = "thread" | "async";
+/** Calls that start a thread or task. `arg` is the argument holding the function, or -1 for the first argument that is not a launch policy. */
+const SPAWN_CALLS = new Map<string, { arg: number; how: SpawnHow }>([
+  ["std::thread", { arg: 0, how: "thread" }],
+  ["std::jthread", { arg: 0, how: "thread" }],
+  ["std::async", { arg: -1, how: "async" }],
+  ["pthread_create", { arg: 2, how: "thread" }],
 ]);
 /** Above this many possible targets, a call is too ambiguous to record. */
 const MAX_CANDIDATES = 8;
@@ -72,49 +73,111 @@ function firstArgument(list: string | undefined): string | undefined {
   return out.trim() || undefined;
 }
 
-const argsOf = (call: SyntaxNode): SyntaxNode[] => (call.childForFieldName("arguments")?.namedChildren ?? []).filter((n) => n.type !== "comment");
+/** The named children of an argument list, without comments. */
+const namedArgs = (list: SyntaxNode | null | undefined): SyntaxNode[] => (list?.namedChildren ?? []).filter((n) => n.type !== "comment");
+const argsOf = (call: SyntaxNode): SyntaxNode[] => namedArgs(call.childForFieldName("arguments"));
 
 const blockOf = (node: SyntaxNode): SyntaxNode | null => {
   for (let p = node.parent; p; p = p.parent) if (p.type === "compound_statement") return p;
   return null;
 };
 
+/** A set of candidate functions, and how sure the frontend is that one of them is the target. */
+interface Resolved {
+  targets: FnDecl[];
+  confidence: Confidence;
+}
+
+/** The candidates, or undefined when there are none or too many to be useful. Several candidates are never more than heuristic. */
+function candidatesOf(targets: FnDecl[], confidence: Confidence): Resolved | undefined {
+  if (targets.length === 0 || targets.length > MAX_CANDIDATES) return undefined;
+  return { targets, confidence: targets.length > 1 ? "heuristic" : confidence };
+}
+
+/**
+ * Candidates for a name written as an identifier or as a qualified name. A defined qualified name is
+ * exact; otherwise it matches the definitions whose qualified name ends with it.
+ */
+function resolveName(project: Project, name: string, qualified: boolean): Resolved | undefined {
+  if (!qualified) return candidatesOf(project.bySimple.get(name) ?? [], "inferred");
+  const exact = project.byQName.get(name) ?? [];
+  if (exact.length > 0) return candidatesOf(exact, "exact");
+  const last = name.split("::").pop() ?? name;
+  const suffixed = (project.bySimple.get(last) ?? []).filter((d) => d.qname === name || d.qname.endsWith(`::${name}`));
+  return candidatesOf(suffixed, "heuristic");
+}
+
 /** Candidate targets for a callee. A qualified name that is defined is exact, an ambiguous name is heuristic. */
-function resolveCallee(project: Project, fnNode: SyntaxNode): { targets: FnDecl[]; confidence: Confidence } | undefined {
-  let targets: FnDecl[] = [];
-  let confidence: Confidence = "inferred";
+function resolveCallee(project: Project, fnNode: SyntaxNode): Resolved | undefined {
   switch (fnNode.type) {
     case "identifier":
-    case "template_function": {
-      const simple = stripTemplates(norm(fnNode.type === "identifier" ? fnNode.text : (fnNode.childForFieldName("name")?.text ?? "")));
-      targets = project.bySimple.get(simple) ?? [];
-      break;
-    }
-    case "qualified_identifier": {
-      const qn = stripTemplates(norm(fnNode.text)).replace(/^::/, "");
-      targets = project.byQName.get(qn) ?? [];
-      if (targets.length > 0) {
-        confidence = "exact";
-      } else {
-        const last = qn.split("::").pop() ?? qn;
-        targets = (project.bySimple.get(last) ?? []).filter((d) => d.qname === qn || d.qname.endsWith(`::${qn}`));
-        confidence = "heuristic";
-      }
-      break;
-    }
+      return resolveName(project, stripTemplates(norm(fnNode.text)), false);
+    case "template_function":
+      return resolveName(project, stripTemplates(norm(fnNode.childForFieldName("name")?.text ?? "")), false);
+    case "qualified_identifier":
+      return resolveName(project, stripTemplates(norm(fnNode.text)).replace(/^::/, ""), true);
     case "field_expression": {
       const simple = fnNode.childForFieldName("field")?.text;
       if (!simple) return undefined;
-      targets = (project.bySimple.get(simple) ?? []).filter((d) => d.cls !== undefined);
-      confidence = "heuristic";
-      break;
+      return candidatesOf((project.bySimple.get(simple) ?? []).filter((d) => d.cls !== undefined), "heuristic");
     }
     default:
       return undefined;
   }
-  if (targets.length === 0 || targets.length > MAX_CANDIDATES) return undefined;
-  if (targets.length > 1) confidence = "heuristic";
-  return { targets, confidence };
+}
+
+/**
+ * The function name a thread or task start names, past the `&`, casts and parentheses around it.
+ * Lambdas and other expressions name no function, so they give undefined.
+ */
+function functionNameOf(arg: SyntaxNode): SyntaxNode | undefined {
+  let n: SyntaxNode | null = arg;
+  while (n) {
+    switch (n.type) {
+      // A type_identifier is here because `std::thread t(worker);` parses as a parameter whose type is the name.
+      case "identifier":
+      case "type_identifier":
+      case "qualified_identifier":
+        return n;
+      case "template_function":
+        n = n.childForFieldName("name");
+        break;
+      case "pointer_expression":
+        // Only `&f` names a function. `*p` does not.
+        n = n.childForFieldName("operator")?.text === "&" ? n.childForFieldName("argument") : null;
+        break;
+      case "cast_expression":
+        n = n.childForFieldName("value");
+        break;
+      case "parenthesized_expression":
+        n = n.namedChild(0);
+        break;
+      default:
+        n = null;
+    }
+  }
+  return undefined;
+}
+
+/** The function a thread or async target names, when the project defines it. */
+function resolveSpawnTarget(project: Project, arg: SyntaxNode): { name: SyntaxNode; resolved: Resolved } | undefined {
+  const name = functionNameOf(arg);
+  if (!name) return undefined;
+  const resolved = resolveName(project, stripTemplates(norm(name.text)).replace(/^::/, ""), name.type === "qualified_identifier");
+  return resolved ? { name, resolved } : undefined;
+}
+
+/** An edge target for a set of candidates: one id, or `candidates` when there are several, as calls.call records them. */
+function targetOf(targets: FnDecl[]): NodeId | { candidates: [NodeId, ...NodeId[]] } {
+  const [first, ...rest] = [...new Set(targets.map((t) => t.id))] as [NodeId, ...NodeId[]];
+  return rest.length === 0 ? first : { candidates: [first, ...rest] };
+}
+
+/** True when a call is the operand of a co_await, possibly in parentheses. */
+function awaitedBy(call: SyntaxNode): boolean {
+  let p: SyntaxNode | null = call.parent;
+  while (p?.type === "parenthesized_expression") p = p.parent;
+  return p?.type === "co_await_expression";
 }
 
 /** Facts for one file, from the project pass. Files with parse errors give inferred facts and a warning. */
@@ -156,9 +219,14 @@ export function emitUnit(project: Project, rel: string): IRBatch {
     });
   };
 
-  const spawn = (n: SyntaxNode, container: NodeId, target: string | undefined) =>
+  /**
+   * A thread or task start. The spawn node is always recorded with the target text. The spawns edge
+   * is added only when the target argument names a function the project defines.
+   */
+  const spawn = (n: SyntaxNode, container: NodeId, how: SpawnHow, target: string | undefined, targetArg: SyntaxNode | undefined) => {
+    const id = ids.take(`${rel}@spawn:${n.startPosition.row}:${n.startPosition.column}`);
     node({
-      id: ids.take(`${rel}@spawn:${n.startPosition.row}:${n.startPosition.column}`),
+      id,
       facet: "concurrency",
       kind: "concurrency.spawn-thread",
       parent: container,
@@ -166,6 +234,19 @@ export function emitUnit(project: Project, rel: string): IRBatch {
       span: spanOf(rel, n),
       provenance: prov,
     });
+    const hit = targetArg ? resolveSpawnTarget(project, targetArg) : undefined;
+    if (!hit) return;
+    for (const t of hit.resolved.targets) if (t.rel !== rel) deps.add(t.rel);
+    edge({
+      from: id,
+      to: targetOf(hit.resolved.targets),
+      facet: "concurrency",
+      kind: "concurrency.spawns",
+      attrs: { how },
+      span: spanOf(rel, hit.name),
+      provenance: { frontend: FRONTEND_ID, confidence: hit.resolved.confidence },
+    });
+  };
 
   const handleInclude = (n: SyntaxNode) => {
     const path = n.childForFieldName("path");
@@ -189,13 +270,11 @@ export function emitUnit(project: Project, rel: string): IRBatch {
     const callee = stripTemplates(norm(fnNode.text)).replace(/^::/, "");
     const args = argsOf(call);
 
-    const spawnIndex = SPAWN_CALLS.get(callee);
-    if (spawnIndex !== undefined) {
-      const target =
-        spawnIndex === -1
-          ? args.find((a) => !norm(a.text).startsWith("std::launch"))?.text
-          : args[spawnIndex]?.text;
-      spawn(call, container, target);
+    const spawnCall = SPAWN_CALLS.get(callee);
+    if (spawnCall) {
+      const targetArg =
+        spawnCall.arg === -1 ? args.find((a) => !norm(a.text).startsWith("std::launch")) : args[spawnCall.arg];
+      spawn(call, container, spawnCall.how, targetArg?.text, targetArg);
     }
 
     const effect = effectCatalog.get(callee);
@@ -231,18 +310,23 @@ export function emitUnit(project: Project, rel: string): IRBatch {
     if (fn) {
       const resolved = resolveCallee(project, fnNode);
       if (resolved) {
-        const targets = resolved.targets.map((t) => t.id);
         for (const t of resolved.targets) if (t.rel !== rel) deps.add(t.rel);
-        const [first, ...rest] = targets as [NodeId, ...NodeId[]];
-        edge({
-          from: fn.id,
-          to: rest.length === 0 ? first : { candidates: [first, ...rest] },
-          facet: "calls",
-          kind: "calls.call",
-          attrs: { callee: callee.slice(0, 200) },
-          span: spanOf(rel, fnNode),
-          provenance: { frontend: FRONTEND_ID, confidence: resolved.confidence },
-        });
+        const to = targetOf(resolved.targets);
+        const span = spanOf(rel, fnNode);
+        const provenance: Provenance = { frontend: FRONTEND_ID, confidence: resolved.confidence };
+        edge({ from: fn.id, to, facet: "calls", kind: "calls.call", attrs: { callee: callee.slice(0, 200) }, span, provenance });
+        // Calling a coroutine creates one. Awaited, the caller waits on it; otherwise the caller starts it and goes on.
+        if (resolved.targets.every((t) => project.coroutines.has(t.id))) {
+          edge({
+            from: fn.id,
+            to,
+            facet: "concurrency",
+            kind: "concurrency.dispatches",
+            attrs: { how: awaitedBy(call) ? "await" : "start" },
+            span,
+            provenance,
+          });
+        }
       }
     }
   };
@@ -258,10 +342,15 @@ export function emitUnit(project: Project, rel: string): IRBatch {
     // argument_list, so both shapes are read.
     if (THREAD_TYPES.has(base)) {
       if (declarator?.type === "function_declarator") {
-        spawn(decl, container, firstArgument(declarator.childForFieldName("parameters")?.text));
+        // `std::thread t(worker);` parses as a function declaration whose one parameter is the name.
+        const params = declarator.childForFieldName("parameters");
+        const only = params?.namedChildren[0];
+        const nameArg =
+          only?.type === "parameter_declaration" && !only.childForFieldName("declarator") ? only.childForFieldName("type") : null;
+        spawn(decl, container, "thread", firstArgument(params?.text), nameArg ?? undefined);
       } else if (declarator?.type === "init_declarator") {
         const value = declarator.childForFieldName("value");
-        if (value?.type === "argument_list") spawn(decl, container, firstArgument(value.text));
+        if (value?.type === "argument_list") spawn(decl, container, "thread", firstArgument(value.text), namedArgs(value)[0]);
       }
     }
 

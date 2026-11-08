@@ -75,6 +75,8 @@ export interface Project {
   bySimple: Map<string, FnDecl[]>;
   /** Field names declared in each class, keyed by qualified class name. */
   members: Map<string, Set<string>>;
+  /** Functions whose body suspends. A call to one creates a coroutine rather than running it. */
+  coroutines: Set<NodeId>;
 }
 
 const walk = (node: SyntaxNode, visit: (n: SyntaxNode) => void): void => {
@@ -112,6 +114,22 @@ function collectMembers(root: SyntaxNode, scopeOfClass: (n: SyntaxNode) => strin
     }
     members.set(cls, set);
   });
+}
+
+/** Nodes that make the function around them a coroutine. */
+const SUSPENDING = ["co_await_expression", "co_yield_statement", "co_return_statement"];
+
+/**
+ * The function a node belongs to: its nearest enclosing definition that the project records. This
+ * is the same rule the emitter uses to find the caller, so both agree on which functions suspend.
+ */
+function ownerOf(node: SyntaxNode, fns: Map<string, FnDecl>, rel: string): FnDecl | undefined {
+  for (let p = node.parent; p; p = p.parent) {
+    if (p.type !== "function_definition") continue;
+    const decl = fns.get(`${rel}|${nodeKey(p)}`);
+    if (decl) return decl;
+  }
+  return undefined;
 }
 
 /** Parses every C or C++ file and collects the function definitions that calls can target. */
@@ -181,7 +199,17 @@ export async function buildProject(texts: Map<string, string>): Promise<Project>
     }, members);
   }
 
-  return { units, fns, fnsByFile, byQName, bySimple, members };
+  // A call to a coroutine only creates one, and the callee may sit in a file the emitter has not
+  // reached, so coroutines are found here, before any file is emitted.
+  const coroutines = new Set<NodeId>();
+  for (const unit of units.values()) {
+    for (const node of unit.root.descendantsOfType(SUSPENDING)) {
+      const owner = ownerOf(node, fns, unit.rel);
+      if (owner) coroutines.add(owner.id);
+    }
+  }
+
+  return { units, fns, fnsByFile, byQName, bySimple, members, coroutines };
 }
 
 /** A lock name for a mutex expression. Members of the enclosing class are qualified by that class. */
