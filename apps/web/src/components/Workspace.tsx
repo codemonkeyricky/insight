@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { api, IS_DEMO, type FileEntry, type Overview, type ScopeLenses } from "../api";
-import { hrefView } from "../router";
+import { hrefView, type FlowMode } from "../router";
 import { canonicalScope } from "../scopeKey";
 import { lensOrder, lensTab } from "../scopeLenses";
 import { ComparePage } from "../pages/Compare";
@@ -24,6 +24,7 @@ export interface WorkspaceProps {
   scope: string;
   line?: number;
   fn?: string;
+  mode?: FlowMode;
   base?: string;
   head?: string;
 }
@@ -37,7 +38,7 @@ interface Loaded {
  * One project: the source explorer on the left, and on the right the view the tab names. The lens
  * tabs are the lenses of the explorer scope, from the scope listing.
  */
-export function Workspace({ id, tab, scope, line, fn, base, head }: WorkspaceProps) {
+export function Workspace({ id, tab, scope, line, fn, mode, base, head }: WorkspaceProps) {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [listing, setListing] = useState<ScopeLenses | null>(null);
@@ -134,7 +135,7 @@ export function Workspace({ id, tab, scope, line, fn, base, head }: WorkspacePro
       case "source":
         return <SourceView id={id} files={files} scope={scope} line={line} />;
       case "flow":
-        return <FlowView id={id} files={files} scope={scope} fn={fn} />;
+        return <FlowView id={id} files={files} scope={scope} fn={fn} mode={mode ?? "entries"} />;
       case "findings":
         return <FindingsView id={id} scope={scope} />;
       case "compare":

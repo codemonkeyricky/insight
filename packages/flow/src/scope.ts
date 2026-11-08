@@ -2,7 +2,18 @@ import type { IREdge, IRNode } from "@insight/ir";
 import { edgeTargets, isExternal } from "@insight/sdk";
 import { factsForFile, type FunctionFacts, type Item } from "./build.js";
 import { measure } from "./layout.js";
-import type { FlowSpan, FlowStats, ScopeCall, ScopeExternal, ScopeFile, ScopeFlow, ScopeFlowStats, ScopeFunction, ScopeGranularity } from "./types.js";
+import type {
+  FlowSpan,
+  FlowStats,
+  ScopeCall,
+  ScopeExternal,
+  ScopeFile,
+  ScopeFlow,
+  ScopeFlowStats,
+  ScopeFunction,
+  ScopeGranularity,
+  UnreferencedFunction,
+} from "./types.js";
 
 /** A scope with more functions than this is summarized per file, so the payload and the graph stay small. */
 export const SCOPE_FUNCTION_LIMIT = 400;
@@ -13,6 +24,62 @@ function push<K, V>(m: Map<K, V[]>, k: K, v: V): void {
   const list = m.get(k);
   if (list) list.push(v);
   else m.set(k, [v]);
+}
+
+/** Directory names whose files are tests, fixtures or samples. */
+const NOISE_DIRS = new Set(["test", "tests", "__tests__", "fixtures", "sample", "samples"]);
+
+/**
+ * Whether a file is noise: a test, fixture or sample. A directory on its path is named `test`, `tests`, `__tests__`,
+ * `fixtures`, `sample` or `samples`, or the file is `*.test.*` or `*.spec.*`. Nothing in the code calls such a function;
+ * a test runner, a fixture loader or a reader does.
+ */
+export function isNoisePath(file: string): boolean {
+  const parts = file.split("/");
+  const base = parts[parts.length - 1] ?? "";
+  if (parts.slice(0, -1).some((p) => NOISE_DIRS.has(p))) return true;
+  return /\.(test|spec)\./.test(base);
+}
+
+/** The distinct functions reached from `start` through `edges`, not counting `start`. Iterative, so cycles are safe. */
+function reachFrom(start: string, edges: ReadonlyMap<string, readonly string[]>): number {
+  const seen = new Set<string>([start]);
+  const stack = [start];
+  while (stack.length > 0) {
+    const cur = stack.pop() as string;
+    for (const next of edges.get(cur) ?? []) {
+      if (seen.has(next)) continue;
+      seen.add(next);
+      stack.push(next);
+    }
+  }
+  return seen.size - 1;
+}
+
+/**
+ * The functions that no function in the scope calls or refers to, each with its reach. `calledInScope` maps a callee to
+ * its callers in the scope, where module-level code counts as a caller; a self-call or self-reference is not in it.
+ * `calls` are the scope's call and reference rows, from which the reach graph is built: in-scope, function to function,
+ * self-edges left out.
+ */
+function unreferencedOf(
+  functions: readonly ScopeFunction[],
+  calledInScope: ReadonlyMap<string, ReadonlySet<string>>,
+  calls: Iterable<ScopeCall>,
+): UnreferencedFunction[] {
+  const local = new Set(functions.map((f) => f.id));
+  const callees = new Map<string, string[]>();
+  for (const c of calls) {
+    if (c.external || c.from === c.to || !local.has(c.from) || !local.has(c.to)) continue;
+    push(callees, c.from, c.to);
+  }
+  const out: UnreferencedFunction[] = [];
+  for (const f of functions) {
+    if (calledInScope.has(f.id)) continue;
+    const noise = isNoisePath(f.file);
+    out.push({ ...f, reach: reachFrom(f.id, callees), ...(noise ? { noise: true as const } : {}) });
+  }
+  return out;
 }
 
 /** The file of an id such as `src/lib/math.ts#add`: the part before the '#'. */
@@ -65,7 +132,11 @@ export function summarizeScope(nodes: Iterable<IRNode>, edges: Iterable<IREdge>,
   }
 
   const callEdges: IREdge[] = [];
-  for (const e of edges) if (e.kind === "calls.call") callEdges.push(e);
+  const refEdges: IREdge[] = [];
+  for (const e of edges) {
+    if (e.kind === "calls.call") callEdges.push(e);
+    else if (e.kind === "calls.reference") refEdges.push(e);
+  }
 
   // A caller is in scope when it is a local function, or a file in scope (module-level code).
   const inScope = (id: string) => !stubs.has(id) && (fnNodes.has(id) || fileSet.has(id));
@@ -106,6 +177,24 @@ export function summarizeScope(nodes: Iterable<IRNode>, edges: Iterable<IREdge>,
       const row = rows.get(key);
       if (row) row.count++;
       else rows.set(key, { from: e.from, to: t, count: 1, external: !local, ...(candidate ? { candidate: true as const } : {}) });
+    }
+  }
+
+  // A reference makes its target referenced without a call. It counts for unreferenced, entries and reach, but adds no call row.
+  const referenceRows: ScopeCall[] = [];
+  for (const e of refEdges) {
+    const { nodes: direct, candidates } = edgeTargets(e);
+    const targets = direct.length > 0 ? direct : candidates;
+    if (!inScope(e.from)) {
+      for (const t of targets) if (fnNodes.has(t)) calledFromOutside.add(t);
+      continue;
+    }
+    for (const t of targets) {
+      if (!fnNodes.has(t) || t === e.from) continue;
+      const set = calledInScope.get(t) ?? new Set<string>();
+      set.add(e.from);
+      calledInScope.set(t, set);
+      referenceRows.push({ from: e.from, to: t, count: 1, external: false });
     }
   }
 
@@ -155,6 +244,10 @@ export function summarizeScope(nodes: Iterable<IRNode>, edges: Iterable<IREdge>,
 
   const entries = granularity === "functions" ? entryFunctions(functions, calledInScope, calledFromOutside) : entryFiles(fileList, calledInScope, calledFromOutside, fileOf);
 
+  // Built from the function rows, not the payload rows, so it holds at every granularity.
+  const unreferenced = unreferencedOf(functions, calledInScope, [...rows.values(), ...referenceRows]);
+  const unreferencedNoise = unreferenced.filter((f) => f.noise).length;
+  const functionsNoise = functions.filter((f) => isNoisePath(f.file)).length;
   const stats: ScopeFlowStats = {
     functions: functions.length,
     files: fileSet.size,
@@ -164,10 +257,17 @@ export function summarizeScope(nodes: Iterable<IRNode>, edges: Iterable<IREdge>,
     unresolved: totals.unresolved,
     inbound: totals.inbound,
     entries: entries.length,
+    functionsTotal: functions.length,
+    functionsNoise,
+    functionsNonNoise: functions.length - functionsNoise,
+    unreferenced: unreferenced.length - unreferencedNoise,
+    unreferencedNoise,
+    unreferencedOutside: unreferenced.filter((f) => !f.noise && f.calledFromOutside).length,
   };
   return {
     granularity,
     functions: granularity === "functions" ? functions : [],
+    unreferenced,
     calls: callRows,
     externals: [...externals.values()].sort((a, b) => cmpText(a.id, b.id)),
     entries,

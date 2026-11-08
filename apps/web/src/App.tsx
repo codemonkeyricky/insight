@@ -54,6 +54,7 @@ export function App() {
             scope={route.scope}
             line={route.line}
             fn={route.fn}
+            mode={route.mode}
             base={route.base}
             head={route.head}
           />

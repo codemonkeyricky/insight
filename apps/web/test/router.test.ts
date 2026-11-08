@@ -107,6 +107,20 @@ describe("hash router", () => {
     expect(parseRoute(hrefFlow("p1", "src/sample.ts"))).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "src/sample.ts" });
   });
 
+  it("keeps the flow mode in the URL only when it is the hierarchy", () => {
+    expect(hrefView("p1", "flow", { scope: "src", mode: "hierarchy" })).toBe("#/projects/p1/view/flow?scope=src&mode=hierarchy");
+    expect(hrefView("p1", "flow", { scope: "src", mode: "entries" })).toBe("#/projects/p1/view/flow?scope=src");
+    expect(parseRoute("#/projects/p1/view/flow?scope=src&mode=hierarchy")).toEqual({
+      name: "workspace",
+      id: "p1",
+      tab: "flow",
+      scope: "src",
+      mode: "hierarchy",
+    });
+    expect(parseRoute("#/projects/p1/view/flow?scope=src")).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "src" });
+    expect(parseRoute("#/projects/p1/view/flow?scope=src&mode=other")).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "src" });
+  });
+
   it("parses the compare links the helpers build", () => {
     expect(parseRoute(hrefCompare("ab12", "main~1", "HEAD"))).toEqual({
       name: "workspace",

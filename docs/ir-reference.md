@@ -85,7 +85,10 @@ Base kinds shipped by the core:
 | `calls.dynamic-dispatch` | calls | node | – |  |
 | `calls.callback-registration` | calls | node | – |  |
 | `calls.call` | calls | edge | – | Caller function to callee function. |
+| `calls.reference` | calls | edge | – | Caller to a function it refers to without calling it. `attrs.how` is `new`, `jsx` or `value`. Caller is the enclosing function, or the file for module-level code. |
 | `calls.contains-call` | calls | edge | – |  |
+
+`calls.reference` has no parent on purpose. A query for a parent also returns its extensions, so extending `calls.call` would make every call query return references too.
 | `concurrency.spawn-thread` | concurrency | node | – |  |
 | `concurrency.spawn-process` | concurrency | node | – |  |
 | `concurrency.coroutine` | concurrency | node | – |  |

@@ -166,7 +166,8 @@ Granularity:
   path.
 
 Entries are the roots of the call graph: the functions (or, in `files` granularity, the files) with
-no caller in the scope and no caller outside it.
+no caller or referrer in the scope and no caller or referrer outside it. A referrer is a
+`calls.reference` edge (see below).
 
 Module-level code, meaning statements that run when a module loads, is not a function row. Its calls
 have the file path as `from`, and its counts go to the file's row in `files`.
@@ -254,13 +255,54 @@ example. The shape is exact.
   "calls": [{ "from": "src/a.ts#a", "to": "lib/c.ts#c", "count": 1, "external": true }],
   "externals": [{ "id": "lib/c.ts#c", "name": "c", "file": "lib/c.ts" }],
   "entries": ["src/b.ts#d"],
+  "unreferenced": [
+    {
+      "id": "src/b.ts#d", "name": "d", "file": "src/b.ts", "async": false,
+      "span": { "file": "src/b.ts", "start": [4, 0], "end": [4, 22] }, "line": 5,
+      "steps": 1, "decisions": 0, "loops": 0, "tries": 0,
+      "awaits": 0, "spawns": 0, "effects": 0, "exits": 1, "reach": 2
+    }
+  ],
   "files": [{ "file": "src/a.ts", "functions": 1, "decisions": 0, "loops": 0, "tries": 0, "calledFromOutside": true }],
-  "stats": { "functions": 4, "files": 5, "calls": 3, "resolved": 2, "external": 1, "unresolved": 0, "inbound": 0, "entries": 1 }
+  "stats": {
+    "functions": 4, "files": 5, "calls": 3, "resolved": 2, "external": 1, "unresolved": 0, "inbound": 0, "entries": 1,
+    "functionsTotal": 4, "functionsNoise": 0, "unreferenced": 1, "unreferencedNoise": 0, "unreferencedOutside": 0
+  }
 }
 ```
 
 `functions` is empty in `files` granularity. `calledFromOutside` appears only when it is true. A
 `span` is `{ file, start: [line, column], end: [line, column] }`, with 0-based positions.
+
+`unreferenced` lists the functions that no function in the scope calls or refers to, at either
+granularity. It is the entry set of the scope's Flow view. A function is unreferenced in a scope `S`
+when no function inside `S` calls it or refers to it:
+
+- Calls are the `calls.call` edges, resolved the way `calls` resolves them. A call with several
+  possible targets references each candidate.
+- References are the `calls.reference` edges that the TypeScript frontend records for a function
+  used without a call: constructed with `new` (its constructor), rendered as a JSX element, or used
+  as a value, such as a callback, an exported name read through an import, or a decorator. A
+  reference is not a call row, so it never appears in `calls`.
+- A self-call or self-reference does not count. Module-level code in a file in `S` counts as a
+  caller or referrer.
+- A caller outside `S` does not count. Such a function is still unreferenced and is flagged with
+  `calledFromOutside`; it resolves when the scope widens.
+- `reach` is the number of distinct functions it reaches through calls and references inside `S`,
+  not counting itself. Cycles are safe.
+- A function defined in a noise file is marked `noise: true`. Noise files are the test, fixture and
+  sample files: a directory named `test`, `tests`, `__tests__`, `fixtures`, `sample` or `samples` on
+  the path, or a file named `*.test.*` or `*.spec.*`. Nothing in the code calls them: a test runner,
+  a fixture loader or a reader does. A file named `sample.ts` is not noise, only a directory is.
+  The stats count them apart. `unreferenced` and `unreferencedOutside` leave them out,
+  `unreferencedNoise` counts them, `functionsTotal` counts all functions, `functionsNoise` counts
+  the noise ones, and `functionsNonNoise` is the rest.
+
+Widening a scope can only remove functions from the unreferenced set: a function unreferenced in a
+wider scope is unreferenced in every narrower scope that holds it, because each caller inside the
+narrower scope is also inside the wider one. The count for a scope can still rise when the scope
+widens, because the wider scope holds more functions. `entries` follows the same rule, so a referenced
+function is never an entry.
 
 The result is kept in memory for up to 32 scopes, keyed by snapshot and scope. A snapshot does not
 change, so a kept result is never stale. The errors are the same as the lens routes.

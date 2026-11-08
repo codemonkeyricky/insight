@@ -69,10 +69,42 @@ CFG is shown.
 Replaced and removed: `CallGraph.tsx`, `flowGraph.ts` and `flowGraph.test.ts` are deleted, and so are
 `apps/web/spike.html` and `apps/web/src/spike/`. `FlowView.tsx` now renders the zoom map.
 
+### Entry points (default mode)
+
+The Flow tab opens on an entry-point view: the functions that nothing in the scope calls, as boxes grouped by file.
+The mode is the URL's `mode` query. `mode=hierarchy` selects the zoom map above, and the default has no `mode`
+parameter, so the entry view's links stay short. A two-link switch at the top of the tab moves between them, and both
+modes keep the scope and function.
+
+- `apps/web/src/components/zoom/EntryMap.tsx` draws it. It is a plain SVG grid with no camera and no layout worker.
+  The scene is pure: `packages/flow/src/entry-map.ts` (`entryBoxes`, `entryFrames`, `layoutEntries`, `entrySummary`,
+  `ladderOf`).
+- A ladder across the top lists the project and each folder down to the scope, with the counts of each ancestor's
+  flow, as `unreferenced/total`: for example `Project 14/1100 › packages 31/700 › index.ts 4/9`. The total is the
+  functions in scope, leaving out test, fixture and sample files while the toggle is off and counting them when it is
+  on. The unreferenced count follows the same rule. The ratio falls as the scope widens, since a wider scope resolves
+  references. A legend line under the ladder says so. The counts come from the flows the store has loaded, and
+  `ensureChain` loads every ancestor.
+- Each box shows its name and a muted `reaches N` line: the number of distinct functions it reaches through calls and
+  references inside the scope. All boxes are the same size.
+- The summary line counts the boxes shown, the files and the functions also called from outside the scope.
+- `Include tests and samples (N)` shows the functions in test, fixture and sample files, which are hidden by default.
+  `N` counts them in the scope. The checkbox is local state, so it is not in the URL.
+- Each box links to its function, `scope` and `fn` in the URL. An open function's chart and detail sit below the grid.
+- Escape closes the open function first, and goes up one scope when none is open.
+- The entry view draws no edges. Two unreferenced functions in one scope cannot call each other, since the caller
+  would make the callee referenced.
+- The grid wraps at the measured width of the view, so the frames stay on screen. A frame wider than the view, such as
+  a file with several columns of boxes, takes a row to itself and scrolls sideways inside the grid. A file path longer
+  than 34 characters is cut from the front, with an ellipsis, and its full path is the frame's tooltip.
+
+`FlowView` owns one `ZoomStore` and passes it to both modes, so a flow loaded for one is not loaded again for the
+other. The hierarchy mode writes `mode=hierarchy` into every URL it sets.
+
 ## Verification
 
-- `pnpm -r build` and `pnpm -r test` pass. `@insight/flow` has 77 tests across 4 files, and `@insight/web` has
-  54 tests across 4 files. The other packages pass too, with no failures.
+- `pnpm -r build` and `pnpm -r test` pass. `@insight/flow` has 101 tests across 6 files, and `@insight/web` has
+  55 tests across 4 files. The other packages pass too, with no failures.
 - `pnpm --filter @insight/web build:demo` builds. The demo is served from `apps/web/dist-demo` on a static port.
 - A playwright-core script drove the demo through real wheel, drag and keyboard input. It checked, with no console or
   page errors:
@@ -83,6 +115,10 @@ Replaced and removed: `CallGraph.tsx`, `flowGraph.ts` and `flowGraph.test.ts` ar
   - the minimap and breadcrumb are clickable;
   - the page has no horizontal scroll at phone width.
 - Screenshots were checked for each level, the minimap and the breadcrumb.
+- The entry view was checked the same way at the file, folder, package and project scopes: the ladder counts and
+  boxes match each scope's flow, a box opens its chart and Escape closes it, the tests toggle adds the test boxes, the
+  grid fits its stage, and the phone width has no page overflow. A check of the per-function monotone rule over the
+  captured demo found no problems.
 
 ## Timings
 

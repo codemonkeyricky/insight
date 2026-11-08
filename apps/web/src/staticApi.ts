@@ -143,11 +143,27 @@ function recordOf(row: ScopeLensRow): LensRecord {
 const EMPTY_SCOPE_FLOW: ScopeFlow = {
   granularity: "functions",
   functions: [],
+  unreferenced: [],
   calls: [],
   externals: [],
   entries: [],
   files: [],
-  stats: { functions: 0, files: 0, calls: 0, resolved: 0, external: 0, unresolved: 0, inbound: 0, entries: 0 },
+  stats: {
+    functions: 0,
+    files: 0,
+    calls: 0,
+    resolved: 0,
+    external: 0,
+    unresolved: 0,
+    inbound: 0,
+    entries: 0,
+    functionsTotal: 0,
+    functionsNoise: 0,
+    functionsNonNoise: 0,
+    unreferenced: 0,
+    unreferencedNoise: 0,
+    unreferencedOutside: 0,
+  },
 };
 
 export const staticApi = {

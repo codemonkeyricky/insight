@@ -222,6 +222,15 @@
     }
   },
   {
+    "kind": "calls.reference",
+    "facet": "calls",
+    "on": "edge",
+    "description": "Caller to a function it refers to without calling it: constructed with new, rendered as a JSX element, or used as a value. The caller is the enclosing function, or the file for module-level code. Does not extend calls.call, so queries for calls.call never return these edges.",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/calls.json#/$defs/CallsReference"
+    }
+  },
+  {
     "kind": "calls.contains-call",
     "facet": "calls",
     "on": "edge",

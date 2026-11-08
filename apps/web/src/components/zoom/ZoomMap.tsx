@@ -25,7 +25,7 @@ import {
 } from "@insight/flow";
 import { nameOfId, resolutionPercent } from "../../flowTargets";
 import { hrefView } from "../../router";
-import { ZoomStore, type Build } from "../../zoom/scene";
+import { type Build, type ZoomStore } from "../../zoom/scene";
 import { FlowChart } from "../FlowChart";
 import { FunctionDetail } from "./FunctionDetail";
 
@@ -60,14 +60,15 @@ const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 interface Props {
   id: string;
+  /** The store of the flow tab, shared with the entry view so the flows loaded for one are kept for the other. */
+  store: ZoomStore;
   /** The URL's scope: a folder, or a file (a function's file). Empty is the project. */
   scope: string;
   /** The URL's function, when one is picked. */
   fn?: string;
 }
 
-export function ZoomMap({ id, scope, fn }: Props) {
-  const store = useMemo(() => new ZoomStore(id), [id]);
+export function ZoomMap({ id, store, scope, fn }: Props) {
   const [build, setBuild] = useState<Build>();
   const [shown, setShown] = useState<{ build?: Build; items: PlacedItem[]; edges: PlacedEdge[] }>({ items: [], edges: [] });
   const [error, setError] = useState<string>();
@@ -152,7 +153,7 @@ export function ZoomMap({ id, scope, fn }: Props) {
   const syncUrl = (b: Build, focus: string) => {
     const target = urlFocus(b.tree, focus);
     if (target === undefined) return;
-    const href = hrefView(id, "flow", target);
+    const href = hrefView(id, "flow", { ...target, mode: "hierarchy" });
     if (window.location.hash === href) return;
     window.history.replaceState(window.history.state, "", href);
     window.dispatchEvent(new HashChangeEvent("hashchange"));
@@ -385,7 +386,7 @@ export function ZoomMap({ id, scope, fn }: Props) {
               return (
                 <li key={n.id}>
                   <a
-                    href={hrefView(id, "flow", urlFocus(tree, n.id) ?? {})}
+                    href={hrefView(id, "flow", { ...(urlFocus(tree, n.id) ?? {}), mode: "hierarchy" })}
                     onClick={(e) => {
                       e.preventDefault();
                       void show(n.id, true, true);

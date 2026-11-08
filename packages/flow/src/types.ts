@@ -111,7 +111,21 @@ export interface ScopeFunction {
 }
 
 /**
- * Calls aggregated by caller and callee. `from` is a function id, or the file path for statements that
+ * A function that no function in its scope calls. `reach` counts the distinct functions it reaches through calls in
+ * the scope, not counting itself. `calledFromOutside` says a caller outside the scope exists: it is information only,
+ * since the function still counts as unreferenced here and resolves when the scope widens.
+ */
+export interface UnreferencedFunction extends ScopeFunction {
+  reach: number;
+  /**
+   * Set for a function defined in a test, fixture or sample file. Nothing in the code calls those: a test runner, a
+   * fixture loader or a reader does. See `isNoisePath`.
+   */
+  noise?: true;
+}
+
+/**
+ * A call row. `from` is a function id, or the file path for statements that
  * run when the module loads. In files granularity both ends are file paths.
  */
 export interface ScopeCall {
@@ -158,6 +172,18 @@ export interface ScopeFlowStats {
   inbound: number;
   /** Entries: functions in functions granularity, files in files granularity. */
   entries: number;
+  /** Functions defined in the scope, noise files included. The same count as `functions`, whatever the granularity. */
+  functionsTotal: number;
+  /** Functions in test, fixture or sample files, a part of `functionsTotal`. */
+  functionsNoise: number;
+  /** Functions outside test, fixture and sample files: `functionsTotal` without `functionsNoise`. */
+  functionsNonNoise: number;
+  /** Unreferenced functions outside test, fixture and sample files: the rows of `unreferenced` without `noise`. */
+  unreferenced: number;
+  /** Unreferenced functions in test, fixture or sample files. */
+  unreferencedNoise: number;
+  /** The non-noise unreferenced functions that a caller outside the scope reaches. */
+  unreferencedOutside: number;
 }
 
 /** The call flow of one scope, from its scoped IR. Pure data: nothing here is laid out. */
@@ -165,6 +191,11 @@ export interface ScopeFlow {
   granularity: ScopeGranularity;
   /** Empty in files granularity. */
   functions: ScopeFunction[];
+  /**
+   * The functions that no function in the scope calls, sorted like `functions`. Computed at every granularity, so a
+   * large scope still has its entry points. Test rows are included and marked; the stats count them apart.
+   */
+  unreferenced: UnreferencedFunction[];
   calls: ScopeCall[];
   externals: ScopeExternal[];
   /** Function ids, or file paths in files granularity: the roots of the call graph. */
