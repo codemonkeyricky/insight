@@ -266,7 +266,7 @@ example. The shape is exact.
   "files": [{ "file": "src/a.ts", "functions": 1, "decisions": 0, "loops": 0, "tries": 0, "calledFromOutside": true }],
   "stats": {
     "functions": 4, "files": 5, "calls": 3, "resolved": 2, "external": 1, "unresolved": 0, "inbound": 0, "entries": 1,
-    "functionsTotal": 4, "functionsTests": 0, "unreferenced": 1, "unreferencedTests": 0, "unreferencedOutside": 0
+    "functionsTotal": 4, "functionsNoise": 0, "unreferenced": 1, "unreferencedNoise": 0, "unreferencedOutside": 0
   }
 }
 ```
@@ -290,10 +290,13 @@ when no function inside `S` calls it or refers to it:
   `calledFromOutside`; it resolves when the scope widens.
 - `reach` is the number of distinct functions it reaches through calls and references inside `S`,
   not counting itself. Cycles are safe.
-- A function defined in a test or fixture file is marked `test: true`. Test files are a directory
-  named `test`, `tests`, `__tests__` or `fixtures` on the path, or a file named `*.test.*` or
-  `*.spec.*`. The stats count them apart: `unreferenced` and `unreferencedOutside` leave them out,
-  `unreferencedTests` counts them, and `functionsTotal` and `functionsTests` count all functions.
+- A function defined in a noise file is marked `noise: true`. Noise files are the test, fixture and
+  sample files: a directory named `test`, `tests`, `__tests__`, `fixtures`, `sample` or `samples` on
+  the path, or a file named `*.test.*` or `*.spec.*`. Nothing in the code calls them: a test runner,
+  a fixture loader or a reader does. A file named `sample.ts` is not noise, only a directory is.
+  The stats count them apart. `unreferenced` and `unreferencedOutside` leave them out,
+  `unreferencedNoise` counts them, `functionsTotal` counts all functions, `functionsNoise` counts
+  the noise ones, and `functionsNonNoise` is the rest.
 
 Widening a scope can only remove functions from the unreferenced set: a function unreferenced in a
 wider scope is unreferenced in every narrower scope that holds it, because each caller inside the

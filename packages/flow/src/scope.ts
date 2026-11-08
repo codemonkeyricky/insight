@@ -26,17 +26,18 @@ function push<K, V>(m: Map<K, V[]>, k: K, v: V): void {
   else m.set(k, [v]);
 }
 
-/** Directory names whose files are tests or fixtures. */
-const TEST_DIRS = new Set(["test", "tests", "__tests__", "fixtures"]);
+/** Directory names whose files are tests, fixtures or samples. */
+const NOISE_DIRS = new Set(["test", "tests", "__tests__", "fixtures", "sample", "samples"]);
 
 /**
- * Whether a file is a test or a fixture: a directory on its path is named `test`, `tests`, `__tests__` or `fixtures`,
- * or the file is `*.test.*` or `*.spec.*`. Nothing in the code calls such a function; the test runner does.
+ * Whether a file is noise: a test, fixture or sample. A directory on its path is named `test`, `tests`, `__tests__`,
+ * `fixtures`, `sample` or `samples`, or the file is `*.test.*` or `*.spec.*`. Nothing in the code calls such a function;
+ * a test runner, a fixture loader or a reader does.
  */
-export function isTestPath(file: string): boolean {
+export function isNoisePath(file: string): boolean {
   const parts = file.split("/");
   const base = parts[parts.length - 1] ?? "";
-  if (parts.slice(0, -1).some((p) => TEST_DIRS.has(p))) return true;
+  if (parts.slice(0, -1).some((p) => NOISE_DIRS.has(p))) return true;
   return /\.(test|spec)\./.test(base);
 }
 
@@ -75,8 +76,8 @@ function unreferencedOf(
   const out: UnreferencedFunction[] = [];
   for (const f of functions) {
     if (calledInScope.has(f.id)) continue;
-    const test = isTestPath(f.file);
-    out.push({ ...f, reach: reachFrom(f.id, callees), ...(test ? { test: true as const } : {}) });
+    const noise = isNoisePath(f.file);
+    out.push({ ...f, reach: reachFrom(f.id, callees), ...(noise ? { noise: true as const } : {}) });
   }
   return out;
 }
@@ -245,7 +246,8 @@ export function summarizeScope(nodes: Iterable<IRNode>, edges: Iterable<IREdge>,
 
   // Built from the function rows, not the payload rows, so it holds at every granularity.
   const unreferenced = unreferencedOf(functions, calledInScope, [...rows.values(), ...referenceRows]);
-  const unreferencedTests = unreferenced.filter((f) => f.test).length;
+  const unreferencedNoise = unreferenced.filter((f) => f.noise).length;
+  const functionsNoise = functions.filter((f) => isNoisePath(f.file)).length;
   const stats: ScopeFlowStats = {
     functions: functions.length,
     files: fileSet.size,
@@ -256,10 +258,11 @@ export function summarizeScope(nodes: Iterable<IRNode>, edges: Iterable<IREdge>,
     inbound: totals.inbound,
     entries: entries.length,
     functionsTotal: functions.length,
-    functionsTests: functions.filter((f) => isTestPath(f.file)).length,
-    unreferenced: unreferenced.length - unreferencedTests,
-    unreferencedTests,
-    unreferencedOutside: unreferenced.filter((f) => !f.test && f.calledFromOutside).length,
+    functionsNoise,
+    functionsNonNoise: functions.length - functionsNoise,
+    unreferenced: unreferenced.length - unreferencedNoise,
+    unreferencedNoise,
+    unreferencedOutside: unreferenced.filter((f) => !f.noise && f.calledFromOutside).length,
   };
   return {
     granularity,

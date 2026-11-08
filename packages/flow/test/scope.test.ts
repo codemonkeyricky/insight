@@ -219,9 +219,10 @@ describe("summarizeScope on synthetic IR", () => {
         inbound: 0,
         entries: 0,
         functionsTotal: 0,
-        functionsTests: 0,
+        functionsNoise: 0,
+        functionsNonNoise: 0,
         unreferenced: 0,
-        unreferencedTests: 0,
+        unreferencedNoise: 0,
         unreferencedOutside: 0,
       },
     });
@@ -277,10 +278,11 @@ describe("summarizeScope on synthetic IR", () => {
       inbound: 0,
       entries: 1,
       functionsTotal: SCOPE_FUNCTION_LIMIT + 1,
-      functionsTests: 0,
+      functionsNoise: 0,
+      functionsNonNoise: SCOPE_FUNCTION_LIMIT + 1,
       // Every f_i of src/a.ts is uncalled; g is called by f0 to f2.
       unreferenced: SCOPE_FUNCTION_LIMIT,
-      unreferencedTests: 0,
+      unreferencedNoise: 0,
       unreferencedOutside: 0,
     });
     expect(flow.unreferenced).toHaveLength(SCOPE_FUNCTION_LIMIT);

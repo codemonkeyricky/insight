@@ -1,7 +1,7 @@
 // The entry view's scene: the unreferenced functions of one scope, as boxes in file frames, and the ladder of the
 // scope's ancestors. Pure data and arithmetic. The view draws no edges: an unreferenced function cannot be the callee
 // of a function in its scope, since that caller would make it referenced, so no two boxes call each other.
-import { isTestPath } from "./scope.js";
+import { isNoisePath } from "./scope.js";
 import type { ScopeFlow, UnreferencedFunction } from "./types.js";
 import { ZOOM_SIZE, frameSize } from "./zoom-layout.js";
 
@@ -29,13 +29,14 @@ export interface EntryBox {
   reach: number;
   /** A caller outside the scope reaches it. It still counts as an entry here. */
   calledFromOutside: boolean;
-  test: boolean;
+  /** Set for a function in a test, fixture or sample file. */
+  noise: boolean;
 }
 
-/** The boxes of one file, in line order. `test` is set for a test or fixture file. */
+/** The boxes of one file, in line order. `noise` is set for a test, fixture or sample file. */
 export interface EntryFrame {
   file: string;
-  test: boolean;
+  noise: boolean;
   boxes: EntryBox[];
 }
 
@@ -48,7 +49,7 @@ export interface PlacedEntryBox extends EntryBox {
 
 export interface PlacedEntryFrame {
   file: string;
-  test: boolean;
+  noise: boolean;
   x: number;
   y: number;
   w: number;
@@ -63,15 +64,15 @@ export interface EntryLayout {
 }
 
 export interface EntryOptions {
-  /** Whether the functions of test and fixture files are shown. */
-  includeTests: boolean;
+  /** Whether the functions of test, fixture and sample files are shown. */
+  includeNoise: boolean;
   /** Width at which frames wrap. Defaults to `ENTRY_WRAP`. */
   wrap?: number;
 }
 
-/** The unreferenced functions to show, sorted by file and then line. Test rows are left out unless asked for. */
-export function entryBoxes(flow: ScopeFlow, includeTests: boolean): EntryBox[] {
-  const rows = flow.unreferenced.filter((f: UnreferencedFunction) => includeTests || !f.test);
+/** The unreferenced functions to show, sorted by file and then line. Noise rows are left out unless asked for. */
+export function entryBoxes(flow: ScopeFlow, includeNoise: boolean): EntryBox[] {
+  const rows = flow.unreferenced.filter((f: UnreferencedFunction) => includeNoise || !f.noise);
   return rows
     .map((f) => ({
       id: f.id,
@@ -81,16 +82,16 @@ export function entryBoxes(flow: ScopeFlow, includeTests: boolean): EntryBox[] {
       async: f.async,
       reach: f.reach,
       calledFromOutside: f.calledFromOutside === true,
-      test: f.test === true,
+      noise: f.noise === true,
     }))
     .sort((a, b) => cmpText(a.file, b.file) || a.line - b.line || cmpText(a.id, b.id));
 }
 
 /** The frames of the entry view: one per file that has a shown box, in path order. */
-export function entryFrames(flow: ScopeFlow, includeTests: boolean): EntryFrame[] {
+export function entryFrames(flow: ScopeFlow, includeNoise: boolean): EntryFrame[] {
   const frames = new Map<string, EntryFrame>();
-  for (const b of entryBoxes(flow, includeTests)) {
-    const fr = frames.get(b.file) ?? { file: b.file, test: isTestPath(b.file), boxes: [] };
+  for (const b of entryBoxes(flow, includeNoise)) {
+    const fr = frames.get(b.file) ?? { file: b.file, noise: isNoisePath(b.file), boxes: [] };
     fr.boxes.push(b);
     frames.set(b.file, fr);
   }
@@ -115,7 +116,7 @@ function frameBox(count: number): { w: number; h: number; cols: number } {
  */
 export function layoutEntries(flow: ScopeFlow, opts: EntryOptions): EntryLayout {
   const wrap = opts.wrap ?? ENTRY_WRAP;
-  const frames = entryFrames(flow, opts.includeTests);
+  const frames = entryFrames(flow, opts.includeNoise);
   const placed: PlacedEntryFrame[] = [];
   let x = 0;
   let y = 0;
@@ -139,7 +140,7 @@ export function layoutEntries(flow: ScopeFlow, opts: EntryOptions): EntryLayout 
         h: ZOOM_SIZE.fn.h,
       };
     });
-    placed.push({ file: fr.file, test: fr.test, x, y, w: size.w, h: size.h, boxes });
+    placed.push({ file: fr.file, noise: fr.noise, x, y, w: size.w, h: size.h, boxes });
     x += size.w + FRAME_GAP;
     rowH = Math.max(rowH, size.h);
     width = Math.max(width, x - FRAME_GAP);
@@ -147,28 +148,28 @@ export function layoutEntries(flow: ScopeFlow, opts: EntryOptions): EntryLayout 
   return { width, height: frames.length === 0 ? 0 : y + rowH, frames: placed };
 }
 
-/** The counts the ladder shows for one scope. `unreferenced` leaves out test rows; `tests` counts them. */
+/** The counts the ladder shows for one scope. `unreferenced` leaves out noise rows; `noise` counts them. */
 export interface EntryCount {
   unreferenced: number;
-  tests: number;
+  noise: number;
 }
 
-/** The summary line of the entry view. `hiddenTests` is what the Include tests toggle would add. */
+/** The summary line of the entry view. `hiddenNoise` is what the Include toggle would add. */
 export interface EntrySummary {
   shown: number;
   files: number;
-  tests: number;
-  hiddenTests: number;
+  noise: number;
+  hiddenNoise: number;
   outside: number;
 }
 
-export function entrySummary(flow: ScopeFlow, includeTests: boolean): EntrySummary {
-  const shown = entryBoxes(flow, includeTests).length;
+export function entrySummary(flow: ScopeFlow, includeNoise: boolean): EntrySummary {
+  const shown = entryBoxes(flow, includeNoise).length;
   return {
     shown,
-    files: entryFrames(flow, includeTests).length,
-    tests: flow.stats.unreferencedTests,
-    hiddenTests: includeTests ? 0 : flow.stats.unreferencedTests,
+    files: entryFrames(flow, includeNoise).length,
+    noise: flow.stats.unreferencedNoise,
+    hiddenNoise: includeNoise ? 0 : flow.stats.unreferencedNoise,
     outside: flow.stats.unreferencedOutside,
   };
 }

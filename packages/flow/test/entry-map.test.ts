@@ -30,9 +30,9 @@ describe("scopeChain and ladderOf", () => {
   });
 
   it("gives the project first and the scope last, marked current, with the counts it knows", () => {
-    const rungs = ladderOf("app/src", (s) => (s === "" ? { unreferenced: 3, tests: 1 } : undefined));
+    const rungs = ladderOf("app/src", (s) => (s === "" ? { unreferenced: 3, noise: 1 } : undefined));
     expect(rungs).toEqual([
-      { scope: "", name: "project", current: false, counts: { unreferenced: 3, tests: 1 } },
+      { scope: "", name: "project", current: false, counts: { unreferenced: 3, noise: 1 } },
       { scope: "app", name: "app", current: false, counts: undefined },
       { scope: "app/src", name: "src", current: true, counts: undefined },
     ]);
@@ -42,12 +42,18 @@ describe("scopeChain and ladderOf", () => {
 describe("entry boxes and frames", () => {
   const flow = flowWith({ "src/a.ts": 2, "src/b.ts": 1, "src/a.test.ts": 1 });
 
-  it("groups the boxes by file in path order, and leaves test rows out unless asked for", () => {
+  it("groups the boxes by file in path order, and leaves noise rows out unless asked for", () => {
     expect(entryFrames(flow, false).map((f) => f.file)).toEqual(["src/a.ts", "src/b.ts"]);
     const all = entryFrames(flow, true);
     expect(all.map((f) => f.file).sort()).toEqual(["src/a.test.ts", "src/a.ts", "src/b.ts"]);
-    expect(all.find((f) => f.file === "src/a.test.ts")).toMatchObject({ test: true });
-    expect(all.find((f) => f.file === "src/a.ts")).toMatchObject({ test: false });
+    expect(all.find((f) => f.file === "src/a.test.ts")).toMatchObject({ noise: true });
+    expect(all.find((f) => f.file === "src/a.ts")).toMatchObject({ noise: false });
+  });
+
+  it("treats a file under a samples directory as noise, like a test file", () => {
+    const sampled = flowWith({ "src/a.ts": 1, "examples/samples/s.ts": 1 });
+    expect(entryFrames(sampled, false).map((f) => f.file)).toEqual(["src/a.ts"]);
+    expect(entryFrames(sampled, true).find((f) => f.file === "examples/samples/s.ts")).toMatchObject({ noise: true });
   });
 
   it("sorts boxes by line within a file", () => {
@@ -56,9 +62,9 @@ describe("entry boxes and frames", () => {
     expect(boxes[0]?.line).toBeLessThan(boxes[1]?.line ?? 0);
   });
 
-  it("summarizes the shown boxes, the frames, the hidden tests and the outside callers", () => {
-    expect(entrySummary(flow, false)).toEqual({ shown: 3, files: 2, tests: 1, hiddenTests: 1, outside: 0 });
-    expect(entrySummary(flow, true)).toEqual({ shown: 4, files: 3, tests: 1, hiddenTests: 0, outside: 0 });
+  it("summarizes the shown boxes, the frames, the hidden noise and the outside callers", () => {
+    expect(entrySummary(flow, false)).toEqual({ shown: 3, files: 2, noise: 1, hiddenNoise: 1, outside: 0 });
+    expect(entrySummary(flow, true)).toEqual({ shown: 4, files: 3, noise: 1, hiddenNoise: 0, outside: 0 });
   });
 
   it("flags a box that an outside caller reaches, and keeps it shown", () => {
@@ -71,12 +77,12 @@ describe("entry boxes and frames", () => {
 
 describe("layoutEntries", () => {
   it("is empty for a scope with no unreferenced functions", () => {
-    expect(layoutEntries(flowWith({}), { includeTests: true })).toEqual({ width: 0, height: 0, frames: [] });
+    expect(layoutEntries(flowWith({}), { includeNoise: true })).toEqual({ width: 0, height: 0, frames: [] });
   });
 
   it("puts a file's boxes in a grid of up to ENTRY_ROWS per column, inside the frame", () => {
     const count = ENTRY_ROWS * 2 + 5;
-    const layout = layoutEntries(flowWith({ "src/big.ts": count }), { includeTests: false });
+    const layout = layoutEntries(flowWith({ "src/big.ts": count }), { includeNoise: false });
     const [frame] = layout.frames;
     expect(frame?.boxes).toHaveLength(count);
     expect(new Set(frame?.boxes.map((b) => b.x)).size).toBe(3);
@@ -92,7 +98,7 @@ describe("layoutEntries", () => {
   it("keeps frames apart and inside the map, across wrapped rows", () => {
     const files: Record<string, number> = {};
     for (let i = 0; i < 40; i++) files[`src/m${i}.ts`] = 1 + ((i * 7) % 25);
-    const layout = layoutEntries(flowWith(files), { includeTests: false, wrap: 900 });
+    const layout = layoutEntries(flowWith(files), { includeNoise: false, wrap: 900 });
     expect(layout.frames).toHaveLength(40);
     for (const [i, a] of layout.frames.entries()) {
       expect(a.x + a.w).toBeLessThanOrEqual(layout.width);
@@ -103,7 +109,7 @@ describe("layoutEntries", () => {
   });
 
   it("gives a frame wider than the wrap width a row of its own", () => {
-    const layout = layoutEntries(flowWith({ "src/a.ts": 30, "src/b.ts": 1 }), { includeTests: false, wrap: 100 });
+    const layout = layoutEntries(flowWith({ "src/a.ts": 30, "src/b.ts": 1 }), { includeNoise: false, wrap: 100 });
     expect(layout.frames.map((f) => f.y)[0]).not.toBe(layout.frames.map((f) => f.y)[1]);
   });
 });

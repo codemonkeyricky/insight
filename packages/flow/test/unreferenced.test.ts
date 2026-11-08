@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { IREdge, IRNode } from "@insight/ir";
-import { SCOPE_FUNCTION_LIMIT, isTestPath, summarizeScope, type ScopeFlow } from "../src/index.js";
+import { SCOPE_FUNCTION_LIMIT, isNoisePath, summarizeScope, type ScopeFlow } from "../src/index.js";
 import { callEdge, flowOfScope, fnNode } from "./synthetic.js";
 
 /**
@@ -42,21 +42,25 @@ const SCOPES = [...new Set([...CHAIN, "app/test", "app/test/index.test.ts", "lib
 const flowAt = (scope: string): ScopeFlow => flowOfScope(NODES, EDGES, FILES, scope);
 const namesOf = (flow: ScopeFlow) => flow.unreferenced.map((f) => f.name).sort();
 
-describe("isTestPath", () => {
-  it("marks files under a test or fixture directory, and test or spec files", () => {
-    expect(isTestPath("app/test/index.test.ts")).toBe(true);
-    expect(isTestPath("a/tests/x.ts")).toBe(true);
-    expect(isTestPath("a/__tests__/x.ts")).toBe(true);
-    expect(isTestPath("a/fixtures/x.ts")).toBe(true);
-    expect(isTestPath("src/x.spec.tsx")).toBe(true);
-    expect(isTestPath("src/x.test.js")).toBe(true);
+describe("isNoisePath", () => {
+  it("marks files under a test, fixture or sample directory, and test or spec files", () => {
+    expect(isNoisePath("app/test/index.test.ts")).toBe(true);
+    expect(isNoisePath("a/tests/x.ts")).toBe(true);
+    expect(isNoisePath("a/__tests__/x.ts")).toBe(true);
+    expect(isNoisePath("a/fixtures/x.ts")).toBe(true);
+    expect(isNoisePath("examples/sample/x.ts")).toBe(true);
+    expect(isNoisePath("examples/samples/x.ts")).toBe(true);
+    expect(isNoisePath("src/x.spec.tsx")).toBe(true);
+    expect(isNoisePath("src/x.test.js")).toBe(true);
   });
 
-  it("leaves source files alone, even with test in their name", () => {
-    expect(isTestPath("src/index.ts")).toBe(false);
-    expect(isTestPath("src/test-utils.ts")).toBe(false);
-    expect(isTestPath("src/testing/index.ts")).toBe(false);
-    expect(isTestPath("src/tests.ts")).toBe(false);
+  it("leaves source files alone, even with test or sample in their name", () => {
+    expect(isNoisePath("src/index.ts")).toBe(false);
+    expect(isNoisePath("src/test-utils.ts")).toBe(false);
+    expect(isNoisePath("src/testing/index.ts")).toBe(false);
+    expect(isNoisePath("src/tests.ts")).toBe(false);
+    expect(isNoisePath("src/sample.ts")).toBe(false);
+    expect(isNoisePath("src/samples-loader/index.ts")).toBe(false);
   });
 });
 
@@ -88,7 +92,7 @@ describe("unreferenced functions of a scope", () => {
   it("keeps a function that only an outside caller reaches, and flags it", () => {
     const format = flowAt("lib/format.ts").unreferenced.find((f) => f.name === "format");
     expect(format).toMatchObject({ calledFromOutside: true });
-    expect(format?.test).toBeUndefined();
+    expect(format?.noise).toBeUndefined();
     const flow = flowAt("lib/format.ts");
     expect(flow.stats).toMatchObject({ unreferenced: 1, unreferencedOutside: 1 });
     // The entries are unchanged: an outside caller still keeps the function out of them.
@@ -98,9 +102,9 @@ describe("unreferenced functions of a scope", () => {
   it("marks test rows, and counts them apart from the rest", () => {
     const root = flowAt("");
     const it = root.unreferenced.find((f) => f.name === "it");
-    expect(it).toMatchObject({ test: true });
-    expect(root.stats).toMatchObject({ unreferenced: 5, unreferencedTests: 1, functionsTests: 1 });
-    expect(root.unreferenced.filter((f) => !f.test).map((f) => f.name).sort()).toEqual(["helper", "ping", "stop", "trim", "upper"]);
+    expect(it).toMatchObject({ noise: true });
+    expect(root.stats).toMatchObject({ unreferenced: 5, unreferencedNoise: 1, functionsNoise: 1 });
+    expect(root.unreferenced.filter((f) => !f.noise).map((f) => f.name).sort()).toEqual(["helper", "ping", "stop", "trim", "upper"]);
   });
 
   it("counts each candidate of a call with several possible targets as referenced", () => {
@@ -138,7 +142,7 @@ describe("unreferenced functions of a scope", () => {
     expect(flow.functions).toEqual([]);
     expect(flow.unreferenced.map((f) => f.name)).toEqual(["f0"]);
     expect(flow.unreferenced[0]).toMatchObject({ reach: count - 1 });
-    expect(flow.stats).toMatchObject({ functionsTotal: count, unreferenced: 1, unreferencedTests: 0 });
+    expect(flow.stats).toMatchObject({ functionsTotal: count, unreferenced: 1, unreferencedNoise: 0 });
   });
 });
 

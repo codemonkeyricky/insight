@@ -117,8 +117,11 @@ export interface ScopeFunction {
  */
 export interface UnreferencedFunction extends ScopeFunction {
   reach: number;
-  /** Set for a function defined in a test or fixture file. The test runner calls those, so no code in the scope does. */
-  test?: true;
+  /**
+   * Set for a function defined in a test, fixture or sample file. Nothing in the code calls those: a test runner, a
+   * fixture loader or a reader does. See `isNoisePath`.
+   */
+  noise?: true;
 }
 
 /**
@@ -169,15 +172,17 @@ export interface ScopeFlowStats {
   inbound: number;
   /** Entries: functions in functions granularity, files in files granularity. */
   entries: number;
-  /** Functions defined in the scope, test files included. The same count as `functions`, whatever the granularity. */
+  /** Functions defined in the scope, noise files included. The same count as `functions`, whatever the granularity. */
   functionsTotal: number;
-  /** Functions in test or fixture files, a part of `functionsTotal`. */
-  functionsTests: number;
-  /** Unreferenced functions outside test files: the rows of `unreferenced` without `test`. */
+  /** Functions in test, fixture or sample files, a part of `functionsTotal`. */
+  functionsNoise: number;
+  /** Functions outside test, fixture and sample files: `functionsTotal` without `functionsNoise`. */
+  functionsNonNoise: number;
+  /** Unreferenced functions outside test, fixture and sample files: the rows of `unreferenced` without `noise`. */
   unreferenced: number;
-  /** Unreferenced functions in test or fixture files. */
-  unreferencedTests: number;
-  /** The non-test unreferenced functions that a caller outside the scope reaches. */
+  /** Unreferenced functions in test, fixture or sample files. */
+  unreferencedNoise: number;
+  /** The non-noise unreferenced functions that a caller outside the scope reaches. */
   unreferencedOutside: number;
 }
 

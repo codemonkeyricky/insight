@@ -82,8 +82,8 @@ modes keep the scope and function.
 - A ladder across the top lists the project and each folder down to the scope, with the counts of each ancestor's
   flow. The counts come from the flows the store has loaded, and `ensureChain` loads every ancestor.
 - The summary line counts the boxes shown, the files and the functions also called from outside the scope.
-- `Include tests (N)` shows the test and fixture functions, which are hidden by default. The checkbox is local state,
-  so it is not in the URL.
+- `Include tests and samples (N)` shows the functions in test, fixture and sample files, which are hidden by default.
+  `N` counts them in the scope. The checkbox is local state, so it is not in the URL.
 - Each box links to its function, `scope` and `fn` in the URL. An open function's chart and detail sit below the grid.
 - Escape closes the open function first, and goes up one scope when none is open.
 - The entry view draws no edges. Two unreferenced functions in one scope cannot call each other, since the caller

@@ -54,9 +54,9 @@ interface FlowListing {
     inbound: number;
     entries: number;
     functionsTotal: number;
-    functionsTests: number;
+    functionsNoise: number;
     unreferenced: number;
-    unreferencedTests: number;
+    unreferencedNoise: number;
     unreferencedOutside: number;
   };
 }
@@ -222,13 +222,13 @@ describe("scoped IR routes", () => {
       // a() is called only by d(), which is outside this file. It is still unreferenced here, and flagged. Its callees
       // are both outside the file, so it reaches nothing inside it.
       expect(file.body.unreferenced).toEqual([expect.objectContaining({ id: "src/a.ts#a", calledFromOutside: true, reach: 0 })]);
-      expect(file.body.stats).toMatchObject({ unreferenced: 1, unreferencedOutside: 1, unreferencedTests: 0 });
+      expect(file.body.stats).toMatchObject({ unreferenced: 1, unreferencedOutside: 1, unreferencedNoise: 0 });
       // d() is the only function in src that nothing in src calls. Through a() it reaches b(), not c(), which is outside.
       expect(folder.body.unreferenced.map((f) => f.id)).toEqual(["src/b.ts#d"]);
       expect(folder.body.unreferenced[0]).toMatchObject({ reach: 2 });
       expect(project.body.unreferenced.map((f) => f.id)).toEqual(["src/b.ts#d"]);
       expect(project.body.unreferenced[0]).toMatchObject({ reach: 3 });
-      expect(project.body.stats).toMatchObject({ functionsTotal: 4, functionsTests: 0, unreferenced: 1, unreferencedOutside: 0 });
+      expect(project.body.stats).toMatchObject({ functionsTotal: 4, functionsNoise: 0, unreferenced: 1, unreferencedOutside: 0 });
     });
 
     it("answers 404 for an unknown snapshot, and for a project with no snapshot yet", async () => {

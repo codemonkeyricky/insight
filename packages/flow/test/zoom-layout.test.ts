@@ -50,9 +50,9 @@ const flowStats = {
   inbound: 0,
   entries: 0,
   functionsTotal: 0,
-  functionsTests: 0,
+  functionsNoise: 0,
   unreferenced: 0,
-  unreferencedTests: 0,
+  unreferencedNoise: 0,
   unreferencedOutside: 0,
 };
 

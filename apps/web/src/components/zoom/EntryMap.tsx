@@ -45,10 +45,10 @@ const shortPath = (file: string) => (file.length > 34 ? `…${file.slice(-33)}` 
 const shortName = (name: string) => (name.length > 26 ? `${name.slice(0, 25)}…` : name);
 
 const countsOf = (flow: ScopeFlow | undefined): EntryCount | undefined =>
-  flow === undefined ? undefined : { unreferenced: flow.stats.unreferenced, tests: flow.stats.unreferencedTests };
+  flow === undefined ? undefined : { unreferenced: flow.stats.unreferenced, noise: flow.stats.unreferencedNoise };
 
 const countText = (c: EntryCount) =>
-  `${c.unreferenced} entry ${plural(c.unreferenced, "point", "points")}${c.tests > 0 ? `, ${c.tests} in tests` : ""}`;
+  `${c.unreferenced} entry ${plural(c.unreferenced, "point", "points")}${c.noise > 0 ? `, ${c.noise} in tests and samples` : ""}`;
 
 function summaryText(s: EntrySummary): string {
   const outside = s.outside > 0 ? `, ${s.outside} also called from outside this scope` : "";
@@ -58,13 +58,13 @@ function summaryText(s: EntrySummary): string {
 /** Why the grid is empty. A scope whose only unreferenced functions are tests says so, and points at the toggle. */
 function emptyText(flow: ScopeFlow): string {
   if (flow.stats.functionsTotal === 0) return "No function in this scope.";
-  if (flow.stats.unreferenced === 0 && flow.stats.unreferencedTests === 0) return "Every function in this scope is called from inside it.";
-  return "The only unreferenced functions here are in test files. Include tests to see them.";
+  if (flow.stats.unreferenced === 0 && flow.stats.unreferencedNoise === 0) return "Every function in this scope is called from inside it.";
+  return "The only unreferenced functions here are in test, fixture or sample files. Include tests and samples to see them.";
 }
 
 /** The entry view of one scope. Its ladder, summary and grid come from the flows the store has loaded. */
 export function EntryMap({ id, store, scope, fn }: Props) {
-  const [includeTests, setIncludeTests] = useState(false);
+  const [includeNoise, setIncludeNoise] = useState(false);
   const [chain, setChain] = useState<{ scope: string; error?: string }>();
   const [chart, setChart] = useState<ChartState>();
   // The width the grid wraps at: the width of this view, so the frames fit it instead of running off the right edge.
@@ -116,8 +116,8 @@ export function EntryMap({ id, store, scope, fn }: Props) {
   const flow = ready !== undefined && ready.error === undefined ? store.flowOf(scope) : undefined;
   // A frame wider than the wrap takes a row to itself, so the narrowest wrap is only a floor against a near-zero width.
   const wrap = width === undefined ? undefined : Math.max(260, Math.floor(width) - 4);
-  const layout = useMemo(() => (flow ? layoutEntries(flow, { includeTests, wrap }) : undefined), [flow, includeTests, wrap]);
-  const summary = flow ? entrySummary(flow, includeTests) : undefined;
+  const layout = useMemo(() => (flow ? layoutEntries(flow, { includeNoise, wrap }) : undefined), [flow, includeNoise, wrap]);
+  const summary = flow ? entrySummary(flow, includeNoise) : undefined;
   const rungs = ladderOf(scope, (s) => countsOf(store.flowOf(s)));
   const fromOutside = flow?.unreferenced.some((f) => f.id === fn && f.calledFromOutside) ?? false;
   const parent = scopeChain(scope)[1];
@@ -158,8 +158,8 @@ export function EntryMap({ id, store, scope, fn }: Props) {
           <div className="em-bar">
             <p className="small em-summary">{summaryText(summary)}</p>
             <label className="em-toggle">
-              <input type="checkbox" checked={includeTests} onChange={(e) => setIncludeTests(e.target.checked)} />
-              Include tests ({summary.tests})
+              <input type="checkbox" checked={includeNoise} onChange={(e) => setIncludeNoise(e.target.checked)} />
+              Include tests and samples ({summary.noise})
             </label>
           </div>
           {layout.frames.length === 0 ? (
@@ -188,7 +188,7 @@ function EntryGrid({ id, scope, layout, selected }: { id: string; scope: string;
 
 function FrameShape({ frame, id, scope, selected }: { frame: PlacedEntryFrame; id: string; scope: string; selected?: string }) {
   return (
-    <g className={frame.test ? "em-frame em-test" : "em-frame"}>
+    <g className={frame.noise ? "em-frame em-noise" : "em-frame"}>
       <title>{frame.file}</title>
       <rect x={frame.x} y={frame.y} width={frame.w} height={frame.h} rx={10} className="em-frame-body" />
       <text x={frame.x + 12} y={frame.y + ZOOM_SIZE.head / 2} dominantBaseline="central" className="em-frame-label">
@@ -209,7 +209,7 @@ function BoxLink({ box, id, scope, selected }: { box: PlacedEntryBox; id: string
   return (
     <a
       href={hrefView(id, "flow", { scope, fn: box.id })}
-      className={`em-box${box.test ? " em-test" : ""}${selected ? " on" : ""}`}
+      className={`em-box${box.noise ? " em-noise" : ""}${selected ? " on" : ""}`}
       aria-current={selected ? "true" : undefined}
     >
       <title>{note}</title>
