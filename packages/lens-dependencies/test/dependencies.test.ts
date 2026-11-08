@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { irFixtures as fx, type LensResult, type GraphView } from "@insight/sdk";
-import { lensDependencies } from "../src/index.js";
+import { buildModuleGraph, lensDependencies } from "../src/index.js";
 
 const sp = (file: string) => fx.span(file, 0, 0, 0, 1);
 
@@ -136,5 +136,30 @@ describe("lens-dependencies in a partial scope", () => {
     const violations = result.findings.filter((f) => f.id.startsWith("rule:")).map((f) => f.id);
     expect(violations).toEqual(["rule:0:src/a.ts>lib/util.ts"]);
     expect(result.metrics.ruleViolations).toBe(1);
+  });
+});
+
+describe("buildModuleGraph", () => {
+  it("keeps the span of every import in a module pair, not just the first", () => {
+    const spans = [fx.span("src/x.ts", 1, 0, 1, 20), fx.span("src/x.ts", 4, 0, 4, 20), fx.span("src/x.ts", 9, 0, 9, 20)];
+    const view = fx.view({
+      nodes: [fx.node("src/x.ts", "structure", "structure.file"), fx.node("src/y.ts", "structure", "structure.file")],
+      edges: spans.map((span) => fx.edge("src/x.ts", "src/y.ts", "packaging", "packaging.import", { span })),
+    });
+    const pair = buildModuleGraph(view).pairs.get("src/x.ts\0src/y.ts");
+    expect(pair?.imports).toBe(3);
+    expect(pair?.spans).toEqual(spans);
+    expect(pair?.span).toEqual(spans[0]);
+  });
+
+  it("lists an unresolved import with its text and span, and still counts it", () => {
+    const span = fx.span("src/x.ts", 2, 0, 2, 30);
+    const view = fx.view({
+      nodes: [fx.node("src/x.ts", "structure", "structure.file")],
+      edges: [fx.edge("src/x.ts", { unresolved: { scheme: "module", text: "left-pad" } }, "packaging", "packaging.import", { span })],
+    });
+    const graph = buildModuleGraph(view);
+    expect(graph.unresolved).toBe(1);
+    expect(graph.unresolvedImports).toEqual([{ from: "src/x.ts", text: "left-pad", span }]);
   });
 });
