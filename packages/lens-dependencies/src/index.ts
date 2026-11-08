@@ -1,6 +1,6 @@
 import picomatch from "picomatch";
 import { edgeTargets, findCycles, type GraphView, type IRView, type Lens, type LensFinding, type LensResult, type TableView } from "@insight/sdk";
-import type { IREdge, NodeId } from "@insight/ir";
+import type { IREdge, NodeId, Span } from "@insight/ir";
 
 /** A layer rule the user writes in .insight/lenses/lens-dependencies.json. */
 export interface DependencyRule {
@@ -19,7 +19,17 @@ interface PairInfo {
   imports: number;
   calls: number;
   confidence: "exact" | "inferred" | "heuristic";
+  /** The first import span for the pair (the lens uses it for display). */
   span?: IREdge["span"];
+  /** The span of every import or include edge for the pair, in edge order. */
+  spans: Span[];
+}
+
+/** An import made inside the scope whose target the IR could not resolve. */
+export interface UnresolvedImport {
+  from: NodeId;
+  text: string;
+  span?: Span;
 }
 
 /** The file that owns a node: the node itself when it is a file, else its nearest file ancestor. */
@@ -39,19 +49,26 @@ const weakest = (a: PairInfo["confidence"], b: PairInfo["confidence"]): PairInfo
 };
 
 /** Module-level graph: imports and includes, plus calls lifted to the modules that contain them. */
-export function buildModuleGraph(view: IRView): { pairs: Map<string, PairInfo>; from: Map<string, [NodeId, NodeId]>; unresolved: number } {
+export function buildModuleGraph(view: IRView): {
+  pairs: Map<string, PairInfo>;
+  from: Map<string, [NodeId, NodeId]>;
+  unresolved: number;
+  unresolvedImports: UnresolvedImport[];
+} {
   const pairs = new Map<string, PairInfo>();
   const endpoints = new Map<string, [NodeId, NodeId]>();
+  const unresolvedImports: UnresolvedImport[] = [];
   let unresolved = 0;
 
   const add = (kind: "imports" | "calls", edge: IREdge, fromMod: NodeId, toMod: NodeId) => {
     if (fromMod === toMod) return;
     const key = `${fromMod}\0${toMod}`;
     endpoints.set(key, [fromMod, toMod]);
-    const info = pairs.get(key) ?? { imports: 0, calls: 0, confidence: edge.provenance.confidence };
+    const info = pairs.get(key) ?? { imports: 0, calls: 0, confidence: edge.provenance.confidence, spans: [] };
     info[kind === "imports" ? "imports" : "calls"]++;
     info.confidence = weakest(info.confidence, edge.provenance.confidence);
     if (info.span === undefined && edge.span !== undefined && kind === "imports") info.span = edge.span;
+    if (kind === "imports" && edge.span !== undefined) info.spans.push(edge.span);
     pairs.set(key, info);
   };
 
@@ -62,6 +79,7 @@ export function buildModuleGraph(view: IRView): { pairs: Map<string, PairInfo>; 
     if (fromMod === undefined) continue;
     if (targets.unresolved) {
       unresolved++;
+      unresolvedImports.push({ from: fromMod, text: targets.unresolved.text, ...(edge.span ? { span: edge.span } : {}) });
       continue;
     }
     for (const t of [...targets.nodes, ...targets.candidates]) {
@@ -78,7 +96,7 @@ export function buildModuleGraph(view: IRView): { pairs: Map<string, PairInfo>; 
       if (toMod !== undefined) add("calls", edge, fromMod, toMod);
     }
   }
-  return { pairs, from: endpoints, unresolved };
+  return { pairs, from: endpoints, unresolved, unresolvedImports };
 }
 
 export const lensDependencies: Lens = {
@@ -181,5 +199,7 @@ export const lensDependencies: Lens = {
     };
   },
 };
+
+export { archModel, defaultLayerOf, DEFAULT_LAYERS, type ArchModel, type ArchOptions, type ArchPackage, type ArchEdge, type ArchUnresolved, type ArchViolation } from "./arch.js";
 
 export default lensDependencies;
