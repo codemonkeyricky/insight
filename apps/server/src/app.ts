@@ -34,6 +34,7 @@ import {
   publicProject,
   resolveSnapshot,
   runScopedLens,
+  scopeFlowOf,
   scopeLensRows,
   scopeView,
 } from "./reader.js";
@@ -233,6 +234,16 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
       return { snapshot, scope: view.scope, kind: view.kind, lens: await runScopedLens(view, req.params.lensId, projectRoot(p)) };
     },
   );
+
+  // The call flow of a scope: its functions, the calls between them, and the calls that cross its edge.
+  app.get<{ Params: ProjectParams; Querystring: SnapshotQuery & { path?: string } }>("/api/projects/:id/scope/flow", async (req) => {
+    const p = project(req.params.id);
+    const path = scopePathOf(req.query.path);
+    const snapshot = resolveSnapshot(rootFor(p), req.query.snapshot);
+    if (!snapshot) throw new ProjectError(404, "project has no snapshot yet");
+    const { scope, kind, flow } = scopeFlowOf(rootFor(p), snapshot, path);
+    return { snapshot, scope, kind, ...flow };
+  });
 
   app.get<{ Params: ProjectParams; Querystring: SnapshotQuery & { lens?: string; severity?: string } }>(
     "/api/projects/:id/findings",

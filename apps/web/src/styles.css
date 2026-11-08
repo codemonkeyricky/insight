@@ -9,6 +9,12 @@
   --warn: #a86b00;
   --error: #b3261e;
   --code-hit: #fff3c4;
+  --band-0: #e6eefb;
+  --band-1: #e7f4ec;
+  --band-2: #fbf1de;
+  --band-3: #f1e8f7;
+  --band-4: #fbe7e4;
+  --band-5: #e3f2f4;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -23,6 +29,12 @@
     --warn: #e0a84d;
     --error: #f08a80;
     --code-hit: #4a3f10;
+    --band-0: #1f2d44;
+    --band-1: #1d3a2c;
+    --band-2: #3d3018;
+    --band-3: #33243f;
+    --band-4: #3f2422;
+    --band-5: #1b3436;
   }
 }
 :root[data-theme="dark"] {
@@ -36,6 +48,12 @@
   --warn: #e0a84d;
   --error: #f08a80;
   --code-hit: #4a3f10;
+  --band-0: #1f2d44;
+  --band-1: #1d3a2c;
+  --band-2: #3d3018;
+  --band-3: #33243f;
+  --band-4: #3f2422;
+  --band-5: #1b3436;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
@@ -179,6 +197,44 @@ a.flow-node:hover :is(rect, polygon, circle) { stroke: var(--accent); stroke-wid
 .flow-edge.exception path { stroke: var(--error); stroke-dasharray: 2 3; }
 .flow-arrow { fill: var(--muted); }
 .legend { margin: 10px 0 0; }
+/* A call from the chart to a function outside the scope: dashed, with a marker. */
+.flow-node.unresolved :is(rect, polygon, circle) { stroke: var(--warn); stroke-width: 1.6; stroke-dasharray: 5 3; }
+.flow-node.resolves :is(rect, polygon) { stroke: var(--accent); stroke-width: 1.6; }
+.flow-mark { fill: var(--warn); font: 700 12px system-ui, sans-serif; }
+
+/* The resolution meter at the top of the Flow tab. */
+.meter { margin: 0 0 14px; }
+.meter p { margin: 0 0 6px; }
+.meter-bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.meter-bar span { display: block; height: 100%; background: var(--ok); }
+
+/* Legend keys: the same marks the chart and the call graph draw. */
+.legend-keys { display: flex; flex-wrap: wrap; gap: 6px 16px; list-style: none; margin: 8px 0 0; padding: 0; color: var(--muted); }
+.legend-keys li { display: inline-flex; align-items: center; gap: 6px; }
+.key { display: inline-block; flex: none; width: 14px; height: 10px; border: 1.5px solid var(--muted); border-radius: 3px; background: var(--panel); box-sizing: border-box; }
+.key-module { border-color: var(--ok); border-style: dotted; }
+.key-entry { border-color: var(--accent); border-width: 3px; }
+.key-outside { border-style: double; border-width: 4px; border-color: var(--warn); }
+.key-external { border-style: dashed; }
+.key-unresolved { border-style: dashed; border-color: var(--warn); }
+.key-resolves { border-color: var(--accent); }
+
+/* The call graph of a folder or the project. */
+.graph-tools { display: flex; align-items: center; gap: 10px; margin: 0 0 8px; }
+.graph-tools input[type="search"] { flex: 0 1 280px; padding: 5px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--fg); font: inherit; }
+.graph-scroll { height: min(68vh, 620px); overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+
+/* Where a function sits in the call graph, and the calls it makes and receives. */
+.back { display: inline-block; margin: 0 0 8px; }
+.trail { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; margin: 0 0 10px; }
+.trail .sep { color: var(--muted); }
+.calls-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px 24px; margin: 16px 0 0; }
+.calls-grid h3, .outside-list h3 { font-size: 0.95rem; margin: 0 0 6px; }
+.call-list { margin: 0; padding-left: 18px; }
+.call-list li { margin: 2px 0; }
+.outside-list { margin: 14px 0 0; padding: 8px 12px; border-left: 3px solid var(--warn); background: var(--panel); border-radius: 0 6px 6px 0; }
+.outside-list ul { margin: 0; padding-left: 18px; }
+.outside-list li { margin: 2px 0; }
 
 /* Lens tree */
 .tree { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; overflow-x: auto; }

@@ -1,12 +1,14 @@
 import { useId, type ReactNode } from "react";
 import type { FlowEdge, FlowNode, FunctionFlow } from "../api";
-import { hrefFile } from "../router";
+import { outsideScope, outsideText } from "../flowGraph";
+import { hrefFile, hrefView } from "../router";
 
 /**
  * One function's control-flow chart as SVG. The boxes and edge points come from the layout in
- * @insight/flow; this only draws them. A step with a source span links to its line.
+ * @insight/flow; this only draws them. A call into a function in scope links to that function's chart.
+ * A call outside the scope is drawn unresolved. Any other step with a source span links to its line.
  */
-export function FlowChart({ id, fn }: { id: string; fn: FunctionFlow }) {
+export function FlowChart({ id, fn, scope }: { id: string; fn: FunctionFlow; scope: string }) {
   const arrow = `arrow-${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
   return (
     <svg className="flow" width={fn.width} height={fn.height} viewBox={`0 0 ${fn.width} ${fn.height}`} role="img" aria-label={`Control flow of ${fn.name}`}>
@@ -22,7 +24,7 @@ export function FlowChart({ id, fn }: { id: string; fn: FunctionFlow }) {
       </g>
       <g>
         {fn.nodes.map((n) => (
-          <Node key={n.id} id={id} node={n} />
+          <Node key={n.id} id={id} node={n} fnId={fn.id} scope={scope} />
         ))}
       </g>
     </svg>
@@ -43,7 +45,7 @@ function Edge({ edge, marker }: { edge: FlowEdge; marker: string }) {
   );
 }
 
-function Node({ id, node }: { id: string; node: FlowNode }) {
+function Node({ id, node, fnId, scope }: { id: string; node: FlowNode; fnId: string; scope: string }) {
   const { x, y, w, h, shape } = node;
   const cx = x + w / 2;
   const cy = y + h / 2;
@@ -69,6 +71,9 @@ function Node({ id, node }: { id: string; node: FlowNode }) {
     default:
       mark = <rect x={x} y={y} width={w} height={h} rx={6} />;
   }
+  const target = node.target;
+  const outside = target !== undefined && outsideScope(target, scope);
+  const inside = target !== undefined && !outside && target !== fnId;
   const text =
     shape === "join" ? null : (
       <text x={cx} y={cy} textAnchor="middle" dominantBaseline="central" className="flow-text">
@@ -77,14 +82,21 @@ function Node({ id, node }: { id: string; node: FlowNode }) {
     );
   const body = (
     <>
-      <title>{node.title ?? node.label}</title>
+      <title>{outside && target !== undefined ? outsideText(target) : (node.title ?? node.label)}</title>
       {mark}
       {text}
+      {outside && (
+        <text x={x + w - 6} y={y + 12} textAnchor="end" className="flow-mark">
+          ↗
+        </text>
+      )}
     </>
   );
-  const cls = `flow-node ${shape} role-${node.role}`;
-  return node.span ? (
-    <a href={hrefFile(id, node.span.file, node.span.start[0] + 1)} className={cls}>
+  const cls = `flow-node ${shape} role-${node.role}${outside ? " unresolved" : ""}${inside ? " resolves" : ""}`;
+  // A call into this scope opens the callee's chart; every other step with a span opens its source line.
+  const link = inside && target !== undefined ? hrefView(id, "flow", { scope, fn: target }) : node.span ? hrefFile(id, node.span.file, node.span.start[0] + 1) : undefined;
+  return link ? (
+    <a href={link} className={cls}>
       {body}
     </a>
   ) : (
