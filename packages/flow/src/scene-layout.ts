@@ -212,6 +212,37 @@ export function sceneContainers(scene: Scene): string[] {
   return out;
 }
 
+/**
+ * Packs a container's children in rows, in their order: left to right, wrapping at a width that makes the block
+ * roughly 1.5 times wider than tall. Edges are ignored. This stands in for ELK's rectpacking, which does not return
+ * for some mixes of box sizes (a group of 43 function boxes with charts, tall and short, ran for 20 minutes), and a
+ * layout that never finishes freezes the browser tab and the demo capture alike.
+ */
+export function packRows(graph: LayoutGraph): SolvedGraph {
+  const gap = Number(graph.layoutOptions["elk.spacing.nodeNode"] ?? 24);
+  const gapOf = Number.isFinite(gap) ? gap : 24;
+  const area = graph.children.reduce((sum, c) => sum + (c.width + gapOf) * (c.height + gapOf), 0);
+  const widest = graph.children.reduce((max, c) => Math.max(max, c.width), 0);
+  const rowWidth = Math.max(widest, Math.sqrt(area * 1.5));
+  const placed: { id: string; x: number; y: number }[] = [];
+  let x = 0;
+  let y = 0;
+  let rowHeight = 0;
+  let width = 0;
+  for (const c of graph.children) {
+    if (x > 0 && x + c.width > rowWidth) {
+      x = 0;
+      y += rowHeight + gapOf;
+      rowHeight = 0;
+    }
+    placed.push({ id: c.id, x, y });
+    x += c.width + gapOf;
+    rowHeight = Math.max(rowHeight, c.height);
+    width = Math.max(width, x - gapOf);
+  }
+  return { width, height: placed.length === 0 ? 0 : y + rowHeight, children: placed };
+}
+
 /** Lays the whole scene out, deepest containers first. Deterministic for a deterministic solver. */
 export async function layoutScene(scene: Scene, solve: SceneSolver): Promise<SceneLayout> {
   // Each edge joins two children of exactly one container, so the edges are sorted out once, not once per container.
@@ -232,7 +263,8 @@ export async function layoutScene(scene: Scene, solve: SceneSolver): Promise<Sce
       if (own) sizes.set(c, frameSize({ w: own.w, h: own.h }));
     }
     const graph = graphOf(scene, id, sizes, landed.get(id) ?? []);
-    containers[id] = readLayout(graph, await solve(graph));
+    const packed = graph.layoutOptions["elk.algorithm"] === "rectpacking";
+    containers[id] = readLayout(graph, packed ? packRows(graph) : await solve(graph));
   }
   return { containers };
 }
