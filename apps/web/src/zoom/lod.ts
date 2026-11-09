@@ -75,7 +75,7 @@ export function lodBucket(k: number): number {
 export const bucketScale = (bucket: number): number => 2 ** (bucket / 4);
 
 /**
- * The camera scale below which the map is "far": zone cards and solid tiles, no labels, no call edges. Set at about the
- * fit scale of a large scope on a desktop, so the zoomed-out view reads as a sheet rather than a barcode of calls.
+ * A function tile smaller than this many screen pixels tall is too small to read: the map draws group cards instead
+ * (see cards.ts). The far tier starts where the median tile falls below it.
  */
-export const FAR_SCALE = 0.42;
+export const FAR_TILE_PX = 22;

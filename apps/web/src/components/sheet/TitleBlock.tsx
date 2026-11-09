@@ -16,8 +16,25 @@ const DASH = "—";
 /** A short commit id, or a dash when the snapshot has none. */
 export const shortCommit = (commit?: string): string => (commit ? commit.slice(0, 7) : DASH);
 
-/** The glass card at the bottom right of the sheet: the project's facts. `emphasis` marks it as the overview. */
-export function TitleBlock({ facts, emphasis = false }: { facts: TitleFacts; emphasis?: boolean }) {
+/**
+ * The glass card at the bottom right of the sheet: the project's facts. Compact by default, a single line of scope,
+ * selection and zone; `expanded` shows the full table. `locked` (a chart is open) keeps it compact, so it never covers
+ * the chart. `emphasis` marks it as the overview.
+ */
+export function TitleBlock({
+  facts,
+  emphasis = false,
+  expanded = false,
+  locked = false,
+  onToggle,
+}: {
+  facts: TitleFacts;
+  emphasis?: boolean;
+  expanded?: boolean;
+  locked?: boolean;
+  onToggle?: () => void;
+}) {
+  const full = expanded && !locked;
   const cells: [string, string, boolean][] = [
     ["Project", facts.project, true],
     ["Scope", facts.scope, true],
@@ -29,15 +46,25 @@ export function TitleBlock({ facts, emphasis = false }: { facts: TitleFacts; emp
     ["Files", facts.files, false],
   ];
   return (
-    <section className={emphasis ? "sh-card sh-title emph" : "sh-card sh-title"} aria-label="Title block">
-      <dl className="sh-title-grid">
-        {cells.map(([k, v, wide]) => (
-          <div key={k} className={wide ? "wide" : undefined}>
-            <dt>{k}</dt>
-            <dd title={v}>{v}</dd>
-          </div>
-        ))}
-      </dl>
+    <section className={`sh-card sh-title${emphasis ? " emph" : ""}${full ? " full" : ""}`} aria-label="Title block">
+      <div className="sh-title-line">
+        <span className="sh-title-summary" title={`${facts.scope} · ${facts.selected} · ${facts.zone ?? DASH}`}>
+          {facts.scope} · {facts.selected} · {facts.zone ?? DASH}
+        </span>
+        <button type="button" className="sh-title-toggle" aria-expanded={full} disabled={locked} onClick={onToggle}>
+          {full ? "Less" : "Details"}
+        </button>
+      </div>
+      {full && (
+        <dl className="sh-title-grid">
+          {cells.map(([k, v, wide]) => (
+            <div key={k} className={wide ? "wide" : undefined}>
+              <dt>{k}</dt>
+              <dd title={v}>{v}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
     </section>
   );
 }

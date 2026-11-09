@@ -406,11 +406,20 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 .zm-mini-view { fill: var(--accent); fill-opacity: 0.12; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 /* The zone grid: hairlines every 480 units with the zone reference in the corner of each cell. */
 .zm-zone-line { fill: none; stroke: var(--hair); stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
-.zm-zone-label { fill: var(--graphite); font-family: var(--font-code); font-size: 11px; opacity: 0.7; pointer-events: none; }
-/* Far out: no labels, no call edges (ZoomMap drops them), tiles go grey so the layout reads as a sheet. */
-.zm-far .zm-box .zm-label, .zm-far .zm-frame .zm-label, .zm-far .zm-frame .zm-count { display: none; }
-.zm-far .zm-box-body { fill: var(--faint); }
-.zm-far .zm-frame-body { fill: var(--faint); }
+/* Rulers: zone letters along the top edge and numbers down the left, in screen space, faint. */
+.zm-rulers { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
+.zm-rulers text { fill: var(--graphite); font-family: var(--font-code); font-size: 11px; opacity: 0.85; }
+.zm-rulers line { stroke: var(--graphite); stroke-width: 1; opacity: 0.6; }
+/* Far tier: one card per group of boxes (zone-fill, hairline, 12px radius), name at 13px, function count faint. */
+.zm-card-body { fill: var(--zone-fill); stroke: var(--hair); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.zm-card-label { fill: var(--ink); font-family: system-ui, sans-serif; font-weight: 600; font-size: calc(13px * var(--zinv, 1)); pointer-events: none; }
+.zm-card-count { fill: var(--graphite); opacity: 0.7; font-family: system-ui, sans-serif; font-size: calc(11px * var(--zinv, 1)); pointer-events: none; }
+.zm-card.zm-line-thread .zm-card-body { stroke: var(--thread); stroke-width: 1.5; }
+.zm-card.zm-line-process .zm-card-body { stroke: var(--ink); stroke-width: 2; }
+.zm-card.zm-line-coroutine .zm-card-body { stroke: var(--coroutine); stroke-dasharray: 6 3; }
+/* Aggregated calls between cards: screen-pixel width grows with log(count) (farEdgeWidth), faint, no arrows. */
+.zm-edge.zm-agg { stroke: var(--graphite); opacity: 0.45; stroke-linecap: round; }
+.zm-far .zm-frame-body { fill: var(--zone-fill); stroke: var(--hair); }
 /* Findings: a red revision cloud around the box, a red triangle top-left and a count badge top-right. */
 .zm-cloud { fill: color-mix(in srgb, var(--red) 6%, transparent); stroke: var(--red); stroke-width: 1.6; vector-effect: non-scaling-stroke; pointer-events: none; }
 .zm-finding .zm-marker, .zm-finding .zm-badge { cursor: pointer; }
@@ -644,3 +653,9 @@ table.grid th { background: var(--faint); }
   .sh-page { padding-top: 14px; }
 }
 .sh-count-inline { color: var(--muted); font-size: var(--t-xs); }
+
+/* Title block: one line by default (scope, selection, zone) with a Details disclosure; the table shows when expanded. */
+.sh-title-line { display: flex; align-items: center; gap: 10px; min-width: 0; font-size: var(--t-sm); }
+.sh-title-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+.sh-title-toggle { flex: none; padding: 2px 8px; font-size: var(--t-xs); }
+.sh-title-toggle:disabled { opacity: 0.4; cursor: default; }

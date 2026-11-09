@@ -100,6 +100,8 @@ export function FlowView({ id, files, scope, fn, roots, line, layers, facts, emp
   const [focus, setFocus] = useState<MapBuild>();
   /** The build the reader closed the panel on, and the scope and function it was closed under. */
   const [closed, setClosed] = useState<{ build: MapBuild | undefined; at: string }>();
+  /** The title block's full table, when the reader opened it. It stays compact while a chart is open. */
+  const [titleFull, setTitleFull] = useState(false);
   // The Layers card covers the map on a phone, so it starts closed on narrow screens.
   const [layersOpen, setLayersOpen] = useState(() => typeof window === "undefined" || window.innerWidth > 720);
   /** The element the side panel hands the exec panel to. A portal draws the panel there from the map's detail hook. */
@@ -163,7 +165,13 @@ export function FlowView({ id, files, scope, fn, roots, line, layers, facts, emp
             Layers
           </button>
         )}
-        <TitleBlock facts={{ ...facts, selected: selectedName, zone: zone ?? "—" }} emphasis={emphasis} />
+        <TitleBlock
+          facts={{ ...facts, selected: selectedName, zone: zone ?? "—" }}
+          emphasis={emphasis}
+          expanded={titleFull}
+          locked={open}
+          onToggle={() => setTitleFull((v) => !v)}
+        />
         <SidePanel
           open={open}
           label="Detail"
