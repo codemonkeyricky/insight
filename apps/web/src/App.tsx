@@ -5,6 +5,7 @@ import { staticApi } from "./staticApi";
 import { parseRoute, type Route } from "./router";
 import { ProjectsPage } from "./pages/Projects";
 import { Workspace } from "./components/Workspace";
+import { ThemeSwitch } from "./components/ThemeSwitch";
 
 function useRoute(): Route {
   const read = () => parseRoute(window.location.hash);
@@ -43,6 +44,7 @@ export function App() {
             Insight at {meta.commit}
           </span>
         )}
+        <ThemeSwitch />
       </header>
       <main>
         {route.name === "projects" && <ProjectsPage />}

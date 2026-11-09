@@ -39,27 +39,34 @@ From the screenshots taken for the POC:
 
 ## Visual system
 
-### Tokens (CSS custom properties on `:root`, dark under `prefers-color-scheme` and `[data-theme]`)
+Apple-style "liquid glass", not the drafting palette. Tokens are copied from the approved mockup (`poc/index.html`).
 
-| Token | Light | Dark | Use |
-| --- | --- | --- | --- |
-| `--film` | `#ECEFEE` | `#121820` | page behind the sheet |
-| `--sheet` | `#F8F9F8` | `#1A222B` | drawing surface, panels |
-| `--ink` | `#17212B` | `#DCE4E9` | primary lines and text |
-| `--graphite` | `#5B6772` | `#93A1AC` | secondary text, thin lines |
-| `--rule` | `#C3CCCF` | `#34404A` | borders, zone grid |
-| `--faint` | `#DCE2E3` | `#26303A` | fills, hover |
-| `--accent` | `#1E5A96` | `#7FB0E0` | selection, links, detail callouts |
-| `--thread` | `#2A7360` | `#6CC2A8` | thread frames |
-| `--coroutine` | `#8C5C10` | `#DDA94F` | coroutine frames |
-| `--red` | `#B2263A` | `#F27A8A` | revision clouds, errors |
+### Tokens (CSS custom properties on `:root`)
+
+- Light tokens sit on `:root`. Dark tokens apply under `:root[data-theme="dark"]` and under `@media (prefers-color-scheme: dark)` for `:root:not([data-theme="light"])`.
+- Core set: `--film` (page behind the sheet), `--sheet`, `--box`, `--raised`, `--ink`, `--graphite`, `--rule`, `--faint`, `--hair`, `--accent`, `--thread`, `--coroutine`, `--red`, `--switch-on`, `--thumb`, `--zone-fill`, `--ambient`, `--float`.
+- Glass: `--glass`, `--glass-strong`, `--sheen`, `--rim`, `--gloss`, `--btn-glass`, `--btn-glass-hover`, `--btn-rim`.
+- Legacy aliases (`--bg`, `--fg`, `--muted`, `--panel`, `--line`, `--sync`, `--ok`, `--warn`, `--error`, `--code-hit`, `--band-0..5`) resolve to the new tokens so older markup keeps working.
+
+### Theme
+
+- Dark is the default. The switch offers System, Light and Dark (`ThemeSwitch`, in the header).
+- The choice is stored in `localStorage` under `insight-theme`. Every access is wrapped in try/catch. With nothing stored, the theme is dark.
+- `index.html` sets `data-theme` on `<html>` before first paint. `theme.ts` applies later changes.
+- The Cytoscape graph restyles from the tokens on theme change (MutationObserver on `data-theme` plus a `prefers-color-scheme` listener).
 
 ### Type
 
-- UI: **Barlow Semi Condensed** (400/500/600).
-- Code and IDs: **Red Hat Mono**.
-- Both come from Google Fonts. Self-host for the offline demo build.
-- Tight tracking on large labels, slight positive tracking at ≤12px.
+- UI stack: `-apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter Variable", "Inter", system-ui, sans-serif`.
+- Code stack: `ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", Menlo, monospace`.
+- Inter and JetBrains Mono are self-hosted through `@fontsource-variable/inter` and `@fontsource/jetbrains-mono` (pinned), so the offline build ships them.
+- Scale: `--t-xs` 11px, `--t-sm` 13px, `--t-md` 14px, `--t-lg` 17px, `--t-xl` 22px.
+
+### Accessibility
+
+- `prefers-reduced-motion`: transitions and animations are removed.
+- `prefers-reduced-transparency`: glass becomes solid surfaces with no blur.
+- `prefers-contrast: more`: ink outlines.
 
 ### Line types (the legend in the Layers panel)
 
