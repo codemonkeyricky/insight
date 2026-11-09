@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { contentOf, flowScopeOf, modeOf, showsFileSource } from "../src/components/sheet/shell.js";
+import { contentOf, flowScopeOf } from "../src/components/sheet/shell.js";
 import { fuzzyScore, rankFuzzy } from "../src/components/sheet/fuzzy.js";
 import { BUILTIN_TABS, hrefCompare, hrefFile, hrefFlow, hrefLens, hrefProject, hrefReview, hrefView, inScope, parseRoute, redirectFor } from "../src/router.js";
 
@@ -228,10 +228,8 @@ describe("old URLs land on the sheet content", () => {
 
   it("source is the flow sheet on a file and the source page on a folder or the project", () => {
     expect(contentOf("source", "file")).toBe("flow");
-    expect(showsFileSource("source", "file")).toBe(true);
     expect(contentOf("source", "folder")).toBe("source");
     expect(contentOf("source", "project")).toBe("source");
-    expect(showsFileSource("source", "folder")).toBe(false);
   });
 
   it("arch, findings, compare and review keep their own content, and lens ids draw lens pages", () => {
@@ -242,13 +240,6 @@ describe("old URLs land on the sheet content", () => {
     expect(contentOf("some-lens", "folder")).toBe("lens");
   });
 
-  it("the mode switch knows the three modes and no others", () => {
-    expect(modeOf("flow")).toBe("flow");
-    expect(modeOf("arch")).toBe("arch");
-    expect(modeOf("findings")).toBe("findings");
-    expect(modeOf("compare")).toBeUndefined();
-    expect(modeOf("lens")).toBeUndefined();
-  });
 });
 
 describe("fuzzy matcher", () => {

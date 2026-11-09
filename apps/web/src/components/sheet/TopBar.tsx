@@ -1,6 +1,4 @@
 import { ThemeSwitch } from "../ThemeSwitch";
-import { ModeSwitch } from "./ModeSwitch";
-import type { ShellMode } from "./shell";
 
 export interface Crumb {
   label: string;
@@ -10,16 +8,18 @@ export interface Crumb {
 
 interface Props {
   crumbs: Crumb[];
-  mode?: ShellMode;
-  modeLinks: Record<ShellMode, string>;
-  findings: number;
   filesOpen: boolean;
+  codeOpen: boolean;
   onFiles: () => void;
+  onCode: () => void;
   onFind: () => void;
 }
 
-/** The one glass bar over the stage: the app mark, the project and scope crumbs, the modes, then Files, Find and the theme. */
-export function TopBar({ crumbs, mode, modeLinks, findings, filesOpen, onFiles, onFind }: Props) {
+/**
+ * The one glass bar over the workspace: the app mark, the project and scope crumbs, then the pane toggles (Files and Code
+ * show or hide their pane), Find and the theme.
+ */
+export function TopBar({ crumbs, filesOpen, codeOpen, onFiles, onCode, onFind }: Props) {
   return (
     <header className="sh-top">
       <a className="sh-mark" href="#/" aria-label="Insight, all projects">
@@ -40,7 +40,6 @@ export function TopBar({ crumbs, mode, modeLinks, findings, filesOpen, onFiles, 
           </span>
         ))}
       </nav>
-      <ModeSwitch mode={mode} links={modeLinks} findings={findings} />
       <div className="sh-spacer" />
       <div className="sh-tools">
         <button type="button" className="sh-tool" aria-expanded={filesOpen} aria-controls="sh-files" onClick={onFiles}>
@@ -48,6 +47,12 @@ export function TopBar({ crumbs, mode, modeLinks, findings, filesOpen, onFiles, 
             <path d="M1.5 3.5h4l1.5 1.5h6.5v7.5h-12z" fill="none" stroke="currentColor" strokeWidth="1.3" />
           </svg>
           <span className="sh-lbl">Files</span>
+        </button>
+        <button type="button" className="sh-tool" aria-expanded={codeOpen} aria-controls="sh-code" onClick={onCode}>
+          <svg width="15" height="15" viewBox="0 0 15 15" aria-hidden="true">
+            <path d="M5 4L1.5 7.5 5 11M10 4l3.5 3.5L10 11" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+          </svg>
+          <span className="sh-lbl">Code</span>
         </button>
         <button type="button" className="sh-tool" aria-keyshortcuts="Meta+K Control+K" onClick={onFind}>
           <svg width="15" height="15" viewBox="0 0 15 15" aria-hidden="true">

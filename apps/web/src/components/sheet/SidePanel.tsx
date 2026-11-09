@@ -7,6 +7,11 @@ interface Props {
   /** The panel's name for screen readers. */
   label: string;
   onClose: () => void;
+  /**
+   * A docked panel is a column of the workspace, not an overlay: it takes no drags and no Escape, and it has no sheet motion.
+   * The workspace sizes the column; `open` only says whether the column is shown to assistive tech.
+   */
+  docked?: boolean;
   /** Content pinned above the scrolling body: it stays in view while the body scrolls. Capped at a share of the panel. */
   pinned?: ReactNode;
   children: ReactNode;
@@ -69,7 +74,7 @@ interface Motion {
  * rest nearest that point, with the release speed as the glide's start speed, so the motion has no seam. A drag past the
  * closed rest closes it. A glide can be caught mid-flight by a new press.
  */
-export function SidePanel({ open, label, onClose, pinned, children }: Props) {
+export function SidePanel({ open, label, onClose, docked = false, pinned, children }: Props) {
   const asideRef = useRef<HTMLElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const [rest, setRestState] = useState<Motion["rest"]>("mid");
@@ -142,6 +147,15 @@ export function SidePanel({ open, label, onClose, pinned, children }: Props) {
   useLayoutEffect(() => {
     const el = asideRef.current;
     const s = motion.current;
+    if (docked) {
+      stop();
+      s.pos = 0;
+      if (el) {
+        el.style.transform = "";
+        el.style.height = "";
+      }
+      return;
+    }
     if (!open || !phone() || !el) {
       stop();
       s.pos = 0;
@@ -156,22 +170,22 @@ export function SidePanel({ open, label, onClose, pinned, children }: Props) {
     write(0);
     setRest("drag");
     glide(restHeights(viewportH()).mid, 0, () => setRest("mid"));
-    // The effect runs when the panel opens or closes; the sheet's own motion is kept in the ref.
+    // The effect runs when the panel opens or closes, or docks or undocks; the sheet's own motion is kept in the ref.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [open, docked]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || docked) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !e.defaultPrevented) onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [open, docked, onClose]);
 
   /** A press listens on the window: a drag keeps tracking the finger when it leaves the sheet, as a native sheet does. */
   const onPointerDown = (e: PointerEvent<HTMLElement>) => {
-    if (!open || !phone() || e.button !== 0) return;
+    if (docked || !open || !phone() || e.button !== 0) return;
     const s = motion.current;
     const target = e.target as Element;
     const onGrab = target.closest(".sh-grab") !== null;
@@ -231,10 +245,11 @@ export function SidePanel({ open, label, onClose, pinned, children }: Props) {
     settle(landingFor(s.pos, vy, viewportH()), vy);
   };
 
-  const cls = ["sh-side", open ? "open" : "", `is-${rest}`].filter(Boolean).join(" ");
+  const cls = ["sh-side", open ? "open" : "", docked ? "is-docked" : `is-${rest}`].filter(Boolean).join(" ");
   return (
     <aside
       ref={asideRef}
+      id="sh-code"
       className={cls}
       aria-label={label}
       aria-hidden={!open}
