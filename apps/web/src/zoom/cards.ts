@@ -69,25 +69,9 @@ export function aggregateEdges(
   return [...by.values()];
 }
 
-/** The stroke width in screen pixels of an aggregated edge: it grows with log(count), and is capped. */
+/** The stroke width in screen pixels of an aggregated link: 1 + log2(count), so a link of one call is 1 px. */
 export function farEdgeWidth(count: number): number {
-  return Math.min(6, 1 + 1.5 * Math.log2(1 + Math.max(0, count)));
-}
-
-/**
- * Moves each anchor down, in order, until it is at least `minDist` from every anchor placed before it (offset, not
- * merged, so each badge keeps its count). Gives up after a few steps and keeps the last position.
- */
-export function placeBadges(points: readonly { x: number; y: number }[], minDist: number): { x: number; y: number }[] {
-  const out: { x: number; y: number }[] = [];
-  for (const p of points) {
-    let at = { x: p.x, y: p.y };
-    for (let tries = 0; tries < 12 && out.some((q) => Math.hypot(q.x - at.x, q.y - at.y) < minDist); tries++) {
-      at = { x: at.x, y: at.y + minDist };
-    }
-    out.push(at);
-  }
-  return out;
+  return 1 + Math.log2(Math.max(1, count));
 }
 
 /**

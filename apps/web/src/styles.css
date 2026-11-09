@@ -410,16 +410,23 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 .zm-rulers { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
 .zm-rulers text { fill: var(--graphite); font-family: var(--font-code); font-size: 11px; opacity: 0.85; }
 .zm-rulers line { stroke: var(--graphite); stroke-width: 1; opacity: 0.6; }
-/* Far tier: one card per group of boxes (zone-fill, hairline, 12px radius), name at 13px, function count faint. */
-.zm-card-body { fill: var(--zone-fill); stroke: var(--hair); stroke-width: 1; vector-effect: non-scaling-stroke; }
-.zm-card-label { fill: var(--ink); font-family: system-ui, sans-serif; font-weight: 600; font-size: calc(13px * var(--zinv, 1)); pointer-events: none; }
-.zm-card-count { fill: var(--graphite); opacity: 0.7; font-family: system-ui, sans-serif; font-size: calc(11px * var(--zinv, 1)); pointer-events: none; }
-.zm-card.zm-line-thread .zm-card-body { stroke: var(--thread); stroke-width: 1.5; }
-.zm-card.zm-line-process .zm-card-body { stroke: var(--ink); stroke-width: 2; }
-.zm-card.zm-line-coroutine .zm-card-body { stroke: var(--coroutine); stroke-dasharray: 6 3; }
+/* Far tier: the function map fades out and the card grid (one card per child of the scope) fades in over it. */
+.zm-world { transition: opacity 180ms ease; }
+.zm-world.zm-far { opacity: 0; pointer-events: none; }
+.zm-far-layer { position: absolute; visibility: hidden; opacity: 0; pointer-events: none; transition: opacity 180ms ease, visibility 180ms; }
+.zm-far-layer.on { visibility: visible; opacity: 1; }
+.zm-far-scroll { position: absolute; inset: 0; overflow-y: auto; overscroll-behavior: contain; pointer-events: auto; }
+.zm-far-content { position: relative; }
+.zm-far-links { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.zm-far-link { fill: none; stroke: var(--graphite); opacity: 0.4; stroke-linecap: round; }
+.zm-far-card { position: absolute; display: flex; flex-direction: column; align-items: stretch; justify-content: center; gap: 4px; padding: 12px 14px; box-sizing: border-box; text-align: left; background: var(--zone-fill); border: 1px solid var(--hair); border-radius: 14px; color: var(--ink); cursor: pointer; overflow: hidden; }
+.zm-far-card:hover:not(:disabled), .zm-far-card:focus-visible { background: var(--btn-glass-hover); }
+.zm-far-card:disabled { cursor: default; }
+.zm-far-name { font: 600 15px/1.2 system-ui, sans-serif; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.zm-far-count { font: 400 12px/1.2 system-ui, sans-serif; color: var(--graphite); opacity: 0.8; white-space: nowrap; }
+.zm-far-pill { position: absolute; top: 8px; right: 8px; min-width: 22px; padding: 1px 7px; border-radius: 999px; background: var(--red); color: #fff; font: 600 11px/16px system-ui, sans-serif; text-align: center; }
+@media (prefers-reduced-motion: reduce) { .zm-world, .zm-far-layer { transition: none; } }
 /* Aggregated calls between cards: screen-pixel width grows with log(count) (farEdgeWidth), faint, no arrows. */
-.zm-edge.zm-agg { stroke: var(--graphite); opacity: 0.45; stroke-linecap: round; }
-.zm-far .zm-frame-body { fill: var(--zone-fill); stroke: var(--hair); }
 /* Findings: a red revision cloud around the box, a red triangle top-left and a count badge top-right. */
 .zm-cloud { fill: color-mix(in srgb, var(--red) 6%, transparent); stroke: var(--red); stroke-width: 1.6; vector-effect: non-scaling-stroke; pointer-events: none; }
 .zm-finding .zm-marker, .zm-finding .zm-badge { cursor: pointer; }

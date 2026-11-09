@@ -15,9 +15,10 @@ import { CHART_MIN_PX } from "../../zoom/chart";
 import { anchoredTo, closeExpansion, connectorOf, openExpansion, refresh, revealCamera, type Expansion, type ExpandAnchor } from "../../zoom/expand";
 import { pickBox } from "../../zoom/gesture";
 import { edgeClass, edgeKey, edgeTitle, edgeWidth, lineClass, runtimeLine, type MapBuild, type MapEdge, type MapNode, type MapSelected, type MapSource, type RuntimeLine } from "../../zoom/source";
-import { BADGE_SPACE_PX, bucketScale, FAR_TILE_PX, fitLabel, headerLabels, labelChars, lodBucket, MID_TILE_PX } from "../../zoom/lod";
+import { bucketScale, FAR_TILE_PX, fitLabel, headerLabels, labelChars, lodBucket, MID_TILE_PX } from "../../zoom/lod";
 import { badgeText, cloudPath, markerAnchors, MARKER_BADGE_R, MARKER_TRIANGLE } from "../../zoom/findingsLayer";
-import { aggregateEdges, cardKeyAt, farEdgeWidth, groupCards, medianOf, pickCardDepth, placeBadges, segmentsBelow, type GroupCard } from "../../zoom/cards";
+import { aggregateEdges, cardKeyAt, groupCards, medianOf, pickCardDepth, segmentsBelow } from "../../zoom/cards";
+import { FarCards, type FarCard } from "./FarCards";
 import { zoneCells, zoneLetter, zoneLines } from "../../zoom/zones";
 import { offMapSelected } from "../../zoom/offMap";
 import type { ZoomStore } from "../../zoom/scene";
@@ -34,6 +35,11 @@ const PAN_PX = 80;
  * inset and a 10 px margin. A selected function fits above it, so the minimap never covers the chart.
  */
 const MINI_RESERVE = 130;
+/** On a phone-width stage the key plan sits higher, so the far grid keeps clear of it by more. */
+const MINI_RESERVE_NARROW = 184;
+const NARROW_STAGE_PX = 520;
+/** A function tile at least this tall on screen (px) shows its name in the mid tier. */
+const TILE_LABEL_PX = 16;
 
 const sameList = <T,>(a: readonly T[], b: readonly T[], key: (t: T) => string): boolean =>
   a.length === b.length &&
@@ -122,8 +128,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   const [view, setView] = useState<MapBuild>();
   /** `lod` is the camera's quarter-octave bucket (lod.ts): labels are cut to it, and it changes only with the bucket. */
   const [shown, setShown] = useState<{ view?: MapBuild; items: PlacedItem[]; edges: MapEdge[]; lod: number }>({ items: [], edges: [], lod: 0 });
-  /** The visible world area, rounded out to a coarse grid, so the card names are anchored where they can be seen. */
-  const [anchorArea, setAnchorArea] = useState<Rect>();
+  /** The stage's size as the far layer lays out in it (set on each refit). */
+  const [stageSize, setStageSize] = useState<{ width: number; height: number }>();
   const [error, setError] = useState<string>();
   /** The open expansions, in the order they opened (the last is closed first by Escape). */
   const [expansions, setExpansions] = useState<readonly Expansion[]>([]);
@@ -197,11 +203,6 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
       return a !== undefined && z !== undefined && intersects(union(a, z), area);
     });
     const lod = lodBucket(c.k);
-    const grid = 160 / c.k;
-    const x0 = Math.floor(v.x / grid) * grid;
-    const y0 = Math.floor(v.y / grid) * grid;
-    const area2 = { x: x0, y: y0, w: Math.ceil((v.x + v.w) / grid) * grid - x0, h: Math.ceil((v.y + v.h) / grid) * grid - y0 };
-    setAnchorArea((prev) => (prev && prev.x === area2.x && prev.y === area2.y && prev.w === area2.w && prev.h === area2.h ? prev : area2));
     setShown((prev) =>
       prev.view === b && prev.lod === lod && sameList(prev.items, items, (i) => i.id) && sameList(prev.edges, edges, edgeKey)
         ? prev
@@ -551,6 +552,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
       const size = sizeOf();
       const last = lastSizeRef.current;
       lastSizeRef.current = size;
+      setStageSize({ width: size.width, height: size.height });
       cull(cameraRef.current);
       const b = buildRef.current;
       if (b?.selected !== undefined && last !== undefined && (last.width !== size.width || last.height !== size.height)) {
@@ -733,7 +735,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
    * frame. Built from the whole view (not the culled set), so the cards do not pop in while panning.
    */
   const cardModel = useMemo(() => {
-    if (!view || !cards) return undefined;
+    if (!view || !far) return undefined;
     const frameIds = new Set(view.placed.items.filter((i) => i.kind === "frame").map((i) => i.id));
     const boxItems = view.placed.items.filter((i) => i.kind === "box" && !frameIds.has(view.node(i.id)?.parent ?? ""));
     // The cards are the children of the scope: the shallowest folder level with at least three cards, down to files.
@@ -745,17 +747,22 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
       const s = segsOf(i.id);
       return s !== undefined && s.length > 0 ? [s] : [];
     }));
+    // A card's drill-in scope: the file's path down to the card's level.
+    const scopeDepth = view.path === "" ? 0 : view.path.split("/").length;
     const cardOf = new Map<string, string>();
     const labels = new Map<string, string>();
+    const paths = new Map<string, string>();
     const boxes = boxItems.map((i) => {
       const segs = segsOf(i.id);
+      const file = view.node(i.id)?.file;
       let key: string;
       let label: string;
-      if (segs !== undefined && segs.length > 0) {
+      if (file !== undefined && segs !== undefined && segs.length > 0) {
         key = cardKeyAt(segs, depth);
         label = key.slice(key.lastIndexOf("/") + 1);
+        paths.set(key, file.split("/").slice(0, scopeDepth + key.split("/").length).join("/"));
       } else {
-        // A function with no source file keeps its own parent's card.
+        // A function with no source file keeps its own parent's card (it does not open).
         const parent = view.node(i.id)?.parent ?? i.id;
         key = `#${parent}`;
         label = view.node(parent)?.label ?? parent;
@@ -764,50 +771,46 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
       labels.set(key, label);
       return { id: i.id, rect: i.rect, group: key };
     });
-    const groups = groupCards(boxes, 6 / labelScale);
+    const groups = groupCards(boxes, 0);
     const byId = new Map(groups.map((c) => [c.id, c]));
-    // The cards' bounding boxes overlap (their functions interleave in the layout), so a name is anchored at one of its
-    // own functions: the first of a few spread along the card's tiles, top to bottom, that does not print over a name
-    // already drawn (larger cards first). A name that fits no spot is not drawn, so no two names overlap.
-    const membersOf = new Map<string, Rect[]>();
-    for (const b of boxes) {
-      const list = membersOf.get(b.group);
-      if (list) list.push(b.rect);
-      else membersOf.set(b.group, [b.rect]);
-    }
-    const labelAt = new Map<string, { x: number; y: number }>();
-    const placed: Rect[] = [];
-    const h = 17 / labelScale;
-    const pad = 6 / labelScale;
-    for (const c of [...groups].sort((a, b) => b.rect.w * b.rect.h - a.rect.w * a.rect.h)) {
-      const all = [...(membersOf.get(c.id) ?? [])].sort((a, b) => a.y - b.y || a.x - b.x);
-      // Prefer the functions on screen; a card with none there keeps its own list (its name is off screen anyway).
-      const seen = anchorArea === undefined ? all : all.filter((r) => intersects(r, anchorArea));
-      const own = seen.length > 0 ? seen : all;
-      const picks = [0, 0.25, 0.5, 0.75, 0.9].map((f) => own[Math.min(own.length - 1, Math.floor(f * own.length))]).filter((r): r is Rect => r !== undefined);
-      for (const at of picks) {
-        const x = at.x + pad;
-        const y = at.y + pad;
-        const text = fitLabel(labels.get(c.id) ?? "", labelChars((c.rect.x + c.rect.w - x) * labelScale));
-        if (text === null) continue;
-        const r = { x, y, w: (text.length * 7.6) / labelScale, h };
-        if (placed.some((q) => r.x < q.x + q.w && q.x < r.x + r.w && r.y < q.y + q.h && q.y < r.y + r.h)) continue;
-        placed.push(r);
-        labelAt.set(c.id, { x, y });
-        break;
+    return { cards: groups, byId, cardOf, labels, paths };
+  }, [view, far]);
+  /** The far tier's cards: one per child of the scope, with its function count and the sum of its findings. */
+  const farCards = useMemo<FarCard[]>(() => {
+    if (!cardModel || !view) return [];
+    return cardModel.cards.map((c) => {
+      let found = 0;
+      if (findings !== undefined) {
+        for (const id of c.ids) {
+          const ref = view.node(id)?.ref;
+          if (ref !== undefined) found += findings.get(ref) ?? 0;
+        }
       }
-    }
-    return { cards: groups, byId, cardOf, labels, labelAt };
-    // labelScale is part of the key: the card padding is in screen pixels.
-  }, [view, cards, labelScale, anchorArea]);
-  /** Calls between cards: one edge per pair, widened with log(count). Only the far tier draws them. */
+      return { id: c.id, label: cardModel.labels.get(c.id) ?? "", count: c.ids.length, findings: found, path: cardModel.paths.get(c.id) };
+    });
+  }, [cardModel, view, findings]);
+  /** Calls between cards: one aggregated edge per pair, drawn by the far layer (all of the view's calls, not the culled set). */
   const farEdges = useMemo(() => {
-    if (!cardModel || !layers.calls) return [];
-    return aggregateEdges((live?.edges ?? []).filter(isCall), (id) => cardModel.cardOf.get(id)).filter(
+    if (!cardModel || !view || !layers.calls) return [];
+    return aggregateEdges(view.edges.filter(isCall), (id) => cardModel.cardOf.get(id)).filter(
       (e) => cardModel.byId.has(e.a) && cardModel.byId.has(e.b),
     );
-    // live.edges changes with the camera's culling; the aggregation follows it.
-  }, [cardModel, live, layers.calls]);
+  }, [cardModel, view, layers.calls]);
+  /** The free part of the stage for the far cards: right of the Layers panel, below the header, above the minimap. */
+  const farArea: Rect = {
+    x: leftInset + 16,
+    y: 76,
+    w: Math.max(120, (stageSize?.width ?? 0) - leftInset - 32),
+    h: Math.max(72, (stageSize?.height ?? 0) - 76 - ((stageSize?.width ?? 0) < NARROW_STAGE_PX ? MINI_RESERVE_NARROW : MINI_RESERVE)),
+  };
+  /** A click on a far card drills into that child: the URL's scope moves to it, which refits the map to it. */
+  const openScope = (path: string) => {
+    window.location.hash = hrefView(id, "flow", { scope: path });
+  };
+  /** A wheel over the far layer (where it cannot scroll) zooms the map: the camera listens on the svg. */
+  const forwardWheel = (ev: WheelEvent) => {
+    svgRef.current?.dispatchEvent(new WheelEvent("wheel", ev));
+  };
   /** The functions with an expansion open, by id: their boxes are drawn as expanded. */
   const expandedFns = new Set(expansions.map((e) => e.fnId));
 
@@ -888,30 +891,6 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
                 <title>{edgeTitle(e)}</title>
               </path>
             ))}
-            {cardModel &&
-              cardModel.cards.map((c) => (
-                <CardBody key={`card-${c.id}`} card={c} line={lines.get(c.id) ?? "none"} k={labelScale} />
-              ))}
-            {cardModel &&
-              farEdges.map((e) => {
-                const a = cardModel.byId.get(e.a);
-                const b = cardModel.byId.get(e.b);
-                if (!a || !b) return null;
-                const ax = a.rect.x + a.rect.w / 2;
-                const ay = a.rect.y + a.rect.h / 2;
-                const bx = b.rect.x + b.rect.w / 2;
-                const by = b.rect.y + b.rect.h / 2;
-                return (
-                  <path
-                    key={`agg-${e.a}\u0000${e.b}`}
-                    d={`M${ax} ${ay}L${bx} ${by}`}
-                    className="zm-edge zm-agg"
-                    style={{ strokeWidth: farEdgeWidth(e.count) }}
-                  >
-                    <title>{`${e.count} calls between two groups`}</title>
-                  </path>
-                );
-              })}
             {!far &&
               drawn("box").map((it) => {
                 const node = view?.node(it.id);
@@ -925,19 +904,11 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
                   k={labelScale}
                   onOpen={boxClick}
                   chartOpen={node.ref !== undefined && expandedFns.has(node.ref)}
-                  bare={mid}
+                  bare={mid && it.rect.h * labelScale < TILE_LABEL_PX}
+                  small={mid}
                 />
               );
             })}
-            {cardModel &&
-              cardModel.cards.map((c) => {
-                const at = cardModel.labelAt.get(c.id);
-                return at ? <CardText key={`card-text-${c.id}`} card={c} label={cardModel.labels.get(c.id) ?? ""} at={at} k={labelScale} /> : null;
-              })}
-            {findings !== undefined && cardModel &&
-              cardFindings(cardModel.cards, findings, view, labelScale).map((f) => (
-                <CardFinding key={`card-finding-${f.id}`} rect={f.rect} count={f.count} at={f.badge} k={labelScale} />
-              ))}
             {findings !== undefined && !cards &&
               drawn("box").map((it) => {
                 const node = view?.node(it.id);
@@ -971,6 +942,17 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
             })}
           </g>
         </svg>
+        {stageSize !== undefined && (
+          <FarCards
+            cards={farCards}
+            pairs={farEdges}
+            area={farArea}
+            shown={far && cardModel !== undefined}
+            findingsOn={findings !== undefined}
+            onOpen={openScope}
+            onWheel={forwardWheel}
+          />
+        )}
         {!build && !error && <p className="zm-loading muted">Loading</p>}
         <svg ref={rulerRef} className="zm-rulers" width="100%" height="100%" aria-hidden="true" />
         {build && (
@@ -1076,6 +1058,7 @@ function BoxShape({
   onOpen,
   chartOpen,
   bare = false,
+  small = false,
 }: {
   item: PlacedItem;
   node: MapNode;
@@ -1083,11 +1066,15 @@ function BoxShape({
   k: number;
   onOpen: (id: string) => void;
   chartOpen: boolean;
-  /** Drawn as a tile only, with no label (the mid tier). */
+  /** Drawn as a tile only, with no label (a tile under TILE_LABEL_PX in the mid tier). */
   bare?: boolean;
+  /** A mid-tier tile: its name in a small font, sized to the tile's height on screen. */
+  small?: boolean;
 }) {
   const { rect } = item;
-  const label = bare ? null : fitLabel(node.label, labelChars(rect.w * k));
+  // The mid tier's name is 10-13 px on screen (the zoom's inverse scales it): its characters are measured at that size.
+  const fontPx = small ? Math.min(13, Math.max(10, Math.round(rect.h * k * 0.42))) : 0;
+  const label = bare ? null : small ? fitLabel(node.label, labelChars(rect.w * k, fontPx * 0.6, 10)) : fitLabel(node.label, labelChars(rect.w * k));
   const holdsChart = node.chart !== undefined;
   return (
     <g
@@ -1097,7 +1084,13 @@ function BoxShape({
       <title>{node.title || node.label}</title>
       <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={8} className="zm-box-body" />
       {label !== null && (
-        <text x={rect.x + 12} y={rect.y + rect.h / 2} dominantBaseline="central" className="zm-label">
+        <text
+          x={rect.x + (small ? 8 : 12)}
+          y={rect.y + rect.h / 2}
+          dominantBaseline="central"
+          className="zm-label"
+          style={small ? { fontSize: `calc(${fontPx}px * var(--zinv, 1))` } : undefined}
+        >
           {label}
         </text>
       )}
@@ -1134,42 +1127,6 @@ function ZoneGrid({ path }: { path: string }) {
   );
 }
 
-/** A group card of the far and mid tiers: the rounded zone-fill body, drawn under the boxes. */
-function CardBody({ card, line, k }: { card: GroupCard; line: RuntimeLine; k: number }) {
-  const { rect } = card;
-  const r = 12 / k;
-  const count = card.ids.length;
-  return (
-    <g className={`zm-card ${lineClass(line)}`}>
-      <title>{`${count} function${count === 1 ? "" : "s"}`}</title>
-      <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={r} ry={r} className="zm-card-body" />
-    </g>
-  );
-}
-
-/** A group card's name and function count, drawn over the boxes so the tiles never cover them. */
-function CardText({ card, label, at, k }: { card: GroupCard; label: string; at: { x: number; y: number }; k: number }) {
-  const { rect } = card;
-  const inset = 12 / k;
-  const text = fitLabel(label, labelChars(rect.w * k));
-  const count = card.ids.length;
-  return (
-    <g className="zm-card-text">
-      {text !== null && (
-        <text x={at.x} y={at.y} dominantBaseline="hanging" className="zm-card-label">
-          {text}
-        </text>
-      )}
-      {rect.w * k > 60 && (
-        <text x={rect.x + rect.w - inset} y={rect.y + inset} dominantBaseline="hanging" textAnchor="end" className="zm-card-count">
-          {count}
-        </text>
-      )}
-    </g>
-  );
-}
-
-/** A count badge in screen pixels (the caller scales it): a red pill, wide enough for three digits. */
 function Badge({ count }: { count: number }) {
   const text = badgeText(count);
   const r = MARKER_BADGE_R;
@@ -1180,48 +1137,6 @@ function Badge({ count }: { count: number }) {
       <text>{text}</text>
     </>
   );
-}
-
-/**
- * The far tier's findings: a revision cloud round a card that has findings, and one badge with the summed count at its
- * top-right corner. The badge's position is already offset from the others (see placeBadges).
- */
-function CardFinding({ rect, count, at, k }: { rect: Rect; count: number; at: { x: number; y: number }; k: number }) {
-  const s = 1 / k;
-  return (
-    <g className="zm-finding">
-      <title>{`${count} finding${count === 1 ? "" : "s"}`}</title>
-      <path d={cloudPath(rect, 0, 14 * s)} className="zm-cloud" />
-      <g transform={`translate(${at.x} ${at.y}) scale(${s})`} className="zm-badge">
-        <Badge count={count} />
-      </g>
-    </g>
-  );
-}
-
-/**
- * The far tier's card findings: each card with findings, the sum of its boxes' counts, and where its badge sits. The
- * badges are spaced at least a badge's width apart (in world units at this scale).
- */
-function cardFindings(
-  cards: readonly GroupCard[],
-  findings: ReadonlyMap<string, number>,
-  view: MapBuild | undefined,
-  k: number,
-): { id: string; rect: Rect; count: number; badge: { x: number; y: number } }[] {
-  const hit = cards.flatMap((c) => {
-    let count = 0;
-    for (const id of c.ids) {
-      const ref = view?.node(id)?.ref;
-      if (ref !== undefined) count += findings.get(ref) ?? 0;
-    }
-    return count > 0 ? [{ id: c.id, rect: c.rect, count }] : [];
-  });
-  const badges = placeBadges(
-    hit.map((h) => ({ x: h.rect.x + h.rect.w, y: h.rect.y })),
-    BADGE_SPACE_PX / k,
-  );
-  return hit.map((h, i) => ({ ...h, badge: badges[i]! }));
 }
 
 /**
