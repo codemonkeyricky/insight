@@ -21,6 +21,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildServer, loadSnapshot, resolveSnapshot } from "../apps/server/dist/index.js";
+import { projectPaths } from "../packages/core/dist/index.js";
 import { edgeTargets } from "../packages/sdk/dist/index.js";
 import { buildExecScene, buildFileFlow, execDefaultOpen, layoutScene, summarizeFlows } from "../packages/flow/dist/index.js";
 import { scopeKey } from "../apps/web/src/scopeKey.ts";
@@ -136,8 +137,8 @@ try {
   const { findings } = await get(`${base}/findings`);
   const { files: fileList } = await get(`${base}/files`);
 
-  const root = server.registry.rootOf(record);
-  const snap = loadSnapshot(root, resolveSnapshot(root, undefined));
+  const paths = projectPaths(server.registry.rootOf(record), server.registry.stateOf(record));
+  const snap = loadSnapshot(paths, resolveSnapshot(paths, undefined));
   const nodes = [...snap.nodes.values()];
   const incoming = {};
   snap.edges.forEach((e, i) => {
