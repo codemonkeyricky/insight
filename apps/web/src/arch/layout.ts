@@ -22,7 +22,7 @@ const BEND = 14;
 export interface ArchBox {
   id: string;
   pkg: ArchPackage;
-  /** Index into `columns`. */
+  /** The column the box sits in: a layer column, or a grid column when the layout is a grid. */
   column: number;
   x: number;
   y: number;
@@ -56,68 +56,37 @@ export interface ArchArrow {
 export interface ArchLayout {
   width: number;
   height: number;
+  /** The layer columns, with titles. Empty for a grid. */
   columns: ArchColumn[];
   boxes: ArchBox[];
   arrows: ArchArrow[];
 }
 
+export interface ArchLayoutOptions {
+  /** Lay the boxes out in rows of this many cards, left to right, instead of one column per layer. */
+  grid?: number;
+}
+
 /** The key of the arrow from one package to another. */
 export const arrowKey = (from: string, to: string): string => `${from}\0${to}`;
 
-/** Stroke width of an arrow: 1 px for one import, growing with log2 of the count, clamped to 4 px. */
 /** The number on an arrow: its imports, or its calls with a "c" when it has no import the IR could see. */
 export function arrowLabel(edge: { imports: number; calls: number }): string {
   return edge.imports > 0 ? String(edge.imports) : `${edge.calls}c`;
 }
 
+/** Stroke width of an arrow: 1 px for one import, growing with log2 of the count, clamped to 4 px. */
 export function arrowWidth(imports: number): number {
   return Math.min(4, Math.max(1, 1 + Math.log2(Math.max(1, imports))));
 }
 
 /**
- * The layers that hold packages, one column each, in the model's layer order. Packages keep the order the model gives
- * them within a column, which is by path.
+ * The boxes of a model. By default one column per layer, in the model's layer order, with packages in the order the model
+ * gives them within a column (by path). With `grid`, the packages fill rows of that many cards, in the model's order.
  */
-export function archLayout(model: ArchModel): ArchLayout {
-  const byLayer = new Map<string, ArchPackage[]>();
-  for (const pkg of model.packages) {
-    const list = byLayer.get(pkg.layer);
-    if (list) list.push(pkg);
-    else byLayer.set(pkg.layer, [pkg]);
-  }
-  const order = [...model.layers];
-  for (const layer of byLayer.keys()) if (!order.includes(layer)) order.push(layer);
-
-  const columns: ArchColumn[] = [];
-  const boxes: ArchBox[] = [];
-  const boxById = new Map<string, ArchBox>();
-  let tallest = 0;
-  for (const layer of order) {
-    const pkgs = byLayer.get(layer);
-    if (!pkgs || pkgs.length === 0) continue;
-    const index = columns.length;
-    const x = ARCH_PAD + index * (ARCH_BOX_W + ARCH_COL_GAP);
-    columns.push({ layer, index, x });
-    pkgs.forEach((pkg, row) => {
-      const box: ArchBox = {
-        id: pkg.id,
-        pkg,
-        column: index,
-        x,
-        y: ARCH_PAD + ARCH_HEADER_H + row * (ARCH_BOX_H + ARCH_BOX_GAP),
-        w: ARCH_BOX_W,
-        h: ARCH_BOX_H,
-      };
-      boxes.push(box);
-      boxById.set(box.id, box);
-    });
-    tallest = Math.max(tallest, pkgs.length);
-  }
-
-  const cols = columns.length;
-  const width = cols === 0 ? ARCH_PAD * 2 : ARCH_PAD * 2 + ARCH_LOOP_ROOM + cols * ARCH_BOX_W + (cols - 1) * ARCH_COL_GAP;
-  const stack = tallest === 0 ? 0 : tallest * ARCH_BOX_H + (tallest - 1) * ARCH_BOX_GAP;
-  const height = ARCH_PAD * 2 + ARCH_HEADER_H + stack;
+export function archLayout(model: ArchModel, options: ArchLayoutOptions = {}): ArchLayout {
+  const placed = options.grid ? placeGrid(model, options.grid) : placeColumns(model);
+  const boxById = new Map(placed.boxes.map((b) => [b.id, b]));
 
   const reverse = new Set(model.edges.map((e) => arrowKey(e.to, e.from)));
   const violating = new Set(model.violations.map((v) => arrowKey(v.from, v.to)));
@@ -143,7 +112,71 @@ export function archLayout(model: ArchModel): ArchLayout {
     });
   }
 
-  return { width, height, columns, boxes, arrows };
+  return { ...placed, arrows };
+}
+
+/** Layer columns: one per layer that holds a package, with the boxes stacked down each column. */
+function placeColumns(model: ArchModel): Omit<ArchLayout, "arrows"> {
+  const byLayer = new Map<string, ArchPackage[]>();
+  for (const pkg of model.packages) {
+    const list = byLayer.get(pkg.layer);
+    if (list) list.push(pkg);
+    else byLayer.set(pkg.layer, [pkg]);
+  }
+  const order = [...model.layers];
+  for (const layer of byLayer.keys()) if (!order.includes(layer)) order.push(layer);
+
+  const columns: ArchColumn[] = [];
+  const boxes: ArchBox[] = [];
+  let tallest = 0;
+  for (const layer of order) {
+    const pkgs = byLayer.get(layer);
+    if (!pkgs || pkgs.length === 0) continue;
+    const index = columns.length;
+    const x = ARCH_PAD + index * (ARCH_BOX_W + ARCH_COL_GAP);
+    columns.push({ layer, index, x });
+    pkgs.forEach((pkg, row) => {
+      boxes.push({
+        id: pkg.id,
+        pkg,
+        column: index,
+        x,
+        y: ARCH_PAD + ARCH_HEADER_H + row * (ARCH_BOX_H + ARCH_BOX_GAP),
+        w: ARCH_BOX_W,
+        h: ARCH_BOX_H,
+      });
+    });
+    tallest = Math.max(tallest, pkgs.length);
+  }
+
+  const cols = columns.length;
+  const width = cols === 0 ? ARCH_PAD * 2 : ARCH_PAD * 2 + ARCH_LOOP_ROOM + cols * ARCH_BOX_W + (cols - 1) * ARCH_COL_GAP;
+  const stack = tallest === 0 ? 0 : tallest * ARCH_BOX_H + (tallest - 1) * ARCH_BOX_GAP;
+  const height = ARCH_PAD * 2 + ARCH_HEADER_H + stack;
+  return { width, height, columns, boxes };
+}
+
+/** A grid: rows of `perRow` cards, left to right, with no layer titles. */
+function placeGrid(model: ArchModel, perRow: number): Omit<ArchLayout, "arrows"> {
+  const n = model.packages.length;
+  const cols = Math.max(1, Math.min(perRow, n));
+  const rows = Math.max(1, Math.ceil(n / perRow));
+  const boxes: ArchBox[] = model.packages.map((pkg, i) => {
+    const column = i % perRow;
+    const row = Math.floor(i / perRow);
+    return {
+      id: pkg.id,
+      pkg,
+      column,
+      x: ARCH_PAD + column * (ARCH_BOX_W + ARCH_COL_GAP),
+      y: ARCH_PAD + row * (ARCH_BOX_H + ARCH_BOX_GAP),
+      w: ARCH_BOX_W,
+      h: ARCH_BOX_H,
+    };
+  });
+  const width = ARCH_PAD * 2 + ARCH_LOOP_ROOM + cols * ARCH_BOX_W + (cols - 1) * ARCH_COL_GAP;
+  const height = ARCH_PAD * 2 + rows * ARCH_BOX_H + (rows - 1) * ARCH_BOX_GAP;
+  return { width, height, columns: [], boxes };
 }
 
 /**

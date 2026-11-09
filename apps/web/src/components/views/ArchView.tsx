@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { api, type ArchModel, type Span } from "../../api";
-import { diagramModel, type DiagramModel } from "../../arch/folders";
+import { diagramModel, FOLDER_GRID, type DiagramModel } from "../../arch/folders";
 import { ARCH_HEADER_H, ARCH_PAD, archLayout, arrowKey, arrowLabel, type ArchBox } from "../../arch/layout";
 import { hrefFile, hrefView } from "../../router";
 
@@ -48,7 +48,7 @@ function ArchDiagram({ id, model: whole }: { id: string; model: ArchModel }) {
   // A project with one package draws its folders instead (see arch/folders.ts). Everything below reads the shown model.
   const shown = useMemo<DiagramModel>(() => diagramModel(whole), [whole]);
   const model = shown.model;
-  const layout = useMemo(() => archLayout(model), [model]);
+  const layout = useMemo(() => archLayout(model, shown.depth !== undefined ? { grid: FOLDER_GRID } : {}), [model, shown.depth]);
   const [sel, setSel] = useState<Selection>(null);
 
   // The boxes lit by the selection: the two ends of the selected arrow.
@@ -77,8 +77,8 @@ function ArchDiagram({ id, model: whole }: { id: string; model: ArchModel }) {
     <div className="arch">
       {shown.depth !== undefined && (
         <p className="muted small arch-caption">
-          {plural(whole.packages.length, "package")} in this project, so the cards are its folders, cut at depth {shown.depth} (1 is the
-          top-level directories). Edges add up the imports between files in each pair of folders.
+          {plural(whole.packages.length, "package")} in this project, so the cards are its folders that hold code, cut at depth{" "}
+          {shown.depth} (1 is the top-level directories). Edges add up the imports between files in each pair of folders.
         </p>
       )}
       <div className="arch-scroll">
@@ -149,6 +149,11 @@ function ArchDiagram({ id, model: whole }: { id: string; model: ArchModel }) {
           })}
         </svg>
       </div>
+      {shown.other > 0 && (
+        <p className="muted small arch-other">
+          Other: {shown.other} {shown.other === 1 ? "folder" : "folders"} without code
+        </p>
+      )}
       <Panel id={id} model={model} sel={sel} />
     </div>
   );

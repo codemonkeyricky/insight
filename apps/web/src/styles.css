@@ -727,3 +727,4 @@ a.btn.primary { background: linear-gradient(180deg, var(--gloss), transparent 52
   .arch-scroll { max-height: 60vh; }
   .arch-name { font-size: 21px; }
 }
+.arch-other { flex: 1 1 100%; margin: 0; }
