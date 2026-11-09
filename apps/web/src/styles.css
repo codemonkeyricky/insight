@@ -250,7 +250,7 @@ a.flow-node:hover :is(rect, polygon, circle) { stroke: var(--accent); stroke-wid
 /* The Arch tab: a column per layer, a box per package, an arrow per import. Colours are the same tokens as the flow chart. */
 .arch { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
 .arch-scroll { flex: 1 1 100%; min-width: 0; max-height: 75vh; overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
-.arch-svg { display: block; max-width: 100%; height: auto; }
+.arch-svg { display: block; flex: none; }
 .arch-bg { fill: transparent; }
 .arch-layer { fill: var(--muted); font: 600 17px system-ui, sans-serif; }
 .arch-box { cursor: pointer; }
@@ -711,4 +711,19 @@ a.btn.primary { background: linear-gradient(180deg, var(--gloss), transparent 52
   .rv-count::after { content: "findings"; font-size: var(--t-sm); color: var(--muted); }
   .rv-bar { grid-template-columns: minmax(0, 1fr) 56px 28px; }
   .rv-show { width: auto; }
+}
+
+/* Arch, folder view and phone. The diagram keeps its natural size and pans inside .arch-scroll, so the 23 px names stay
+   readable and the page itself never scrolls sideways. */
+.arch { min-width: 0; max-width: 100%; }
+.arch-caption { margin: 0 0 8px; }
+.arch-scroll { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+.arch-panel { min-width: 0; }
+.arch-unresolved { margin-top: 16px; }
+.arch-unresolved summary { cursor: pointer; list-style-position: outside; }
+.arch-unresolved summary h2 { display: inline; }
+@media (max-width: 720px) {
+  .arch { gap: 12px; }
+  .arch-scroll { max-height: 60vh; }
+  .arch-name { font-size: 21px; }
 }

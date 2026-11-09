@@ -108,4 +108,23 @@ describe("archModel: bare specifiers", () => {
     expect(model.packages.map((p) => p.path)).toEqual(["packages/a"]);
     expect(model.packages[0]?.fileCount).toBe(4);
   });
+
+  it("lists every source file with its function count, and the import pairs between local files", () => {
+    const site = fx.span("src/a.ts", 1, 0, 1, 30);
+    const view = fx.view({
+      nodes: [
+        file("src/a.ts"),
+        fx.node("src/a.ts#f", "structure", "structure.function", { parent: "src/a.ts" }),
+        fx.node("src/a.ts#g", "structure", "structure.function", { parent: "src/a.ts" }),
+        file("src/b.ts"),
+      ],
+      edges: [fx.edge("src/a.ts", "src/b.ts", "packaging", "packaging.import", { span: site })],
+    });
+    const model = archModel(view);
+    expect(model.files).toEqual([
+      { path: "src/a.ts", functions: 2 },
+      { path: "src/b.ts", functions: 0 },
+    ]);
+    expect(model.fileImports).toEqual([{ from: "src/a.ts", to: "src/b.ts", imports: 1, confidence: "exact", sites: [site] }]);
+  });
 });

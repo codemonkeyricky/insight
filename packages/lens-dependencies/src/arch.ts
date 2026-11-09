@@ -43,6 +43,24 @@ export interface ArchPackage {
   layer: string;
   /** Source files (structure.file nodes) whose nearest package is this one. */
   fileCount: number;
+  /** Functions in those files. Set only on the folder modules the Arch tab derives when a project has one package. */
+  functions?: number;
+}
+
+/** A source file (structure.file node) and how many functions it holds. */
+export interface ArchFile {
+  path: string;
+  functions: number;
+}
+
+/** The imports from one local file to another: the file-level data the Arch tab aggregates into folder edges. */
+export interface ArchFileImport {
+  from: string;
+  to: string;
+  imports: number;
+  confidence: IREdge["provenance"]["confidence"];
+  /** The import spans, sorted and without duplicates. */
+  sites: Span[];
 }
 
 export interface ArchEdge {
@@ -84,6 +102,10 @@ export interface ArchModel {
   unresolved: ArchUnresolved[];
   externals: ArchExternal[];
   violations: ArchViolation[];
+  /** Every source file of the project, sorted by path. */
+  files: ArchFile[];
+  /** Import pairs between local files, sorted by from then to. */
+  fileImports: ArchFileImport[];
 }
 
 /** "@scope/name/sub" -> "@scope/name", "name/sub" -> "name". */
@@ -127,6 +149,17 @@ function packageRoots(view: IRView): PkgRoot[] {
     roots.set(dir, { path: dir, name: dir === "." ? "." : lastSegment(dir) });
   }
   return [...roots.values()];
+}
+
+/** The nearest structure.file node above a node, or undefined when there is none. */
+function fileAncestor(view: IRView, id: NodeId): NodeId | undefined {
+  let cur = view.node(id);
+  while (cur) {
+    if (cur.kind === "structure.file") return cur.id;
+    if (cur.parent === undefined) return undefined;
+    cur = view.node(cur.parent);
+  }
+  return undefined;
 }
 
 /** The nearest package root above a file. The root "." matches everything but ranks lowest. */
@@ -181,12 +214,19 @@ export function archModel(view: IRView, options: ArchOptions = {}): ArchModel {
   for (const root of roots) {
     packages.set(root.path, { id: root.path, name: root.name, path: root.path, layer: layerName(root.path), fileCount: 0 });
   }
+  const files = new Map<string, ArchFile>();
   for (const node of view.nodes({ kind: "structure.file" })) {
+    files.set(node.id, { path: node.id, functions: 0 });
     const path = pathOf(node.id);
     if (path !== undefined) packages.get(path)!.fileCount++;
   }
+  for (const node of view.nodes({ kind: "structure.function" })) {
+    const file = fileAncestor(view, node.id);
+    const entry = file === undefined ? undefined : files.get(file);
+    if (entry) entry.functions++;
+  }
 
-  const { pairs, from, unresolvedImports } = buildModuleGraph(view);
+  const { pairs, from, unresolvedImports, local } = buildModuleGraph(view);
   const rolled = new Map<string, { from: string; to: string; imports: number; calls: number; confidence: ArchEdge["confidence"]; sites: Span[] }>();
   for (const [key, info] of pairs) {
     const [a, b] = from.get(key) as [NodeId, NodeId];
@@ -238,6 +278,15 @@ export function archModel(view: IRView, options: ArchOptions = {}): ArchModel {
     .sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to));
   const externals = [...externalCounts.values()].sort((a, b) => a.fromPackage.localeCompare(b.fromPackage) || b.imports - a.imports || a.name.localeCompare(b.name));
 
+  const fileImports: ArchFileImport[] = [];
+  for (const [key, info] of pairs) {
+    if (info.imports === 0) continue;
+    const [a, b] = from.get(key) as [NodeId, NodeId];
+    if (a === b || !files.has(a) || !files.has(b) || !local.has(a) || !local.has(b)) continue;
+    fileImports.push({ from: a, to: b, imports: info.imports, confidence: info.confidence, sites: mergeSpans(info.spans) });
+  }
+  fileImports.sort((x, y) => x.from.localeCompare(y.from) || x.to.localeCompare(y.to));
+
   const violations: ArchViolation[] = [];
   // The frontend and lens rule belongs to Insight's layout. Top-directory layers have no such meaning.
   for (const edge of generic ? [] : edges) {
@@ -254,5 +303,6 @@ export function archModel(view: IRView, options: ArchOptions = {}): ArchModel {
   }
   if (packageList.some((pkg) => pkg.layer === "other")) layers.push("other");
 
-  return { layers, packages: packageList, edges, unresolved, externals, violations };
+  const fileList = [...files.values()].sort((a, b) => a.path.localeCompare(b.path));
+  return { layers, packages: packageList, edges, unresolved, externals, violations, files: fileList, fileImports };
 }

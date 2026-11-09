@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { api, type ArchModel, type Span } from "../../api";
+import { diagramModel, type DiagramModel } from "../../arch/folders";
 import { ARCH_HEADER_H, ARCH_PAD, archLayout, arrowKey, arrowLabel, type ArchBox } from "../../arch/layout";
 import { hrefFile, hrefView } from "../../router";
 
@@ -43,7 +44,10 @@ export function ArchView({ id }: { id: string }) {
   return <ArchDiagram id={id} model={done.model} />;
 }
 
-function ArchDiagram({ id, model }: { id: string; model: ArchModel }) {
+function ArchDiagram({ id, model: whole }: { id: string; model: ArchModel }) {
+  // A project with one package draws its folders instead (see arch/folders.ts). Everything below reads the shown model.
+  const shown = useMemo<DiagramModel>(() => diagramModel(whole), [whole]);
+  const model = shown.model;
   const layout = useMemo(() => archLayout(model), [model]);
   const [sel, setSel] = useState<Selection>(null);
 
@@ -71,6 +75,12 @@ function ArchDiagram({ id, model }: { id: string; model: ArchModel }) {
 
   return (
     <div className="arch">
+      {shown.depth !== undefined && (
+        <p className="muted small arch-caption">
+          {plural(whole.packages.length, "package")} in this project, so the cards are its folders, cut at depth {shown.depth} (1 is the
+          top-level directories). Edges add up the imports between files in each pair of folders.
+        </p>
+      )}
       <div className="arch-scroll">
         <svg className="arch-svg" width={layout.width} height={layout.height} viewBox={`0 0 ${layout.width} ${layout.height}`} role="img" aria-label="Package architecture">
           <defs>
@@ -130,7 +140,9 @@ function ArchDiagram({ id, model }: { id: string; model: ArchModel }) {
                   {fit(box.pkg.name, LABEL_CHARS)}
                 </text>
                 <text className="arch-sub" x={box.x + 14} y={box.y + 60}>
-                  {plural(box.pkg.fileCount, "file")}
+                  {box.pkg.functions === undefined
+                    ? plural(box.pkg.fileCount, "file")
+                    : `${plural(box.pkg.fileCount, "file")} · ${box.pkg.functions} fns`}
                 </text>
               </g>
             );
@@ -230,8 +242,10 @@ function Sites({ id, sites }: { id: string; sites: Span[] }) {
 function Unresolved({ id, model }: { id: string; model: ArchModel }) {
   const rows = model.unresolved;
   return (
-    <section>
-      <h2>Unresolved imports ({rows.length})</h2>
+    <details className="arch-unresolved">
+      <summary>
+        <h2>Unresolved imports ({rows.length})</h2>
+      </summary>
       {rows.length === 0 ? (
         <p className="muted small">Every relative import resolves.</p>
       ) : (
@@ -251,6 +265,6 @@ function Unresolved({ id, model }: { id: string; model: ArchModel }) {
           ))}
         </ul>
       )}
-    </section>
+    </details>
   );
 }

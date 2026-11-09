@@ -10,6 +10,8 @@ export const ARCH_COL_GAP = 90;
 export const ARCH_BOX_GAP = 18;
 /** Margin on every side. It also holds the loop of an arrow between two packages in one column. */
 export const ARCH_PAD = 24;
+/** Room right of the last column, where the loop of an arrow between two packages in one column reaches out. */
+export const ARCH_LOOP_ROOM = 64;
 /** Room above the first box of a column for its layer title. */
 export const ARCH_HEADER_H = 44;
 /** How far a curve between two packages in one column reaches out past the boxes. */
@@ -113,7 +115,7 @@ export function archLayout(model: ArchModel): ArchLayout {
   }
 
   const cols = columns.length;
-  const width = cols === 0 ? ARCH_PAD * 2 : ARCH_PAD * 2 + cols * ARCH_BOX_W + (cols - 1) * ARCH_COL_GAP;
+  const width = cols === 0 ? ARCH_PAD * 2 : ARCH_PAD * 2 + ARCH_LOOP_ROOM + cols * ARCH_BOX_W + (cols - 1) * ARCH_COL_GAP;
   const stack = tallest === 0 ? 0 : tallest * ARCH_BOX_H + (tallest - 1) * ARCH_BOX_GAP;
   const height = ARCH_PAD * 2 + ARCH_HEADER_H + stack;
 
