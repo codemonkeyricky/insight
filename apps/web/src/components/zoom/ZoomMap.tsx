@@ -14,8 +14,10 @@ import { hrefView } from "../../router";
 import { CHART_MIN_PX } from "../../zoom/chart";
 import { anchoredTo, closeExpansion, connectorOf, openExpansion, refresh, revealCamera, type Expansion, type ExpandAnchor } from "../../zoom/expand";
 import { pickBox } from "../../zoom/gesture";
-import { edgeClass, edgeKey, edgeTitle, edgeWidth, type MapBuild, type MapEdge, type MapNode, type MapSelected, type MapSource } from "../../zoom/source";
-import { bucketScale, fitLabel, headerLabels, labelChars, lodBucket } from "../../zoom/lod";
+import { edgeClass, edgeKey, edgeTitle, edgeWidth, lineClass, runtimeLine, type MapBuild, type MapEdge, type MapNode, type MapSelected, type MapSource, type RuntimeLine } from "../../zoom/source";
+import { bucketScale, FAR_SCALE, fitLabel, headerLabels, labelChars, lodBucket } from "../../zoom/lod";
+import { badgeText, cloudPath, markerAnchors, MARKER_BADGE_R, MARKER_TRIANGLE } from "../../zoom/findingsLayer";
+import { zoneCells, zoneLines, type ZoneCell } from "../../zoom/zones";
 import { offMapSelected } from "../../zoom/offMap";
 import type { ZoomStore } from "../../zoom/scene";
 import { ExpansionShape } from "./Expansion";
@@ -80,6 +82,10 @@ interface Props {
   hint?: boolean;
   /** Room the map gives up on the right, in px, such as a side panel over the stage. Fits and reveals keep clear of it. */
   inset?: number;
+  /** The findings layer: how many findings each function (by its id) has. Undefined when the layer is off. */
+  findings?: ReadonlyMap<string, number>;
+  /** Which parts of the map are drawn: the frames (file and runtime frames) and the call edges. Both on by default. */
+  layers?: { frames: boolean; calls: boolean };
 }
 
 /** What an expansion needs to draw its chart: the project, the scope its links resolve in, and the flow store. */
@@ -106,7 +112,7 @@ interface OffMap {
  * The execution map: one camera over a scope's scene. Each node is a focus of the source; the map's items and edges
  * are named by node id, so a click or key that names a node is turned into a focus by the source first (`focusOf`).
  */
-export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFocus, hint = true, inset = 0 }: Props) {
+export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFocus, hint = true, inset = 0, findings, layers = { frames: true, calls: true } }: Props) {
   /** The selection: the focus the breadcrumb, the detail panel and the URL show. Only explicit actions change it. */
   const [build, setBuild] = useState<MapBuild>();
   /** The map as drawn: the selection's build. Only a click or a key changes it; gestures move the camera alone. */
@@ -614,11 +620,26 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   };
 
   const miniItems = useMemo(() => (view ? view.placed.items : []), [view]);
+  /** The sheet's zone grid over the map's extent, and its outline path. Built once per view. */
+  const zones = useMemo(() => {
+    if (!view) return { cells: [] as ZoneCell[], path: "" };
+    const extent = { x: 0, y: 0, w: view.placed.width, h: view.placed.height };
+    return { cells: zoneCells(extent), path: zoneLines(extent) };
+  }, [view]);
+  /** The line type of every drawn node, from its own kind and the container it sits in. Built once per view. */
+  const lines = useMemo(() => (view ? lineMap(view) : new Map<string, RuntimeLine>()), [view]);
   // The items and edges drawn are only those of the current view, so a stale set never shows.
   const live = view !== undefined && shown.view === view ? shown : undefined;
   const drawn = (kind: PlacedItem["kind"]) => (live ? live.items.filter((i) => i.kind === kind) : []);
   /** The camera scale of the labels' bucket: labels are fitted to the boxes' width on screen at this scale. */
   const labelScale = bucketScale(shown.lod);
+  /**
+   * Far out (below FAR_SCALE) the map draws zone cards and solid tiles: no labels, no call edges. The call edges are the
+   * spaghetti that reads as a barcode at that scale. Spawns, dispatches and sync edges stay, as they are few.
+   */
+  const far = labelScale < FAR_SCALE;
+  const isCall = (e: MapEdge) => e.kind === undefined || e.kind === "call";
+  const edgesShown = (live?.edges ?? []).filter((e) => !isCall(e) || (layers.calls && !far));
   /** The functions with an expansion open, by id: their boxes are drawn as expanded. */
   const expandedFns = new Set(expansions.map((e) => e.fnId));
 
@@ -682,11 +703,13 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
               <path d="M0,0 L10,5 L0,10 z" className="zm-arrow" />
             </marker>
           </defs>
-          <g ref={worldRef}>
-            {drawn("frame").map((it) => (
-              <FrameShape key={it.id} item={it} node={view?.node(it.id)} k={labelScale} onOpen={openNode} />
-            ))}
-            {live?.edges.map((e) => (
+          <g ref={worldRef} className={far ? "zm-world zm-far" : "zm-world"}>
+            <ZoneGrid cells={zones.cells} path={zones.path} k={labelScale} />
+            {layers.frames &&
+              drawn("frame").map((it) => (
+                <FrameShape key={it.id} item={it} node={view?.node(it.id)} line={lines.get(it.id) ?? "none"} k={labelScale} onOpen={openNode} />
+              ))}
+            {edgesShown.map((e) => (
               <path
                 key={edgeKey(e)}
                 d={e.d}
@@ -705,12 +728,21 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
                   key={it.id}
                   item={it}
                   node={node}
+                  line={lines.get(it.id) ?? "none"}
                   k={labelScale}
                   onOpen={boxClick}
                   chartOpen={node.ref !== undefined && expandedFns.has(node.ref)}
                 />
               );
             })}
+            {findings !== undefined &&
+              drawn("box").map((it) => {
+                const node = view?.node(it.id);
+                const count = node?.ref !== undefined ? findings.get(node.ref) : undefined;
+                if (node?.ref === undefined || count === undefined) return null;
+                const ref = node.ref;
+                return <FindingShape key={`finding-${it.id}`} rect={it.rect} count={count} k={labelScale} onSelect={() => void selectFunction(ref)} />;
+              })}
             {expansions.map((e) => {
               const c = connectorOf(e, expansions);
               return (
@@ -738,6 +770,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
         </svg>
         {!build && !error && <p className="zm-loading muted">Loading</p>}
         {build && (
+          <figure className="zm-keyplan">
+          <figcaption>Key plan</figcaption>
           <svg
             ref={miniRef}
             className="zm-mini"
@@ -771,6 +805,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
             ))}
             <rect ref={miniViewRef} className="zm-mini-view" />
           </svg>
+          </figure>
         )}
       </div>
       {hint && (
@@ -789,12 +824,24 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
  * A frame's header and a box's label are cut to the room they have on screen at the label scale `k` (lod.ts). The full
  * text stays in the tooltip.
  */
-function FrameShape({ item, node, k, onOpen }: { item: PlacedItem; node: MapNode | undefined; k: number; onOpen: (id: string) => void }) {
+function FrameShape({
+  item,
+  node,
+  line,
+  k,
+  onOpen,
+}: {
+  item: PlacedItem;
+  node: MapNode | undefined;
+  line: RuntimeLine;
+  k: number;
+  onOpen: (id: string) => void;
+}) {
   const { rect } = item;
   const head = ZOOM_SIZE.head;
   const text = headerLabels(node?.label ?? nameOfId(item.id), node?.detail, rect.w * k);
   return (
-    <g className={node ? `zm-frame zm-${node.kind}` : "zm-frame"}>
+    <g className={`zm-frame${node ? ` zm-${node.kind}` : ""} ${lineClass(line)}`}>
       <title>{node?.title || item.id}</title>
       <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={10} className="zm-frame-body" />
       <g className="zm-hit" onClick={() => onOpen(item.id)}>
@@ -820,12 +867,14 @@ function FrameShape({ item, node, k, onOpen }: { item: PlacedItem; node: MapNode
 function BoxShape({
   item,
   node,
+  line,
   k,
   onOpen,
   chartOpen,
 }: {
   item: PlacedItem;
   node: MapNode;
+  line: RuntimeLine;
   k: number;
   onOpen: (id: string) => void;
   chartOpen: boolean;
@@ -835,7 +884,7 @@ function BoxShape({
   const holdsChart = node.chart !== undefined;
   return (
     <g
-      className={`zm-box zm-${node.kind}${holdsChart ? " zm-has-chart" : ""}${chartOpen ? " expanded" : ""}`}
+      className={`zm-box zm-${node.kind} ${lineClass(line)}${holdsChart ? " zm-has-chart" : ""}${chartOpen ? " expanded" : ""}`}
       onClick={() => onOpen(item.id)}
     >
       <title>{node.title || node.label}</title>
@@ -845,6 +894,66 @@ function BoxShape({
           {label}
         </text>
       )}
+    </g>
+  );
+}
+
+/**
+ * The line type of every node a view places, by id. A node's line comes from its kind, and a function from the container
+ * it sits in, so the walk goes up through the parents. Each node is looked up once.
+ */
+function lineMap(b: MapBuild): Map<string, RuntimeLine> {
+  const memo = new Map<string, RuntimeLine>();
+  const lineOf = (id: string, depth: number): RuntimeLine => {
+    const hit = memo.get(id);
+    if (hit !== undefined) return hit;
+    const node = b.node(id);
+    // A parent chain is short (a function, its thread, its program); the depth guard keeps a bad parent from looping.
+    const parent = node?.parent !== undefined && depth < 32 ? lineOf(node.parent, depth + 1) : "none";
+    const line = node ? runtimeLine(node.kind, parent) : "none";
+    memo.set(id, line);
+    return line;
+  };
+  for (const it of b.placed.items) lineOf(it.id, 0);
+  return memo;
+}
+
+/** The sheet's zone grid: the lines of the 480-unit zones and each zone's reference, drawn in world units. */
+function ZoneGrid({ cells, path, k }: { cells: ZoneCell[]; path: string; k: number }) {
+  const s = 1 / k;
+  return (
+    <g className="zm-zones" aria-hidden="true">
+      <path d={path} className="zm-zone-line" />
+      {cells.map((c) => (
+        <g key={`${c.col}:${c.row}`} transform={`translate(${c.x} ${c.y}) scale(${s})`}>
+          <text x={8} y={6} dominantBaseline="hanging" className="zm-zone-label">
+            {c.label}
+          </text>
+        </g>
+      ))}
+    </g>
+  );
+}
+
+/**
+ * A revision cloud around a function with findings, with a red triangle on its top-left corner and the count in a badge on
+ * its top-right corner. The marker's shape is in screen pixels (the scale `k` undoes the world zoom), so it keeps its size.
+ */
+function FindingShape({ rect, count, k, onSelect }: { rect: Rect; count: number; k: number; onSelect: () => void }) {
+  const at = markerAnchors(rect);
+  const s = 1 / k;
+  const tip = MARKER_TRIANGLE.map(([x, y]) => `${x},${y}`).join(" ");
+  return (
+    <g className="zm-finding">
+      <title>{`${count} finding${count === 1 ? "" : "s"}`}</title>
+      <path d={cloudPath(rect)} className="zm-cloud" />
+      <g transform={`translate(${at.triangle.x} ${at.triangle.y}) scale(${s})`} className="zm-marker" onClick={onSelect}>
+        <polygon points={tip} className="zm-marker-tri" />
+      </g>
+      <g transform={`translate(${at.badge.x} ${at.badge.y}) scale(${s})`} className="zm-badge" onClick={onSelect}>
+        <circle r={MARKER_BADGE_R} />
+        <text>{badgeText(count)}</text>
+      </g>
     </g>
   );
 }

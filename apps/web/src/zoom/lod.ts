@@ -73,3 +73,9 @@ export function lodBucket(k: number): number {
 
 /** The scale a bucket stands for: the scale at the bucket's centre, 2^(bucket / 4). */
 export const bucketScale = (bucket: number): number => 2 ** (bucket / 4);
+
+/**
+ * The camera scale below which the map is "far": zone cards and solid tiles, no labels, no call edges. Set at about the
+ * fit scale of a large scope on a desktop, so the zoomed-out view reads as a sheet rather than a barcode of calls.
+ */
+export const FAR_SCALE = 0.42;

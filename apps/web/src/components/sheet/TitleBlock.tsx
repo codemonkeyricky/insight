@@ -7,6 +7,8 @@ export interface TitleFacts {
   commit: string;
   indexed: string;
   files: string;
+  /** The zone the focused node sits in, such as "C4". */
+  zone?: string;
 }
 
 const DASH = "—";
@@ -20,6 +22,7 @@ export function TitleBlock({ facts, emphasis = false }: { facts: TitleFacts; emp
     ["Project", facts.project, true],
     ["Scope", facts.scope, true],
     ["Selected", facts.selected, false],
+    ["Zone", facts.zone ?? DASH, false],
     ["Source", facts.source, true],
     ["Commit", facts.commit, false],
     ["Indexed", facts.indexed, false],
