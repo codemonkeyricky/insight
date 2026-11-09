@@ -658,6 +658,16 @@ table.grid th { background: var(--faint); }
 .sh-tab-sep { flex: none; width: 1px; height: 18px; margin: 0 6px; background: var(--hair); }
 .sh-code-head { display: flex; flex-direction: column; gap: 2px; min-width: 0; margin-bottom: 8px; }
 .sh-code-head strong { overflow-wrap: anywhere; }
+/* The docked pane's header row: the title (path, or function name and location) beside the close button, one row, one hair under it. */
+.sh-dock-head { flex: none; display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 44px; padding: 0 44px 0 16px; border-bottom: 1px solid var(--hair); position: relative; }
+.sh-dock-head .sh-close { position: absolute; top: 50%; right: 10px; transform: translateY(-50%); }
+.sh-dock-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; font-size: var(--t-sm); }
+.sh-dock-title strong { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sh-dock-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sh-side.is-docked .sh-side-body, .sh-side.is-docked .sh-pinned { padding-right: 0; }
+.sh-side:not(.is-docked) .sh-dock-title { padding-right: 30px; }
+.sh-side .panel.viewer { border: 0; background: transparent; padding: 0; border-radius: 0; box-shadow: none; }
+.sh-side .viewer-head strong { display: none; }
 .file.shown { background: var(--faint); box-shadow: inset 2px 0 0 var(--accent); }
 
 /* The file tree: the left column of the workspace. On a phone it is a drawer (see the phone rules below). */
@@ -702,15 +712,19 @@ table.grid th { background: var(--faint); }
   .sh-canvas .zm-crumbs { display: none; }
 }
 @media (max-width: 520px) {
-  :root { --sh-top: 56px; }
+  :root { --sh-top: 92px; }
   .sh-top { flex-wrap: wrap; align-content: center; row-gap: 6px; padding-top: 6px; padding-bottom: 6px; height: var(--sh-top); }
   /* The logo goes, so the crumbs (whose first item links to all projects) get the row's room. */
   .sh-mark { display: none; }
   /* The crumbs collapse to the current item: the last crumb is always the current one. */
-  .sh-crumbs { flex: 1 1 0; min-width: 0; }
+  .sh-crumbs { flex: 1 0 100%; min-width: 0; order: -1; }
   .sh-tools, .sh-theme { flex-shrink: 0; }
   .sh-crumb:not(:last-child) { display: none; }
   .sh-crumb a { max-width: 100%; }
+  /* The last crumb is the current scope: it takes the row's room and ellipsizes, so the scope's name stays visible. */
+  .sh-crumb:last-child { flex: 1 1 auto; min-width: 0; }
+  .sh-crumb:last-child a { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .theme-switch button { padding: 4px 6px; }
   .sh-lbl { display: none; }
   .sh-tool kbd { display: none; }
   .sh-title { display: none; }

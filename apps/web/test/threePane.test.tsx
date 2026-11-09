@@ -75,10 +75,10 @@ describe("CodePane", () => {
     expect(html).toContain('class="sh-slot"');
   });
 
-  it("pins a picked function's name and location above its source", () => {
+  it("names a picked function and its location in the header row", () => {
     const sel = { build: { path: "src/a.ts" }, selected: { ref: "src/a.ts#f", name: "f", file: "src/a.ts", line: 3 } } as never;
     const html = renderToStaticMarkup(<CodePane {...common} target={{ kind: "function", sel }} />);
-    expect(html).toContain("sh-code-head");
+    expect(html).toContain("sh-dock-head");
     expect(html).toContain("src/a.ts:3");
     expect(html).not.toContain("Click a file or function");
   });

@@ -113,8 +113,8 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
   const [focus, setFocus] = useState<MapBuild>();
   /** The title block's full table, when the reader opened it. */
   const [titleFull, setTitleFull] = useState(false);
-  // The Show-on-the-map card covers the map on a phone, so it starts closed on narrow screens.
-  const [layersOpen, setLayersOpen] = useState(() => typeof window === "undefined" || window.innerWidth > 720);
+  // The Show-on-the-map card starts collapsed on desktop and phone alike: it is a small button until the reader opens it.
+  const [layersOpen, setLayersOpen] = useState(false);
   if (kind === "missing") return <p className="muted">Nothing at this path in the snapshot, so there is no flow to chart.</p>;
 
   const selectedName = fn ? fn.slice(fn.indexOf("#") + 1) : "none";

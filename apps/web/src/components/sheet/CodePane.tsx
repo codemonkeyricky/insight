@@ -22,30 +22,33 @@ interface Props {
 }
 
 /**
- * The code pane, the right of the workspace on every tab. It shows the file (or the function) last clicked: for a function, its
- * name and location with the callers and callees pinned above its source. The exec slot sits above the code, where the flow
- * map draws the focused function's or container's panel.
+ * The code pane, the right of the workspace on every tab. It shows the file (or the function) last clicked. The header row
+ * names it: the file's path, or a function's name and location. For a function, the callers and callees are pinned above its
+ * source. The exec slot sits above the code, where the flow map draws the focused function's or container's panel.
  */
 export function CodePane({ id, roots, store, target, open, docked, onClose, onSlot }: Props) {
   const fn = target?.kind === "function" ? target : undefined;
   const path = target ? targetPath(target) : "";
+  const head = fn ? (
+    <>
+      <strong className="mono">{fn.sel.selected.name}</strong>
+      <span className="muted small mono sh-dock-path">
+        {fn.sel.selected.file ? `${fn.sel.selected.file}:${fn.sel.selected.line}` : "No source for this function"}
+      </span>
+    </>
+  ) : target ? (
+    <span className="mono sh-dock-path">{target.kind === "file" && target.line !== undefined ? `${path}:${target.line}` : path}</span>
+  ) : (
+    <span className="muted small">Code</span>
+  );
   return (
     <SidePanel
       open={open}
       docked={docked}
       label="Code"
       onClose={onClose}
-      pinned={
-        fn ? (
-          <>
-            <header className="sh-code-head">
-              <strong className="mono">{fn.sel.selected.name}</strong>
-              <span className="muted small mono">{fn.sel.selected.file ? `${fn.sel.selected.file}:${fn.sel.selected.line}` : "No source for this function"}</span>
-            </header>
-            <FunctionRefs id={id} sel={fn.sel} roots={roots} />
-          </>
-        ) : undefined
-      }
+      head={head}
+      pinned={fn ? <FunctionRefs id={id} sel={fn.sel} roots={roots} /> : undefined}
     >
       <div className="sh-slot" ref={onSlot} />
       {target === undefined && <p className="muted">Click a file or function to see its code.</p>}
