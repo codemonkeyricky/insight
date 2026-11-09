@@ -182,7 +182,7 @@ function emptyScopeExec(scope: string): ExecModel {
  * The architecture of a project with no package.json files, as archModel answers it. The layers are the lens
  * package's DEFAULT_LAYERS, written out here so the web build does not import that package at run time.
  */
-const EMPTY_ARCH: ArchModel = { layers: ["project", "frontend", "ir", "lens", "app"], packages: [], edges: [], unresolved: [], externals: [], violations: [] };
+const EMPTY_ARCH: ArchModel = { layers: ["project", "frontend", "ir", "lens", "app"], packages: [], edges: [], unresolved: [], externals: [], violations: [], files: [], fileImports: [] };
 
 /** The flow of a scope with no functions. The capture writes no flow file for such a scope. */
 const EMPTY_SCOPE_FLOW: ScopeFlow = {

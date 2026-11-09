@@ -270,3 +270,12 @@ describe("fuzzy matcher", () => {
     expect(rankFuzzy(["one", "two", "three"], "", (s) => s, 2)).toEqual(["one", "two"]);
   });
 });
+
+describe("the findings layer link", () => {
+  it("carries the kind of finding to the flow tab and back", () => {
+    const href = hrefView("p1", "flow", { scope: "src/a.ts", fn: "src/a.ts#run", kind: "unreachable" });
+    expect(href).toBe("#/projects/p1/view/flow?scope=src%2Fa.ts&fn=src%2Fa.ts%23run&kind=unreachable");
+    expect(parseRoute(href)).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "src/a.ts", fn: "src/a.ts#run", kind: "unreachable" });
+    expect(parseRoute(hrefView("p1", "flow"))).not.toHaveProperty("kind");
+  });
+});

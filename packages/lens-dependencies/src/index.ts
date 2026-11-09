@@ -228,6 +228,6 @@ export const lensDependencies: Lens = {
   },
 };
 
-export { archModel, defaultLayerOf, topDirLayerOf, DEFAULT_LAYERS, type ArchModel, type ArchOptions, type ArchPackage, type ArchEdge, type ArchUnresolved, type ArchViolation } from "./arch.js";
+export { archModel, defaultLayerOf, topDirLayerOf, DEFAULT_LAYERS, type ArchModel, type ArchOptions, type ArchPackage, type ArchEdge, type ArchUnresolved, type ArchViolation, type ArchFile, type ArchFileImport } from "./arch.js";
 
 export default lensDependencies;

@@ -37,6 +37,8 @@ export interface WorkspaceProps {
   head?: string;
   /** The overview tab with the full overview page, rather than the flow root. */
   full?: boolean;
+  /** The flow tab's findings layer, drawing only the findings of this kind. */
+  findingKind?: string;
 }
 
 interface Loaded {
@@ -51,7 +53,7 @@ const isEditable = (target: EventTarget | null) =>
  * One project in the sheet shell: a glass top bar over a full-height stage. The flow tabs and the overview's flow root draw the
  * sheet; the other tabs draw their page in the stage. Files and Find open as overlays, and the Layers list reaches every page.
  */
-export function Workspace({ id, tab, scope, line, fn, roots = false, base, head, full = false }: WorkspaceProps) {
+export function Workspace({ id, tab, scope, line, fn, roots = false, base, head, full = false, findingKind }: WorkspaceProps) {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [listing, setListing] = useState<ScopeLenses | null>(null);
@@ -268,6 +270,7 @@ export function Workspace({ id, tab, scope, line, fn, roots = false, base, head,
             facts={facts}
             emphasis={tab === "overview"}
             fileSource={showsFileSource(tab, kind)}
+            findingKind={findingKind}
           />
         </div>
       ) : (
