@@ -3,6 +3,7 @@
 // layouts and hands them here.
 import {
   EXEC_PROJECT_ROOT,
+  execDefaultOpen,
   execThreadId,
   placeSceneEdges,
   placeSceneLayout,
@@ -17,6 +18,7 @@ import {
   type SceneLayout,
   type SceneNode,
 } from "@insight/flow";
+import { expandedAfter } from "./expand";
 import type { MapBuild, MapNode, MapSelected } from "./source";
 
 /** The separator between a scope and a node id in a focus. A path cannot hold it. */
@@ -121,20 +123,41 @@ export function execSelected(scene: Scene, fns: ReadonlyMap<string, ExecFunction
 }
 
 /**
- * The nodes open in a scope's first view (the project, with no function in the URL): the project, and every process and
- * thread box, so the view shows process ▸ thread ▸ function boxes. Coroutines and function charts stay closed.
+ * The containers open for an expanded set: the first view's containers (execDefaultOpen), and the ancestors of every
+ * expanded box, the box itself included when it is a container. Everything else is closed: a closed container is a
+ * compact box and its children are not laid out.
  */
-export function execFirstOpen(scene: Scene): Set<string> {
-  const open = sceneOpenFor(scene, scene.root);
-  for (const n of scene.nodes.values()) if ((n.kind === "program" || n.kind === "thread") && n.children.length > 0) open.add(n.id);
+export function execOpenSet(scene: Scene, expanded: ReadonlySet<string>): Set<string> {
+  const open = execDefaultOpen(scene);
+  for (const e of expanded) for (const p of sceneOpenFor(scene, e)) open.add(p);
   return open;
 }
 
 /**
+ * The expanded set a build of `nodeId` draws: the set it starts from, with `nodeId` added when it is a function (its chart
+ * is drawn) or a container (it opens, see expandedAfter). The layout is chosen for this set, so a store calls it before
+ * it builds.
+ */
+export function execExpandedFor(
+  scene: Scene,
+  fns: ReadonlyMap<string, ExecFunctionRef> | undefined,
+  nodeId: string,
+  expanded: ReadonlySet<string>,
+): ReadonlySet<string> {
+  const selected = fns === undefined ? undefined : execSelected(scene, fns, nodeId);
+  const container = (scene.nodes.get(nodeId)?.children.length ?? 0) > 0;
+  return selected !== undefined || container ? expandedAfter(expanded, "click", nodeId) : expanded;
+}
+
+/**
  * The map of a laid-out scene for a node: the node and its ancestors open, everything else closed. The project's own
- * map (the first view) opens the nesting instead, see execFirstOpen. `fns` (the model's functions by id) adds what the
+ * map opens the containers of execOpenSet. `fns` (the model's functions by id) adds what the
  * function panel shows for a function node. `openId` is the node whose open set is drawn, when it is not `nodeId`: the
  * node, crumbs and selection stay `nodeId`, while the boxes drawn follow `openId`.
+ *
+ * `expanded` is the set of function boxes whose chart is drawn. The function `nodeId` selects is added to it, and the
+ * ancestors of every expanded function open too, so a caller that stays expanded stays on screen when its callee is
+ * the focus. The build carries the set it was made with (`expanded`).
  */
 export function execBuild(
   scene: Scene,
@@ -143,8 +166,12 @@ export function execBuild(
   nodeId: string,
   fns?: ReadonlyMap<string, ExecFunctionRef>,
   openId: string = nodeId,
+  expanded: ReadonlySet<string> = new Set(),
 ): MapBuild {
-  const open = openId === scene.root ? execFirstOpen(scene) : sceneOpenFor(scene, openId);
+  const selected = fns === undefined ? undefined : execSelected(scene, fns, nodeId);
+  const exp = execExpandedFor(scene, fns, nodeId, expanded);
+  const open = execOpenSet(scene, exp);
+  for (const p of sceneOpenFor(scene, openId)) open.add(p);
   const placed = placeSceneLayout(scene, layout, open);
   const edges = placeSceneEdges(scene, open, placed.rects);
   const node = (id: string) => execMapNode(scene, id);
@@ -157,8 +184,8 @@ export function execBuild(
     node,
     depth: (id) => sceneDepth(scene, id),
     crumbs: sceneBreadcrumb(scene, nodeId).flatMap((n) => node(n.id) ?? []),
+    expanded: exp,
   };
-  const selected = fns === undefined ? undefined : execSelected(scene, fns, nodeId);
   if (selected !== undefined) out.selected = selected;
   return out;
 }

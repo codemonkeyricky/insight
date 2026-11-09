@@ -162,7 +162,11 @@ describe("function charts", () => {
     const scene = withChart("a", [400, 300]);
     const a = placedOf(scene, "a");
     expect(a?.chart).toEqual({ w: 400, h: 300 });
-    expect(sceneLeafSize(scene, a?.id ?? "")).toEqual({ w: 400 + 2 * CHART_PAD, h: CHART_HEAD + 300 + 2 * CHART_PAD });
+    expect(sceneLeafSize(scene, a?.id ?? "", new Set([a?.id ?? ""]))).toEqual({ w: 400 + 2 * CHART_PAD, h: CHART_HEAD + 300 + 2 * CHART_PAD });
+    // Collapsed, the box is the compact size: just the name.
+    const compact = a?.compact;
+    expect(compact?.h).toBe(36);
+    expect(sceneLeafSize(scene, a?.id ?? "")).toEqual(compact);
     // A function without a chart keeps the level's box.
     const work = placedOf(scene, "work");
     expect(work?.chart).toBeUndefined();
@@ -172,7 +176,8 @@ describe("function charts", () => {
   it("a chart smaller than the level's box never shrinks the box", () => {
     const scene = withChart("a", [10, 10]);
     const box = scene.levels.function?.box ?? { w: 0, h: 0 };
-    const size = sceneLeafSize(scene, placedOf(scene, "a")?.id ?? "");
+    const id = placedOf(scene, "a")?.id ?? "";
+    const size = sceneLeafSize(scene, id, new Set([id]));
     expect(size.w).toBeGreaterThanOrEqual(box.w);
     expect(size.h).toBeGreaterThanOrEqual(box.h);
   });

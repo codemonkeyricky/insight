@@ -13,10 +13,22 @@ The Flow tab draws the execution canvas of the scope: program, threads, coroutin
 - A function's control-flow chart is drawn inside its box on the canvas. The exec model gives each function the
   chart's size (`ExecFunctionRef.chart`, from `layoutFunction` in `packages/flow/src/layout.ts`), the scene node keeps
   it (`SceneNode.chart`), and `sceneLeafSize` makes the box large enough to hold the chart under a header for the name.
-  Zoomed out, a function is just that box with its name. Once the box is 160 px wide on screen (`CHART_MIN_PX` in
-  `apps/web/src/components/zoom/BoxChart.tsx`), the chart is loaded through the flow store and drawn in the box at its
-  natural scale, so it grows with the camera. A function with no chart, or one too large to chart, keeps the plain
-  box. A saved layout whose function boxes have other sizes does not cover the scene (`layoutCovers`), so a demo or
+  A collapsed function with a chart is compact: a box just wide enough for its name (`SceneNode.compact`, 36 px high),
+  and that is the size it is laid out at. Expanding it grows the box to the chart, so the layout changes with the set of
+  expanded functions. Zooming never opens a box. A function's box is opened by a click (or by `fn=` in the URL, or by a
+  call to it from another chart), and only an expanded function draws its chart. The chart is drawn once the box is also 160 px wide on
+  screen (`CHART_MIN_PX` and `chartShown` in `apps/web/src/zoom/chart.ts`). The chart is loaded through the flow store
+  and drawn in the box at its natural scale, so it grows with the camera. A function with no chart, or one too large
+  to chart, keeps the plain box. Escape closes the selected function's chart and goes up one level (`expandedAfter` in
+  `apps/web/src/zoom/expand.ts`). A click, call or URL keeps every expanded caller open, so a callee is opened in place
+  without closing its caller (`ZoomMap.tsx`, `chartStep`). A click on any other step selects it as a construct and does
+  not navigate.
+- A right source panel (`apps/web/src/components/zoom/FunctionSource.tsx`) sits beside the map while a function is
+  selected. It shows the function's name and `file:line`, and its file through `FileViewer` with the lines highlighted
+  (`hit-range`): the picked construct's span when there is one (`FlowSpan` from the chart, 1-based in `rangeOf`), else
+  the whole function's span from `store.chartOf`, else the definition line. Its close button hides the panel for that
+  selection; a new selection opens it again. `FlowView.tsx` lays the map and the panel out as `.zm-split`, and stacks
+  them on a phone. A saved layout whose function boxes have other sizes does not cover the scene (`layoutCovers`), so a demo or
   server layout from before the charts is solved again.
 - A function's panel sits below the canvas. It shows the function's name and source line, where it runs ("Runs on
   <thread>", with the coroutine it runs in), the other places it runs, and the chart's stats and legend. A function in
@@ -35,10 +47,12 @@ The Flow tab draws the execution canvas of the scope: program, threads, coroutin
 - Threads that take the same lock (including C++ RAII guards) are joined by a dotted `sync` edge; a channel joins its
   sender to its receiver with a solid one.
 - Labels fit their box's on-screen width and drop out when too small (`apps/web/src/zoom/lod.ts`). A gesture or Enter
-  over a gap opens the nearest box within 60 px.
-- Layouts: the demo reads `scope/<key>/exec-layout.json`; the live app asks the server
+  over a gap opens the nearest box within 60 px. Only a click, Enter or a link opens a box; a gesture only moves the camera.
+- Layouts: the demo reads `scope/<key>/exec-layout.json`, laid out with no chart expanded; the live app asks the server
   (`GET /api/projects/:id/scope/exec-layout`), which solves in a worker thread and caches per snapshot and scope. The
-  browser solves only when neither has one.
+  browser solves only when neither has one. A layout with charts open is solved in the browser from that base layout
+  (`layoutScene` with `expanded` and `reuse`): only the containers above an open chart are solved again, and each set
+  of open charts is kept (`ExecStore.layoutFor`, up to 32 sets per scope).
 - For a folder or the project, the table of files sits below the canvas.
 - A focus carries its scope: `execFocus(scope, nodeId)` in `apps/web/src/zoom/execMap.ts`. A node id is unique only
   within one scope's scene. `MapSource.focusOf` turns a clicked node id into a focus.
@@ -100,10 +114,10 @@ CFG is shown.
   visible set changes.
 - Viewport-culled SVG: only boxes, frames, stubs and edges that intersect the view are rendered.
 - Lazy, cached ELK layouts per container, solved in the worker.
-- Hysteresis expand and collapse at 240 px and 200 px on screen.
+- Open on click: a box opens when it is clicked, when Enter opens the item at the view centre, or when a link names it.
 - Animated focus: an Explorer or URL change moves the camera to the new focus.
-- Keyboard: `+` and `-` zoom, arrow keys pan, `Enter` opens the item at the view centre, and `Escape` goes up one
-  level.
+- Keyboard: `+` and `-` zoom, arrow keys pan, `Enter` opens the item at the view centre, and `Escape` collapses an
+  expanded function, then goes up one level.
 - A breadcrumb (`ZoomMap` draws it; the Flow tab's explorer trail is turned off with `ScopeNote trail={false}`).
 - A minimap, and a resolution meter that reads as text.
 - Dashed external stubs for calls that leave the open scope.
@@ -175,12 +189,11 @@ Camera updates (culling plus the transform) took 0.1 to 0.6 ms per update in eve
 - Layout runs in the elkjs worker, not on the main thread. Layouts take about 140 to 210 ms at these sizes, which
   is a 150 ms stall on the main thread and none in the worker.
 - The camera is d3-zoom with the transform applied imperatively. React state holds only what is culled or expanded.
-- Expansion hysteresis: open at 240 px on screen, close below 200 px. The rule is applied at the end of a user
-  gesture only, so a drag never changes expansion.
-- `mayOpen` gating: a child may open only when the gesture did not zoom out. This stops file, folder, file
-  oscillation during a zoom-out.
-- Wheel zoom anchors on the pointer. The world point under the pointer is stored at gesture start, so a wheel
-  over a gap still descends into the box the pointer is over. Keyboard and drag use the view centre.
+- Open on click replaces the old gesture-end hysteresis (open at 240 px, close below 200 px, decided when a wheel or drag
+  ended). Opening and closing no longer depend on the camera's scale, so zooming in and out never changes the open set
+  and it does not oscillate. The gesture helpers left in `apps/web/src/zoom/gesture.ts` are `pickBox` (Enter, and the
+  nearest box in a gap) and `GAP_PX`.
+- Wheel zoom anchors on the pointer as d3-zoom does. Only the camera moves; Enter and the gap rule use the view centre.
 - `ensureFocus` runs before `show()` builds the scene, so a function's file is loaded before its CFG is drawn.
 - Labels keep a constant screen size. The world group sets `--zinv` (1/scale) and the label font sizes are
   `calc()` expressions on it.

@@ -113,7 +113,10 @@ export function buildExecScene(model: ExecModel): Scene {
   const placeOne = (threadKey: string, container: string, f: ExecFunctionRef, note?: string): void => {
     const id = execFnId(container, f.id);
     const node: SceneNode = { id, kind: "function", label: f.name, parent: container, children: [], ref: f.id };
-    if (f.chart !== undefined) node.chart = { w: f.chart[0], h: f.chart[1] };
+    if (f.chart !== undefined) {
+      node.chart = { w: f.chart[0], h: f.chart[1] };
+      node.compact = { w: Math.max(90, 8 * f.name.length + 24), h: 36 };
+    }
     if (f.file !== "") node.detail = `${f.file}:${f.line}`;
     const n = note ?? (f.anonymous ? anonymousNote(f) : undefined);
     if (n !== undefined) node.note = n;
@@ -459,4 +462,15 @@ export function buildExecScene(model: ExecModel): Scene {
     }
     return node;
   }
+}
+
+/**
+ * The containers open in an execution scene's first view: the project, and every program and thread box, so the view
+ * shows process ▸ thread ▸ function boxes. Coroutines stay closed, and so does everything under them. The demo capture
+ * lays out this set, and the web store's base layout is this set too (see layoutScene's `open`).
+ */
+export function execDefaultOpen(scene: Scene): Set<string> {
+  const open = new Set<string>([scene.root]);
+  for (const n of scene.nodes.values()) if ((n.kind === "program" || n.kind === "thread") && n.children.length > 0) open.add(n.id);
+  return open;
 }

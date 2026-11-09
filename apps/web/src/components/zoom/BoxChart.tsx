@@ -4,10 +4,9 @@
 import { useEffect, useState } from "react";
 import { CHART_HEAD, CHART_PAD, type FunctionFlow, type Rect } from "@insight/flow";
 import type { ZoomStore } from "../../zoom/scene";
-import { FlowChart } from "../FlowChart";
+import { FlowChart, type FlowNodeClick } from "../FlowChart";
 
-/** Charts are drawn once the box is at least this many pixels wide on screen. Below it the box shows only its name. */
-export const CHART_MIN_PX = 160;
+export { CHART_MIN_PX } from "../../zoom/chart";
 
 /** The chart's top-left corner in a box: centred across the box, under the name's header. */
 export function chartOrigin(rect: Rect, chart: { w: number; h: number }): { x: number; y: number } {
@@ -22,6 +21,10 @@ interface Props {
   /** The function's id. */
   fnId: string;
   rect: Rect;
+  /** Takes over the clicks on the chart's steps (see FlowChart). */
+  onNodeClick?: FlowNodeClick;
+  /** The step to mark as selected. */
+  selectedId?: string;
 }
 
 interface State {
@@ -29,7 +32,7 @@ interface State {
   fn?: FunctionFlow;
 }
 
-export function BoxChart({ id, scope, store, fnId, rect }: Props) {
+export function BoxChart({ id, scope, store, fnId, rect, onNodeClick, selectedId }: Props) {
   const [state, setState] = useState<State>();
   useEffect(() => {
     let cancelled = false;
@@ -51,7 +54,7 @@ export function BoxChart({ id, scope, store, fnId, rect }: Props) {
   // A click on a step follows its link or does nothing; it must not also move the camera to the box.
   return (
     <g className="zm-chart" transform={`translate(${at.x} ${at.y})`} onClick={(e) => e.stopPropagation()}>
-      <FlowChart id={id} fn={fn} scope={scope} />
+      <FlowChart id={id} fn={fn} scope={scope} onNodeClick={onNodeClick} selectedId={selectedId} />
     </g>
   );
 }

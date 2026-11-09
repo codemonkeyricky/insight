@@ -42,6 +42,11 @@ export interface SceneNode {
    * `sceneLeafSize`), and the renderer draws the chart inside the box once the box is large on screen.
    */
   chart?: Size;
+  /**
+   * For a function with a chart: the box's size while the chart is collapsed, just its name. The box grows to `chart`
+   * when the node is expanded (see `sceneLeafSize`).
+   */
+  compact?: Size;
 }
 
 /**

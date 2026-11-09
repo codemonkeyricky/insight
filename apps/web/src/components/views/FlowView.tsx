@@ -6,8 +6,10 @@ import { ZoomStore } from "../../zoom/scene";
 import { scopeKind } from "../ScopeNote";
 import { ExecContainerPanel } from "../zoom/ExecContainerPanel";
 import { ExecFunctionPanel } from "../zoom/ExecFunctionPanel";
+import { FunctionSource } from "../zoom/FunctionSource";
 import { Stat } from "../zoom/FunctionDetail";
-import { ZoomMap } from "../zoom/ZoomMap";
+import { ZoomMap, type MapSelection } from "../zoom/ZoomMap";
+import type { MapBuild } from "../../zoom/source";
 
 type Loaded<T> = { status: "loading" } | { status: "ready"; data: T } | { status: "error"; message: string };
 
@@ -51,28 +53,39 @@ export function FlowView({ id, files, scope, fn, roots }: Props) {
   const store = useMemo(() => new ZoomStore(id), [id]);
   const exec = useMemo(() => new ExecStore(id, roots), [id, roots]);
   const kind = scopeKind(scope, files);
+  /** The function the map selects, with its construct. */
+  const [sel, setSel] = useState<MapSelection>();
+  /** The build whose source panel the reader closed. A new selection opens the panel again. */
+  const [closed, setClosed] = useState<MapBuild>();
   if (kind === "missing") return <p className="muted">Nothing at this path in the snapshot, so there is no flow to chart.</p>;
+  const split = sel !== undefined && sel.build !== closed;
   return (
     <div>
-      <RootsOnly id={id} scope={scope} fn={fn} roots={roots} />
-      <ZoomMap
-        key={roots ? "roots" : "all"}
-        id={id}
-        source={exec}
-        scope={scope}
-        fn={fn}
-        charts={{ id, scope, store }}
-        detail={(build, open) => {
-          const view = exec.viewOf(build);
-          if (view === undefined) return null;
-          const panel = { id, scope: build.path, roots, store, index: view.index, nodeId: build.nodeId, onOpen: open };
-          return build.selected ? (
-            <ExecFunctionPanel {...panel} selected={build.selected} />
-          ) : (
-            <ExecContainerPanel {...panel} rootKind={kind} />
-          );
-        }}
-      />
+      <div className={split ? "zm-split open" : "zm-split"}>
+        <div className="zm-split-map">
+          <RootsOnly id={id} scope={scope} fn={fn} roots={roots} />
+          <ZoomMap
+            key={roots ? "roots" : "all"}
+            id={id}
+            source={exec}
+            scope={scope}
+            fn={fn}
+            charts={{ id, scope, store }}
+            onSelect={setSel}
+            detail={(build, open) => {
+              const view = exec.viewOf(build);
+              if (view === undefined) return null;
+              const panel = { id, scope: build.path, roots, store, index: view.index, nodeId: build.nodeId, onOpen: open };
+              return build.selected ? (
+                <ExecFunctionPanel {...panel} selected={build.selected} />
+              ) : (
+                <ExecContainerPanel {...panel} rootKind={kind} />
+              );
+            }}
+          />
+        </div>
+        {split && sel && <FunctionSource id={id} store={store} sel={sel} onClose={() => setClosed(sel.build)} />}
+      </div>
       {kind !== "file" && <FlowFolders id={id} scope={scope} />}
     </div>
   );
