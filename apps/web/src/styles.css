@@ -107,7 +107,9 @@ h1 { font-size: 1.5rem; margin: 0.4rem 0; }
 h2 { font-size: 1.15rem; margin: 1.4rem 0 0.4rem; }
 h3 { font-size: 1rem; margin: 1rem 0 0.3rem; }
 .app { max-width: 1280px; margin: 0 auto; padding: 0 16px 48px; }
-.app.wide { max-width: 1680px; }
+/* The workspace fills the window: the top bar over three panes, with no page margin. */
+.app.wide { max-width: none; margin: 0; padding: 0; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+.app.wide > main { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .top { display: flex; align-items: baseline; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
 .brand { font-weight: 700; font-size: 1.1rem; color: var(--fg); text-decoration: none; }
 .muted { color: var(--muted); }
@@ -556,7 +558,7 @@ table.grid th { background: var(--faint); }
 :root { --sh-top: 56px; --side-w: 380px; --sh-gap: 16px; }
 .sh-top {
   position: sticky; top: 0; z-index: 40; height: var(--sh-top); display: flex; align-items: center; gap: 14px;
-  margin: 0 -16px; padding: 0 16px; background: var(--glass-strong); border-bottom: 1px solid var(--hair);
+  margin: 0; padding: 0 16px; flex: none; background: var(--glass-strong); border-bottom: 1px solid var(--hair);
   -webkit-backdrop-filter: blur(24px) saturate(1.6); backdrop-filter: blur(24px) saturate(1.6); min-width: 0;
 }
 .sh-mark { display: inline-flex; align-items: center; gap: 8px; color: var(--ink); text-decoration: none; font-weight: 600; flex: none; }
@@ -566,10 +568,7 @@ table.grid th { background: var(--faint); }
 .sh-crumb a { color: var(--muted); text-decoration: none; overflow: hidden; text-overflow: ellipsis; max-width: 18ch; }
 .sh-crumb a[aria-current="page"] { color: var(--ink); font-weight: 600; }
 .sh-sep { color: var(--muted); margin: 0 6px; }
-.sh-modes { display: inline-flex; padding: 2px; border-radius: 9px; background: var(--faint); flex: none; }
-.sh-mode { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 7px; color: var(--muted); text-decoration: none; font-size: var(--t-sm); font-weight: 500; }
-.sh-mode[aria-current="page"] { background: var(--thumb); color: var(--ink); box-shadow: var(--shadow); }
-.sh-mode:focus-visible, .sh-tool:focus-visible, .sh-close:focus-visible, .sh-layer-list a:focus-visible, .sh-crumb a:focus-visible, .sh-find-input:focus-visible, .sh-find-list a:focus-visible, .sh-layers-open:focus-visible, .sh-roots input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sh-tab:focus-visible, .sh-split:focus-visible, .sh-tool:focus-visible, .sh-close:focus-visible, .sh-layer-list a:focus-visible, .sh-crumb a:focus-visible, .sh-find-input:focus-visible, .sh-find-list a:focus-visible, .sh-layers-open:focus-visible, .sh-roots input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .sh-count { min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--red); color: var(--on-accent); font-size: var(--t-xs); line-height: 16px; text-align: center; }
 .sh-spacer { flex: 1; min-width: 0; }
 .sh-tools { display: inline-flex; align-items: center; gap: 8px; flex: none; }
@@ -577,21 +576,22 @@ table.grid th { background: var(--faint); }
 .sh-tool:hover { background: var(--btn-glass-hover); }
 .sh-tool[aria-expanded="true"] { color: var(--accent); }
 .sh-tool kbd { font-family: var(--font-code); font-size: var(--t-xs); color: var(--muted); }
-.sh-stage { position: relative; }
-.sh-page { padding: 20px 0 48px; }
+.sh-stage { position: relative; flex: 1 1 auto; min-height: 0; overflow: auto; }
+.sh-stage-flow { display: flex; flex-direction: column; }
+.sh-page { padding: 20px 16px 48px; }
 .sh-page-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .sh-page-head h1 { margin: 0; font-size: var(--t-xl); }
 
 /* The sheet: the map fills the stage at the height of the window under the bar. */
-.sh-sheet { position: relative; height: max(420px, calc(100dvh - var(--sh-top))); margin: 0 -16px; overflow: hidden; background: var(--film); background-image: var(--ambient); }
+.sh-sheet { position: relative; flex: 1 0 auto; min-height: 420px; margin: 0; overflow: hidden; background: var(--film); background-image: var(--ambient); }
 .sh-canvas { position: absolute; inset: 0; }
 .sh-canvas .zm-stage { position: absolute; inset: 0; height: auto; border: 0; border-radius: 0; background: transparent; }
 .sh-slot:empty { display: none; }
 .sh-roots { position: absolute; left: var(--sh-gap); bottom: var(--sh-gap); z-index: 5; display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 9px; background: var(--glass); box-shadow: var(--float); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); font-size: var(--t-sm); color: var(--ink); }
 
 .sh-card { background: var(--glass-strong); border: 0; border-radius: 14px; box-shadow: var(--float), var(--rim); -webkit-backdrop-filter: blur(24px) saturate(1.6); backdrop-filter: blur(24px) saturate(1.6); color: var(--ink); }
-.sh-card-head, .sh-files-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.sh-card-head h2, .sh-files-head h2 { margin: 0; font-size: var(--t-sm); font-weight: 600; }
+.sh-card-head, .sh-tree-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.sh-card-head h2, .sh-tree-head h2 { margin: 0; font-size: var(--t-sm); font-weight: 600; }
 .sh-close { display: inline-grid; place-items: center; width: 24px; height: 24px; border: 0; border-radius: 7px; background: var(--faint); color: var(--muted); cursor: pointer; flex: none; }
 .sh-close:hover { color: var(--ink); }
 
@@ -606,7 +606,6 @@ table.grid th { background: var(--faint); }
 .sh-check { display: flex; align-items: center; gap: 8px; font-size: var(--t-sm); padding: 3px 0; }
 
 .sh-title { position: absolute; right: var(--sh-gap); bottom: var(--sh-gap); z-index: 5; width: min(360px, calc(100% - 2 * var(--sh-gap))); padding: 12px 14px; transition: right .3s ease; }
-.sh-sheet[data-panel="open"] .sh-title { right: calc(var(--sh-gap) + var(--side-w) + var(--sh-gap)); }
 .sh-title.emph { width: min(420px, calc(100% - 2 * var(--sh-gap))); }
 .sh-title-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px 14px; margin: 0; }
 .sh-title-grid .wide { grid-column: 1 / -1; }
@@ -616,6 +615,8 @@ table.grid th { background: var(--faint); }
 
 .sh-side { position: absolute; top: var(--sh-gap); right: var(--sh-gap); bottom: var(--sh-gap); z-index: 8; width: var(--side-w); max-width: calc(100% - 2 * var(--sh-gap)); display: flex; flex-direction: column; padding: 12px; overflow: hidden; background: var(--glass-strong); border-radius: 14px; box-shadow: var(--float), var(--rim); -webkit-backdrop-filter: blur(28px) saturate(1.6); backdrop-filter: blur(28px) saturate(1.6); transform: translateX(calc(100% + 24px)); visibility: hidden; transition: transform .3s ease, visibility .3s; }
 .sh-side.open { transform: none; visibility: visible; }
+/* Docked: the code pane is the right column of the workspace, not an overlay. The grid sets its width. */
+.sh-side.is-docked { position: relative; top: auto; right: auto; bottom: auto; width: auto; min-width: 0; max-width: none; min-height: 0; border-radius: 0; box-shadow: none; transform: none; visibility: visible; transition: none; background: var(--glass-strong); }
 .sh-side > .sh-close { position: absolute; top: 10px; right: 10px; z-index: 1; }
 .sh-side-body { flex: 1; min-height: 0; overflow: auto; padding-right: 30px; }
 /* The pinned lists sit above the scrolling source: at most 35% of the panel, scrolling inside it when longer. The right
@@ -628,7 +629,7 @@ table.grid th { background: var(--faint); }
 .sh-side .sh-source { background: transparent; border: 0; padding: 0; margin: 0; }
 /* The outline sits above the code in the side panel as a collapsible section, never over it. */
 .sh-side .viewer-body { grid-template-columns: minmax(0, 1fr); gap: 10px; }
-.sh-side .outline { position: static; order: -1; max-height: 34vh; overflow: auto; padding: 8px 10px; border-radius: 12px; background: color-mix(in srgb, var(--graphite) 10%, transparent); }
+.sh-side .outline { position: static; max-height: 34vh; overflow: auto; padding: 8px 10px; border-radius: 12px; background: color-mix(in srgb, var(--graphite) 10%, transparent); }
 .sh-side .outline summary { cursor: pointer; font-size: var(--t-sm); font-weight: 600; }
 .sh-side .outline details[open] > summary { margin-bottom: 6px; }
 .sh-side .outline h3 { margin: 8px 0 4px; font-size: var(--t-xs); }
@@ -641,10 +642,41 @@ table.grid th { background: var(--faint); }
 .sh-canvas .zm-crumbs { position: absolute; left: calc(var(--sh-gap) + 212px); top: var(--sh-gap); z-index: 6; padding: 6px 10px; border-radius: 10px; background: var(--glass-strong); box-shadow: var(--rim); }
 .sh-canvas .zm-crumbs ol { margin: 0; }
 .sh-slot { margin-top: 10px; }
+/* The three panes: the file tree, the center and the code pane, from the top bar to the bottom of the window. */
+.sh-body { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: var(--tree-col, 280px) var(--split-l, 1px) minmax(0, 1fr) var(--split-r, 1px) var(--code-col, 440px); grid-template-rows: minmax(0, 1fr); overflow: hidden; }
+.sh-center { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--film); }
+.sh-split { position: relative; width: 1px; background: var(--hair); cursor: col-resize; touch-action: none; }
+.sh-split::before { content: ""; position: absolute; top: 0; bottom: 0; left: -4px; right: -4px; }
+.sh-split:hover, .sh-split:focus-visible { background: var(--accent); outline: none; }
+.sh-split.is-off { visibility: hidden; }
+.sh-tabs { flex: none; position: relative; display: flex; align-items: center; gap: 2px; min-width: 0; padding: 8px 12px; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--hair); --fade-l: 0px; --fade-r: 0px; mask-image: linear-gradient(to right, transparent 0, #000 var(--fade-l), #000 calc(100% - var(--fade-r)), transparent 100%); -webkit-mask-image: linear-gradient(to right, transparent 0, #000 var(--fade-l), #000 calc(100% - var(--fade-r)), transparent 100%); }
+.sh-tabs::-webkit-scrollbar { display: none; }
+.sh-tab { display: inline-flex; align-items: center; gap: 6px; flex: none; padding: 5px 10px; border-radius: 8px; color: var(--muted); text-decoration: none; font-size: var(--t-sm); font-weight: 500; white-space: nowrap; }
+.sh-tab:hover { color: var(--ink); background: var(--faint); }
+.sh-tab[aria-selected="true"] { background: var(--thumb); color: var(--ink); box-shadow: var(--shadow); }
+.sh-tab.dim { opacity: 0.55; }
+.sh-tab-sep { flex: none; width: 1px; height: 18px; margin: 0 6px; background: var(--hair); }
+.sh-code-head { display: flex; flex-direction: column; gap: 2px; min-width: 0; margin-bottom: 8px; }
+.sh-code-head strong { overflow-wrap: anywhere; }
+/* The docked pane's header row: the title (path, or function name and location) beside the close button, one row, one hair under it. */
+.sh-dock-head { flex: none; display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 44px; padding: 0 44px 0 16px; border-bottom: 1px solid var(--hair); position: relative; }
+.sh-dock-head .sh-close { position: absolute; top: 50%; right: 10px; transform: translateY(-50%); }
+.sh-dock-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; font-size: var(--t-sm); }
+.sh-dock-title strong { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sh-dock-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sh-dock-title strong.sh-dock-file { flex: 1 1 auto; max-width: none; }
+.sh-dock-facts { flex: none; white-space: nowrap; }
+.sh-side.is-docked .sh-side-body, .sh-side.is-docked .sh-pinned { padding-right: 0; }
+.sh-side:not(.is-docked) .sh-dock-title { padding-right: 30px; }
+.sh-side .panel.viewer { border: 0; background: transparent; padding: 0; border-radius: 0; box-shadow: none; }
+.sh-side .viewer-head strong { display: none; }
+.file.shown { background: var(--faint); box-shadow: inset 2px 0 0 var(--accent); }
 
-.sh-files { position: fixed; top: calc(var(--sh-top) + var(--sh-gap)); left: var(--sh-gap); bottom: var(--sh-gap); z-index: 50; width: min(360px, calc(100vw - 2 * var(--sh-gap))); display: flex; flex-direction: column; padding: 12px; }
-.sh-files-body { flex: 1; min-height: 0; overflow: auto; margin-top: 8px; }
-.sh-files-body .explorer { position: static; max-height: none; background: transparent; border: 0; padding: 0; }
+/* The file tree: the left column of the workspace. On a phone it is a drawer (see the phone rules below). */
+.sh-tree { display: flex; flex-direction: column; position: relative; min-width: 0; min-height: 0; overflow: hidden; border-radius: 0; box-shadow: none; background: var(--glass-strong); }
+.sh-tree-head { flex: none; padding: 12px 12px 8px; }
+.sh-tree-body { flex: 1; min-height: 0; overflow: auto; padding: 0 10px 12px; }
+.sh-tree .explorer { position: static; max-height: none; background: transparent; border: 0; padding: 0; }
 
 .sh-below { padding: 16px var(--sh-gap) 48px; }
 
@@ -662,7 +694,7 @@ table.grid th { background: var(--faint); }
 
 /* The grab region is a phone-only header: its handle and label are the drag target of the bottom sheet. */
 .sh-grab { display: none; }
-@media (max-width: 860px) {
+@media (max-width: 999px) {
   /* A bottom sheet: fixed to the viewport's bottom edge, 90% tall at most. SidePanel moves it with a transform and sets its
      height, so the CSS only parks it off screen while closed. The sheet owns the touch: the page does not scroll under it. */
   .sh-side { top: auto; left: 0; right: 0; bottom: 0; width: auto; max-width: none; height: 90vh; height: 90dvh; padding: 8px 16px calc(12px + env(safe-area-inset-bottom, 0px)); border-radius: 18px 18px 0 0; position: fixed; z-index: 70; transform: translateY(calc(100% + 24px)); transition: visibility .3s; touch-action: none; overscroll-behavior: contain; }
@@ -674,37 +706,39 @@ table.grid th { background: var(--faint); }
   /* Only the top rest scrolls the content; at 40% it is cut to its top, and a drag moves the sheet. */
   .sh-side:not(.is-top) .sh-side-body { overflow: hidden; }
   .sh-side.is-top .sh-side-body { overflow-y: auto; touch-action: pan-y; overscroll-behavior: contain; }
-  .sh-sheet[data-panel="open"] .sh-title, .sh-sheet[data-panel="open"] .sh-layers, .sh-sheet[data-panel="open"] .sh-layers-open, .sh-sheet[data-panel="open"] .sh-roots { display: none; }
   .sh-layers { width: 176px; }
+  .sh-body { grid-template-columns: minmax(0, 1fr); }
+  .sh-split { display: none; }
+  .sh-tree { position: fixed; top: var(--sh-top); left: 0; bottom: 0; z-index: 60; width: min(340px, 86vw); border-radius: 0 16px 16px 0; box-shadow: var(--float); transform: translateX(calc(-100% - 24px)); visibility: hidden; transition: transform .3s ease, visibility .3s; -webkit-backdrop-filter: blur(28px) saturate(1.6); backdrop-filter: blur(28px) saturate(1.6); }
+  .sh-tree.open { transform: none; visibility: visible; }
   .sh-canvas .zm-crumbs { display: none; }
 }
 @media (max-width: 520px) {
-  :root { --sh-top: 96px; }
+  :root { --sh-top: 92px; }
   .sh-top { flex-wrap: wrap; align-content: center; row-gap: 6px; padding-top: 6px; padding-bottom: 6px; height: var(--sh-top); }
   /* The logo goes, so the crumbs (whose first item links to all projects) get the row's room. */
   .sh-mark { display: none; }
   /* The crumbs collapse to the current item: the last crumb is always the current one. */
-  .sh-crumbs { flex: 1 1 0; min-width: 0; }
+  .sh-crumbs { flex: 1 0 100%; min-width: 0; order: -1; }
   .sh-tools, .sh-theme { flex-shrink: 0; }
   .sh-crumb:not(:last-child) { display: none; }
   .sh-crumb a { max-width: 100%; }
-  .sh-modes { order: 3; width: 100%; box-sizing: border-box; justify-content: space-between; }
-  .sh-mode { flex: 1; justify-content: center; }
+  /* The last crumb is the current scope: it takes the row's room and ellipsizes, so the scope's name stays visible. */
+  .sh-crumb:last-child { flex: 1 1 auto; min-width: 0; }
+  .sh-crumb:last-child a { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .theme-switch button { padding: 4px 6px; }
   .sh-lbl { display: none; }
   .sh-tool kbd { display: none; }
   .sh-title { display: none; }
-  .sh-sheet[data-panel="open"] .sh-title { display: none; }
   .sh-title-grid { grid-template-columns: 1fr 1fr; }
   .sh-find-list a { grid-template-columns: 56px minmax(0, 1fr); }
   .sh-find-detail { display: none; }
-  .sh-files { width: calc(100vw - 2 * var(--sh-gap)); }
   .sh-page { padding-top: 14px; }
   /* The Layers card opens as a full-width drawer from the bottom edge, and the roots-only switch lives in it. */
   .sh-layers { left: 0; right: 0; top: auto; bottom: 0; width: auto; max-height: 62%; border-radius: 16px 16px 0 0; }
   /* A wide table scrolls inside its page rather than widening the page. */
   .sh-page table.grid { display: block; max-width: 100%; overflow-x: auto; }
   .sh-roots { display: none; }
-  .sh-sheet[data-panel="open"] .sh-canvas .zm-keyplan { display: none; }
 }
 .sh-count-inline { color: var(--muted); font-size: var(--t-xs); }
 

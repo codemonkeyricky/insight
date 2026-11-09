@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { api, IS_DEMO, type FileEntry, type Overview, type ScopeLenses } from "../api";
-import { contentOf, flowScopeOf, modeOf, showsFileSource, type ShellContent } from "./sheet/shell";
+import { CodeTargetContext, scopeCodeTarget, type CodeTarget, type CodeTargetValue } from "../codeTarget";
+import { contentOf, flowScopeOf, type ShellContent } from "./sheet/shell";
 import { hrefView, redirectFor } from "../router";
 import { canonicalScope } from "../scopeKey";
 import { lensTab, tabbedLenses } from "../scopeLenses";
@@ -11,9 +12,12 @@ import { ReviewPage } from "../pages/Review";
 import { StatusBadge } from "../pages/Projects";
 import { useProjectEvents, type RunEvent } from "../useEvents";
 import { ScopeNote, scopeKind } from "./ScopeNote";
-import { FilesDrawer } from "./sheet/FilesDrawer";
+import { CodePane } from "./sheet/CodePane";
+import { FileTree } from "./sheet/FileTree";
 import { FindPalette } from "./sheet/FindPalette";
-import type { LayerLink } from "./sheet/LayersPanel";
+import { LayerTabs, type LayerLink } from "./sheet/LayerTabs";
+import { isNarrow, CODE_KEY, TREE_KEY, useNarrow, usePaneWidth } from "./sheet/panes";
+import { Splitter } from "./sheet/Splitter";
 import { TopBar, type Crumb } from "./sheet/TopBar";
 import type { TitleFacts } from "./sheet/TitleBlock";
 import { shortCommit } from "./sheet/TitleBlock";
@@ -21,9 +25,14 @@ import { ArchView } from "./views/ArchView";
 import { FindingsView } from "./views/FindingsView";
 import { FlowView } from "./views/FlowView";
 import { SourceView } from "./views/SourceView";
+import { ZoomStore } from "../zoom/scene";
 
 /** Tabs that cover the whole project. The explorer scope does not narrow them. */
 const PROJECT_WIDE = new Set(["overview", "arch", "compare", "review"]);
+
+/** The default widths of the file tree and the code pane, in px, until the reader resizes them. */
+const TREE_DEFAULT = 280;
+const CODE_DEFAULT = 440;
 
 export interface WorkspaceProps {
   id: string;
@@ -50,18 +59,44 @@ const isEditable = (target: EventTarget | null) =>
   target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
 
 /**
- * One project in the sheet shell: a glass top bar over a full-height stage. The flow tabs and the overview's flow root draw the
- * sheet; the other tabs draw their page in the stage. Files and Find open as overlays, and the Layers list reaches every page.
+ * One project in the workspace: a glass top bar over three panes. The file tree on the left and the code pane on the right
+ * stay put on every tab; the center holds the layers as tabs over the view. On a phone the two side panes are drawers, opened
+ * from the top bar. Find opens as an overlay.
  */
 export function Workspace({ id, tab, scope, line, fn, roots = false, base, head, full = false, findingKind }: WorkspaceProps) {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [listing, setListing] = useState<ScopeLenses | null>(null);
   const [listingError, setListingError] = useState<string | null>(null);
-  const [filesOpen, setFilesOpen] = useState(false);
   const [findOpen, setFindOpen] = useState(false);
+  /** The desktop panes: shown or collapsed. */
+  const [treeCollapsed, setTreeCollapsed] = useState(false);
+  const [codeCollapsed, setCodeCollapsed] = useState(false);
+  /** The phone drawers: open or closed. Only one of the two is open at a time. */
+  const [filesOpen, setFilesOpen] = useState(false);
+  const [codeDrawer, setCodeDrawer] = useState(false);
+  const [treeW, setTreeW] = usePaneWidth(TREE_KEY, TREE_DEFAULT);
+  const [codeW, setCodeW] = usePaneWidth(CODE_KEY, CODE_DEFAULT);
+  const narrow = useNarrow();
+  /** What the code pane shows, and the element the flow map draws its exec panel into. */
+  const [target, setTarget] = useState<CodeTarget>();
+  const [slot, setSlot] = useState<HTMLElement | null>(null);
+  /** The flow charts, shared by the map and the code pane, so both read one cache. */
+  const store = useMemo(() => new ZoomStore(id), [id]);
   // Listings by snapshot and scope, so a scope the user has already opened is not asked for again.
   const listings = useRef(new Map<string, ScopeLenses>());
+
+  // Picking code shows it: the pane opens (the Code drawer on a phone). A file scope set by a link shows silently, below.
+  const showCode = useCallback((t: CodeTarget) => {
+    setTarget(t);
+    if (isNarrow()) {
+      setCodeDrawer(true);
+      setFilesOpen(false);
+    } else {
+      setCodeCollapsed(false);
+    }
+  }, []);
+  const codeCtx = useMemo<CodeTargetValue>(() => ({ target, showCode }), [target, showCode]);
 
   const load = useCallback(async () => {
     try {
@@ -87,7 +122,7 @@ export function Workspace({ id, tab, scope, line, fn, roots = false, base, head,
     if (event.type === "done" || event.type === "failed" || event.type === "status") void load();
   });
 
-  // Ctrl/Cmd+K toggles Find, "/" opens it outside a text field, and Escape closes the Files drawer.
+  // Ctrl/Cmd+K toggles Find, "/" opens it outside a text field, and Escape closes the phone's file drawer.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
@@ -147,6 +182,14 @@ export function Workspace({ id, tab, scope, line, fn, roots = false, base, head,
     );
   }, [id, scope, listingKey]);
 
+  // A file scope (a link, a finding, the Find palette, a tree click) shows that file in the code pane. A folder or the project
+  // sets nothing, so the pane keeps the code it shows. The line rides along for a link to a line.
+  const fileScope = loaded !== null && scopeKind(scope, loaded.files) === "file";
+  useEffect(() => {
+    const next = scopeCodeTarget(scope, fileScope, line);
+    if (next !== undefined) setTarget(next);
+  }, [scope, fileScope, line]);
+
   if (redirect !== undefined) return null;
   if (!loaded) return error ? <p className="error" role="alert">{error}</p> : <p className="muted">Loading</p>;
 
@@ -155,11 +198,10 @@ export function Workspace({ id, tab, scope, line, fn, roots = false, base, head,
   const sourceText = p.source.kind === "path" ? p.source.path : p.source.url;
   const kind = scopeKind(scope, files);
   const content: ShellContent = contentOf(tab, kind, full);
-  const mode = modeOf(content);
   const lensTabs = listing ? tabbedLenses(listing.lenses).map((row) => lensTab(row, !IS_DEMO)) : [];
   // The banner's numbers belong to one scope. A listing for another scope is not shown while the new one loads.
   const stats = listing && listing.scope === canonicalScope(scope) ? listing.stats : null;
-  // The explorer picks flow for the flow sheet, and source for the project-wide pages, so a picked file opens its flow or source.
+  // The tree picks flow for the flow view, and source for the project-wide pages, so a picked file opens its flow or source.
   const explorerTab = content === "flow" ? "flow" : PROJECT_WIDE.has(tab) ? "source" : tab;
   // Views remount when the snapshot, view or scope changes, so no state from the last one carries over. The flow map
   // follows the scope and function in place, so a scope change animates the camera rather than remounting the map.
@@ -175,12 +217,6 @@ export function Workspace({ id, tab, scope, line, fn, roots = false, base, head,
     }),
   ];
 
-  const modeLinks = {
-    flow: hrefView(id, "flow", { scope: flowScopeOf(tab, scope) }),
-    arch: hrefView(id, "arch"),
-    findings: hrefView(id, "findings", { scope }),
-  };
-
   const pageLink = (t: string, title: string, current: boolean, opts: { full?: boolean } = {}): LayerLink => ({
     id: t,
     title,
@@ -188,12 +224,14 @@ export function Workspace({ id, tab, scope, line, fn, roots = false, base, head,
     current,
     group: "page",
   });
+  // The Overview tab is current on the overview route, whether it shows the flow root or the full page. Flow is the flow tab
+  // on any other route.
   const layers: LayerLink[] = [
-    pageLink("overview", "Overview", content === "overview", { full: true }),
+    pageLink("overview", "Overview", tab === "overview", { full: true }),
     pageLink("source", "Source", content === "source"),
     pageLink("flow", "Flow", content === "flow" && tab !== "overview"),
     pageLink("arch", "Arch", content === "arch"),
-    pageLink("findings", "Findings", content === "findings"),
+    { ...pageLink("findings", "Findings", content === "findings"), count: overview.findings.total },
     ...(IS_DEMO ? [] : [pageLink("compare", "Compare", content === "compare"), pageLink("review", "Triage", content === "triage")]),
     ...lensTabs.map((t): LayerLink => ({
       id: t.id,
@@ -213,6 +251,34 @@ export function Workspace({ id, tab, scope, line, fn, roots = false, base, head,
     commit: shortCommit(overview.snapshot?.commit),
     indexed: overview.snapshot ? overview.snapshot.createdAt.replace("T", " ").slice(0, 16) : "—",
     files: String(files.length),
+  };
+
+  // The panes: on a desktop each is a column (its width, or none when collapsed); on a phone the grid is one column and the
+  // side panes are drawers, so the widths do not apply.
+  const treeShown = narrow ? filesOpen : !treeCollapsed;
+  const codeShown = narrow ? codeDrawer : !codeCollapsed;
+  const bodyStyle = {
+    "--tree-col": `${treeShown ? treeW : 0}px`,
+    "--split-l": treeShown ? "1px" : "0px",
+    "--code-col": `${codeShown ? codeW : 0}px`,
+    "--split-r": codeShown ? "1px" : "0px",
+  } as CSSProperties;
+
+  const toggleFiles = () => {
+    if (narrow) {
+      setFilesOpen(!filesOpen);
+      setCodeDrawer(false);
+    } else {
+      setTreeCollapsed(!treeCollapsed);
+    }
+  };
+  const toggleCode = () => {
+    if (narrow) {
+      setCodeDrawer(!codeDrawer);
+      setFilesOpen(false);
+    } else {
+      setCodeCollapsed(!codeCollapsed);
+    }
   };
 
   const renderPage = (): ReactNode => {
@@ -246,66 +312,81 @@ export function Workspace({ id, tab, scope, line, fn, roots = false, base, head,
   };
 
   return (
-    <>
+    <CodeTargetContext.Provider value={codeCtx}>
       <TopBar
         crumbs={crumbs}
-        mode={mode}
-        modeLinks={modeLinks}
-        findings={overview.findings.total}
-        filesOpen={filesOpen}
-        onFiles={() => setFilesOpen((o) => !o)}
+        filesOpen={treeShown}
+        codeOpen={codeShown}
+        onFiles={toggleFiles}
+        onCode={toggleCode}
         onFind={() => setFindOpen(true)}
       />
-      {content === "flow" ? (
-        <div className="sh-stage">
-          {error && <p className="error" role="alert">{error}</p>}
-          <FlowView
-            id={id}
-            files={files}
-            scope={flowScopeOf(tab, scope)}
-            fn={fn}
-            roots={roots}
-            line={line}
-            layers={layers}
-            facts={facts}
-            emphasis={tab === "overview"}
-            fileSource={showsFileSource(tab, kind)}
-            findingKind={findingKind}
-          />
-        </div>
-      ) : (
-        <div className="sh-stage sh-page">
-          <div className="sh-page-head">
-            <h1>{p.name}</h1>
-            <StatusBadge project={p} />
-          </div>
-          {error && <p className="error" role="alert">{error}</p>}
-          {listingError && (
-            <p className="muted small" title={listingError}>
-              Lenses unavailable
-            </p>
-          )}
-          {PROJECT_WIDE.has(tab) ? (
-            <p className="muted small scope-note">
-              This page covers the whole project, so the scope does not narrow it. Pick a file in the Files drawer to open its source.
-            </p>
-          ) : (
-            <ScopeNote id={id} tab={tab} scope={scope} kind={kind} files={files} trail />
-          )}
-          <div key={viewKey}>{renderPage()}</div>
-        </div>
-      )}
-      {filesOpen && (
-        <FilesDrawer
+      <div className="sh-body" style={bodyStyle}>
+        <FileTree
           id={id}
           tab={explorerTab}
           fileTab={explorerTab}
           scope={scope}
           files={files}
-          onClose={() => setFilesOpen(false)}
+          open={treeShown}
+          onClose={toggleFiles}
         />
-      )}
+        <Splitter side="left" label="Resize the files pane" width={treeW} shown={treeShown && !narrow} onResize={setTreeW} />
+        <section className="sh-center">
+          <LayerTabs links={layers} />
+          {content === "flow" ? (
+            <div className="sh-stage sh-stage-flow">
+              {error && <p className="error" role="alert">{error}</p>}
+              <FlowView
+                id={id}
+                files={files}
+                scope={flowScopeOf(tab, scope)}
+                fn={fn}
+                roots={roots}
+                store={store}
+                slot={slot}
+                facts={facts}
+                emphasis={tab === "overview"}
+                findingKind={findingKind}
+                codeOpen={codeShown}
+              />
+            </div>
+          ) : (
+            <div className="sh-stage sh-page">
+              <div className="sh-page-head">
+                <h1>{p.name}</h1>
+                <StatusBadge project={p} />
+              </div>
+              {error && <p className="error" role="alert">{error}</p>}
+              {listingError && (
+                <p className="muted small" title={listingError}>
+                  Lenses unavailable
+                </p>
+              )}
+              {PROJECT_WIDE.has(tab) ? (
+                <p className="muted small scope-note">
+                  This page covers the whole project, so the scope does not narrow it. Pick a file in the tree to open its source.
+                </p>
+              ) : (
+                <ScopeNote id={id} tab={tab} scope={scope} kind={kind} files={files} trail />
+              )}
+              <div key={viewKey}>{renderPage()}</div>
+            </div>
+          )}
+        </section>
+        <Splitter side="right" label="Resize the code pane" width={codeW} shown={codeShown && !narrow} onResize={setCodeW} />
+        <CodePane
+          id={id}
+          roots={roots}
+          store={store}
+          target={target}
+          open={codeShown}
+          docked={!narrow}
+          onClose={toggleCode}
+          onSlot={setSlot}
+        />
+      </div>
       {findOpen && <FindPalette id={id} files={files} onClose={() => setFindOpen(false)} />}
-    </>
+    </CodeTargetContext.Provider>
   );
 }

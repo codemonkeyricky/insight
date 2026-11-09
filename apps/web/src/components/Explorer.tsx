@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FileEntry } from "../api";
 import { hrefView } from "../router";
+import { fileTarget, targetPath, useCodeTarget } from "../codeTarget";
 
 /** A folder in the explorer: its subfolders and files, sorted by name. */
 export interface Dir {
@@ -53,6 +54,16 @@ interface Links {
   scope: string;
   isOpen: (dir: Dir) => boolean;
   setOpen: (path: string, open: boolean) => void;
+  /** The file the code pane shows, marked in the tree when it is not the scope. */
+  shownPath?: string;
+  /** Shows a file in the code pane. The link still sets the scope, as before. */
+  onFile: (path: string) => void;
+}
+
+/** A file row's classes: the scope's file is "on"; the file the code pane shows is "shown" when it is not the scope. */
+function fileClass(path: string, links: Links): string {
+  if (path === links.scope) return "file on";
+  return path === links.shownPath ? "file shown" : "file";
 }
 
 function Rows({ dir, links }: { dir: Dir; links: Links }) {
@@ -79,9 +90,10 @@ function Rows({ dir, links }: { dir: Dir; links: Links }) {
         <a
           key={f.path}
           href={hrefView(links.id, links.fileTab, { scope: f.path })}
-          className={f.path === links.scope ? "file on" : "file"}
+          className={fileClass(f.path, links)}
           aria-current={f.path === links.scope ? "page" : undefined}
           title={f.path}
+          onClick={() => links.onFile(f.path)}
         >
           <span className="fname">{basename(f.path)}</span>
           {f.findings > 0 && <span className="count warn" title={`${f.findings} findings`}>{f.findings}</span>}
@@ -97,6 +109,8 @@ function Rows({ dir, links }: { dir: Dir; links: Links }) {
  */
 export function Explorer({ id, tab, fileTab = tab, scope, files }: { id: string; tab: string; fileTab?: string; scope: string; files: FileEntry[] }) {
   const [filter, setFilter] = useState("");
+  const { target, showCode } = useCodeTarget();
+  const shownPath = target ? targetPath(target) : undefined;
   // Folders the user opened or closed by hand. A folder without an entry is open when it lies on the path to the scope, or at the top.
   const [toggled, setToggled] = useState<Record<string, boolean>>({});
   const needle = filter.trim().toLowerCase();
@@ -124,6 +138,8 @@ export function Explorer({ id, tab, fileTab = tab, scope, files }: { id: string;
     // A filter opens every folder so the matches are visible.
     isOpen: (dir) => needle !== "" || (toggled[dir.path] ?? (!dir.path.includes("/") || onPath.has(dir.path))),
     setOpen: (path, open) => setToggled((prev) => (prev[path] === open ? prev : { ...prev, [path]: open })),
+    ...(shownPath !== undefined ? { shownPath } : {}),
+    onFile: (path) => showCode(fileTarget(path)),
   };
 
   return (

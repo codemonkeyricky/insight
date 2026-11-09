@@ -1,25 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { api, type FileEntry, type FileFlowSummary, type FindingRow } from "../../api";
+import { useCodeTarget } from "../../codeTarget";
 import { hrefFlow, hrefView, inScope } from "../../router";
 import { ExecStore } from "../../zoom/execStore";
 import { kindOf } from "../../findingGroups";
 import { findingCounts } from "../../zoom/findingsLayer";
-import { ZoomStore } from "../../zoom/scene";
+import type { ZoomStore } from "../../zoom/scene";
 import type { MapBuild } from "../../zoom/source";
 import { zoneOf } from "../../zoom/zones";
 import { scopeKind } from "../ScopeNote";
-import { LayersPanel, type LayerLink, type LayerState } from "../sheet/LayersPanel";
-import { SHEET_MAX_WIDTH, SHEET_MID } from "../sheet/bottomSheet";
-import { SidePanel } from "../sheet/SidePanel";
+import { LayersPanel, type LayerState } from "../sheet/LayersPanel";
+import { SHEET_MID, SHEET_MAX_WIDTH } from "../sheet/bottomSheet";
 import { TitleBlock, type TitleFacts } from "../sheet/TitleBlock";
-import { ExecContainerPanel } from "../zoom/ExecContainerPanel";
 import { ExecFunctionPanel } from "../zoom/ExecFunctionPanel";
-import { FunctionSource } from "../zoom/FunctionSource";
-import { FunctionRefs } from "../zoom/RefLists";
 import { Stat } from "../zoom/FunctionDetail";
 import { ZoomMap, type MapSelection } from "../zoom/ZoomMap";
-import { SourceView } from "./SourceView";
 
 type Loaded<T> = { status: "loading" } | { status: "ready"; data: T } | { status: "error"; message: string };
 
@@ -50,32 +46,31 @@ interface Props {
   fn?: string;
   /** The canvas shows only the functions each thread starts in. */
   roots: boolean;
-  line?: number;
-  /** The Layers card's rows: the project's pages and the scope's lenses. */
-  layers: LayerLink[];
+  /** The workspace's flow store: the charts the map and the code pane read. */
+  store: ZoomStore;
+  /** The code pane's exec slot: the element the focused function's or container's panel is drawn into. */
+  slot: HTMLElement | null;
   /** The title block's facts, without the selection, which this view works out. */
   facts: Omit<TitleFacts, "selected">;
   /** The overview is the flow root with the title block emphasised. */
   emphasis: boolean;
-  /** The source tab on a file: the side panel shows the file's source. */
-  fileSource: boolean;
   /** Set by "Show in Flow": the findings layer is on, drawing only the findings of this kind. */
   findingKind?: string;
+  /** Whether the code pane is open. On a phone it is a bottom sheet over the map, so the map fits a focus above it. */
+  codeOpen: boolean;
 }
 
-/**
- * The flow sheet: the execution map fills the stage, with the Layers card, the title block and the side panel over it. The
- * side panel shows the selected function's source and its exec panel (a function's trail, chart and call lists, or a
- * container's functions), and a file's source on the source tab. Below the sheet, a folder or project lists its files.
- */
-/** The width the side panel takes over the map, with its gap on each side. */
-const SIDE_INSET = 380 + 2 * 16;
-/** The Layers panel (200 px at 16 px from the left edge) and a 16 px gap: the map's left inset while it is open. */
+/** The Show-on-the-map card (200 px at 16 px from the left edge) and a 16 px gap: the map's left inset while it is open. */
 const LAYERS_INSET = 200 + 16 + 16;
 
-export function FlowView({ id, files, scope, fn, roots, line, layers, facts, emphasis, fileSource, findingKind }: Props) {
-  const store = useMemo(() => new ZoomStore(id), [id]);
+/**
+ * The flow view: the execution map fills the center, with the Show-on-the-map card and the title block over it. The selected
+ * function's source, and its calls, are in the code pane beside the workspace (see CodePane). Below the map, a folder or the
+ * project lists its files with their flows.
+ */
+export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emphasis, findingKind, codeOpen }: Props) {
   const exec = useMemo(() => new ExecStore(id, roots), [id, roots]);
+  const { showCode } = useCodeTarget();
   const kind = scopeKind(scope, files);
   /** What the map shows: frames and calls on by default, findings off until the reader turns the layer on. */
   const [shown, setShown] = useState<LayerState>(() => ({ frames: true, calls: true, findings: findingKind !== undefined }));
@@ -108,40 +103,33 @@ export function FlowView({ id, files, scope, fn, roots, line, layers, facts, emp
   );
   const counts = useMemo(() => (findingRows ? findingCounts(findingRows) : undefined), [findingRows]);
   const mapLayers = useMemo(() => ({ frames: shown.frames, calls: shown.calls }), [shown.frames, shown.calls]);
-  /** The function the map selects, with its construct. */
+  /** The function the map selects, with its construct. A new selection shows its code in the code pane. */
   const [sel, setSel] = useState<MapSelection>();
+  useEffect(() => {
+    if (sel) showCode({ kind: "function", sel });
+  }, [sel, showCode]);
   /** The build the map is focused on. */
   const [focus, setFocus] = useState<MapBuild>();
-  /** The build the reader closed the panel on, and the scope and function it was closed under. */
-  const [closed, setClosed] = useState<{ build: MapBuild | undefined; at: string }>();
-  /** The title block's full table, when the reader opened it. It stays compact while a chart is open. */
+  /** The title block's full table, when the reader opened it. */
   const [titleFull, setTitleFull] = useState(false);
-  // The Layers card covers the map on a phone, so it starts closed on narrow screens.
-  const [layersOpen, setLayersOpen] = useState(() => typeof window === "undefined" || window.innerWidth > 720);
-  /** The element the side panel hands the exec panel to. A portal draws the panel there from the map's detail hook. */
-  const [slot, setSlot] = useState<HTMLElement | null>(null);
+  // The Show-on-the-map card starts collapsed on desktop and phone alike: it is a small button until the reader opens it.
+  const [layersOpen, setLayersOpen] = useState(false);
   if (kind === "missing") return <p className="muted">Nothing at this path in the snapshot, so there is no flow to chart.</p>;
 
-  const at = `${scope}\0${fn ?? ""}`;
-  const focusNested = focus !== undefined && (focus.selected !== undefined || focus.path !== scope);
-  const dismissed = closed !== undefined && closed.at === at && closed.build === focus;
-  const open = (fileSource || focusNested) && !dismissed;
   const selectedName = fn ? fn.slice(fn.indexOf("#") + 1) : "none";
   // The zone the focused node sits in, by the centre of its box (zones.ts). A focus with no box has no zone.
   const focusRect = focus?.placed.rects.get(focus.nodeId);
   const zone = focusRect ? zoneOf(focusRect).label : undefined;
-  // On a phone the side panel is a bottom sheet. Its middle rest hides the lower part of the map, so an open detail is fitted
-  // above it (once, when the sheet opens: see ZoomMap's bottomInset).
+  // On a phone the code pane is a bottom sheet. Its middle rest hides the lower part of the map, so the focus is fitted above it
+  // (once, when the sheet opens: see ZoomMap's bottomInset). On a desktop the pane is a column, so the map is already clear of it.
   const narrow = typeof window !== "undefined" && window.innerWidth <= SHEET_MAX_WIDTH;
-  // The side panel (380px) sits 16px in from the right edge with a 16px gap: on a wide screen the map keeps clear of it.
-  const inset = open && !narrow ? SIDE_INSET : 0;
-  const bottomInset = open && narrow ? Math.round(window.innerHeight * SHEET_MID) : 0;
-  // The Layers card sits over the map's left edge on a desktop: the fit and the rulers keep clear of it.
+  const bottomInset = codeOpen && narrow ? Math.round(window.innerHeight * SHEET_MID) : 0;
+  // The Show-on-the-map card sits over the map's left edge on a desktop: the fit and the rulers keep clear of it.
   const leftInset = layersOpen && !narrow ? LAYERS_INSET : 0;
 
   return (
     <>
-      <div className="sh-sheet" data-panel={open ? "open" : "closed"}>
+      <div className="sh-sheet">
         <div className="sh-canvas">
           <RootsOnly id={id} scope={scope} fn={fn} roots={roots} />
           <ZoomMap
@@ -154,29 +142,21 @@ export function FlowView({ id, files, scope, fn, roots, line, layers, facts, emp
             onSelect={setSel}
             onFocus={setFocus}
             hint={false}
-            inset={inset}
             bottomInset={bottomInset}
             leftInset={leftInset}
             layers={mapLayers}
             findings={findingsOn ? counts ?? new Map<string, number>() : undefined}
             detail={(build, openNode) => {
+              // The code pane shows code. A function's exec panel goes there; a file's or folder's summary stays in the centre.
               const view = exec.viewOf(build);
-              if (view === undefined || slot === null) return null;
+              if (view === undefined || slot === null || build.selected === undefined) return null;
               const panel = { id, scope: build.path, roots, store, index: view.index, nodeId: build.nodeId, onOpen: openNode };
-              return createPortal(
-                build.selected ? (
-                  <ExecFunctionPanel {...panel} selected={build.selected} />
-                ) : (
-                  <ExecContainerPanel {...panel} rootKind={kind} />
-                ),
-                slot,
-              );
+              return createPortal(<ExecFunctionPanel {...panel} selected={build.selected} />, slot);
             }}
           />
         </div>
         {layersOpen ? (
           <LayersPanel
-            links={layers}
             shown={shown}
             findingCount={findingRows?.length}
             onChange={(key, on) => setShown((s) => ({ ...s, [key]: on }))}
@@ -185,26 +165,15 @@ export function FlowView({ id, files, scope, fn, roots, line, layers, facts, emp
           />
         ) : (
           <button type="button" className="sh-card sh-layers-open" onClick={() => setLayersOpen(true)}>
-            Layers
+            Show
           </button>
         )}
         <TitleBlock
           facts={{ ...facts, selected: selectedName, zone: zone ?? "—" }}
           emphasis={emphasis}
           expanded={titleFull}
-          locked={open}
           onToggle={() => setTitleFull((v) => !v)}
         />
-        <SidePanel
-          open={open}
-          label="Detail"
-          onClose={() => setClosed({ build: focus, at })}
-          pinned={sel && <FunctionRefs id={id} sel={sel} roots={roots} />}
-        >
-          {fileSource && !sel && <SourceView id={id} files={files} scope={scope} line={line} />}
-          {sel && <FunctionSource id={id} store={store} sel={sel} />}
-          <div className="sh-slot" ref={setSlot} />
-        </SidePanel>
       </div>
       {kind !== "file" && <FlowFolders id={id} scope={scope} />}
     </>
@@ -235,7 +204,7 @@ function FlowFolders({ id, scope }: { id: string; scope: string }) {
   const sum = (k: "functions" | "decisions" | "loops" | "exits") => shown.reduce((n, r) => n + r[k], 0);
   return (
     <section className="sh-below">
-      <p className="muted small">Pick a file in the Files drawer, or a row below, to draw its control flow.</p>
+      <p className="muted small">Pick a file in the tree on the left, or a row below, to draw its control flow.</p>
       {shown.length === 0 ? (
         <p className="muted">No function in this scope has a flow to chart.</p>
       ) : (
@@ -299,4 +268,3 @@ function FileTable({ id, rows }: { id: string; rows: FileFlowSummary[] }) {
     </table>
   );
 }
-

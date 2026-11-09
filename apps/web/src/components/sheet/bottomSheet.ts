@@ -6,8 +6,11 @@ import { momentumOffset } from "../../zoom/spring";
 /** The sheet's two rest heights, as a share of the viewport's height. Closed is the third rest. */
 export const SHEET_MID = 0.4;
 export const SHEET_TOP = 0.9;
-/** At or under this width the side panel is a bottom sheet. */
-export const SHEET_MAX_WIDTH = 860;
+/**
+ * At or under this width the layout is one column: the file tree and the code pane become overlay drawers (the code one a
+ * bottom sheet). Three panes need about 1000 px, so the drawers start there.
+ */
+export const SHEET_MAX_WIDTH = 999;
 
 export type Rest = "closed" | "mid" | "top";
 
