@@ -9,7 +9,9 @@ import {
   depthOf,
   fileBands,
   fileId,
+  CHART_FIT_MAX_K,
   fitCamera,
+  fitChartCamera,
   focusAt,
   focusFromUrl,
   folderId,
@@ -332,6 +334,35 @@ describe("camera fit", () => {
     expect(fitCamera(target, vp, { padding: 1 }).k).toBeCloseTo(4);
     expect(fitCamera({ x: 0, y: 0, w: 1, h: 1 }, vp).k).toBe(16);
     expect(fitCamera({ x: 0, y: 0, w: 1e6, h: 1e6 }, vp).k).toBe(0.02);
+  });
+});
+
+describe("chart fit", () => {
+  const vp = { width: 800, height: 400 };
+
+  it("caps a small chart at 1.5x its natural size", () => {
+    const target = { x: 100, y: 50, w: 200, h: 100 };
+    expect(fitCamera(target, vp).k).toBeGreaterThan(1.5);
+    expect(fitChartCamera(target, vp, 160).k).toBe(CHART_FIT_MAX_K);
+    expect(CHART_FIT_MAX_K).toBe(1.5);
+  });
+
+  it("honours a custom cap", () => {
+    const target = { x: 100, y: 50, w: 200, h: 100 };
+    expect(fitChartCamera(target, vp, 160, 1).k).toBe(1);
+  });
+
+  it("keeps the chart minimum width, which wins over the cap", () => {
+    const target = { x: 0, y: 0, w: 20, h: 10 };
+    const cam = fitChartCamera(target, vp, 160);
+    expect(cam.k).toBeCloseTo(8);
+    expect(target.w * cam.k).toBeGreaterThanOrEqual(160);
+  });
+
+  it("leaves a large target at its normal fit", () => {
+    const target = { x: 0, y: 0, w: 800, h: 400 };
+    expect(fitChartCamera(target, vp, 160).k).toBeCloseTo(fitCamera(target, vp).k);
+    expect(fitChartCamera(target, vp, 160).k).toBeLessThan(1.5);
   });
 });
 

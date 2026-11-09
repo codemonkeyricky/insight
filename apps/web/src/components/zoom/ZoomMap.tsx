@@ -7,10 +7,10 @@ import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as KeyE
 import { select } from "d3-selection";
 import "d3-transition";
 import { zoom, zoomIdentity, type D3ZoomEvent, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
-import { CHART_HEAD, ZOOM_SIZE, fitCamera, visibleWorld, type Camera, type FlowNode, type FlowSpan, type PlacedItem, type Rect } from "@insight/flow";
+import { CHART_HEAD, ZOOM_SIZE, fitCamera, fitChartCamera, visibleWorld, type Camera, type FlowNode, type FlowSpan, type PlacedItem, type Rect } from "@insight/flow";
 import { nameOfId } from "../../flowTargets";
 import { hrefView } from "../../router";
-import { chartShown } from "../../zoom/chart";
+import { CHART_MIN_PX, chartShown } from "../../zoom/chart";
 import { expandedAfter } from "../../zoom/expand";
 import { pickBox } from "../../zoom/gesture";
 import { edgeClass, edgeKey, edgeTitle, edgeWidth, type MapBuild, type MapEdge, type MapNode, type MapSelected, type MapSource } from "../../zoom/source";
@@ -192,7 +192,9 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
     const z = zoomRef.current;
     if (!rect || !svg || !z) return;
     const size = sizeOf();
-    const target = fitCamera(rect, { width: size.width, height: Math.max(1, size.height - MINI_RESERVE) });
+    const room = { width: size.width, height: Math.max(1, size.height - MINI_RESERVE) };
+    // A function with a chart is capped at about 1.5x its natural size, but never below CHART_MIN_PX wide (fitChartCamera).
+    const target = b.node(b.nodeId)?.chart !== undefined ? fitChartCamera(rect, room, CHART_MIN_PX) : fitCamera(rect, room);
     if (animate && !reduceMotion()) select(svg).transition().duration(ANIM_MS).call(z.transform, toTransform(target));
     else select(svg).call(z.transform, toTransform(target));
   };

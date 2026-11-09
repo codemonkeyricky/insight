@@ -341,6 +341,26 @@ export function fitCamera(target: Rect, viewport: { width: number; height: numbe
   };
 }
 
+/**
+ * The most a fitted function's chart is enlarged: at this scale the chart is drawn at 1.5 times its natural size, so a
+ * small function fills the stage without giant text.
+ */
+export const CHART_FIT_MAX_K = 1.5;
+
+/**
+ * Fits a function box with a chart. The scale is at most `maxScale` (so a small chart is not blown up), and at least what
+ * draws the box `chartMinPx` wide on screen. When the two conflict, the chart's minimum wins, so the chart still draws.
+ */
+export function fitChartCamera(
+  target: Rect,
+  viewport: { width: number; height: number },
+  chartMinPx: number,
+  maxScale: number = CHART_FIT_MAX_K,
+): Camera {
+  const minK = chartMinPx / Math.max(target.w, 1);
+  return fitCamera(target, viewport, { minK, maxK: Math.max(maxScale, minK) });
+}
+
 /** The world rectangle a camera shows in a viewport. */
 export function visibleWorld(camera: Camera, viewport: { width: number; height: number }): Rect {
   return { x: -camera.x / camera.k, y: -camera.y / camera.k, w: viewport.width / camera.k, h: viewport.height / camera.k };
