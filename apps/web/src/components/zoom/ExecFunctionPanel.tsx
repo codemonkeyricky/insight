@@ -105,7 +105,7 @@ export function ExecFunctionPanel({ id, scope, roots, store, index, nodeId, sele
       {loaded === undefined && <p className="muted small">Loading the chart</p>}
       {loaded !== undefined && fn === undefined && loaded.error === undefined && <p className="muted small">No control-flow chart for this function.</p>}
       {fn !== undefined && !fn.tooLarge && fn.nodes.length > 0 && (
-        <p className="muted small">The control-flow chart is drawn inside the function's box on the map. Click a step in it to see its source.</p>
+        <p className="muted small">The control-flow chart is drawn in an expansion to the right of the function's box on the map. Click a step in it to see its source.</p>
       )}
       {fn !== undefined && <FunctionDetail id={id} fn={fn} scope={scope} />}
       <CallLists base={base} lists={lists} />

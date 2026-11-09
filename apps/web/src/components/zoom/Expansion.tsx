@@ -20,22 +20,26 @@ interface Props {
   selectedId?: string;
   /** Takes over the clicks on the chart's steps (see FlowChart). */
   onNodeClick: (node: FlowNode) => boolean;
+  /** Selects the expansion's function: a click on its header. */
+  onSelect: () => void;
   onClose: () => void;
 }
 
-export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClick, onClose }: Props) {
+export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClick, onSelect, onClose }: Props) {
   const { chart, x, y, w, h } = expansion;
   const label = fitLabel(chart.name, labelChars(w * k));
   return (
     <g className="zm-expansion">
       <title>{chart.name}</title>
       <rect x={x} y={y} width={w} height={h} rx={8} className="zm-expansion-body" />
-      <rect x={x} y={y} width={w} height={CHART_HEAD} rx={8} className="zm-expansion-head" />
-      {label !== null && (
-        <text x={x + 12} y={y + CHART_HEAD / 2} dominantBaseline="central" className="zm-label">
-          {label}
-        </text>
-      )}
+      <g className="zm-expansion-title" onClick={onSelect}>
+        <rect x={x} y={y} width={w} height={CHART_HEAD} rx={8} className="zm-expansion-head" />
+        {label !== null && (
+          <text x={x + 12} y={y + CHART_HEAD / 2} dominantBaseline="central" className="zm-label">
+            {label}
+          </text>
+        )}
+      </g>
       <g
         className="zm-expansion-close"
         role="button"

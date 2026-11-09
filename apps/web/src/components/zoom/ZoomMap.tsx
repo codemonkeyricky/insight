@@ -240,7 +240,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
    * opens its expansion beside its box (`toggle` is false), or closes it when `toggle` is true and it is open. The camera
    * fits the focus, unless a toggle left it alone, then shows the expansion it opened or closed.
    */
-  const show = async (focus: string, animate: boolean, writeUrl: boolean, toggle = false) => {
+  const show = async (focus: string, animate: boolean, writeUrl: boolean, toggle = false, select = false) => {
     const seq = ++seqRef.current;
     let b: MapBuild;
     try {
@@ -256,8 +256,16 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
     focusRef.current = focus;
     setBuild(b);
     setError(undefined);
-    setConstruct(undefined);
     showView(b);
+
+    // A selection alone moves the source panel and the URL. The expansions stay open, placed on this build, and the camera
+    // does not move. The construct picked in a chart is kept: the panel shows it only for its own function.
+    if (select) {
+      setExp(placeAll(b, expRef.current));
+      if (writeUrl) syncUrl(b, focus);
+      return;
+    }
+    setConstruct(undefined);
 
     const node = b.node(b.nodeId);
     const boxRect = b.placed.rects.get(b.nodeId);
@@ -322,18 +330,36 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
     if (next === list) return;
     setExp(next);
     const added = next.find((e) => e.fnId === callee);
-    if (added !== undefined) moveTo(revealOf(cameraRef.current, added), true);
+    if (added !== undefined) {
+      moveTo(revealOf(cameraRef.current, added), true);
+      selectFunction(callee);
+    }
   };
 
   /**
-   * A click on a step of an expansion's chart. A call to a function opens that function's expansion beside the step. Any
-   * other step becomes the construct the source panel highlights. A step never navigates.
+   * Selects a function of the build: the source panel and the URL show it, and the camera and the open expansions stay
+   * where they are. A function the scope does not draw cannot be selected, so the selection stays.
+   */
+  const selectFunction = (fnId: string) => {
+    const b = buildRef.current;
+    const node = b ? source.placeFunction?.(b, fnId) : undefined;
+    if (!b || node === undefined || node === b.nodeId) return;
+    void show(source.focusOf?.(b, node) ?? node, false, true, false, true);
+  };
+
+  /**
+   * A click on a step of an expansion's chart. A call to a function opens that function's expansion beside the step, and
+   * selects the callee. Any other step becomes the construct the source panel highlights, and selects the expansion's
+   * function. A step never navigates.
    */
   const chartStep = (fnId: string, node: FlowNode): boolean => {
     stageRef.current?.focus({ preventScroll: true });
     const callee = node.target !== undefined && node.target !== fnId ? node.target : undefined;
     if (callee !== undefined) void openStep(fnId, node, callee);
-    else setConstruct({ ref: fnId, nodeId: node.id, ...(node.span ? { span: node.span } : {}) });
+    else {
+      setConstruct({ ref: fnId, nodeId: node.id, ...(node.span ? { span: node.span } : {}) });
+      selectFunction(fnId);
+    }
     return true;
   };
 
@@ -488,10 +514,14 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
           break;
         }
         // Escape closes the last expansion (and any chained from it). When it hangs from the selected box, the selection
-        // moves to the box's parent; a container selects nothing, so the source panel closes with it.
+        // moves to the box's parent; a container selects nothing, so the source panel closes with it. When the selected
+        // function is the callee of a chained expansion, the selection returns to the expansion it hangs from.
+        const selectedRef = b.node(b.nodeId)?.ref;
         setExp(closeExpansion(list, last.fnId));
         if (last.anchor.kind === "box" && last.anchor.nodeId === b.nodeId && parent !== undefined) {
           void show(source.focusOf?.(b, parent) ?? parent, true, true);
+        } else if (last.anchor.kind === "step" && selectedRef === last.fnId) {
+          selectFunction(last.anchor.fnId);
         }
         break;
       }
@@ -626,6 +656,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
                     k={labelScale}
                     selectedId={construct !== undefined && construct.ref === e.fnId ? construct.nodeId : undefined}
                     onNodeClick={(n) => chartStep(e.fnId, n)}
+                    onSelect={() => selectFunction(e.fnId)}
                     onClose={() => setExp(closeExpansion(expRef.current, e.fnId))}
                   />
                 </g>
