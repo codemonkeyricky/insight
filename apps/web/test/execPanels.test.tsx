@@ -206,4 +206,29 @@ describe("the panels", () => {
     expect(html).toContain("Code flow, no runtime context found in this scope.");
     expect(html).toContain("Per function");
   });
+
+  it("badges the scope's root as FOLDER or FILE for a scoped map, and as PROJECT for the whole project", () => {
+    const m = model();
+    const scene = buildExecScene(m);
+    const index = execIndex(scene, m);
+    const badge = (rootKind?: "project" | "folder" | "file") =>
+      renderToStaticMarkup(
+        <ExecContainerPanel
+          id="p1"
+          scope="src"
+          roots={false}
+          store={new ZoomStore("p1")}
+          index={index}
+          nodeId={scene.root}
+          onOpen={() => {}}
+          rootKind={rootKind}
+        />,
+      );
+    expect(badge()).toContain('class="kind project"> Project</span>');
+    expect(badge("project")).toContain('class="kind project"> Project</span>');
+    expect(badge("folder")).toContain('class="kind project"> Folder</span>');
+    expect(badge("folder")).toContain('aria-label="Folder"');
+    expect(badge("file")).toContain('class="kind project"> File</span>');
+    expect(badge("file")).not.toContain("Project</span>");
+  });
 });

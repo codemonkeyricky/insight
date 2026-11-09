@@ -3,6 +3,7 @@
 // heading only. The table's flow counts come from the scope's flow, loaded once through the flow store.
 import { useEffect, useMemo, useState } from "react";
 import type { ScopeFlow } from "@insight/flow";
+import type { ScopeKind } from "../ScopeNote";
 import { execChips, execRows, type ExecFlowCounts, type ExecIndex } from "../../zoom/execMap";
 import type { ZoomStore } from "../../zoom/scene";
 import { ExecChips, ExecTable, type ListBase } from "./ExecLists";
@@ -13,6 +14,13 @@ const KIND_WORD: Record<string, string> = {
   program: "Process",
   thread: "Thread",
   coroutine: "Coroutine",
+};
+
+/** The root of a scoped map is always a `project` node. Its badge names the scope it stands for. */
+const ROOT_WORD: Record<Exclude<ScopeKind, "missing">, string> = {
+  project: "Project",
+  folder: "Folder",
+  file: "File",
 };
 
 /** The containers that hold functions directly. A project holds them only as plain code flow, so it lists them when it has any. */
@@ -29,6 +37,8 @@ interface Props {
   /** The focused container's scene node. */
   nodeId: string;
   onOpen: (nodeId: string) => void;
+  /** What the scope is, for the badge of a project node. Defaults to the whole project. */
+  rootKind?: Exclude<ScopeKind, "missing">;
 }
 
 /** The scope's flow once it has loaded, or the error that stopped it. Nothing before the load settles. */
@@ -57,7 +67,7 @@ function countsOf(flow: ScopeFlow | undefined): Map<string, ExecFlowCounts> | un
   return new Map(flow.functions.map((f): [string, ExecFlowCounts] => [f.id, { steps: f.steps, decisions: f.decisions, loops: f.loops }]));
 }
 
-export function ExecContainerPanel({ id, scope, roots, store, index, nodeId, onOpen }: Props) {
+export function ExecContainerPanel({ id, scope, roots, store, index, nodeId, onOpen, rootKind = "project" }: Props) {
   const node = index.scene.nodes.get(nodeId);
   const { flow, error } = useScopeFlow(store, scope);
   const counts = useMemo(() => countsOf(flow), [flow]);
@@ -65,7 +75,7 @@ export function ExecContainerPanel({ id, scope, roots, store, index, nodeId, onO
   const rows = useMemo(() => execRows(index, nodeId, counts), [index, nodeId, counts]);
   if (node === undefined) return null;
   const base: ListBase = { id, scope, roots, onOpen };
-  const word = KIND_WORD[node.kind] ?? node.kind;
+  const word = node.kind === "project" ? ROOT_WORD[rootKind] : (KIND_WORD[node.kind] ?? node.kind);
   // The project lists its functions only when it holds plain code flow; its processes and threads are listed by their own boxes.
   const holdsFunctions = LISTS_FUNCTIONS.has(node.kind);
   const listsProjectFunctions = node.kind === "project" && rows.length > 0;
