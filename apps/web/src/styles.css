@@ -310,6 +310,12 @@ a.flow-node:hover :is(rect, polygon, circle) { stroke: var(--accent); stroke-wid
 .outside-list { margin: 14px 0 0; padding: 8px 12px; border-left: 3px solid var(--warn); background: var(--panel); border-radius: 0 6px 6px 0; }
 .outside-list ul { margin: 0; padding-left: 18px; }
 .outside-list li { margin: 2px 0; }
+.ref-lists { display: grid; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.ref-list > summary { cursor: pointer; font-size: 0.95rem; font-weight: 600; }
+.ref-list .muted { margin: 4px 0 0; }
+.ref-group { margin-top: 6px; }
+.ref-group h4 { margin: 0 0 2px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.ref-group .call-list li { font-size: 0.9rem; }
 
 /* Lens tree */
 .tree { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; overflow-x: auto; }

@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@insight/ir": "workspace:*",
+    "@insight/model": "workspace:*",
     "@insight/sdk": "workspace:*",
     "ajv": "^8.20.0",
     "better-sqlite3": "^13.0.3",

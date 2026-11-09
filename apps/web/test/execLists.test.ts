@@ -392,3 +392,14 @@ describe("sorting the table", () => {
     expect(sortExecRows(rows, "calledBy", -1).map((r) => r.id)).toEqual(["load", "parse", "target", "helper", "main", "orphan"]);
   });
 });
+
+describe("execIndex with the project's callers", () => {
+  it("adds each function's callers from anywhere in the project, and names them from their own entries", () => {
+    const model = mainModel();
+    const scene = buildExecScene(model);
+    const index = execIndex(scene, model, new Map([["target", [fn("outside", "other.py", 4)]]]));
+    expect(index.callers.get("target")).toEqual(["helper", "outside", "parse"]);
+    expect(index.fns.get("outside")).toMatchObject({ file: "other.py", line: 4, inScope: true });
+    expect(execIndex(scene, model).callers.get("target")).toEqual(["helper", "parse"]);
+  });
+});

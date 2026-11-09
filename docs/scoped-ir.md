@@ -176,6 +176,63 @@ have the file path as `from`, and its counts go to the file's row in `files`.
 node, so files with no functions count too. `files` lists only the files with functions or
 module-level code.
 
+## Project model
+
+One snapshot has one whole-project model, `buildProjectModel(doc)` in `packages/model` (`@insight/model`).
+It is pure TypeScript with no `node:` imports, and it depends only on `@insight/ir` and `@insight/sdk`. The
+server builds it once per loaded snapshot (`LoadedSnapshot.model`, built on first use). A scope is a view of
+that model, not a cut that is recomputed per request.
+
+- `doc` is the original IRDocument, untouched. Lenses still read it.
+- `byId` and `fileOf(id)` give each node's file through its parent chain (the same rules as `scopeOfNode`).
+- `tree` holds a folder entity per directory: id `dir:<path>`, the root `dir:`, sorted child folders and
+  files, and subtree counts of files and functions.
+- `functions` lists every `structure.function` node with its file and whether it is anonymous.
+- `relations` normalizes four edge kinds into `{ kind, from, to, how?, candidate, edge }`: `calls.call` (call),
+  `calls.reference` (reference), `concurrency.dispatches` (dispatch) and `concurrency.spawns` (spawn). A candidate
+  set gives one relation per candidate, with `candidate: true`. Unresolved targets give no relation.
+- `out` indexes relations by `from`, and `in` by `to`. `in` is the reverse-reference index: who calls or references
+  a function.
+
+A scope is a view of the model: `scopeView(model, scope)` (`packages/model/src/view.ts`) returns
+- `kind`: `project`, `folder` or `file`, and `has(id)`, which tells whether a node is in the scope;
+- `files()` and `functions()`, the scope's files and functions;
+- `callers(id)` and `callees(id)`, the relations into and out of `id` across the whole project. Each one carries
+  `inScope`, which says whether the other end is in the view. A project-wide "called by" list is `callers` in the
+  root view, and in a folder view it splits into "in this scope" and "outside this scope";
+- `toDoc(opts)`, the scoped IR with the same stub and finding rules as before. `scopeDoc` in `@insight/core` is
+  now `scopeView(buildProjectModel(doc), scope).toDoc(opts)`, and its tests are unchanged.
+
+For example, with `src/a.ts` (function `a`) calling `lib/b.ts` (function `b`): in view `src`,
+`callees(a)` gives `b` with `inScope: false`; in view `lib`, `callers(b)` gives `a` with `inScope: false`; in the
+root view both are `inScope: true`.
+
+`normalizeScope` and `inScope` live in the model. Core re-exports them, and maps a bad scope to its `InputError`
+(400), so the route behavior is unchanged.
+
+### Serialized model and client-side views
+
+`serializeModel(model, snapshot)` and `loadModel(json)` (`packages/model/src/serialize.ts`) move the model
+across the wire. The file is `{ schema, snapshot, doc: { nodes, edges, findings } }` with `schema` set to
+`MODEL_SCHEMA` (1). The IR document is the source of truth, so the file holds no derived index: `loadModel`
+checks the schema and calls `buildProjectModel` again. A different schema number, or a missing `doc` array, throws.
+
+The browser builds each scope's views from this model, so a scope change needs no request:
+
+- `apps/web/src/model/store.ts` (`models`, a `ModelStore`) fetches the model once per project, builds it, and keeps
+  it. A key loaded from one snapshot is dropped when the latest overview names another. A failed load is not kept.
+- `apps/web/src/model/payloads.ts` (`scopeFlowFor`, `scopeExecFor`) answers the same payloads as `/scope/flow` and
+  `/scope/exec`. They run `summarizeScope` on `scopeView(model, scope).toDoc()` with the scope's files, and
+  `execModel` on the whole document, as `scopeFlowOf` and `scopeExecOf` do in `apps/server/src/reader.ts`.
+  The extra fields (`snapshot`, `scope`, `kind`) are the same too. The module has no browser globals, so the
+  demo capture (`scripts/capture-demo.mjs`) runs it under Node.
+- `liveApi` (`apps/web/src/api.ts`) and `staticApi` (`apps/web/src/staticApi.ts`) call those functions for
+  `scopeFlow` and `getScopeExec`. The live app reads `GET /api/projects/:id/model`. The demo reads `model.json`.
+- `apps/web/test/modelParity.test.ts` indexes this repository, and checks that both APIs return the server's JSON
+  for the root, a folder and a file, and that the live API fetches the model once.
+
+The server keeps the scope routes for other clients. Lens results and the exec layouts stay per scope.
+
 ## Server routes
 
 The routes are in `apps/server/src/app.ts`. They take `?path=<scope>`, and an optional
@@ -414,6 +471,39 @@ show in that scope.
 The result is kept in memory for up to 32 scopes, keyed by snapshot and scope. The errors are the same as
 the call flow route, which is the table below.
 
+### Whole-project model
+
+`GET /api/projects/:id/model`, with an optional `?snapshot=<id>`
+
+The serialized model of the snapshot (see "Serialized model and client-side views" above). It takes no `path`. The
+checks are the scope routes': an unknown project, `project has no snapshot yet`, and `unknown snapshot <id>`. The
+model covers the whole snapshot, so the same response serves every scope.
+
+### Reverse references of a node
+
+`GET /api/projects/:id/refs?id=<node>&path=<scope>&snapshot=<id>` lists what refers to a node and what it
+refers to. The result is `{ "snapshot", "scope", "kind", "id", "calledBy": RefRow[], "calls": RefRow[] }`.
+`calledBy` holds the nodes with a relation into `id`, and `calls` the nodes `id` has a relation to. It is
+computed by `refsOf` in `packages/model/src/refs.ts` from the project model, not from the scope's cut, so
+callers outside the scope are listed.
+
+Each row has `id`, `name`, `file`, `line`, `isFunction`, `kind`, `candidate`, `count`, `inScope`, and `how`
+when the relation has one:
+
+- Anonymous functions are attributed to the nearest named function, or to their file when none encloses
+  them. A callback written inside `a` that calls `b` is a call from `a`.
+- Rows collapse by the other node and the relation kind. `count` is the number of call sites. `candidate`
+  is true only when every relation is a candidate (see `edgeTargets` in `@insight/sdk`).
+- For a function row, `file` and `line` are its definition. For a file row, `line` is the earliest call site.
+- Rows are ordered in-scope first, then by file, line, name, id and kind.
+- `inScope` says whether the other node is inside the scope. The Web app uses it to split the rows into
+  "In this scope" and "Outside this scope", and an outside row switches the scope to its file.
+
+The Web app does not fetch this route. `refsFor` in `apps/web/src/model/payloads.ts` computes the same
+result from the ModelStore, and the parity tests check that the two agree. Project-wide function callers
+also feed `ExecIndex.callers` in `apps/web/src/zoom/execMap.ts`. A caller outside the scope has
+`runtime: "none"`.
+
 ### Errors
 
 Errors are `{ "error": "<message>" }`.
@@ -429,16 +519,20 @@ Errors are `{ "error": "<message>" }`.
 | 404    | `unknown snapshot <id>`       | `?snapshot=` names a snapshot the project does not have            |
 | 404    | `no such scope`               | no indexed file is at the path or under it                         |
 | 404    | `no lens <id>`                | the lens id is not loaded                                          |
+| 400    | `id is required`              | the refs route has no `id`                                         |
+| 404    | `no node <id>`                | the refs route: the node id is not in the snapshot                 |
 
 The checks run in this order: project, `path` presence and repetition, snapshot, scope path, lens.
 So a bad path in a project with no snapshot gives the snapshot error.
+The refs route checks project, `path`, `id`, snapshot, scope path, then the node.
 
 ## Limits
 
 - The Web app calls these routes through `liveApi` in `apps/web/src/api.ts`. The demo build reads
   the same data from captured files under `scope/<key>/` (see `scripts/capture-demo.mjs`):
-  `lenses.json`, `<lensId>.json`, `flow.json` (the `/scope/flow` payload) and `exec.json` (the
-  `/scope/exec` payload). `flow.json` and `exec.json` exist only for a scope with at least one function.
+  `lenses.json`, `<lensId>.json`, and `exec-layout.json` (the laid-out exec scene, for a scope with at least one
+  function). The demo writes one `model.json` for the whole project. The browser computes each scope's flow and exec
+  from it (see "Serialized model and client-side views"), so the demo writes no per-scope `flow.json` or `exec.json`.
   The root key is `@root`.
 - The demo holds one project and its id is random on every capture, so `staticApi` ignores the id in
   the URL. A link from an earlier deploy keeps working.

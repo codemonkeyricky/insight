@@ -200,7 +200,7 @@ export function FlowView({ id, files, scope, fn, roots, line, layers, facts, emp
           onClose={() => setClosed({ build: focus, at })}
         >
           {fileSource && !sel && <SourceView id={id} files={files} scope={scope} line={line} />}
-          {sel && <FunctionSource id={id} store={store} sel={sel} />}
+          {sel && <FunctionSource id={id} store={store} sel={sel} roots={roots} />}
           <div className="sh-slot" ref={setSlot} />
         </SidePanel>
       </div>

@@ -5,6 +5,7 @@ import type {
   Annotation,
   ArchModel,
   Compare,
+  ExecFunctionRef,
   ExecModel,
   FileEntry,
   FileFlow,
@@ -26,6 +27,9 @@ import type {
   SourceSlice,
   TargetType,
 } from "./api";
+import type { SerializedModel } from "@insight/model";
+import { refsFor, scopeCallersFor, scopeExecFor, scopeFlowFor, type ScopeRefsPayload } from "./model/payloads";
+import { models } from "./model/store";
 import { canonicalScope, scopeKey, scopeProblem } from "./scopeKey";
 
 interface RawNode {
@@ -143,73 +147,13 @@ function recordOf(row: ScopeLensRow): LensRecord {
 }
 
 /**
- * The exec model of a scope with no functions, as execModel answers it. The main thread is always listed, so
- * the empty model has one thread with nothing in it. The web build cannot call execModel, so this is written out.
- */
-function emptyScopeExec(scope: string): ExecModel {
-  return {
-    scope: canonicalScope(scope),
-    truncated: false,
-    functions: [],
-    threads: [{ id: "main", kind: "main", grounded: false, roots: [], reach: 0, reached: [], coroutines: [], coroutineOnly: [] }],
-    dispatches: [],
-    calls: [],
-    unthreaded: [],
-    programs: [],
-    resources: [],
-    stats: {
-      threads: 1,
-      spawns: 0,
-      resolved: 0,
-      outside: 0,
-      unresolved: 0,
-      candidates: 0,
-      coroutines: 0,
-      dispatches: 0,
-      functionsInScope: 0,
-      functionsThreaded: 0,
-      functionsCoroutineOnly: 0,
-      functionsUnthreaded: 0,
-      functionsListed: 0,
-      programs: 0,
-      locks: 0,
-      channels: 0,
-    },
-  };
-}
-
-/**
  * The architecture of a project with no package.json files, as archModel answers it. The layers are the lens
  * package's DEFAULT_LAYERS, written out here so the web build does not import that package at run time.
  */
 const EMPTY_ARCH: ArchModel = { layers: ["project", "frontend", "ir", "lens", "app"], packages: [], edges: [], unresolved: [], externals: [], violations: [], files: [], fileImports: [] };
 
-/** The flow of a scope with no functions. The capture writes no flow file for such a scope. */
-const EMPTY_SCOPE_FLOW: ScopeFlow = {
-  granularity: "functions",
-  functions: [],
-  unreferenced: [],
-  calls: [],
-  externals: [],
-  entries: [],
-  files: [],
-  stats: {
-    functions: 0,
-    files: 0,
-    calls: 0,
-    resolved: 0,
-    external: 0,
-    unresolved: 0,
-    inbound: 0,
-    entries: 0,
-    functionsTotal: 0,
-    functionsNoise: 0,
-    functionsNonNoise: 0,
-    unreferenced: 0,
-    unreferencedNoise: 0,
-    unreferencedOutside: 0,
-  },
-};
+/** The demo's project model, loaded once. Scope flows and exec models are computed from it, as the server computes them. */
+const demoModel = () => models.get("demo", () => load<SerializedModel>("model.json"));
 
 export const staticApi = {
   health: async () => ({ ok: true, version: "demo" }),
@@ -325,19 +269,37 @@ export const staticApi = {
     await checkProject(id);
     return (await load<{ snapshot: string | null; files: FileFlowSummary[] }>("flow-summary.json")).files;
   },
-  /** A scope's call flow as the capture saved it. A scope with no functions has no file, which is the empty flow. */
+  /** A scope's call flow, computed from the demo's model the way the live server computes it. */
   scopeFlow: async (id: string, scope: string): Promise<ScopeFlow> => {
     await checkProject(id);
     const problem = scopeProblem(scope);
     if (problem) throw new ApiError(400, problem);
-    return (await scopeFile<ScopeFlow>(scope, "flow.json")) ?? EMPTY_SCOPE_FLOW;
+    const { snapshot, model } = await demoModel();
+    return scopeFlowFor(snapshot, model, scope);
   },
-  /** A scope's execution model as the capture saved it. A scope with no functions has no file, which is the empty model. */
+  /** A scope's execution model, computed from the demo's model the way the live server computes it. */
   getScopeExec: async (id: string, scope: string): Promise<ExecModel> => {
     await checkProject(id);
     const problem = scopeProblem(scope);
     if (problem) throw new ApiError(400, problem);
-    return (await scopeFile<ExecModel>(scope, "exec.json")) ?? emptyScopeExec(scope);
+    const { snapshot, model } = await demoModel();
+    return scopeExecFor(snapshot, model, scope);
+  },
+  /** The reverse references of a node, computed from the demo's model the way the live server computes them. */
+  getRefs: async (id: string, scope: string, fnId: string): Promise<ScopeRefsPayload> => {
+    await checkProject(id);
+    const problem = scopeProblem(scope);
+    if (problem) throw new ApiError(400, problem);
+    const { snapshot, model } = await demoModel();
+    return refsFor(snapshot, model, scope, fnId);
+  },
+  /** The project-wide callers of each function of a scope, computed from the demo's model. */
+  getScopeCallers: async (id: string, scope: string): Promise<ReadonlyMap<string, readonly ExecFunctionRef[]>> => {
+    await checkProject(id);
+    const problem = scopeProblem(scope);
+    if (problem) throw new ApiError(400, problem);
+    const { model } = await demoModel();
+    return scopeCallersFor(model, scope);
   },
   /**
    * The architecture model as the capture saved it. The model covers the whole project, so the capture writes it

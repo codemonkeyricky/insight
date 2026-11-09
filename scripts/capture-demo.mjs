@@ -7,12 +7,13 @@
 // (see apps/web/src/staticApi.ts). The indexed project is this checkout, so the demo always
 // shows Insight analysing its own latest commit.
 //
-// Every scope the explorer can reach (the project, each folder, each openable file) also gets its
-// lens listing under scope/<key>/lenses.json, and each lens result that has something to show gets
-// scope/<key>/<lensId>.json. Those are read through the real server, so the demo matches the live app.
-// A scope with at least one function also gets its call flow under scope/<key>/flow.json and its
-// execution model (threads, coroutines, reach) under scope/<key>/exec.json, and the execution canvas's
-// layout of that model under scope/<key>/exec-layout.json, so the static demo does not lay it out on load.
+// The project's whole model (the IR document, serialized by @insight/model) is written once, as model.json. The
+// browser builds each scope's call flow and execution model from it, the way the live server does, so the demo
+// writes no per-scope flow or exec files. Every scope the explorer can reach (the project, each folder, each
+// openable file) gets its lens listing under scope/<key>/lenses.json, and each lens result that has something to
+// show gets scope/<key>/<lensId>.json. Those are read through the real server, so the demo matches the live app.
+// A scope with at least one function also gets the execution canvas's layout of its execution model under
+// scope/<key>/exec-layout.json, so the static demo does not lay it out on load (the layout is solved here, from the model).
 // The project's package architecture is written once, under the root scope, as scope/@root/arch.json.
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
@@ -24,8 +25,11 @@ import { buildServer, loadSnapshot, resolveSnapshot } from "../apps/server/dist/
 import { projectPaths } from "../packages/core/dist/index.js";
 import { edgeTargets } from "../packages/sdk/dist/index.js";
 import { buildExecScene, buildFileFlow, execDefaultOpen, layoutScene, summarizeFlows } from "../packages/flow/dist/index.js";
+import { serializeModel } from "../packages/model/dist/index.js";
 import { scopeKey } from "../apps/web/src/scopeKey.ts";
 import { resultHasContent } from "../apps/web/src/scopeLenses.ts";
+// The same functions the browser runs to answer /scope/flow and /scope/exec, so the layouts match what the page would solve.
+import { scopeExecFor, scopeFlowFor } from "../apps/web/src/model/payloads.ts";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(ROOT, "apps", "web", "public", "demo");
@@ -139,6 +143,8 @@ try {
 
   const paths = projectPaths(server.registry.rootOf(record), server.registry.stateOf(record));
   const snap = loadSnapshot(paths, resolveSnapshot(paths, undefined));
+  const model = snap.model;
+  const snapshotId = overview.snapshot.id;
   const nodes = [...snap.nodes.values()];
   const incoming = {};
   snap.edges.forEach((e, i) => {
@@ -198,15 +204,13 @@ try {
       const run = runs.get(row.id);
       if (row.status === "ok" && run) row.hasContent = resultHasContent(run.lens.result ?? { findings: [], views: [] });
     }
-    // The call flow and execution model of the scope. A scope with no functions has nothing to draw,
-    // so it writes neither file. The exec model is fetched only for those scopes, since each one
-    // walks the whole graph once per thread and coroutine.
-    const flow = await get(`${base}/scope/flow${q}`);
-    const hasFunctions = flow.stats.functions > 0;
-    const exec = hasFunctions ? await get(`${base}/scope/exec${q}`) : undefined;
+    // The call flow and execution model come from the model, as the browser computes them. A scope with no
+    // functions has nothing to lay out. The exec model is built only for the others.
+    const hasFunctions = scopeFlowFor(snapshotId, model, scope).stats.functions > 0;
     // The canvas lays the whole scene out once; zoom only changes what is drawn open, so this one layout serves it.
     let execLayout;
-    if (exec) {
+    if (hasFunctions) {
+      const exec = scopeExecFor(snapshotId, model, scope);
       const t0 = performance.now();
       // Laid out with the containers the first view opens (execDefaultOpen); the canvas opens more from this one.
       const scene = buildExecScene(exec);
@@ -215,7 +219,7 @@ try {
     }
     // The architecture covers the whole project, so only the root scope asks for it and writes it.
     const arch = scope === "" ? await get(`${base}/scope/arch${q}`) : undefined;
-    return { scope, kind: listing.kind, listing, runs, flow: hasFunctions ? flow : undefined, exec, execLayout, arch };
+    return { scope, kind: listing.kind, listing, runs, execLayout, arch };
   };
 
   const elk = new ELK();
@@ -233,6 +237,7 @@ try {
   put("lenses.json", lenses);
   put("findings.json", findings);
   put("graph.json", { snapshot: overview.snapshot.id, nodes, edges: snap.edges, incoming });
+  put("model.json", serializeModel(model, snapshotId));
   put("sources.json", sources);
   put("files.json", openableEntries);
 
@@ -286,8 +291,6 @@ try {
         return dropped ? { id: row.id, title: row.title, status: "not-run", findings: null } : row;
       });
       out.set(`${dir}/lenses.json`, JSON.stringify({ ...c.listing, lenses: rows }));
-      if (c.flow) out.set(`${dir}/flow.json`, JSON.stringify(c.flow));
-      if (c.exec) out.set(`${dir}/exec.json`, JSON.stringify(c.exec));
       if (c.execLayout) out.set(`${dir}/exec-layout.json`, JSON.stringify(c.execLayout));
       if (c.arch) out.set(`${dir}/arch.json`, JSON.stringify(c.arch));
     }
@@ -313,10 +316,6 @@ try {
   }
   const scopeEntries = [...out].filter(([rel]) => rel.startsWith("scope/"));
   const scopeBytes = scopeEntries.reduce((sum, [, text]) => sum + Buffer.byteLength(text), 0);
-  // What the exec models add to the demo, measured on the final file set so a budget cap is reflected.
-  const execEntries = [...out].filter(([rel]) => rel.startsWith("scope/") && rel.endsWith("/exec.json"));
-  const execBytes = execEntries.reduce((sum, [, text]) => sum + Buffer.byteLength(text), 0);
-  const execLargest = execEntries.reduce((max, [rel, text]) => (Buffer.byteLength(text) > max.bytes ? { rel, bytes: Buffer.byteLength(text) } : max), { rel: "", bytes: 0 });
 
   const layoutEntries = [...out].filter(([rel]) => rel.startsWith("scope/") && rel.endsWith("/exec-layout.json"));
   const layoutBytes = layoutEntries.reduce((sum, [, text]) => sum + Buffer.byteLength(text), 0);
@@ -336,10 +335,8 @@ try {
   }
   console.log(`captured ${nodes.length} nodes, ${snap.edges.length} edges, ${findings.length} findings, ${Object.keys(sources).length} files -> ${OUT}`);
   console.log(`scope captures: ${captured.length} scopes, ${scopeEntries.length} files, ${megabytes(scopeBytes)}`);
-  console.log(
-    `exec models: ${execEntries.length} files, ${megabytes(execBytes)}, largest ${execLargest.rel} ${megabytes(execLargest.bytes)}; ` +
-      `demo without them: ${out.size - execEntries.length} files, ${megabytes(totalBytes(out) - execBytes)}`,
-  );
+  const modelBytes = Buffer.byteLength(out.get("model.json") ?? "");
+  console.log(`model: model.json ${megabytes(modelBytes)}; scope flows and exec models are computed in the browser, not captured`);
   console.log(
     `exec layouts: ${layoutEntries.length} files, ${megabytes(layoutBytes)}, ${(layoutMs / 1000).toFixed(1)} s to lay out, ` +
       `slowest ${slowest.scope === "" ? "(project)" : slowest.scope} ${slowest.ms.toFixed(0)} ms`,
