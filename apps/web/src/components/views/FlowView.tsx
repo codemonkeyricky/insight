@@ -65,6 +65,8 @@ interface Props {
  */
 /** The width the side panel takes over the map, with its gap on each side. */
 const SIDE_INSET = 380 + 2 * 16;
+/** The Layers panel (200 px at 16 px from the left edge) and a 16 px gap: the map's left inset while it is open. */
+const LAYERS_INSET = 200 + 16 + 16;
 
 export function FlowView({ id, files, scope, fn, roots, line, layers, facts, emphasis, fileSource }: Props) {
   const store = useMemo(() => new ZoomStore(id), [id]);
@@ -118,6 +120,8 @@ export function FlowView({ id, files, scope, fn, roots, line, layers, facts, emp
   const zone = focusRect ? zoneOf(focusRect).label : undefined;
   // The side panel (380px) sits 16px in from the right edge with a 16px gap: on a wide screen the map keeps clear of it.
   const inset = open && (typeof window === "undefined" || window.innerWidth > 720) ? SIDE_INSET : 0;
+  // The Layers card sits over the map's left edge on a desktop: the fit and the rulers keep clear of it.
+  const leftInset = layersOpen && (typeof window === "undefined" || window.innerWidth > 860) ? LAYERS_INSET : 0;
 
   return (
     <>
@@ -135,6 +139,7 @@ export function FlowView({ id, files, scope, fn, roots, line, layers, facts, emp
             onFocus={setFocus}
             hint={false}
             inset={inset}
+            leftInset={leftInset}
             layers={mapLayers}
             findings={findingsOn ? counts ?? new Map<string, number>() : undefined}
             detail={(build, openNode) => {

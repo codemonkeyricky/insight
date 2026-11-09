@@ -58,9 +58,11 @@ describe("markerAnchors", () => {
 });
 
 describe("badgeText", () => {
-  it("shows the count, capped at 99+", () => {
+  it("shows the real count up to 999, then 999+", () => {
     expect(badgeText(3)).toBe("3");
     expect(badgeText(99)).toBe("99");
-    expect(badgeText(100)).toBe("99+");
+    expect(badgeText(100)).toBe("100");
+    expect(badgeText(999)).toBe("999");
+    expect(badgeText(1000)).toBe("999+");
   });
 });

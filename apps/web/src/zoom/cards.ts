@@ -90,6 +90,36 @@ export function placeBadges(points: readonly { x: number; y: number }[], minDist
   return out;
 }
 
+/**
+ * The path segments of a file below the scope: "src/physics/faceCam.ts" under "src" is ["physics", "faceCam.ts"]. A file
+ * outside the scope keeps all its segments, and the scope's own file has none.
+ */
+export function segmentsBelow(file: string, scope: string): string[] {
+  let rel = file;
+  if (scope !== "") {
+    if (file === scope) rel = "";
+    else if (file.startsWith(`${scope}/`)) rel = file.slice(scope.length + 1);
+  }
+  return rel === "" ? [] : rel.split("/");
+}
+
+/** The card key of a file at `depth` segments: its folder at that depth, or the file itself when it is shallower. */
+export function cardKeyAt(segs: readonly string[], depth: number): string {
+  return segs.slice(0, Math.min(depth, segs.length)).join("/");
+}
+
+/**
+ * The depth (from 1) of the cards: the shallowest level below the scope that gives at least `minCards` cards, descending
+ * while there are fewer. It stops at the files when no folder level is enough.
+ */
+export function pickCardDepth(segsList: readonly (readonly string[])[], minCards = 3): number {
+  const maxDepth = Math.max(1, ...segsList.map((s) => s.length));
+  for (let d = 1; d < maxDepth; d++) {
+    if (new Set(segsList.map((s) => cardKeyAt(s, d))).size >= minCards) return d;
+  }
+  return maxDepth;
+}
+
 /** The median of a list (the mean of the two middle values for an even count); 0 for an empty list. */
 export function medianOf(nums: readonly number[]): number {
   if (nums.length === 0) return 0;

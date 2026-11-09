@@ -82,7 +82,7 @@ export function markerAnchors(rect: Rect, pad = CLOUD_PAD): { triangle: { x: num
 
 /** A number as the badge shows it: the count itself, or "99+" past two digits. */
 export function badgeText(count: number): string {
-  return count > 99 ? "99+" : String(count);
+  return count > 999 ? "999+" : String(count);
 }
 
 const fmt = (n: number) => (Math.round(n * 100) / 100).toString();

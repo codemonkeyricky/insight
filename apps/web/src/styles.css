@@ -424,7 +424,7 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 .zm-cloud { fill: color-mix(in srgb, var(--red) 6%, transparent); stroke: var(--red); stroke-width: 1.6; vector-effect: non-scaling-stroke; pointer-events: none; }
 .zm-finding .zm-marker, .zm-finding .zm-badge { cursor: pointer; }
 .zm-marker-tri { fill: var(--red); stroke: var(--sheet); stroke-width: 1.5; }
-.zm-badge circle { fill: var(--red); stroke: var(--sheet); stroke-width: 1.5; }
+.zm-badge rect { fill: var(--red); stroke: var(--sheet); stroke-width: 1.5; }
 .zm-badge text { fill: var(--on-accent); font-family: var(--font-ui); font-size: 10px; font-weight: 600; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
 .zm-hint { margin: 6px 0 0; }
 .zm-detail { margin-top: 14px; }

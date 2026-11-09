@@ -19,6 +19,8 @@ export interface MapNode {
   parent?: string;
   /** The entity the box draws, such as the function id whose chart the box holds. */
   ref?: string;
+  /** The source file a function is written in (a path, as the model names it). Used to group boxes into cards. */
+  file?: string;
   /**
    * The natural size of the control-flow chart the box's expansion draws. The box itself is always drawn at its compact
    * size, with its name only.

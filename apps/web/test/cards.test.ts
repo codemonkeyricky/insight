@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aggregateEdges, farEdgeWidth, groupCards, medianOf, placeBadges } from "../src/zoom/cards.js";
+import { aggregateEdges, cardKeyAt, farEdgeWidth, groupCards, medianOf, pickCardDepth, placeBadges, segmentsBelow } from "../src/zoom/cards.js";
 
 describe("groupCards", () => {
   it("unions the boxes of each group and grows the card by the pad", () => {
@@ -76,5 +76,30 @@ describe("medianOf", () => {
     expect(medianOf([])).toBe(0);
     expect(medianOf([5, 1, 3])).toBe(3);
     expect(medianOf([4, 1, 3, 2])).toBe(2.5);
+  });
+});
+
+describe("card depth", () => {
+  it("takes the path below the scope, and a file outside it keeps its segments", () => {
+    expect(segmentsBelow("src/physics/faceCam.ts", "src")).toEqual(["physics", "faceCam.ts"]);
+    expect(segmentsBelow("lib/x.ts", "src")).toEqual(["lib", "x.ts"]);
+    expect(segmentsBelow("src", "src")).toEqual([]);
+    expect(segmentsBelow("a/b.ts", "")).toEqual(["a", "b.ts"]);
+  });
+
+  it("picks the shallowest depth with at least three cards, descending to files when needed", () => {
+    const segs = [
+      ["parts", "gear.ts"],
+      ["parts", "shaft.ts"],
+      ["physics", "faceCam.ts"],
+      ["physics", "solver.ts"],
+      ["util", "math.ts"],
+    ];
+    // Depth 1: parts, physics, util, three cards.
+    expect(pickCardDepth(segs)).toBe(1);
+    // Two folders only: depth 1 gives 2 cards, so descend to the files (depth 2).
+    expect(pickCardDepth(segs.slice(0, 4))).toBe(2);
+    expect(cardKeyAt(["physics", "faceCam.ts"], 1)).toBe("physics");
+    expect(cardKeyAt(["util", "math.ts"], 2)).toBe("util/math.ts");
   });
 });
