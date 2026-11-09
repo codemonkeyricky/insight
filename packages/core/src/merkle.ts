@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import ignore, { type Ignore } from "ignore";
 import { STATE_DIR } from "./paths.js";
@@ -76,6 +76,9 @@ export function scanProject(root: string, previous: StatCache = {}): ScanResult 
       const childRel = rel === "" ? entry.name : `${rel}/${entry.name}`;
       if (entry.isDirectory()) {
         if (ig.ignores(`${childRel}/`)) continue;
+        // Nested repos and git worktrees (a `.git` file or dir) duplicate the project. Skip them.
+        if (existsSync(join(abs, entry.name, ".git"))) continue;
+        if (childRel === ".claude/worktrees") continue;
         children[entry.name] = walk(childRel);
       } else if (entry.isFile()) {
         if (ig.ignores(childRel)) continue;
