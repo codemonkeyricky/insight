@@ -98,6 +98,11 @@ export interface MapSource {
    * calls this before `build`. Undefined from this method (or no method) means the node id is the focus.
    */
   focusOf?(build: MapBuild, nodeId: string): string;
+  /**
+   * The node of a function (by its IR id) that the build draws, preferably in the thread the build's node runs on. A
+   * chart's call to a function in scope opens this node in place. Undefined when the scope does not draw the function.
+   */
+  placeFunction?(build: MapBuild, fnId: string): string | undefined;
 }
 
 export interface Box {

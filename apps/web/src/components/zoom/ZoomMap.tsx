@@ -1,18 +1,21 @@
-// The zoom map: one d3-zoom camera over a scene from a MapSource (the execution canvas of a scope). Containers open as
-// the camera reaches them, and the URL follows the focus. The camera transform is written straight onto a <g>; React
-// re-renders only when the set of drawn items changes.
+// The zoom map: one d3-zoom camera over a scene from a MapSource (the execution canvas of a scope). The camera only moves
+// (wheel, drag, keys, minimap) and never opens or closes a box. A click, a key or a link opens a box, and the URL follows
+// the focus. A function's control-flow chart is drawn only once the function is expanded: by a click on its box, by the
+// URL's fn, or by a call to it from another chart. The camera transform is written straight onto a <g>; React re-renders
+// only when the set of drawn items changes.
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as KeyEvent, type PointerEvent as PointerEv, type ReactNode } from "react";
 import { select } from "d3-selection";
 import "d3-transition";
 import { zoom, zoomIdentity, type D3ZoomEvent, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
-import { CHART_HEAD, ZOOM_SIZE, fitCamera, visibleWorld, type Camera, type PlacedItem, type Rect } from "@insight/flow";
+import { CHART_HEAD, ZOOM_SIZE, fitCamera, visibleWorld, type Camera, type FlowNode, type FlowSpan, type PlacedItem, type Rect } from "@insight/flow";
 import { nameOfId } from "../../flowTargets";
 import { hrefView } from "../../router";
-import { openAfterGesture, pickBox } from "../../zoom/gesture";
-import { edgeClass, edgeKey, edgeTitle, edgeWidth, type MapBuild, type MapEdge, type MapNode, type MapSource } from "../../zoom/source";
+import { chartShown } from "../../zoom/chart";
+import { pickBox } from "../../zoom/gesture";
+import { edgeClass, edgeKey, edgeTitle, edgeWidth, type MapBuild, type MapEdge, type MapNode, type MapSelected, type MapSource } from "../../zoom/source";
 import { bucketScale, fitLabel, headerLabels, labelChars, lodBucket } from "../../zoom/lod";
 import type { ZoomStore } from "../../zoom/scene";
-import { BoxChart, CHART_MIN_PX } from "./BoxChart";
+import { BoxChart } from "./BoxChart";
 
 /** The camera's scale range: from the whole project down to a single line of a chart. */
 const SCALE: [number, number] = [0.02, 16];
@@ -36,10 +39,24 @@ const union = (a: Rect, b: Rect): Rect => {
   return { x, y, w: Math.max(a.x + a.w, b.x + b.w) - x, h: Math.max(a.y + a.h, b.y + b.h) - y };
 };
 
+const without = (set: ReadonlySet<string>, id: string): ReadonlySet<string> => {
+  const next = new Set(set);
+  next.delete(id);
+  return next;
+};
+
 const toCamera = (t: ZoomTransform): Camera => ({ k: t.k, x: t.x, y: t.y });
 const toTransform = (c: Camera): ZoomTransform => zoomIdentity.translate(c.x, c.y).scale(c.k);
 const reduceMotion = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/** What the map has selected, for the page's source panel: the function, its build, and the construct picked in its chart. */
+export interface MapSelection {
+  build: MapBuild;
+  selected: MapSelected;
+  /** The span of the construct picked in the function's chart. Undefined for the whole function. */
+  construct?: FlowSpan;
+}
 
 interface Props {
   id: string;
@@ -53,6 +70,8 @@ interface Props {
   detail?: (build: MapBuild, open: (nodeId: string) => void) => ReactNode;
   /** Where a function box's control-flow chart is loaded from. Without it, function boxes show only their names. */
   charts?: ChartSource;
+  /** Reports the function the map selects (undefined when the focus is not a function), with the construct picked in it. */
+  onSelect?: (sel: MapSelection | undefined) => void;
 }
 
 /** What a box needs to draw its chart: the project, the scope its links resolve in, and the flow store. */
@@ -66,14 +85,18 @@ export interface ChartSource {
  * The execution map: one camera over a scope's scene. Each node is a focus of the source; the map's items and edges
  * are named by node id, so a click or key that names a node is turned into a focus by the source first (`focusOf`).
  */
-export function ZoomMap({ id, source, scope, fn, detail, charts }: Props) {
+export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Props) {
   /** The selection: the focus the breadcrumb, the detail panel and the URL show. Only explicit actions change it. */
   const [build, setBuild] = useState<MapBuild>();
-  /** The map as drawn: the selection's build with the open node's boxes. Gestures change it; the selection stays. */
+  /** The map as drawn: the selection's build. Only a click or a key changes it; gestures move the camera alone. */
   const [view, setView] = useState<MapBuild>();
   /** `lod` is the camera's quarter-octave bucket (lod.ts): labels are cut to it, and it changes only with the bucket. */
   const [shown, setShown] = useState<{ view?: MapBuild; items: PlacedItem[]; edges: MapEdge[]; lod: number }>({ items: [], edges: [], lod: 0 });
   const [error, setError] = useState<string>();
+  /** The function boxes whose chart is drawn, by placement id. A click on a function box adds it; Escape removes it. */
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+  /** The construct picked in an expanded chart: the placement of that chart, the step, and its span. */
+  const [construct, setConstruct] = useState<{ placement: string; nodeId: string; span?: FlowSpan }>();
   const stageRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const worldRef = useRef<SVGGElement>(null);
@@ -83,23 +106,13 @@ export function ZoomMap({ id, source, scope, fn, detail, charts }: Props) {
   const cameraRef = useRef<Camera>({ k: 1, x: 0, y: 0 });
   /** The selection's build. Its `nodeId` is the node the focus stands for. */
   const buildRef = useRef<MapBuild | undefined>(undefined);
-  /** The build as drawn (see `view`). Its placed boxes are what the pointer and the gestures look at. */
+  /** The build as drawn (see `view`). Its placed boxes are what the pointer looks at. */
   const viewRef = useRef<MapBuild | undefined>(undefined);
-  /** The node whose children the map has open. Starts as the focus; gestures move it, the selection does not. */
-  const openRef = useRef<string | undefined>(undefined);
   /** The focus the map shows (the selection). Its build's `nodeId` is the node it stands for. */
   const focusRef = useRef<string | undefined>(undefined);
   const boxesRef = useRef<{ id: string; x: number; y: number; w: number; h: number }[]>([]);
   const seqRef = useRef(0);
-  /** Bumped by every selection and every open change, so a slower build for an older state is dropped. */
-  const viewSeqRef = useRef(0);
-  /** True while a camera move is ours (a focus change), so its end does not start a hysteresis decision. */
-  const programmaticRef = useRef(false);
   const miniDragRef = useRef(false);
-  /** The world point under the pointer at the last wheel event of this gesture. Wheel zoom works about the pointer. */
-  const pointRef = useRef<{ x: number; y: number } | undefined>(undefined);
-  /** The camera's scale when the current user gesture began. A gesture that ends above it may open a child. */
-  const gestureKRef = useRef(1);
   const arrowId = `zm-arrow-${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
   const hintId = useId();
 
@@ -144,19 +157,6 @@ export function ZoomMap({ id, source, scope, fn, detail, charts }: Props) {
     cull(c);
   };
 
-  /** The middle of the view, in world units. */
-  const centreOf = (c: Camera) => {
-    const v = visibleWorld(c, sizeOf());
-    return { x: v.x + v.w / 2, y: v.y + v.h / 2 };
-  };
-
-  /** The world point under a screen point (client pixels) for the camera `c`. */
-  const worldAt = (clientX: number, clientY: number, c: Camera) => {
-    const r = stageRef.current?.getBoundingClientRect();
-    if (!r) return undefined;
-    return { x: (clientX - r.left - c.x) / c.k, y: (clientY - r.top - c.y) / c.k };
-  };
-
   /** Writes the focus into the URL without a history entry, then tells the router the hash changed. */
   const syncUrl = (b: MapBuild, focus: string) => {
     const target = source.url(b, focus);
@@ -168,16 +168,11 @@ export function ZoomMap({ id, source, scope, fn, detail, charts }: Props) {
   };
 
   /**
-   * Makes `focus` the focus: loads what it needs, builds the map for it, and moves the camera to fit it. `animate`
-   * is false only for the first view, which is set at once.
+   * Draws the map for the selection's build: the boxes are placed for it, and the pointer looks at them. The camera is
+   * not touched here.
    */
-  /**
-   * Draws the map for an open node: the boxes are placed for it, and the pointer and gestures look at them. The
-   * selection and the camera are not touched.
-   */
-  const showView = (v: MapBuild, open: string) => {
+  const showView = (v: MapBuild) => {
     viewRef.current = v;
-    openRef.current = open;
     boxesRef.current = v.placed.items.map((i) => ({ id: i.id, x: i.rect.x, y: i.rect.y, w: i.rect.w, h: i.rect.h }));
     setView(v);
     cull(cameraRef.current);
@@ -185,13 +180,13 @@ export function ZoomMap({ id, source, scope, fn, detail, charts }: Props) {
 
   /**
    * Makes `focus` the selection: loads what it needs, builds the map for it, and moves the camera to fit it. `animate`
-   * is false only for the first view, which is set at once. An explicit selection also opens the focus itself.
+   * is false only for the first view, which is set at once. A function selected is drawn with its chart open.
    */
   const show = async (focus: string, animate: boolean, writeUrl: boolean) => {
     const seq = ++seqRef.current;
     let b: MapBuild;
     try {
-      // A focus reached by a gesture may not be loaded yet: the source loads what it needs first.
+      // A focus reached by a click may not be loaded yet: the source loads what it needs first.
       await source.ensureFocus(focus);
       b = await source.build(focus);
     } catch (e) {
@@ -199,66 +194,22 @@ export function ZoomMap({ id, source, scope, fn, detail, charts }: Props) {
       return;
     }
     if (seq !== seqRef.current) return;
-    viewSeqRef.current += 1;
     buildRef.current = b;
     focusRef.current = focus;
     setBuild(b);
     setError(undefined);
-    showView(b, b.nodeId);
+    setConstruct(undefined);
+    if (b.selected) setExpanded((prev) => (prev.has(b.nodeId) ? prev : new Set(prev).add(b.nodeId)));
+    showView(b);
     const rect = b.placed.rects.get(b.nodeId);
     const svg = svgRef.current;
     const z = zoomRef.current;
     if (rect && svg && z) {
       const target = fitCamera(rect, sizeOf());
-      programmaticRef.current = true;
       if (animate && !reduceMotion()) select(svg).transition().duration(ANIM_MS).call(z.transform, toTransform(target));
       else select(svg).call(z.transform, toTransform(target));
     }
     if (writeUrl) syncUrl(b, focus);
-  };
-
-  /** Draws the map with `open` as the open node, keeping the selection. Only the boxes change; no camera, no URL. */
-  const openOnly = async (open: string) => {
-    const b = buildRef.current;
-    const focus = focusRef.current;
-    if (!b || focus === undefined) return;
-    const seq = ++viewSeqRef.current;
-    let v: MapBuild;
-    try {
-      v = await source.build(focus, source.focusOf?.(b, open) ?? open);
-    } catch (e) {
-      if (seq === viewSeqRef.current) setError(messageOf(e));
-      return;
-    }
-    if (seq !== viewSeqRef.current || focusRef.current !== focus) return;
-    showView(v, open);
-  };
-
-  /**
-   * The hysteresis step after a user gesture: the open node stays open until it is narrower than 200 px on screen,
-   * and a node opens once it is wider than 240 px. Runs at the end of a wheel or key gesture, not during it. A wheel
-   * gesture looks at the item under the pointer; other gestures look at the middle of the view. The decision changes
-   * which boxes are open and nothing else: the camera stays, the selection stays, and the URL is not written.
-   */
-  const decide = () => {
-    const v = viewRef.current;
-    const open = openRef.current;
-    const point = pointRef.current;
-    pointRef.current = undefined;
-    if (!v || open === undefined || focusRef.current === undefined) return;
-    const c = cameraRef.current;
-    const target = openAfterGesture({
-      open,
-      camera: c,
-      visible: visibleWorld(c, sizeOf()),
-      point,
-      gestureK: gestureKRef.current,
-      boxes: boxesRef.current,
-      rects: v.placed.rects,
-      parentOf: (id) => v.node(id)?.parent,
-      depth: (id) => v.depth(id),
-    });
-    if (target !== open) void openOnly(target);
   };
 
   /** Opens the node a click, key or link names: the source turns the node into its focus, then the map shows it. */
@@ -267,11 +218,26 @@ export function ZoomMap({ id, source, scope, fn, detail, charts }: Props) {
     if (b) void show(source.focusOf?.(b, nodeId) ?? nodeId, true, true);
   };
 
+  /**
+   * A click on a step of a function's chart. A call to a function in scope opens that function in place: it is expanded,
+   * selected and fitted, and this one stays expanded. A step of a chart that is not the selection's selects its function.
+   * Any other step becomes the construct the source panel highlights. A step never navigates.
+   */
+  const chartStep = (placement: string, node: FlowNode): boolean => {
+    const b = buildRef.current;
+    if (!b) return true;
+    const own = b.node(placement)?.ref;
+    const callee = node.target !== undefined && node.target !== own ? source.placeFunction?.(b, node.target) : undefined;
+    if (callee !== undefined) openNode(callee);
+    else if (placement !== b.nodeId) openNode(placement);
+    else setConstruct({ placement, nodeId: node.id, ...(node.span ? { span: node.span } : {}) });
+    return true;
+  };
+
   const zoomStep = (factor: number) => {
     const svg = svgRef.current;
     const z = zoomRef.current;
     if (!svg || !z) return;
-    programmaticRef.current = false;
     select(svg).transition().duration(180).call(z.scaleBy, factor);
   };
 
@@ -279,7 +245,6 @@ export function ZoomMap({ id, source, scope, fn, detail, charts }: Props) {
     const svg = svgRef.current;
     const z = zoomRef.current;
     if (!svg || !z) return;
-    programmaticRef.current = false;
     select(svg).transition().duration(180).call(z.translateBy, dx, dy);
   };
 
@@ -292,45 +257,27 @@ export function ZoomMap({ id, source, scope, fn, detail, charts }: Props) {
     const r = e.currentTarget.getBoundingClientRect();
     const W = Math.max(1, b.placed.width);
     const H = Math.max(1, b.placed.height);
-    // Minimap drag is an explicit move: the selection stays, and the view is panned by the camera only.
     const s = Math.max(W / r.width, H / r.height);
     const wx = (e.clientX - r.left - (r.width - W / s) / 2) * s;
     const wy = (e.clientY - r.top - (r.height - H / s) / 2) * s;
     const c = cameraRef.current;
     const size = sizeOf();
-    programmaticRef.current = true;
     select(svg).call(z.transform, zoomIdentity.translate(size.width / 2 - wx * c.k, size.height / 2 - wy * c.k).scale(c.k));
   };
 
-  // The camera. Wheel and drag are d3-zoom's; a user gesture that ends runs the hysteresis step.
+  // The camera. Wheel and drag are d3-zoom's, and only move the camera.
   useEffect(() => {
     const svg = svgRef.current;
     const stage = stageRef.current;
     if (!svg || !stage) return;
     buildRef.current = undefined;
     viewRef.current = undefined;
-    openRef.current = undefined;
     focusRef.current = undefined;
+    setExpanded(new Set());
+    setConstruct(undefined);
     const z = zoom<SVGSVGElement, unknown>()
       .scaleExtent(SCALE)
-      .on("start", (ev: D3ZoomEvent<SVGSVGElement, unknown>) => {
-        if (ev.sourceEvent) {
-          programmaticRef.current = false;
-          pointRef.current = undefined;
-          gestureKRef.current = cameraRef.current.k;
-        }
-      })
-      .on("zoom", (ev: D3ZoomEvent<SVGSVGElement, unknown>) => {
-        const c = toCamera(ev.transform);
-        applyCamera(c);
-        const src = ev.sourceEvent as Partial<WheelEvent> | null;
-        if (src && src.type === "wheel" && typeof src.clientX === "number" && typeof src.clientY === "number") {
-          pointRef.current = worldAt(src.clientX, src.clientY, c);
-        }
-      })
-      .on("end", () => {
-        if (!programmaticRef.current) decide();
-      });
+      .on("zoom", (ev: D3ZoomEvent<SVGSVGElement, unknown>) => applyCamera(toCamera(ev.transform)));
     zoomRef.current = z;
     const sel = select(svg).call(z);
     const ro = new ResizeObserver(() => cull(cameraRef.current));
@@ -375,6 +322,19 @@ export function ZoomMap({ id, source, scope, fn, detail, charts }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view]);
 
+  // The page's source panel follows the selected function, and the construct picked in its chart while it is selected.
+  useEffect(() => {
+    if (!onSelect) return;
+    if (build?.selected === undefined) {
+      onSelect(undefined);
+      return;
+    }
+    const span = construct !== undefined && construct.placement === build.nodeId ? construct.span : undefined;
+    onSelect({ build, selected: build.selected, ...(span !== undefined ? { construct: span } : {}) });
+    // onSelect is the page's state setter: only the selection and the construct change what it receives.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [build, construct]);
+
   const onKey = (e: KeyEvent<HTMLDivElement>) => {
     const b = buildRef.current;
     switch (e.key) {
@@ -399,6 +359,11 @@ export function ZoomMap({ id, source, scope, fn, detail, charts }: Props) {
         panStep(0, -PAN_PX);
         break;
       case "Escape": {
+        // An expanded function collapses first; the map then goes up one level, as it always does.
+        if (b?.selected !== undefined && expanded.has(b.nodeId)) {
+          setExpanded((prev) => without(prev, b.nodeId));
+          break;
+        }
         const parent = b?.node(b.nodeId)?.parent;
         if (parent !== undefined) openNode(parent);
         break;
@@ -407,7 +372,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts }: Props) {
         const v = viewRef.current;
         if (!b || !v) break;
         const c = cameraRef.current;
-        const at = centreOf(c);
+        const v2 = visibleWorld(c, sizeOf());
+        const at = { x: v2.x + v2.w / 2, y: v2.y + v2.h / 2 };
         const under = pickBox(boxesRef.current, (id) => v.depth(id), at.x, at.y, c.k);
         if (under !== undefined && under !== b.nodeId) openNode(under);
         break;
@@ -502,7 +468,20 @@ export function ZoomMap({ id, source, scope, fn, detail, charts }: Props) {
             ))}
             {drawn("box").map((it) => {
               const node = view?.node(it.id);
-              return node ? <BoxShape key={it.id} item={it} node={node} k={labelScale} onOpen={openNode} charts={charts} /> : null;
+              if (node === undefined) return null;
+              return (
+                <BoxShape
+                  key={it.id}
+                  item={it}
+                  node={node}
+                  k={labelScale}
+                  onOpen={openNode}
+                  charts={charts}
+                  chartOpen={expanded.has(it.id)}
+                  selectedId={construct !== undefined && construct.placement === it.id ? construct.nodeId : undefined}
+                  onChartStep={(n) => chartStep(it.id, n)}
+                />
+              );
             })}
           </g>
         </svg>
@@ -544,8 +523,9 @@ export function ZoomMap({ id, source, scope, fn, detail, charts }: Props) {
         )}
       </div>
       <p id={hintId} className="muted small zm-hint">
-        Scroll or press + and - to zoom. Arrow keys pan. Enter opens the item at the centre and Escape goes up one level. Click a
-        box to open it.
+        Scroll or press + and - to zoom; zooming never opens a box. Arrow keys pan. Click a box to open it, and a function to
+        draw its chart. Click a step in the chart to see its source. Enter opens the item at the centre and Escape goes up one
+        level.
       </p>
       {build && detail?.(build, openNode)}
     </div>
@@ -583,13 +563,31 @@ function FrameShape({ item, node, k, onOpen }: { item: PlacedItem; node: MapNode
 
 /**
  * A box with a chart (a function that has a control-flow chart) keeps its name in a header and draws the chart below it
- * once the box is CHART_MIN_PX wide on screen. Any other box has its name in the middle.
+ * once the box is expanded and CHART_MIN_PX wide on screen. Any other box has its name in the middle.
  */
-function BoxShape({ item, node, k, onOpen, charts }: { item: PlacedItem; node: MapNode; k: number; onOpen: (id: string) => void; charts?: ChartSource }) {
+function BoxShape({
+  item,
+  node,
+  k,
+  onOpen,
+  charts,
+  chartOpen,
+  selectedId,
+  onChartStep,
+}: {
+  item: PlacedItem;
+  node: MapNode;
+  k: number;
+  onOpen: (id: string) => void;
+  charts?: ChartSource;
+  chartOpen: boolean;
+  selectedId?: string;
+  onChartStep: (node: FlowNode) => boolean;
+}) {
   const { rect } = item;
   const label = fitLabel(node.label, labelChars(rect.w * k));
   const holdsChart = node.chart !== undefined;
-  const showChart = holdsChart && charts !== undefined && node.ref !== undefined && rect.w * k >= CHART_MIN_PX;
+  const showChart = chartShown({ holdsChart, hasCharts: charts !== undefined, hasRef: node.ref !== undefined, expanded: chartOpen, widthPx: rect.w * k });
   return (
     <g className={`zm-box zm-${node.kind}${holdsChart ? " zm-has-chart" : ""}`} onClick={() => onOpen(item.id)}>
       <title>{node.title || node.label}</title>
@@ -599,7 +597,9 @@ function BoxShape({ item, node, k, onOpen, charts }: { item: PlacedItem; node: M
           {label}
         </text>
       )}
-      {showChart && node.ref !== undefined && <BoxChart id={charts.id} scope={charts.scope} store={charts.store} fnId={node.ref} rect={rect} />}
+      {showChart && charts !== undefined && node.ref !== undefined && (
+        <BoxChart id={charts.id} scope={charts.scope} store={charts.store} fnId={node.ref} rect={rect} onNodeClick={onChartStep} selectedId={selectedId} />
+      )}
     </g>
   );
 }

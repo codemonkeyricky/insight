@@ -1,14 +1,29 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type FileView } from "../api";
 import { hrefFile } from "../router";
+import type { LineRange } from "../zoom/chart";
 
 export const humanSize = (n: number) => (n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`);
 
-/** One source file: its lines with the findings flagged, an outline of its symbols, and the line in `line` scrolled to. */
-export function FileViewer({ id, path, line }: { id: string; path: string; line?: number }) {
+/** A rendered line's class: a range's lines are tinted, the single `line` is marked, and a flagged line keeps its flag. */
+export function lineClass(n: number, opts: { line?: number; range?: LineRange; note?: string }): string | undefined {
+  if (opts.range !== undefined) {
+    if (n >= opts.range.start && n <= opts.range.end) return "hit-range";
+  } else if (n === opts.line) return "hit";
+  return opts.note !== undefined ? "flag" : undefined;
+}
+
+/**
+ * One source file: its lines with the findings flagged, an outline of its symbols, and the line in `line` scrolled to. A
+ * `range` (1-based, inclusive) is tinted line by line instead, and its first line is scrolled to.
+ */
+export function FileViewer({ id, path, line, range }: { id: string; path: string; line?: number; range?: LineRange }) {
   const [file, setFile] = useState<FileView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const hit = useRef<HTMLDivElement | null>(null);
+  const rangeStart = range?.start;
+  const rangeEnd = range?.end;
+  const top = rangeStart ?? line;
 
   useEffect(() => {
     let cancelled = false;
@@ -24,9 +39,12 @@ export function FileViewer({ id, path, line }: { id: string; path: string; line?
   }, [id, path]);
 
   useEffect(() => {
-    if (file && line && hit.current) hit.current.scrollIntoView({ block: "center" });
-    else if (file) window.scrollTo({ top: 0 });
-  }, [file, line]);
+    if (file && top && hit.current) {
+      // A range taller than about 80% of the window (19 px a line) starts at its top, so its first line is not cut off.
+      const tall = rangeStart !== undefined && rangeEnd !== undefined && rangeEnd - rangeStart + 1 > (window.innerHeight * 0.8) / 19;
+      hit.current.scrollIntoView({ block: tall ? "start" : "center" });
+    } else if (file && rangeStart === undefined) window.scrollTo({ top: 0 });
+  }, [file, top, rangeStart, rangeEnd]);
 
   if (error) return <p className="error" role="alert">{error}</p>;
   if (!file) return <p className="muted">Loading</p>;
@@ -46,10 +64,9 @@ export function FileViewer({ id, path, line }: { id: string; path: string; line?
         <pre className="code" data-testid="file-lines">
           {file.lines.map((text, i) => {
             const n = i + 1;
-            const on = n === line;
             const note = flagged.get(n);
             return (
-              <div key={n} ref={on ? hit : undefined} className={on ? "hit" : note ? "flag" : undefined} title={note}>
+              <div key={n} ref={n === top ? hit : undefined} className={lineClass(n, { line, ...(range ? { range } : {}), ...(note ? { note } : {}) })} title={note}>
                 <span className="gutter">{n}</span>
                 {text}
               </div>

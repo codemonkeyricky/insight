@@ -367,7 +367,20 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 }
 
 @media (max-width: 860px) {
-  .split, .ws, .viewer-body { grid-template-columns: minmax(0, 1fr); }
+  .split, .ws, .viewer-body, .zm-split.open { grid-template-columns: minmax(0, 1fr); }
   .side, .outline { position: static; }
   .explorer { position: static; max-height: 45vh; }
+  .zm-source { position: static; max-height: 60vh; }
 }
+
+/* Flow page: the map on the left, the selected function's source on the right (open only while a function is selected). */
+.zm-split { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; align-items: start; }
+.zm-split.open { grid-template-columns: minmax(0, 1fr) minmax(360px, 40%); }
+.zm-split-map { min-width: 0; }
+.zm-source { position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow: auto; min-width: 0; padding: 0; }
+.zm-source-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.zm-source .outline { display: none; }
+.zm-source .viewer-body pre.code { max-height: none; }
+pre.code > div.hit-range { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.zm-chart .flow-node { cursor: pointer; }
+.flow-node.selected :is(rect, polygon, circle) { stroke: var(--accent); stroke-width: 2.4; }

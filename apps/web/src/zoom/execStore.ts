@@ -14,7 +14,7 @@ import {
 } from "@insight/flow";
 import { api } from "../api";
 import { solve } from "./elk";
-import { execBuild, execFocus, execIndex, execResolve, execUrl, splitExecFocus, type ExecIndex } from "./execMap";
+import { execBuild, execFocus, execIndex, execPlacementFor, execResolve, execThreadKeyOf, execUrl, splitExecFocus, type ExecIndex } from "./execMap";
 import type { MapBuild, MapSource, MapUrl } from "./source";
 
 /** One scope's loaded canvas: its scene and layout, the model's functions, and the index the panels read. */
@@ -112,5 +112,12 @@ export class ExecStore implements MapSource {
   /** A node of a build is a node of the build's scope, so its focus carries that scope. */
   focusOf(build: MapBuild, nodeId: string): string {
     return execFocus(build.path, nodeId);
+  }
+
+  /** The placement of a function in the build's scope: in the build's thread when it has one there (see execPlacementFor). */
+  placeFunction(build: MapBuild, fnId: string): string | undefined {
+    const view = this.viewOf(build);
+    if (view === undefined) return undefined;
+    return execPlacementFor(view.index, fnId, execThreadKeyOf(view.scene, build.nodeId));
   }
 }
