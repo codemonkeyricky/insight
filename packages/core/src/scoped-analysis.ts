@@ -28,6 +28,8 @@ export interface ScopedLensOptions {
   resultOf?: (lensId: string) => LensResult | undefined;
   /** The lens's own previous result for this scope, passed to the lens as `ctx.previous`. */
   previous?: LensResult;
+  /** Where the project's generated state lives. Defaults to `<root.path>/.insight`. */
+  stateDir?: string;
 }
 
 /** What a stored scope record holds on disk. */
@@ -52,7 +54,7 @@ interface StoredScopedRecord {
  */
 export async function runLensOnScope(opts: ScopedLensOptions): Promise<LensRecord> {
   const scope = normalizeScope(opts.scope);
-  const paths = projectPaths(opts.root.path);
+  const paths = projectPaths(opts.root.path, opts.stateDir);
   const target = opts.lens;
   if (scope === ROOT_SCOPE) {
     const stored = readAnalysis(paths, opts.snapshot)?.lenses.find((r) => r.id === target.lens.id);

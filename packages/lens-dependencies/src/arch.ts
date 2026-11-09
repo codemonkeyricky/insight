@@ -17,6 +17,20 @@ export function defaultLayerOf(pkgPath: string): string | undefined {
   return undefined;
 }
 
+/**
+ * Layer of a package for a project that is not laid out like Insight: its top-level directory, so `src/`, `lib/`,
+ * `packages/*` and `apps/*` each give one layer. The root package "." is the layer "root".
+ */
+export function topDirLayerOf(pkgPath: string): string {
+  return pkgPath === "." ? "root" : (pkgPath.split("/")[0] as string);
+}
+
+/**
+ * When the default layers match fewer than this share of the packages, the layers come from the top-level directories
+ * instead. Insight's own layout clears it, so its result is unchanged.
+ */
+export const DEFAULT_LAYER_MATCH_MIN = 0.2;
+
 export interface ArchOptions {
   layerOf?: (pkgPath: string) => string | undefined;
 }
@@ -153,9 +167,14 @@ function mergeSpans(spans: Span[]): Span[] {
  * their import spans, unresolved imports, and rule violations. Plain JSON, no UI.
  */
 export function archModel(view: IRView, options: ArchOptions = {}): ArchModel {
-  const layerOf = options.layerOf ?? defaultLayerOf;
-  const layerName = (pkgPath: string): string => layerOf(pkgPath) ?? "other";
   const roots = packageRoots(view);
+  // Without a caller's own layerOf, a project whose packages mostly miss the Insight layers gets top-directory layers.
+  // The root package "." is left out of the count: the default layers name it "project" in any repository.
+  const named = roots.filter((r) => r.path !== ".");
+  const matched = named.filter((r) => defaultLayerOf(r.path) !== undefined).length;
+  const generic = options.layerOf === undefined && named.length > 0 && matched < DEFAULT_LAYER_MATCH_MIN * named.length;
+  const layerOf = options.layerOf ?? (generic ? topDirLayerOf : defaultLayerOf);
+  const layerName = (pkgPath: string): string => layerOf(pkgPath) ?? "other";
   const pathOf = (file: NodeId): string | undefined => rootOf(roots, file)?.path;
 
   const packages = new Map<string, ArchPackage>();
@@ -220,7 +239,8 @@ export function archModel(view: IRView, options: ArchOptions = {}): ArchModel {
   const externals = [...externalCounts.values()].sort((a, b) => a.fromPackage.localeCompare(b.fromPackage) || b.imports - a.imports || a.name.localeCompare(b.name));
 
   const violations: ArchViolation[] = [];
-  for (const edge of edges) {
+  // The frontend and lens rule belongs to Insight's layout. Top-directory layers have no such meaning.
+  for (const edge of generic ? [] : edges) {
     if (edge.imports === 0) continue;
     const layers = new Set([packages.get(edge.from)?.layer, packages.get(edge.to)?.layer]);
     if (!(layers.has("frontend") && layers.has("lens"))) continue;
@@ -228,7 +248,7 @@ export function archModel(view: IRView, options: ArchOptions = {}): ArchModel {
   }
 
   const packageList = [...packages.values()].sort((a, b) => a.path.localeCompare(b.path));
-  const layers: string[] = [...DEFAULT_LAYERS];
+  const layers: string[] = generic ? [] : [...DEFAULT_LAYERS];
   for (const pkg of packageList) {
     if (pkg.layer !== "other" && !layers.includes(pkg.layer)) layers.push(pkg.layer);
   }

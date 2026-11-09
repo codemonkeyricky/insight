@@ -111,7 +111,9 @@ export class JobRunner {
       if (project.source.kind === "git") {
         root = project.source.checkout;
         this.emit({ type: "progress", projectId, line: `fetching ${project.source.url}`, at: now() });
-        commit = await syncCheckout(project.source.url, root);
+        const sync = await syncCheckout(project.source.url, root);
+        commit = sync.commit;
+        if (sync.warning) this.emit({ type: "progress", projectId, line: `warning: ${sync.warning}`, at: now() });
       } else {
         root = project.source.path;
         commit = await headOf(root);
@@ -120,6 +122,7 @@ export class JobRunner {
       }
       const report = await (this.opts.index ?? runIndex)({
         projectPath: root,
+        stateDir: project.stateDir,
         full,
         allowBuildTools: project.allowBuildTools,
         commit,

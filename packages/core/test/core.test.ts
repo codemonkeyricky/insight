@@ -90,6 +90,40 @@ describe("merkle scan", () => {
   });
 });
 
+describe("merkle scan skips nested repos and worktrees", () => {
+  const root = join(SCRATCH, "merkle-nested");
+
+  it("skips a nested directory that holds a .git file (worktree)", () => {
+    write(root, "src/a.ts", "export const a = 1;\n");
+    write(root, "wt/.git", "gitdir: /elsewhere/.git/worktrees/wt\n");
+    write(root, "wt/src/b.ts", "export const b = 1;\n");
+    const scan = scanProject(root);
+    expect([...scan.files.keys()]).toEqual(["src/a.ts"]);
+  });
+
+  it("skips a nested directory that holds a .git directory (nested repo)", () => {
+    write(root, "vendor/lib/.git/HEAD", "ref: refs/heads/main\n");
+    write(root, "vendor/lib/index.ts", "export {};\n");
+    const scan = scanProject(root);
+    expect([...scan.files.keys()]).toEqual(["src/a.ts"]);
+  });
+
+  it("skips .claude/worktrees explicitly, even without a .git entry", () => {
+    write(root, ".claude/worktrees/x/src/c.ts", "export {};\n");
+    write(root, ".claude/settings.json", "{}\n");
+    const scan = scanProject(root);
+    expect([...scan.files.keys()]).toEqual([".claude/settings.json", "src/a.ts"]);
+  });
+
+  it("still indexes the root when the root itself has a .git directory", () => {
+    const top = join(SCRATCH, "merkle-root-git");
+    write(top, ".git/HEAD", "ref: refs/heads/main\n");
+    write(top, "src/root.ts", "export const r = 1;\n");
+    const scan = scanProject(top);
+    expect([...scan.files.keys()]).toEqual(["src/root.ts"]);
+  });
+});
+
 describe("plugin loader", () => {
   it("disables a broken plugin with a reason and keeps the rest", async () => {
     const project = join(SCRATCH, "loader-project");

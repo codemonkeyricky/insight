@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, join, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { CoverageRow } from "@insight/core";
+import { STATE_DIR, type CoverageRow } from "@insight/core";
 
 export type ProjectSource = { kind: "path"; path: string } | { kind: "git"; url: string; checkout: string };
 
@@ -37,6 +37,8 @@ export interface ProjectRecord {
   name: string;
   addedAt: string;
   source: ProjectSource;
+  /** Where the generated state lives. See chooseStateDir. */
+  stateDir: string;
   allowBuildTools: boolean;
   status: "idle" | "indexing" | "error";
   error?: string;
@@ -53,6 +55,22 @@ export function insightHome(env: NodeJS.ProcessEnv = process.env): string {
   return resolve(env.INSIGHT_HOME ?? join(homedir(), ".insight"));
 }
 
+/**
+ * Where a project's generated state goes. A local folder that already has an index in its own `.insight` folder keeps
+ * it there, so an existing project is not re-indexed from scratch. Every other project keeps its state under
+ * `<home>/projects/<id>`, which leaves the user's folder clean.
+ */
+export function chooseStateDir(home: string, id: string, source: ProjectSource, exists: (file: string) => boolean = existsSync): string {
+  if (source.kind === "path" && exists(join(source.path, STATE_DIR, "index.sqlite"))) return join(source.path, STATE_DIR);
+  return join(home, "projects", id);
+}
+
+/** True when the state folder is one the server made under its home. Only these are ever deleted with a project. */
+export function ownsStateDir(home: string, stateDir: string): boolean {
+  const owned = join(home, "projects") + sep;
+  return stateDir.startsWith(owned);
+}
+
 /** Projects on disk, in insight home/projects.json. Writes are atomic. */
 export class ProjectRegistry {
   private readonly file: string;
@@ -64,6 +82,20 @@ export class ProjectRegistry {
     this.projects = existsSync(this.file)
       ? (JSON.parse(readFileSync(this.file, "utf8")) as RegistryFile).projects
       : [];
+    // Records written before stateDir existed get one now. The choice is saved, so it does not change later.
+    let migrated = false;
+    for (const p of this.projects) {
+      if (p.stateDir === undefined) {
+        p.stateDir = chooseStateDir(home, p.id, p.source);
+        migrated = true;
+      }
+    }
+    if (migrated) this.save();
+  }
+
+  /** The folder the generated state of a project is kept in. */
+  stateOf(p: ProjectRecord): string {
+    return p.stateDir;
   }
 
   list(): ProjectRecord[] {
@@ -109,6 +141,7 @@ export class ProjectRegistry {
       name,
       addedAt: new Date().toISOString(),
       source,
+      stateDir: chooseStateDir(this.home, id, source),
       allowBuildTools: input.allowBuildTools === true,
       status: "idle",
     };
