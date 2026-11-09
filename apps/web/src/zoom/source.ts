@@ -17,8 +17,6 @@ export interface MapNode {
   title?: string;
   /** The parent's id. The root has none, so going up from the root does nothing. */
   parent?: string;
-  /** A colour band (0..5, `--band-N` in styles.css) for a file and what it holds. */
-  band?: number;
   /** The entity the box draws, such as the function id whose chart the box holds. */
   ref?: string;
   /**

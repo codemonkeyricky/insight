@@ -1,7 +1,7 @@
 // The zoom map: one d3-zoom camera over a scene from a MapSource (the execution canvas of a scope). Containers open as
 // the camera reaches them, and the URL follows the focus. The camera transform is written straight onto a <g>; React
 // re-renders only when the set of drawn items changes.
-import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as KeyEvent, type PointerEvent as PointerEv, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as KeyEvent, type PointerEvent as PointerEv, type ReactNode } from "react";
 import { select } from "d3-selection";
 import "d3-transition";
 import { zoom, zoomIdentity, type D3ZoomEvent, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
@@ -554,12 +554,11 @@ function FrameShape({ item, node, k, onOpen }: { item: PlacedItem; node: MapNode
  */
 function BoxShape({ item, node, k, onOpen, charts }: { item: PlacedItem; node: MapNode; k: number; onOpen: (id: string) => void; charts?: ChartSource }) {
   const { rect } = item;
-  const style = node.band !== undefined ? ({ "--band": `var(--band-${node.band})` } as CSSProperties) : undefined;
   const label = fitLabel(node.label, labelChars(rect.w * k));
   const holdsChart = node.chart !== undefined;
   const showChart = holdsChart && charts !== undefined && node.ref !== undefined && rect.w * k >= CHART_MIN_PX;
   return (
-    <g className={`zm-box zm-${node.kind}${holdsChart ? " zm-has-chart" : ""}`} style={style} onClick={() => onOpen(item.id)}>
+    <g className={`zm-box zm-${node.kind}${holdsChart ? " zm-has-chart" : ""}`} onClick={() => onOpen(item.id)}>
       <title>{node.title || node.label}</title>
       <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={8} className="zm-box-body" />
       {label !== null && (

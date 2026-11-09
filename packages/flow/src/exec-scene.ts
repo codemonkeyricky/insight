@@ -1,35 +1,26 @@
-// The execution canvas's scene: a program holds its threads, a thread its functions and coroutines, a coroutine its
-// own functions and nested coroutines. Built from one scope's ExecModel. See scene.ts for the model.
+// The execution canvas's scene, built from one scope's ExecModel: project ▸ process ▸ thread ▸ coroutine ▸ function.
+// A process box is drawn for a program or a process spawn, and a thread box only where the IR has evidence for the
+// thread (ExecThread.grounded). Where no runtime is known, the functions sit directly on the project as plain code
+// flow, with their call edges and no wrapper box. See scene.ts for the model.
 //
 // A function is drawn once per place it runs: a helper two threads call has a box in each thread, and the call edges
 // of one thread stay inside that thread. Pure and deterministic: the scene depends only on the model's content, not
 // on the order of its call pairs.
-import type { ExecCoroutine, ExecFunctionRef, ExecModel, ExecResource, ExecResourceSite, ExecThread } from "./exec-model.js";
+import type { ExecCoroutine, ExecFunctionRef, ExecModel, ExecProgram, ExecResourceSite, ExecThread } from "./exec-model.js";
 import type { Scene, SceneEdge, SceneEdgeKind, SceneLevel, SceneNode } from "./scene.js";
 import { LAYERED, ZOOM_SIZE } from "./zoom-layout.js";
 
-/** The root node's id, when the model has no programs. */
-export const EXEC_ROOT = "program";
-/** The root node's id, when the model has programs: the project holds them. */
+/** The root node's id. The project holds the processes, or the plain code flow when no thread is grounded. */
 export const EXEC_PROJECT_ROOT = "project";
 /** Most sync edges one lock or channel adds. The rest are skipped, in the order the pairs are made. */
 export const MAX_SYNC_EDGES_PER_RESOURCE = 50;
+/** The synthetic process that holds the grounded main threads no program owns. */
+export const MAIN_PROCESS_ID = "prog:main";
 
-/** The group that holds the functions no thread runs. */
-export const NO_RUNTIME_GROUP = "group:none";
-/** The note on each function in the no-runtime group. */
+/** The note on each function drawn as plain code flow, with no runtime box around it. */
 export const NO_RUNTIME_NOTE = "Plain call with no runtime context. Zoom out to see where it runs.";
-
-/**
- * A thread, coroutine or group that holds more functions than this groups them by file. A flat container of hundreds
- * of boxes is unreadable, and the layered layout grows much faster than linearly in it (a 900-function thread took
- * over 20 s), so the files give the container a level of its own.
- */
-export const FILE_GROUP_MIN = 24;
-
-const GROUP_NOTE =
-  "Functions that no thread in this scope runs: nothing a thread starts reaches them, for example because only " +
-  "module-level statements call them. A wider scope may show where they run.";
+/** The root's note when no thread is grounded in the scope. */
+const NO_RUNTIME_ROOT_NOTE = "Code flow, no runtime context found in this scope.";
 
 /** Every node kind of the execution scene, with its level. */
 export const EXEC_LEVELS: Record<string, SceneLevel> = {
@@ -37,16 +28,7 @@ export const EXEC_LEVELS: Record<string, SceneLevel> = {
   program: { box: { w: 300, h: 64 }, layout: LAYERED },
   thread: { box: { w: 260, h: 60 }, layout: LAYERED },
   coroutine: { box: { w: 240, h: 52 }, layout: LAYERED },
-  file: { box: { w: ZOOM_SIZE.file.w, h: ZOOM_SIZE.file.h }, layout: LAYERED },
   function: { box: { w: ZOOM_SIZE.fn.w, h: ZOOM_SIZE.fn.h } },
-  group: {
-    box: { w: 260, h: 60 },
-    layout: {
-      "elk.algorithm": "rectpacking",
-      "elk.spacing.nodeNode": "24",
-      "elk.padding": "[top=0,left=0,bottom=0,right=0]",
-    },
-  },
 };
 
 export function execThreadId(threadId: string): string {
@@ -58,21 +40,21 @@ export function execProgramId(programId: string): string {
   return `prog:${programId}`;
 }
 
+/** The scene id of the process a process spawn starts: its own box, which holds that thread. */
+export function execProcessId(threadId: string): string {
+  return `proc:${threadId}`;
+}
+
 export function execCoroutineId(threadId: string, target: string): string {
   return `co:${threadId}:${target}`;
 }
 
 /**
  * A function's placement in a container: the container's scene id, a literal `>`, then the function id. The container
- * is the thread, coroutine or group, even when a file node sits in between, so the id does not depend on grouping.
+ * is the thread or coroutine, or the project for plain code flow.
  */
 export function execFnId(container: string, fn: string): string {
   return `${container}>${fn}`;
-}
-
-/** The file node that groups a container's functions from one file. */
-export function execFileId(container: string, file: string): string {
-  return `${container}>file:${file}`;
 }
 
 /** Code-unit order, the same in every locale. */
@@ -91,13 +73,13 @@ function basename(path: string): string {
 
 const KIND_LABEL: Record<string, string> = { thread: "Thread", process: "Process", async: "Async" };
 
-/** The placements of one function in one thread (or the no-runtime group). */
+/** The placements of one function in one thread (or the project, for plain code flow). */
 interface Placed {
   /** Placement ids, sorted by id once building is done. */
   ids: string[];
   /**
-   * Placement id by the thread, coroutine or group that holds it (not the file node between them). A function is
-   * placed at most once per container.
+   * Placement id by the thread or coroutine that holds it (not the project). A function is placed at most once per
+   * container.
    */
   byParent: Map<string, string>;
 }
@@ -108,7 +90,7 @@ export function buildExecScene(model: ExecModel): Scene {
   const nameOf = (id: string): string => fns.get(id)?.name ?? id;
 
   const nodes = new Map<string, SceneNode>();
-  // fnId -> thread key (thread scene id or the group id) -> placements.
+  // fnId -> thread key (thread scene id, or the project for plain code flow) -> placements.
   const placements = new Map<string, Map<string, Placed>>();
 
   const addNode = (node: SceneNode): void => {
@@ -116,51 +98,21 @@ export function buildExecScene(model: ExecModel): Scene {
     if (node.parent !== undefined) nodes.get(node.parent)?.children.push(node.id);
   };
 
-  /** The thread, coroutine or group each placement belongs to, which a file node may sit under. */
+  /** The container each placement sits in: a thread, a coroutine, or the project. */
   const containerOf = new Map<string, string>();
 
-  /**
-   * Places functions in a container, in the order given. Unlisted and already placed ones are skipped. Past
-   * FILE_GROUP_MIN functions from more than one file, each file gets a node of its own, in the order its first
-   * function comes, and its functions keep their order inside it.
-   */
+  /** Places functions in a container, in the order given. Unlisted and already placed ones are skipped. */
   const placeAll = (threadKey: string, container: string, fnIds: readonly string[], note?: string): void => {
-    const todo: ExecFunctionRef[] = [];
-    const seen = new Set<string>();
     for (const fnId of fnIds) {
       const f = fns.get(fnId);
-      if (f === undefined || seen.has(fnId) || nodes.has(execFnId(container, fnId))) continue;
-      seen.add(fnId);
-      todo.push(f);
-    }
-    const byFile = new Map<string, ExecFunctionRef[]>();
-    for (const f of todo) {
-      const list = byFile.get(f.file);
-      if (list) list.push(f);
-      else byFile.set(f.file, [f]);
-    }
-    const grouped = todo.length > FILE_GROUP_MIN && byFile.size > 1;
-    for (const [file, list] of grouped ? byFile : new Map([["", todo]])) {
-      let parent = container;
-      if (grouped) {
-        parent = execFileId(container, file);
-        addNode({
-          id: parent,
-          kind: "file",
-          label: file === "" ? "No source" : basename(file),
-          parent: container,
-          children: [],
-          detail: plural(list.length, "function"),
-          ...(file !== "" ? { note: file } : {}),
-        });
-      }
-      for (const f of list) placeOne(threadKey, container, parent, f, note);
+      if (f === undefined || nodes.has(execFnId(container, fnId))) continue;
+      placeOne(threadKey, container, f, note);
     }
   };
 
-  const placeOne = (threadKey: string, container: string, parent: string, f: ExecFunctionRef, note?: string): void => {
+  const placeOne = (threadKey: string, container: string, f: ExecFunctionRef, note?: string): void => {
     const id = execFnId(container, f.id);
-    const node: SceneNode = { id, kind: "function", label: f.name, parent, children: [], ref: f.id };
+    const node: SceneNode = { id, kind: "function", label: f.name, parent: container, children: [], ref: f.id };
     if (f.chart !== undefined) node.chart = { w: f.chart[0], h: f.chart[1] };
     if (f.file !== "") node.detail = `${f.file}:${f.line}`;
     const n = note ?? (f.anonymous ? anonymousNote(f) : undefined);
@@ -178,68 +130,107 @@ export function buildExecScene(model: ExecModel): Scene {
   const anonymousNote = (f: ExecFunctionRef): string =>
     f.parent === undefined ? "An anonymous function." : `An anonymous function written in ${nameOf(f.parent)}.`;
 
-  // The tree. With programs, the root is the project and each program holds its threads; without, the root is the program.
-  const threadCount = model.threads.length;
+  // The root is the project. Its children are the process boxes, the grounded threads outside any process, and the
+  // functions of plain code flow.
+  const rootId = EXEC_PROJECT_ROOT;
   const unthreaded = model.unthreaded.filter((id) => fns.has(id));
-  // A model saved before programs existed has none: read it as an empty list.
   const programs = model.programs ?? [];
-  const hasPrograms = programs.length > 0;
-  const rootId = hasPrograms ? EXEC_PROJECT_ROOT : EXEC_ROOT;
-  const root: SceneNode = hasPrograms
-    ? {
-        id: rootId,
-        kind: "project",
-        label: model.scope === "" ? "Project" : model.scope,
-        children: [],
-        detail: plural(programs.length, "program"),
-      }
-    : {
-        id: rootId,
-        kind: "program",
-        label: model.scope === "" ? "Program" : model.scope,
-        children: [],
-        detail: plural(threadCount, "thread"),
-      };
-  if (model.truncated) {
-    root.note =
-      `The model lists only ${plural(model.functions.length, "function")}: the function cap cut it, so later ` +
-      "threads and functions are missing or incomplete.";
-  }
+  const root: SceneNode = {
+    id: rootId,
+    kind: "project",
+    label: model.scope === "" ? "Project" : model.scope,
+    children: [],
+    detail: "Code flow",
+  };
   addNode(root);
 
+  // A model saved before the grounded field existed: a main thread is grounded only when a root is named `main`, and
+  // every other thread is grounded.
+  const isGrounded = (t: ExecThread): boolean => {
+    const flag = (t as { grounded?: boolean }).grounded;
+    return flag ?? (t.kind !== "main" || t.roots.some((r) => fns.get(r)?.name === "main"));
+  };
+  const grounded = model.threads.filter(isGrounded);
+  // The grounded threads that reach each function, in thread order: a spawn's spawner is the first one of them.
+  const reachers = new Map<string, ExecThread[]>();
+  for (const s of grounded) {
+    for (const id of s.reached) {
+      const list = reachers.get(id);
+      if (list) list.push(s);
+      else reachers.set(id, [s]);
+    }
+  }
+  const spawnerOf = (t: ExecThread): ExecThread | undefined => {
+    const owner = t.spawn?.owner;
+    if (owner === undefined) return undefined;
+    return reachers.get(owner)?.find((s) => s !== t);
+  };
+
   // A thread sits under the first program (by id) that lists it. The others only count it in their notes.
-  const programOfThread = new Map<string, string>();
+  const programOfThread = new Map<string, ExecProgram>();
   const listedBy = new Map<string, number>();
   for (const p of programs) {
     for (const t of p.threads) {
-      if (!programOfThread.has(t)) programOfThread.set(t, p.id);
+      if (!programOfThread.has(t)) programOfThread.set(t, p);
       listedBy.set(t, (listedBy.get(t) ?? 0) + 1);
     }
   }
-  for (const p of programs) {
+
+  let processCount = 0;
+  const addProcess = (id: string, label: string, detail: string, note?: string): string => {
+    if (!nodes.has(id)) {
+      const node: SceneNode = { id, kind: "program", label, parent: rootId, children: [], detail };
+      if (note !== undefined) node.note = note;
+      addNode(node);
+      processCount += 1;
+    }
+    return id;
+  };
+  const programBox = (p: ExecProgram): string => {
     const main = p.main !== undefined ? nameOf(p.main) : undefined;
     const shared = p.threads.filter((t) => (listedBy.get(t) ?? 0) > 1).length;
     const parts = [`Built from ${plural(p.files.length, "file")}.`, main !== undefined ? `Main function: ${main}.` : "No main function in the IR."];
     if (shared > 0) parts.push(`Shares ${plural(shared, "thread")} with other programs.`);
-    addNode({
-      id: execProgramId(p.id),
-      kind: "program",
-      label: p.name,
-      parent: rootId,
-      children: [],
-      detail: p.targetKind,
-      note: parts.join(" "),
-    });
-  }
+    return addProcess(execProgramId(p.id), p.name, p.targetKind, parts.join(" "));
+  };
+
+  const threadName = (t: ExecThread): string => {
+    const first = t.roots[0];
+    if (first !== undefined && fns.has(first)) return nameOf(first);
+    return t.spawn?.script !== undefined && t.spawn.script !== "" ? basename(t.spawn.script) : "unresolved";
+  };
+
+  // The process box a grounded thread's box sits in, made when first asked. Undefined when the box sits on the project.
+  // A spawned thread sits in its spawner's process, so this recurses up the spawns; the memo ends a cycle of them.
+  const processes = new Map<string, string | undefined>();
+  const processOf = (t: ExecThread): string | undefined => {
+    if (processes.has(t.id)) return processes.get(t.id);
+    processes.set(t.id, undefined);
+    let box: string | undefined;
+    if (t.kind === "process") {
+      box = addProcess(execProcessId(t.id), `Process · ${threadName(t)}`, plural(1, "thread"));
+    } else if (t.kind === "main") {
+      const p = programOfThread.get(t.id);
+      box = p !== undefined ? programBox(p) : addProcess(MAIN_PROCESS_ID, "Process · main", plural(1, "thread"));
+    } else {
+      const s = spawnerOf(t);
+      box = s !== undefined && isGrounded(s) ? processOf(s) : undefined;
+      // A thread no spawner covers sits under the first program that lists it, if any.
+      const p = programOfThread.get(t.id);
+      if (box === undefined && p !== undefined) box = programBox(p);
+    }
+    processes.set(t.id, box);
+    return box;
+  };
 
   // The coroutine node each (thread, coroutine) got, for the dispatch edges.
-  const coNodes: { thread: ExecThread; key: string; co: ExecCoroutine; id: string; container: string }[] = [];
+  const coNodes: { key: string; co: ExecCoroutine; id: string; container: string }[] = [];
 
-  for (const t of model.threads) {
-    const key = execThreadId(t.id);
-    const owner = programOfThread.get(t.id);
-    addNode(threadNode(t, key, owner !== undefined ? execProgramId(owner) : rootId));
-
+  /**
+   * Places a thread's own functions and its coroutines. `key` is the placement key (the thread's scene id, or the
+   * project for plain code flow) and `box` the container the functions sit in: the thread's node, or the project.
+   */
+  const placeBody = (t: ExecThread, key: string, box: string): void => {
     // Which coroutines are top-level, and which functions the coroutines hold.
     const coByTarget = new Map<string, ExecCoroutine>();
     for (const co of t.coroutines) if (!coByTarget.has(co.target)) coByTarget.set(co.target, co);
@@ -260,7 +251,7 @@ export function buildExecScene(model: ExecModel): Scene {
     }
     const rootSet = new Set(ordered);
     for (const id of [...own].sort(cmp)) if (!rootSet.has(id)) ordered.push(id);
-    placeAll(key, key, ordered);
+    placeAll(key, box, ordered);
 
     // Coroutines: top-level ones in model order, each with its nested ones under it.
     const done = new Set<ExecCoroutine>();
@@ -279,29 +270,30 @@ export function buildExecScene(model: ExecModel): Scene {
       };
       if (co.dispatchedBy.length > 0) node.note = `Dispatched by ${co.dispatchedBy.map(nameOf).join(", ")}.`;
       addNode(node);
-      coNodes.push({ thread: t, key, co, id, container });
+      coNodes.push({ key, co, id, container });
       placeAll(key, id, [co.target, ...[...co.callees].sort(cmp)]);
       for (const child of t.coroutines) if (child.parent === co.target && child !== co) addCoroutine(child, id);
     };
     for (const co of t.coroutines) {
-      if (co.parent === undefined || !coByTarget.has(co.parent)) addCoroutine(co, key);
+      if (co.parent === undefined || !coByTarget.has(co.parent)) addCoroutine(co, box);
     }
-    // Defensive: a coroutine whose parents form a cycle has no top-level ancestor; draw it on the thread.
-    for (const co of t.coroutines) addCoroutine(co, key);
+    // Defensive: a coroutine whose parents form a cycle has no top-level ancestor; draw it on the box.
+    for (const co of t.coroutines) addCoroutine(co, box);
+  };
+
+  for (const t of model.threads) {
+    // A main thread inferred only from unreferenced entry functions has no box: its code is plain code flow.
+    if (!isGrounded(t)) {
+      placeBody(t, rootId, rootId);
+      continue;
+    }
+    const key = execThreadId(t.id);
+    addNode(threadNode(t, key, processOf(t) ?? rootId));
+    placeBody(t, key, key);
   }
 
-  if (unthreaded.length > 0) {
-    addNode({
-      id: NO_RUNTIME_GROUP,
-      kind: "group",
-      label: "No runtime context",
-      parent: rootId,
-      children: [],
-      detail: plural(unthreaded.length, "function"),
-      note: GROUP_NOTE,
-    });
-    placeAll(NO_RUNTIME_GROUP, NO_RUNTIME_GROUP, unthreaded, NO_RUNTIME_NOTE);
-  }
+  // Functions no thread runs: plain code flow, directly on the project.
+  placeAll(rootId, rootId, unthreaded, NO_RUNTIME_NOTE);
 
   for (const byThread of placements.values()) for (const p of byThread.values()) p.ids.sort(cmp);
 
@@ -329,7 +321,7 @@ export function buildExecScene(model: ExecModel): Scene {
 
   const parentOf = (placementId: string): string => containerOf.get(placementId) ?? "";
 
-  /** Links every placement of `a` to one placement of `b` in the same thread. */
+  /** Links every placement of `a` to one placement of `b` in the same thread (or in plain code flow). */
   const linkPlacements = (a: string, b: string, kind: SceneEdgeKind, how?: string, candidate?: boolean): void => {
     const from = placements.get(a);
     const to = placements.get(b);
@@ -383,8 +375,8 @@ export function buildExecScene(model: ExecModel): Scene {
       }
     }
     if (from === undefined) {
-      const p = byThread.get(NO_RUNTIME_GROUP);
-      if (p !== undefined) from = pick(p, NO_RUNTIME_GROUP, NO_RUNTIME_GROUP);
+      const p = byThread.get(rootId);
+      if (p !== undefined) from = pick(p, rootId, rootId);
     }
     if (from !== undefined) addEdge(from, execThreadId(t.id), "spawn", t.spawn.how, t.spawn.candidates);
   }
@@ -431,21 +423,22 @@ export function buildExecScene(model: ExecModel): Scene {
   const edgeList = [...edges.values()].sort(
     (x, y) => cmp(x.from, y.from) || cmp(x.to, y.to) || cmp(x.kind, y.kind) || cmp(x.how ?? "", y.how ?? ""),
   );
+
+  root.detail = processCount === 0 ? "Code flow" : processCount === 1 ? "1 process" : `${processCount} processes`;
+  const rootNotes: string[] = [];
+  if (model.truncated) {
+    rootNotes.push(
+      `The model lists only ${plural(model.functions.length, "function")}: the function cap cut it, so later ` +
+        "threads and functions are missing or incomplete.",
+    );
+  }
+  if (grounded.length === 0) rootNotes.push(NO_RUNTIME_ROOT_NOTE);
+  if (rootNotes.length > 0) root.note = rootNotes.join(" ");
+
   return { root: rootId, nodes, edges: edgeList, levels: EXEC_LEVELS };
 
   function threadNode(t: ExecThread, id: string, parent: string): SceneNode {
-    let label: string;
-    if (t.kind === "main") label = "Main thread";
-    else {
-      const first = t.roots[0];
-      const name =
-        first !== undefined && fns.has(first)
-          ? nameOf(first)
-          : t.spawn?.script !== undefined && t.spawn.script !== ""
-            ? basename(t.spawn.script)
-            : "unresolved";
-      label = `${KIND_LABEL[t.kind] ?? t.kind} · ${name}`;
-    }
+    const label = t.kind === "main" || t.kind === "process" ? "Main thread" : `${KIND_LABEL[t.kind] ?? t.kind} · ${threadName(t)}`;
     const node: SceneNode = {
       id,
       kind: "thread",

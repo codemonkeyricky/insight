@@ -4,7 +4,7 @@ import {
   CHART_PAD,
   EXEC_LEVELS,
   NO_RUNTIME_NOTE,
-  NO_RUNTIME_GROUP,
+  EXEC_PROJECT_ROOT,
   layoutScene,
   type ExecFunctionRef,
   type LayoutGraph,
@@ -12,7 +12,7 @@ import {
   type SceneNode,
   type SolvedGraph,
 } from "@insight/flow";
-import { BANDS, execBuild, execFileBands, execFocus, execMapNode, execResolve, execSelected, execUrl, splitExecFocus } from "../src/zoom/execMap.js";
+import { execBuild, execFirstOpen, execFocus, execMapNode, execResolve, execSelected, execUrl, splitExecFocus } from "../src/zoom/execMap.js";
 import { chartOrigin } from "../src/components/zoom/BoxChart.js";
 import { deepestAt, edgeClass, edgeKey, edgeTitle, edgeWidth } from "../src/zoom/source.js";
 
@@ -79,8 +79,7 @@ describe("exec map", () => {
     n("thread:w", "thread", "program", { label: "Thread · work" }),
     n("thread:main>a#run", "function", "thread:main", { label: "run", ref: "a#run" }),
     n("thread:main>a#help", "function", "thread:main", { label: "help", ref: "a#help", note: "A helper." }),
-    n("thread:w>file:b.py", "file", "thread:w", { label: "b.py", note: "src/b.py" }),
-    n("thread:w>a#help", "function", "thread:w>file:b.py", { label: "help", ref: "a#help" }),
+    n("thread:w>a#help", "function", "thread:w", { label: "help", ref: "a#help" }),
   ];
   const nodes = new Map(list.map((x) => [x.id, x]));
   for (const x of list) if (x.parent !== undefined) nodes.get(x.parent)?.children.push(x.id);
@@ -104,11 +103,9 @@ describe("exec map", () => {
     return { children };
   };
 
-  it("maps scene nodes, with the note as the tooltip and a band for each file group", () => {
-    expect(execFileBands(scene)).toEqual(new Map([["src/b.py", 0]]));
+  it("maps scene nodes, with the note as the tooltip and no file bands", () => {
     expect(execMapNode(scene, "thread:main")).toEqual({ id: "thread:main", kind: "thread", label: "Main thread", title: "Main thread", detail: "2 functions", parent: "program" });
     expect(execMapNode(scene, "thread:main>a#help")?.title).toBe("A helper.");
-    expect(execMapNode(scene, "thread:w>file:b.py", execFileBands(scene))).toMatchObject({ kind: "file", band: 0, title: "src/b.py" });
     expect(execMapNode(scene, "program")?.parent).toBeUndefined();
     expect(execMapNode(scene, "nope")).toBeUndefined();
   });
@@ -147,23 +144,25 @@ describe("exec map", () => {
 
   it("builds the map for a focus from one whole layout, named by its scope and node", async () => {
     const layout = await layoutScene(scene, column);
+    // The project's own view is the first view: every thread box is open, so its functions are drawn.
     const top = execBuild(scene, layout, "src", "program");
     expect(top.path).toBe("src");
     expect(top.focus).toBe(execFocus("src", "program"));
     expect(top.nodeId).toBe("program");
     expect(top.selected).toBeUndefined();
-    expect(top.placed.items.map((i) => [i.id, i.kind])).toEqual([
-      ["thread:main", "box"],
-      ["thread:w", "box"],
+    expect(top.placed.items.filter((i) => i.kind === "frame").map((i) => i.id).sort()).toEqual(["thread:main", "thread:w"]);
+    expect(top.placed.items.filter((i) => i.kind === "box").map((i) => i.id).sort()).toEqual([
+      "thread:main>a#help",
+      "thread:main>a#run",
+      "thread:w>a#help",
     ]);
-    expect(top.edges.map((e) => [e.from, e.to, e.kind])).toEqual([["thread:main", "thread:w", "spawn"]]);
     expect(top.crumbs.map((c) => c.id)).toEqual(["program"]);
-    expect(top.depth("thread:w>a#help")).toBe(3);
+    expect(top.depth("thread:w>a#help")).toBe(2);
 
     const deep = execBuild(scene, layout, "src", "thread:w>a#help");
     expect(deep.focus).toBe(execFocus("src", "thread:w>a#help"));
-    expect(deep.placed.items.filter((i) => i.kind === "frame").map((i) => i.id)).toEqual(["thread:w", "thread:w>file:b.py"]);
-    expect(deep.crumbs.map((c) => c.label)).toEqual(["program", "Thread · work", "b.py", "help"]);
+    expect(deep.placed.items.filter((i) => i.kind === "frame").map((i) => i.id)).toEqual(["thread:w"]);
+    expect(deep.crumbs.map((c) => c.label)).toEqual(["program", "Thread · work", "help"]);
     // Every focus shares the layout, so a box sits in the same place open or closed.
     expect(deep.placed.rects.get("thread:w")).toEqual(top.placed.rects.get("thread:w"));
   });
@@ -200,20 +199,20 @@ describe("exec selected function", () => {
   });
   // The nodes are listed in the order the scene builds them, so the placements come out in that order.
   const list = [
-    n("program", "program", undefined),
-    n("thread:main", "thread", "program", { label: "Main thread" }),
+    n(EXEC_PROJECT_ROOT, "project", undefined, { label: "Project" }),
+    n("thread:main", "thread", EXEC_PROJECT_ROOT, { label: "Main thread" }),
     n("thread:main>a#help", "function", "thread:main", { label: "help", ref: "a#help" }),
     n("co:main:c", "coroutine", "thread:main", { label: "step loop" }),
     n("co:main:c>a#help", "function", "co:main:c", { label: "help", ref: "a#help" }),
     n("co:main:c>c#step", "function", "co:main:c", { label: "step", ref: "c#step", note: "A step." }),
-    n("thread:w", "thread", "program", { label: "Thread · work" }),
+    n("thread:w", "thread", EXEC_PROJECT_ROOT, { label: "Thread · work" }),
     n("thread:w>a#help", "function", "thread:w", { label: "help", ref: "a#help" }),
-    n(NO_RUNTIME_GROUP, "group", "program", { label: "No runtime context" }),
-    n(`${NO_RUNTIME_GROUP}>f#plain`, "function", NO_RUNTIME_GROUP, { label: "plain", ref: "f#plain", note: NO_RUNTIME_NOTE }),
+    // A plain function, with no runtime box: it sits on the project.
+    n(`${EXEC_PROJECT_ROOT}>f#plain`, "function", EXEC_PROJECT_ROOT, { label: "plain", ref: "f#plain", note: NO_RUNTIME_NOTE }),
   ];
   const nodes = new Map(list.map((x) => [x.id, x]));
   for (const x of list) if (x.parent !== undefined) nodes.get(x.parent)?.children.push(x.id);
-  const scene: Scene = { root: "program", nodes, edges: [], levels: EXEC_LEVELS };
+  const scene: Scene = { root: EXEC_PROJECT_ROOT, nodes, edges: [], levels: EXEC_LEVELS };
   const fns = new Map<string, ExecFunctionRef>([
     ["a#help", { id: "a#help", name: "help", file: "src/a.py", line: 7, inScope: true, runtime: "thread" }],
     ["c#step", { id: "c#step", name: "step", file: "src/c.py", line: 3, inScope: true, runtime: "coroutine" }],
@@ -250,8 +249,8 @@ describe("exec selected function", () => {
     });
   });
 
-  it("says a function in the no-runtime group runs nowhere, with the explanation", () => {
-    const sel = execSelected(scene, fns, `${NO_RUNTIME_GROUP}>f#plain`);
+  it("says a plain function on the project runs nowhere, with the explanation", () => {
+    const sel = execSelected(scene, fns, `${EXEC_PROJECT_ROOT}>f#plain`);
     expect(sel).toMatchObject({ runtime: "none", note: NO_RUNTIME_NOTE, placements: [] });
     expect(sel?.thread).toBeUndefined();
   });
@@ -266,13 +265,45 @@ describe("exec selected function", () => {
     const layout = await layoutScene(scene, column);
     const build = execBuild(scene, layout, "src", "co:main:c>c#step", fns);
     expect(build.selected).toMatchObject({ ref: "c#step", runtime: "coroutine", coroutine: "step loop" });
-    expect(build.crumbs.map((c) => c.label)).toEqual(["program", "Main thread", "step loop", "step"]);
-    expect(execBuild(scene, layout, "src", "program", fns).selected).toBeUndefined();
+    expect(build.crumbs.map((c) => c.label)).toEqual(["Project", "Main thread", "step loop", "step"]);
+    expect(execBuild(scene, layout, "src", EXEC_PROJECT_ROOT, fns).selected).toBeUndefined();
   });
 });
 
-describe("file bands", () => {
-  it("uses the six colour bands by default", () => {
-    expect(BANDS).toBe(6);
+describe("exec first view", () => {
+  // A project with two threads: the main thread holds a coroutine, and the project holds one plain function.
+  const n = (id: string, kind: string, parent: string | undefined, extra: Partial<SceneNode> = {}): SceneNode => ({
+    id,
+    kind,
+    label: id,
+    children: [],
+    ...(parent !== undefined ? { parent } : {}),
+    ...extra,
+  });
+  const list = [
+    n(EXEC_PROJECT_ROOT, "project", undefined, { label: "Project" }),
+    n("prog:main", "program", EXEC_PROJECT_ROOT, { label: "Process · main" }),
+    n("thread:main", "thread", "prog:main", { label: "Main thread" }),
+    n("thread:main>a#help", "function", "thread:main", { label: "help", ref: "a#help" }),
+    n("co:main:c", "coroutine", "thread:main", { label: "step loop" }),
+    n("co:main:c>c#step", "function", "co:main:c", { label: "step", ref: "c#step" }),
+    n(`${EXEC_PROJECT_ROOT}>f#plain`, "function", EXEC_PROJECT_ROOT, { label: "plain", ref: "f#plain" }),
+  ];
+  const nodes = new Map(list.map((x) => [x.id, x]));
+  for (const x of list) if (x.parent !== undefined) nodes.get(x.parent)?.children.push(x.id);
+  const scene: Scene = { root: EXEC_PROJECT_ROOT, nodes, edges: [], levels: EXEC_LEVELS };
+  const column = async (g: LayoutGraph): Promise<SolvedGraph> => ({ children: g.children.map((c, i) => ({ id: c.id, x: 0, y: i * 10 })) });
+
+  it("opens every process and thread box, and no coroutine", () => {
+    expect([...execFirstOpen(scene)].sort()).toEqual([EXEC_PROJECT_ROOT, "prog:main", "thread:main"].sort());
+  });
+
+  it("draws the process and thread frames on the project's view, with the coroutine as a closed box", async () => {
+    const layout = await layoutScene(scene, column);
+    const build = execBuild(scene, layout, "", EXEC_PROJECT_ROOT, new Map());
+    expect(build.placed.items.filter((i) => i.kind === "frame").map((i) => i.id).sort()).toEqual(["prog:main", "thread:main"]);
+    expect(build.placed.items.filter((i) => i.kind === "box").map((i) => i.id).sort()).toEqual(
+      [`${EXEC_PROJECT_ROOT}>f#plain`, "co:main:c", "thread:main>a#help"].sort(),
+    );
   });
 });

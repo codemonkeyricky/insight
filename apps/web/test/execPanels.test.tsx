@@ -42,6 +42,7 @@ const model = (): ExecModel => {
   const main: ExecThread = {
     id: "main",
     kind: "main",
+    grounded: true,
     roots: ["main"],
     reach: 3,
     reached: ["helper", "leaf", "main"],
@@ -171,7 +172,63 @@ describe("the panels", () => {
     const program = renderToStaticMarkup(
       <ExecContainerPanel id="p1" scope="src" roots={false} store={new ZoomStore("p1")} index={index} nodeId={scene.root} onOpen={() => {}} />,
     );
-    expect(program).toContain("Program");
+    expect(program).toContain("Project");
     expect(program).not.toContain("exec-table");
+    expect(program).toContain(scene.nodes.get(scene.root)?.detail ?? "");
+  });
+
+  it("says a function on no thread is plain code flow, on the project, with the project in its trail", () => {
+    // No thread is grounded, so every function sits flat on the project.
+    const m = { ...model(), threads: model().threads.map((t) => ({ ...t, grounded: false })) };
+    const scene = buildExecScene(m);
+    const index = execIndex(scene, m);
+    const flat = [...scene.nodes.values()].find((n) => n.kind === "function" && n.parent === scene.root);
+    if (flat === undefined) throw new Error("no flat function");
+    const selected = execSelected(scene, new Map(m.functions.map((f) => [f.id, f])), flat.id);
+    if (selected === undefined) throw new Error("no selection");
+    const html = renderToStaticMarkup(
+      <ExecFunctionPanel id="p1" scope="src" roots={false} store={new ZoomStore("p1")} index={index} nodeId={flat.id} selected={selected} onOpen={() => {}} />,
+    );
+    expect(html).toContain("Plain code flow, no runtime context found");
+    expect(html).not.toContain("Runs on");
+    expect(html).toContain('aria-label="Call path"');
+    // The trail's first step is the project, named as the scene names its root (the scope, or "Project").
+    expect(html).toContain(scene.nodes.get(scene.root)?.label ?? "");
+  });
+
+  it("says the project has no runtime context when no thread is grounded, and lists its plain-flow functions", () => {
+    const m = { ...model(), threads: model().threads.map((t) => ({ ...t, grounded: false })) };
+    const scene = buildExecScene(m);
+    const index = execIndex(scene, m);
+    const html = renderToStaticMarkup(
+      <ExecContainerPanel id="p1" scope="src" roots={false} store={new ZoomStore("p1")} index={index} nodeId={scene.root} onOpen={() => {}} />,
+    );
+    expect(html).toContain("Code flow, no runtime context found in this scope.");
+    expect(html).toContain("Per function");
+  });
+
+  it("badges the scope's root as FOLDER or FILE for a scoped map, and as PROJECT for the whole project", () => {
+    const m = model();
+    const scene = buildExecScene(m);
+    const index = execIndex(scene, m);
+    const badge = (rootKind?: "project" | "folder" | "file") =>
+      renderToStaticMarkup(
+        <ExecContainerPanel
+          id="p1"
+          scope="src"
+          roots={false}
+          store={new ZoomStore("p1")}
+          index={index}
+          nodeId={scene.root}
+          onOpen={() => {}}
+          rootKind={rootKind}
+        />,
+      );
+    expect(badge()).toContain('class="kind project"> Project</span>');
+    expect(badge("project")).toContain('class="kind project"> Project</span>');
+    expect(badge("folder")).toContain('class="kind project"> Folder</span>');
+    expect(badge("folder")).toContain('aria-label="Folder"');
+    expect(badge("file")).toContain('class="kind project"> File</span>');
+    expect(badge("file")).not.toContain("Project</span>");
   });
 });

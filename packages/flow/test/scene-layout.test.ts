@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import type { Scene, SceneEdge, SceneLevel, SceneNode } from "../src/scene.js";
 import {
   layoutCovers,
+  COLUMNS,
   LAYERED_MAX_CHILDREN,
   PACKED,
+  callColumns,
   layoutScene,
   packRows,
   sceneLayoutOptions,
@@ -569,7 +571,7 @@ describe("a large scene", () => {
       if (a !== b) edges.push({ from: `f${a}`, to: `f${b}`, kind: "call", count: 1 });
     }
     const big = makeScene(spec, edges, LEVELS, "P");
-    expect(sceneLayoutOptions(big, "T")).toBe(PACKED);
+    expect(sceneLayoutOptions(big, "T")).toBe(COLUMNS);
     expect(sceneLayoutOptions(big, "P")["elk.algorithm"]).toBe("layered");
     const t0 = performance.now();
     const layout = await layoutScene(big, solveElk);
@@ -588,6 +590,31 @@ describe("a large scene", () => {
     const s = makeScene(spec, [], { ...LEVELS, group: { box: { w: 100, h: 40 }, layout: own } }, "P");
     expect(sceneLayoutOptions(s, "T")["elk.algorithm"]).toBe("layered");
     expect(sceneLayoutOptions(s, "G")).toBe(own);
+  });
+});
+
+describe("callColumns", () => {
+  it("puts each callee in a column right of its caller, and places every child without overlap", () => {
+    const graph: LayoutGraph = {
+      id: "G",
+      layoutOptions: { "elk.algorithm": "insight.columns", "elk.spacing.nodeNode": "24" },
+      children: ["a", "b", "c", "d"].map((id) => ({ id, width: 100, height: 50 })),
+      edges: [
+        { id: "e0", sources: ["a"], targets: ["b"] },
+        { id: "e1", sources: ["b"], targets: ["c"] },
+      ],
+    };
+    const solved = callColumns(graph);
+    const at = new Map((solved.children ?? []).map((c) => [c.id, c]));
+    expect([...at.keys()].sort()).toEqual(["a", "b", "c", "d"]);
+    expect(at.get("a")?.x).toBeLessThan(at.get("b")?.x ?? 0);
+    expect(at.get("b")?.x).toBeLessThan(at.get("c")?.x ?? 0);
+    // d is called by nothing and calls nothing: a source, so it shares column 0 with a.
+    expect(at.get("d")?.x).toBe(at.get("a")?.x);
+    const rects = graph.children.map((c) => ({ ...c, x: at.get(c.id)?.x ?? 0, y: at.get(c.id)?.y ?? 0 }));
+    for (let i = 0; i < rects.length; i += 1) {
+      for (let j = i + 1; j < rects.length; j += 1) expect(overlaps(rects[i]!, rects[j]!)).toBe(false);
+    }
   });
 });
 

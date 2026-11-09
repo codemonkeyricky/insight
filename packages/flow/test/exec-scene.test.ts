@@ -2,14 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   EXEC_LEVELS,
   EXEC_PROJECT_ROOT,
-  EXEC_ROOT,
-  NO_RUNTIME_GROUP,
+  MAIN_PROCESS_ID,
   NO_RUNTIME_NOTE,
   buildExecScene,
   execCoroutineId,
+  execProcessId,
   execProgramId,
-  FILE_GROUP_MIN,
-  execFileId,
   execFnId,
   execThreadId,
   MAX_SYNC_EDGES_PER_RESOURCE,
@@ -82,6 +80,7 @@ function model(parts: {
 const mainThread = (t: Partial<ExecThread>): ExecThread => ({
   id: "main",
   kind: "main",
+  grounded: true,
   roots: [],
   reach: t.reached?.length ?? 0,
   reached: [],
@@ -121,6 +120,7 @@ const basic = (): ExecModel =>
       {
         id: "spawn:1",
         kind: "thread",
+        grounded: true,
         spawn: { node: "spawn:1", owner: "main", file: "src/app.ts", line: 5, how: "thread", status: "resolved", candidates: false },
         roots: ["work"],
         reach: 1,
@@ -139,8 +139,9 @@ const basic = (): ExecModel =>
 
 describe("exec scene ids", () => {
   it("builds the ids from their parts", () => {
-    expect(EXEC_ROOT).toBe("program");
-    expect(NO_RUNTIME_GROUP).toBe("group:none");
+    expect(EXEC_PROJECT_ROOT).toBe("project");
+    expect(MAIN_PROCESS_ID).toBe("prog:main");
+    expect(execProcessId("spawn:1")).toBe("proc:spawn:1");
     expect(execThreadId("main")).toBe("thread:main");
     expect(execCoroutineId("main", "co")).toBe("co:main:co");
     expect(execFnId("thread:main", "a")).toBe("thread:main>a");
@@ -178,12 +179,13 @@ describe("function charts", () => {
 });
 
 describe("buildExecScene", () => {
-  it("builds the program, thread, coroutine and group tree with its edges", () => {
+  it("builds the project, process, thread, coroutine and plain code tree with its edges", () => {
     const s = buildExecScene(basic());
-    expect(s.root).toBe("program");
+    expect(s.root).toBe(EXEC_PROJECT_ROOT);
     expect(s.levels).toBe(EXEC_LEVELS);
     expect(shape(s)).toEqual([
-      ["program", "program", ["thread:main", "thread:spawn:1", "group:none"]],
+      ["project", "project", [MAIN_PROCESS_ID, "project>f"]],
+      [MAIN_PROCESS_ID, "program", ["thread:main", "thread:spawn:1"]],
       ["thread:main", "thread", ["thread:main>main", "thread:main>a", "co:main:co"]],
       ["thread:main>main", "function", []],
       ["thread:main>a", "function", []],
@@ -192,20 +194,22 @@ describe("buildExecScene", () => {
       ["co:main:co>h", "function", []],
       ["thread:spawn:1", "thread", ["thread:spawn:1>work"]],
       ["thread:spawn:1>work", "function", []],
-      ["group:none", "group", ["group:none>f"]],
-      ["group:none>f", "function", []],
+      ["project>f", "function", []],
     ]);
 
-    const root = node(s, "program");
-    expect(root.label).toBe("Program");
-    expect(root.detail).toBe("2 threads");
+    const root = node(s, "project");
+    expect(root.label).toBe("Project");
+    expect(root.detail).toBe("1 process");
     expect(root.note).toBeUndefined();
 
+    const proc = node(s, MAIN_PROCESS_ID);
+    expect(proc).toMatchObject({ label: "Process · main", detail: "1 thread", parent: "project" });
+
     const main = node(s, "thread:main");
-    expect(main).toMatchObject({ label: "Main thread", detail: "4 functions", parent: "program" });
+    expect(main).toMatchObject({ label: "Main thread", detail: "4 functions", parent: MAIN_PROCESS_ID });
     expect(main.note).toBeUndefined();
     const spawned = node(s, "thread:spawn:1");
-    expect(spawned).toMatchObject({ label: "Thread · work", detail: "1 function" });
+    expect(spawned).toMatchObject({ label: "Thread · work", detail: "1 function", parent: MAIN_PROCESS_ID });
     expect(spawned.note).toBe("Spawned at src/app.ts:5.");
 
     expect(node(s, "co:main:co")).toMatchObject({
@@ -224,12 +228,8 @@ describe("buildExecScene", () => {
       ref: "a",
     });
 
-    const group = node(s, "group:none");
-    expect(group.label).toBe("No runtime context");
-    expect(group.detail).toBe("1 function");
-    expect(group.note).toContain("module-level");
-    expect(group.note).toContain("wider scope");
-    expect(node(s, "group:none>f")).toMatchObject({ ref: "f", note: NO_RUNTIME_NOTE });
+    // A function no thread runs is plain code flow: directly on the project, with no wrapper box.
+    expect(node(s, "project>f")).toMatchObject({ ref: "f", parent: "project", note: NO_RUNTIME_NOTE });
 
     expect(s.edges).toEqual([
       { from: "co:main:co>co", to: "co:main:co>h", kind: "call", count: 1 },
@@ -248,6 +248,7 @@ describe("buildExecScene", () => {
         {
           id: "spawn:1",
           kind: "process",
+          grounded: true,
           spawn: { node: "spawn:1", owner: "src/mod.ts", file: "src/mod.ts", line: 3, how: "process", status: "resolved", candidates: false },
           roots: ["work"],
           reach: 2,
@@ -272,8 +273,10 @@ describe("buildExecScene", () => {
     expect(node(s, "thread:main").children).toEqual(["thread:main>main", "thread:main>cb", "thread:main>h"]);
     expect(node(s, "thread:main>cb").note).toBe("An anonymous function written in main.");
 
+    // The process box is named for the thread's root, and holds the thread.
+    expect(node(s, execProcessId("spawn:1"))).toMatchObject({ kind: "program", label: "Process · work", parent: "project" });
     const spawned = node(s, "thread:spawn:1");
-    expect(spawned.label).toBe("Process · work");
+    expect(spawned.parent).toBe(execProcessId("spawn:1"));
     expect(spawned.note).toBe("Spawned at src/mod.ts:3. Started by module-level code in src/mod.ts.");
 
     // No spawn edge: the owner is module-level code, which has no placement. The await dispatch is not same-thread.
@@ -336,6 +339,7 @@ describe("buildExecScene", () => {
         {
           id: "spawn:2",
           kind: "thread",
+          grounded: true,
           spawn: { node: "spawn:2", owner: "main", file: "src/app.ts", line: 7, how: "thread", status: "unresolved", candidates: false },
           roots: [],
           reach: 0,
@@ -346,6 +350,7 @@ describe("buildExecScene", () => {
         {
           id: "spawn:3",
           kind: "process",
+          grounded: true,
           spawn: {
             node: "spawn:3",
             owner: "main",
@@ -370,8 +375,8 @@ describe("buildExecScene", () => {
     expect(stub.children).toEqual([]);
     expect(stub.detail).toBe("0 functions");
     expect(stub.note).toBe("Spawned at src/app.ts:7. The spawn target could not be resolved.");
+    expect(node(s, execProcessId("spawn:3")).label).toBe("Process · job.py");
     const outside = node(s, "thread:spawn:3");
-    expect(outside.label).toBe("Process · job.py");
     expect(outside.note).toContain("outside this scope");
     expect(outside.note).toContain("several possible targets");
     expect(s.edges).toEqual([
@@ -380,7 +385,7 @@ describe("buildExecScene", () => {
     ]);
   });
 
-  it("leaves out the group when every function runs on a thread", () => {
+  it("adds no plain code flow when every function runs on a thread", () => {
     const m = model({
       functions: [fn("main")],
       threads: [mainThread({ roots: ["main"], reached: ["main"], reach: 1 })],
@@ -388,64 +393,51 @@ describe("buildExecScene", () => {
       truncated: true,
     });
     const s = buildExecScene(m);
-    expect(s.nodes.has(NO_RUNTIME_GROUP)).toBe(false);
-    const root = node(s, "program");
-    expect(root.children).toEqual(["thread:main"]);
+    expect([...s.nodes.values()].some((n) => n.parent === EXEC_PROJECT_ROOT && n.kind === "function")).toBe(false);
+    const root = node(s, EXEC_PROJECT_ROOT);
+    expect(root.children).toEqual([MAIN_PROCESS_ID]);
     expect(root.label).toBe("src/app");
-    expect(root.detail).toBe("1 thread");
+    expect(root.detail).toBe("1 process");
     expect(root.note).toContain("1 function");
   });
 
-  it("links calls among unthreaded functions inside the group", () => {
+  it("links calls among unthreaded functions, directly on the project", () => {
     const m = model({
       functions: [fn("f", 1, { runtime: "none" }), fn("g", 2, { runtime: "none" })],
-      threads: [mainThread({})],
+      threads: [mainThread({ grounded: false })],
       calls: [["f", "g"]],
       unthreaded: ["f", "g"],
     });
     const s = buildExecScene(m);
-    expect(node(s, "group:none").children).toEqual(["group:none>f", "group:none>g"]);
-    expect(s.edges).toEqual([{ from: "group:none>f", to: "group:none>g", kind: "call", count: 1 }]);
+    expect(node(s, EXEC_PROJECT_ROOT).children).toEqual(["project>f", "project>g"]);
+    expect(s.edges).toEqual([{ from: "project>f", to: "project>g", kind: "call", count: 1 }]);
   });
 
-  it("groups a large container's functions by file, root's file first, and keeps placement ids and calls", () => {
-    // FILE_GROUP_MIN + 6 functions over three files. The root is in the last file by path, so its file comes first.
+  it("draws a large container's functions directly, with no file grouping, and keeps placement ids and calls", () => {
+    // Sixteen functions over three files. The root is in the third file, and it leads the thread's children.
     const files = ["src/a.ts", "src/b.ts", "src/c.ts"];
-    const fns = Array.from({ length: FILE_GROUP_MIN + 6 }, (_, i) => fn(`f${String(i).padStart(2, "0")}`, i + 1, { file: files[i % 3] as string }));
+    const fns = Array.from({ length: 16 }, (_, i) => fn(`f${String(i).padStart(2, "0")}`, i + 1, { file: files[i % 3] as string }));
     const ids = fns.map((f) => f.id);
-    const root = ids[2] as string; // in src/c.ts
+    const root = ids[2] as string;
     const m = model({
       functions: fns,
       threads: [mainThread({ roots: [root], reached: ids })],
-      calls: [[root, ids[0] as string]], // c.ts -> a.ts, across file nodes
+      calls: [[root, ids[0] as string]],
     });
     const s = buildExecScene(m);
+    expect([...s.nodes.values()].some((n) => n.kind === "file")).toBe(false);
     const t = node(s, "thread:main");
-    expect(t.children).toEqual([execFileId("thread:main", "src/c.ts"), execFileId("thread:main", "src/a.ts"), execFileId("thread:main", "src/b.ts")]);
-    const c = node(s, execFileId("thread:main", "src/c.ts"));
-    expect(c).toMatchObject({ kind: "file", label: "c.ts", parent: "thread:main", note: "src/c.ts", detail: "10 functions" });
-    // The root leads its file; the rest follow by id.
-    expect(c.children[0]).toBe(execFnId("thread:main", root));
-    // Placement ids name the thread, not the file node, so they do not depend on grouping.
-    expect(node(s, execFnId("thread:main", ids[0] as string)).parent).toBe(execFileId("thread:main", "src/a.ts"));
+    expect(t.children).toHaveLength(16);
+    expect(t.children[0]).toBe(execFnId("thread:main", root));
+    expect(node(s, execFnId("thread:main", ids[0] as string)).parent).toBe("thread:main");
     expect(s.edges).toEqual([{ from: execFnId("thread:main", root), to: execFnId("thread:main", ids[0] as string), kind: "call", count: 1 }]);
-    expect(s.levels.file).toBeDefined();
   });
 
-  it("does not group a container at or under FILE_GROUP_MIN functions, or one with a single file", () => {
-    const small = Array.from({ length: FILE_GROUP_MIN }, (_, i) => fn(`s${i}`, i + 1, { file: i % 2 === 0 ? "src/a.ts" : "src/b.ts" }));
-    const s1 = buildExecScene(model({ functions: small, threads: [mainThread({ reached: small.map((f) => f.id) })] }));
-    expect([...s1.nodes.values()].some((n) => n.kind === "file")).toBe(false);
-    const one = Array.from({ length: FILE_GROUP_MIN + 10 }, (_, i) => fn(`o${i}`, i + 1));
-    const s2 = buildExecScene(model({ functions: one, threads: [mainThread({ reached: one.map((f) => f.id) })] }));
-    expect([...s2.nodes.values()].some((n) => n.kind === "file")).toBe(false);
-  });
-
-  it("groups the no-runtime group by file too, and keeps the note on each function", () => {
-    const fns = Array.from({ length: FILE_GROUP_MIN + 1 }, (_, i) => fn(`u${String(i).padStart(2, "0")}`, i + 1, { runtime: "none", file: i < 5 ? "src/x.ts" : "src/y.ts" }));
-    const s = buildExecScene(model({ functions: fns, threads: [mainThread({})], unthreaded: fns.map((f) => f.id) }));
-    expect(node(s, NO_RUNTIME_GROUP).children).toEqual([execFileId(NO_RUNTIME_GROUP, "src/x.ts"), execFileId(NO_RUNTIME_GROUP, "src/y.ts")]);
-    expect(node(s, execFnId(NO_RUNTIME_GROUP, "u00")).note).toBe(NO_RUNTIME_NOTE);
+  it("keeps the plain-flow note on each function that no thread runs", () => {
+    const fns = Array.from({ length: 4 }, (_, i) => fn(`u${i}`, i + 1, { runtime: "none", file: i < 2 ? "src/x.ts" : "src/y.ts" }));
+    const s = buildExecScene(model({ functions: fns, threads: [mainThread({ grounded: false })], unthreaded: fns.map((f) => f.id) }));
+    expect(node(s, EXEC_PROJECT_ROOT).children).toEqual(["project>u0", "project>u1", "project>u2", "project>u3"]);
+    expect(node(s, "project>u0").note).toBe(NO_RUNTIME_NOTE);
   });
 });
 
@@ -453,6 +445,7 @@ describe("buildExecScene with programs", () => {
   const spawnAt = (id: string, file: string, line: number, root: string): ExecThread => ({
     id,
     kind: "thread",
+    grounded: true,
     spawn: { node: id, file, line, how: "thread", status: "resolved", candidates: false },
     roots: [root],
     reach: 1,
@@ -475,7 +468,8 @@ describe("buildExecScene with programs", () => {
         fn("f", 60, { file: "src/app.ts", runtime: "none" }),
       ],
       threads: [
-        mainThread({ roots: ["lone"], reach: 1, reached: ["lone"] }),
+        // An entry function no program or spawn reaches: an ungrounded main, so its code is plain code flow.
+        mainThread({ grounded: false, roots: ["lone"], reach: 1, reached: ["lone"] }),
         mainThread({ id: "main:app:client", kind: "main", roots: ["client"], reach: 1, reached: ["client"] }),
         mainThread({ id: "main:app:server", kind: "main", roots: ["server"], reach: 1, reached: ["server"] }),
         spawnAt("spawn:1", "src/client/main.cc", 3, "w"),
@@ -500,12 +494,12 @@ describe("buildExecScene with programs", () => {
     const s = buildExecScene(programModel());
     expect(s.root).toBe(EXEC_PROJECT_ROOT);
     expect(EXEC_PROJECT_ROOT).toBe("project");
-    expect(node(s, "project")).toMatchObject({ kind: "project", label: "Project", detail: "2 programs", children: [
+    expect(node(s, "project")).toMatchObject({ kind: "project", label: "Project", detail: "2 processes", children: [
+      "project>lone",
       execProgramId("app:client"),
       execProgramId("app:server"),
-      "thread:main",
       "thread:spawn:3",
-      NO_RUNTIME_GROUP,
+      "project>f",
     ] });
     expect(node(s, execProgramId("app:client"))).toMatchObject({ kind: "program", label: "client", parent: "project", detail: "cc_binary" });
     expect(node(s, execProgramId("app:client")).note).toBe("Built from 2 files. Main function: client. Shares 1 thread with other programs.");
@@ -518,9 +512,9 @@ describe("buildExecScene with programs", () => {
     expect(node(s, execProgramId("app:client")).children).toEqual(["thread:main:app:client", "thread:spawn:1", "thread:spawn:2"]);
     expect(node(s, execProgramId("app:server")).children).toEqual(["thread:main:app:server"]);
     expect(node(s, "thread:spawn:2").parent).toBe(execProgramId("app:client"));
-    expect(node(s, "thread:main").parent).toBe("project");
+    expect(node(s, "project>lone").parent).toBe("project");
     expect(node(s, "thread:spawn:3").parent).toBe("project");
-    expect(node(s, NO_RUNTIME_GROUP).parent).toBe("project");
+    expect(node(s, "project>f").parent).toBe("project");
     // The shared thread is drawn once, so its functions appear once.
     expect([...s.nodes.values()].filter((n) => n.ref === "s")).toHaveLength(1);
   });
@@ -539,16 +533,16 @@ describe("buildExecScene with programs", () => {
       programs: [{ id: "lib:x", name: "x", targetKind: "py_binary", files: ["src/x.py"], threads: ["spawn:1"] }],
     });
     const s = buildExecScene(solo);
-    expect(node(s, "project")).toMatchObject({ label: "src", detail: "1 program" });
+    expect(node(s, "project")).toMatchObject({ label: "src", detail: "2 processes" });
     expect(node(s, execProgramId("lib:x")).note).toBe("Built from 1 file. No main function in the IR.");
     expect(node(s, "thread:spawn:1").parent).toBe(execProgramId("lib:x"));
   });
 
-  it("keeps the program root when the model has no programs", () => {
+  it("holds a grounded main with no program in a synthetic process under the project", () => {
     const s = buildExecScene(model({ functions: [fn("m", 1)], threads: [mainThread({ roots: ["m"], reach: 1, reached: ["m"] })] }));
-    expect(s.root).toBe(EXEC_ROOT);
-    expect(node(s, EXEC_ROOT)).toMatchObject({ kind: "program", label: "Program", detail: "1 thread" });
-    expect([...s.nodes.keys()].some((id) => id.startsWith("prog:") || id === "project")).toBe(false);
+    expect(s.root).toBe(EXEC_PROJECT_ROOT);
+    expect(node(s, EXEC_PROJECT_ROOT).children).toEqual([MAIN_PROCESS_ID]);
+    expect(node(s, MAIN_PROCESS_ID)).toMatchObject({ kind: "program", label: "Process · main", parent: EXEC_PROJECT_ROOT });
   });
 });
 
@@ -557,6 +551,7 @@ describe("buildExecScene: sync edges", () => {
   const worker = (id: string, reached: string[], extra: Partial<ExecThread> = {}): ExecThread => ({
     id,
     kind: "thread",
+    grounded: true,
     roots: reached.slice(0, 1),
     reach: reached.length,
     reached: [...reached].sort(),

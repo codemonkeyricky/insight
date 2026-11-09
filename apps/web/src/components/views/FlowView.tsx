@@ -66,7 +66,11 @@ export function FlowView({ id, files, scope, fn, roots }: Props) {
           const view = exec.viewOf(build);
           if (view === undefined) return null;
           const panel = { id, scope: build.path, roots, store, index: view.index, nodeId: build.nodeId, onOpen: open };
-          return build.selected ? <ExecFunctionPanel {...panel} selected={build.selected} /> : <ExecContainerPanel {...panel} />;
+          return build.selected ? (
+            <ExecFunctionPanel {...panel} selected={build.selected} />
+          ) : (
+            <ExecContainerPanel {...panel} rootKind={kind} />
+          );
         }}
       />
       {kind !== "file" && <FlowFolders id={id} scope={scope} />}

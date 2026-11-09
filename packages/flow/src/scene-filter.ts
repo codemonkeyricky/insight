@@ -1,5 +1,5 @@
 // Cuts a scene down to part of itself. The execution canvas's "roots only" view is the one cut the app makes: each
-// thread keeps the functions it starts in, with the thread and the file groups that hold them. Pure: the scene and
+// thread keeps the functions it starts in, with the thread and the process box that holds it. Pure: the scene and
 // the model are read, never changed.
 import { execFnId, execThreadId } from "./exec-scene.js";
 import type { ExecModel } from "./exec-model.js";
@@ -32,20 +32,33 @@ export function keepScene(scene: Scene, keep: ReadonlySet<string>): Scene {
 }
 
 /**
- * The execution scene's roots-only view. For each thread of the model it keeps the thread node (even when the thread
- * starts no function that the scene holds) and the placement of each of its roots in that thread, when the scene has
- * one. Coroutines and the no-runtime group are cut, and so are the functions only called from the roots. A root's
- * file group stays, as an ancestor of the root.
+ * The execution scene's roots-only view. For each grounded thread of the model it keeps the thread node (even when the
+ * thread starts no function that the scene holds) and the placement of each of its roots in that thread, when the scene
+ * has one. A root of an ungrounded thread is placed flat, directly on the project (plain code flow), so its placement
+ * there is kept instead. The flat functions with no caller inside the flat flow are kept too, since they start it.
+ * Coroutines are cut, and so are the functions only called from the roots. A root's process box stays, as an ancestor
+ * of the thread.
  */
 export function execRootsOnly(scene: Scene, model: ExecModel): Scene {
   const keep = new Set<string>();
   for (const t of model.threads) {
     const thread = execThreadId(t.id);
-    keep.add(thread);
+    // A grounded thread has a node in the scene; an ungrounded one does not, and its roots sit on the project.
+    const grounded = scene.nodes.has(thread);
+    if (grounded) keep.add(thread);
     for (const r of t.roots) {
-      const placement = execFnId(thread, r);
+      const placement = execFnId(grounded ? thread : scene.root, r);
       if (scene.nodes.has(placement)) keep.add(placement);
     }
   }
+
+  // The plain code flow: the functions placed directly on the project. A call from one of them to another makes the
+  // callee a non-root, so the roots of the flow are the ones nothing calls within it.
+  const flat = new Set<string>();
+  for (const n of scene.nodes.values()) if (n.kind === "function" && n.parent === scene.root) flat.add(n.id);
+  const called = new Set<string>();
+  for (const e of scene.edges) if (e.kind === "call" && flat.has(e.from) && flat.has(e.to)) called.add(e.to);
+  for (const id of flat) if (!called.has(id)) keep.add(id);
+
   return keepScene(scene, keep);
 }

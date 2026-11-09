@@ -39,19 +39,26 @@ export function sceneLeafSize(scene: Scene, id: string): Size {
 export function sceneLayoutOptions(scene: Scene, id: string): Record<string, string> {
   const node = scene.nodes.get(id);
   const own = (node === undefined ? undefined : scene.levels[node.kind]?.layout) ?? LAYERED;
-  if ((node?.children.length ?? 0) > LAYERED_MAX_CHILDREN && own["elk.algorithm"] === "layered") return PACKED;
+  if ((node?.children.length ?? 0) > LAYERED_MAX_CHILDREN && own["elk.algorithm"] === "layered") return COLUMNS;
   return own;
 }
 
 /**
  * The most children a container lays out with the layered algorithm. Its time grows much faster than linearly: 260
  * functions with 300 calls take about 0.4 s, 600 with 1200 calls about 7 s, and 1500 about 25 s. Past this many
- * children a container is packed instead, which ignores the edges but takes milliseconds. Scenes are expected to
- * group their children (the exec scene groups by file) so this is a guard, not the usual path.
+ * children a container is laid out in call columns instead (callColumns), which takes milliseconds and never goes to
+ * ELK, so a big container costs the same whatever its edges.
  */
 export const LAYERED_MAX_CHILDREN = 150;
 
-/** The options a container past LAYERED_MAX_CHILDREN is laid out with: rectangles packed in rows, edges ignored. */
+/** The options a container past LAYERED_MAX_CHILDREN is laid out with: call columns, see callColumns. Never sent to ELK. */
+export const COLUMNS: Record<string, string> = {
+  "elk.algorithm": "insight.columns",
+  "elk.spacing.nodeNode": "24",
+  "elk.padding": "[top=0,left=0,bottom=0,right=0]",
+};
+
+/** The options a rectpacking container lays out with (no level uses it by default): rectangles packed in rows. */
 export const PACKED: Record<string, string> = {
   "elk.algorithm": "rectpacking",
   "elk.spacing.nodeNode": "24",
@@ -243,6 +250,128 @@ export function packRows(graph: LayoutGraph): SolvedGraph {
   return { width, height: placed.length === 0 ? 0 : y + rowHeight, children: placed };
 }
 
+/**
+ * Lays a container out in call columns, flowing left to right as LAYERED does. A child's column is its BFS distance
+ * from the sources: the children nothing in the container calls, in child order. Children no source reaches start
+ * a new BFS, from the first unreached child, at column 0. Within a column, children are ordered by the mean position
+ * of their callers in earlier columns (ties by child order). A column taller than H wraps into side-by-side
+ * sub-columns, where H = max(tallest child, sqrt(totalArea / 1.5)). Linear in children plus edges; no randomness.
+ * Edges to unknown ids and self-edges are ignored. Returns the same shape as packRows.
+ */
+export function callColumns(graph: LayoutGraph): SolvedGraph {
+  const n = graph.children.length;
+  const gap = Number(graph.layoutOptions["elk.spacing.nodeNode"] ?? 24);
+  const gapOf = Number.isFinite(gap) ? gap : 24;
+  const index = new Map(graph.children.map((c, i) => [c.id, i] as const));
+  const out: number[][] = graph.children.map(() => []);
+  const into: number[][] = graph.children.map(() => []);
+  for (const e of graph.edges) {
+    for (const s of e.sources) {
+      for (const t of e.targets) {
+        const a = index.get(s);
+        const b = index.get(t);
+        if (a === undefined || b === undefined || a === b) continue;
+        out[a]?.push(b);
+        into[b]?.push(a);
+      }
+    }
+  }
+
+  // Column of each child: BFS distance from the sources, then from each child nothing above reached.
+  const depth = new Array<number>(n).fill(-1);
+  const bfs = (starts: readonly number[]): void => {
+    const queue: number[] = [];
+    for (const s of starts) {
+      depth[s] = 0;
+      queue.push(s);
+    }
+    for (let q = 0; q < queue.length; q++) {
+      const cur = queue[q] as number;
+      for (const next of out[cur] ?? []) {
+        if (depth[next] !== -1) continue;
+        depth[next] = (depth[cur] ?? 0) + 1;
+        queue.push(next);
+      }
+    }
+  };
+  bfs(graph.children.map((_, i) => i).filter((i) => (into[i]?.length ?? 0) === 0));
+  for (let i = 0; i < n; i++) if (depth[i] === -1) bfs([i]);
+
+  const columns: number[][] = [];
+  for (let i = 0; i < n; i++) {
+    const d = depth[i] ?? 0;
+    while (columns.length <= d) columns.push([]);
+    columns[d]?.push(i);
+  }
+
+  // Order each column by the barycenter of its callers in earlier columns. A child with none goes last, by child order.
+  const pos = new Array<number>(n).fill(0);
+  for (let k = 0; k < columns.length; k++) {
+    const col = columns[k] ?? [];
+    const bary = new Map<number, number>();
+    for (const i of col) {
+      let sum = 0;
+      let count = 0;
+      for (const p of into[i] ?? []) {
+        if ((depth[p] ?? 0) < k) {
+          sum += pos[p] ?? 0;
+          count += 1;
+        }
+      }
+      bary.set(i, count > 0 ? sum / count : Number.POSITIVE_INFINITY);
+    }
+    col.sort((a, b) => {
+      const ba = bary.get(a) ?? 0;
+      const bb = bary.get(b) ?? 0;
+      if (ba !== bb) return ba < bb ? -1 : 1;
+      return a - b;
+    });
+    col.forEach((i, p) => {
+      pos[i] = p;
+    });
+  }
+
+  // Stack each column, wrapping it into sub-columns past H, and lay the columns out side by side.
+  const area = graph.children.reduce((sum, c) => sum + (c.width + gapOf) * (c.height + gapOf), 0);
+  const tallest = graph.children.reduce((max, c) => Math.max(max, c.height), 0);
+  const limit = Math.max(tallest, Math.sqrt(area / 1.5));
+  const placed: { id: string; x: number; y: number }[] = [];
+  let x = 0;
+  let width = 0;
+  let height = 0;
+  for (const col of columns) {
+    const subs: { items: { i: number; y: number }[]; w: number; h: number }[] = [];
+    let cur: { items: { i: number; y: number }[]; w: number; h: number } = { items: [], w: 0, h: 0 };
+    for (const i of col) {
+      const c = graph.children[i];
+      if (c === undefined) continue;
+      let y = cur.items.length === 0 ? 0 : cur.h + gapOf;
+      if (cur.items.length > 0 && y + c.height > limit) {
+        subs.push(cur);
+        cur = { items: [], w: 0, h: 0 };
+        y = 0;
+      }
+      cur.items.push({ i, y });
+      cur.w = Math.max(cur.w, c.width);
+      cur.h = y + c.height;
+    }
+    if (cur.items.length > 0) subs.push(cur);
+    let sx = x;
+    let colHeight = 0;
+    for (const sub of subs) {
+      for (const it of sub.items) placed.push({ id: graph.children[it.i]?.id ?? "", x: sx, y: it.y });
+      sx += sub.w + gapOf;
+      colHeight = Math.max(colHeight, sub.h);
+    }
+    if (subs.length > 0) {
+      width = Math.max(width, sx - gapOf);
+      height = Math.max(height, colHeight);
+      x = sx;
+    }
+  }
+  return { width, height, children: placed };
+}
+
 /** Lays the whole scene out, deepest containers first. Deterministic for a deterministic solver. */
 export async function layoutScene(scene: Scene, solve: SceneSolver): Promise<SceneLayout> {
   // Each edge joins two children of exactly one container, so the edges are sorted out once, not once per container.
@@ -263,8 +392,10 @@ export async function layoutScene(scene: Scene, solve: SceneSolver): Promise<Sce
       if (own) sizes.set(c, frameSize({ w: own.w, h: own.h }));
     }
     const graph = graphOf(scene, id, sizes, landed.get(id) ?? []);
-    const packed = graph.layoutOptions["elk.algorithm"] === "rectpacking";
-    containers[id] = readLayout(graph, packed ? packRows(graph) : await solve(graph));
+    // The insight algorithms are ours: they are answered here, and only ELK's own algorithms reach the solver.
+    const algorithm = graph.layoutOptions["elk.algorithm"];
+    const solved = algorithm === "insight.columns" ? callColumns(graph) : algorithm === "rectpacking" ? packRows(graph) : await solve(graph);
+    containers[id] = readLayout(graph, solved);
   }
   return { containers };
 }
