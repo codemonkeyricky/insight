@@ -161,7 +161,7 @@ table.grid td.break-any { overflow-wrap: anywhere; }
 pre.code { margin: 0; font-size: 0.8rem; overflow-x: auto; }
 pre.code > div { white-space: pre; }
 pre.code > div.hit { background: var(--code-hit); }
-pre.code .gutter { display: inline-block; width: 3.5em; color: var(--muted); text-align: right; margin-right: 0.8em; user-select: none; }
+pre.code .gutter { display: inline-block; flex: none; width: var(--gutter-ch, 4ch); color: var(--muted); text-align: right; margin-right: 0.8em; user-select: none; }
 .crumbs { margin-bottom: 4px; }
 select, textarea { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
 textarea { min-height: 3.2em; width: 100%; box-sizing: border-box; resize: vertical; }
@@ -562,6 +562,20 @@ table.grid th { background: var(--faint); }
 .sh-side > .sh-close { position: absolute; top: 10px; right: 10px; z-index: 1; }
 .sh-side-body { flex: 1; min-height: 0; overflow: auto; padding-right: 30px; }
 .sh-side .sh-source { background: transparent; border: 0; padding: 0; margin: 0; }
+/* The outline sits above the code in the side panel as a collapsible section, never over it. */
+.sh-side .viewer-body { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.sh-side .outline { position: static; order: -1; max-height: 34vh; overflow: auto; padding: 8px 10px; border-radius: 12px; background: color-mix(in srgb, var(--graphite) 10%, transparent); }
+.sh-side .outline summary { cursor: pointer; font-size: var(--t-sm); font-weight: 600; }
+.sh-side .outline details[open] > summary { margin-bottom: 6px; }
+.sh-side .outline h3 { margin: 8px 0 4px; font-size: var(--t-xs); }
+.sh-side pre.code { color: var(--ink); }
+.sh-side .viewer-body pre.code { max-height: none; }
+.sh-side .viewer-head { margin-bottom: 6px; }
+.sh-keys { margin-top: 12px; font-size: var(--t-sm); }
+.sh-keys summary { cursor: pointer; color: var(--muted); }
+.sh-keys ul { margin: 6px 0 0; padding-left: 16px; display: grid; gap: 4px; color: var(--muted); }
+.sh-canvas .zm-crumbs { position: absolute; left: calc(var(--sh-gap) + 212px); top: var(--sh-gap); z-index: 6; padding: 6px 10px; border-radius: 10px; background: var(--glass-strong); box-shadow: var(--rim); }
+.sh-canvas .zm-crumbs ol { margin: 0; }
 .sh-slot { margin-top: 10px; }
 
 .sh-files { position: fixed; top: calc(var(--sh-top) + var(--sh-gap)); left: var(--sh-gap); bottom: var(--sh-gap); z-index: 50; width: min(360px, calc(100vw - 2 * var(--sh-gap))); display: flex; flex-direction: column; padding: 12px; }
@@ -587,6 +601,7 @@ table.grid th { background: var(--faint); }
   .sh-side.open { transform: none; }
   .sh-sheet[data-panel="open"] .sh-title { right: var(--sh-gap); }
   .sh-layers { width: 176px; }
+  .sh-canvas .zm-crumbs { display: none; }
 }
 @media (max-width: 520px) {
   :root { --sh-top: 96px; }

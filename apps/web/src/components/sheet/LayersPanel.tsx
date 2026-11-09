@@ -62,6 +62,17 @@ export function LayersPanel({ links, onClose }: Props) {
       <label className="sh-check">
         <input type="checkbox" checked={calls} onChange={(e) => setCalls(e.target.checked)} /> Calls
       </label>
+      <details className="sh-keys">
+        <summary>? Keyboard and mouse</summary>
+        <ul>
+          <li>Scroll, or + and -, to zoom. Zooming never opens a box.</li>
+          <li>Arrow keys pan.</li>
+          <li>Click a function to open its chart beside it. Click a call step in the chart to open the callee beside it.</li>
+          <li>Click a step that is not a call to see its source.</li>
+          <li>Enter opens the item at the centre.</li>
+          <li>Escape closes the last chart opened.</li>
+        </ul>
+      </details>
     </section>
   );
 }

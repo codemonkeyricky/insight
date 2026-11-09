@@ -61,6 +61,9 @@ interface Props {
  * side panel shows the selected function's source and its exec panel (a function's trail, chart and call lists, or a
  * container's functions), and a file's source on the source tab. Below the sheet, a folder or project lists its files.
  */
+/** The width the side panel takes over the map, with its gap on each side. */
+const SIDE_INSET = 380 + 2 * 16;
+
 export function FlowView({ id, files, scope, fn, roots, line, layers, facts, emphasis, fileSource }: Props) {
   const store = useMemo(() => new ZoomStore(id), [id]);
   const exec = useMemo(() => new ExecStore(id, roots), [id, roots]);
@@ -82,6 +85,8 @@ export function FlowView({ id, files, scope, fn, roots, line, layers, facts, emp
   const dismissed = closed !== undefined && closed.at === at && closed.build === focus;
   const open = (fileSource || focusNested) && !dismissed;
   const selectedName = fn ? fn.slice(fn.indexOf("#") + 1) : "none";
+  // The side panel (380px) sits 16px in from the right edge with a 16px gap: on a wide screen the map keeps clear of it.
+  const inset = open && (typeof window === "undefined" || window.innerWidth > 720) ? SIDE_INSET : 0;
 
   return (
     <>
@@ -97,6 +102,8 @@ export function FlowView({ id, files, scope, fn, roots, line, layers, facts, emp
             charts={{ id, scope, store }}
             onSelect={setSel}
             onFocus={setFocus}
+            hint={false}
+            inset={inset}
             detail={(build, openNode) => {
               const view = exec.viewOf(build);
               if (view === undefined || slot === null) return null;
