@@ -13,6 +13,15 @@ export function lineClass(n: number, opts: { line?: number; range?: LineRange; n
   return opts.note !== undefined ? "flag" : undefined;
 }
 
+/** The nearest ancestor that scrolls its content vertically and has room to scroll, or null when the page itself is the scroller. */
+function scrollBoxOf(el: HTMLElement): HTMLElement | null {
+  for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+    const oy = getComputedStyle(p).overflowY;
+    if ((oy === "auto" || oy === "scroll") && p.scrollHeight > p.clientHeight) return p;
+  }
+  return null;
+}
+
 /**
  * One source file: its lines with the findings flagged, an outline of its symbols, and the line in `line` scrolled to. A
  * `range` (1-based, inclusive) is tinted line by line instead, and its first line is scrolled to.
@@ -42,7 +51,15 @@ export function FileViewer({ id, path, line, range }: { id: string; path: string
     if (file && top && hit.current) {
       // A range taller than about 80% of the window (19 px a line) starts at its top, so its first line is not cut off.
       const tall = rangeStart !== undefined && rangeEnd !== undefined && rangeEnd - rangeStart + 1 > (window.innerHeight * 0.8) / 19;
-      hit.current.scrollIntoView({ block: tall ? "start" : "center" });
+      const block = tall ? "start" : "center";
+      // Inside a scrolling box (the side panel's body) only that box scrolls, so the page and the panel's pinned part stay put.
+      const box = scrollBoxOf(hit.current);
+      if (box) {
+        const r = hit.current.getBoundingClientRect();
+        const b = box.getBoundingClientRect();
+        const offset = block === "start" ? 0 : (b.height - r.height) / 2;
+        box.scrollTop += r.top - b.top - offset;
+      } else hit.current.scrollIntoView({ block });
     } else if (file && rangeStart === undefined) window.scrollTo({ top: 0 });
   }, [file, top, rangeStart, rangeEnd]);
 
