@@ -30,7 +30,7 @@ import {
   type ScopeFlow,
   type SceneLayout,
 } from "@insight/flow";
-import { buildProjectModel, scopeView as modelScopeView, type ProjectModel } from "@insight/model";
+import { buildProjectModel, scopeView as modelScopeView, serializeModel, type ProjectModel, type SerializedModel } from "@insight/model";
 import { edgeTargets, IRView, isExternal, type ProjectRoot } from "@insight/sdk";
 import { createCoreRegistry, type IREdge, type IRDocument, type IRFinding, type IRNode, type IRRecord, type KindRegistry, type NodeId } from "@insight/ir";
 import { archModel, type ArchModel } from "@insight/lens-dependencies";
@@ -351,6 +351,11 @@ export function scopeKindOf(snap: LoadedSnapshot, scope: string): ScopeKind | un
     if (path.startsWith(`${scope}/`)) folder = true;
   }
   return folder ? "folder" : undefined;
+}
+
+/** The whole-project model of a snapshot as the browser loads it: the IR document with its schema and snapshot id (see docs/scoped-ir.md). */
+export function serializedModelOf(paths: ProjectPaths, snapshot: string): SerializedModel {
+  return serializeModel(loadSnapshot(paths, snapshot).model, snapshot);
 }
 
 const pluginCache = new Map<string, Promise<LoadedPlugins>>();

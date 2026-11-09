@@ -1,6 +1,9 @@
 import type { ExecModel, FileFlow, FileFlowSummary, SceneLayout, ScopeFlow } from "@insight/flow";
 import type { ArchModel } from "@insight/lens-dependencies";
 import { ApiError } from "./apiError";
+import type { SerializedModel } from "@insight/model";
+import { scopeExecFor, scopeFlowFor } from "./model/payloads";
+import { models } from "./model/store";
 import { staticApi } from "./staticApi";
 
 // Types only: the flow package is not bundled, its charts are drawn by components/FlowChart.tsx.
@@ -366,6 +369,9 @@ const q = (params: Record<string, string | number | undefined>) => {
   return entries.length === 0 ? "" : `?${new URLSearchParams(entries.map(([k, v]) => [k, String(v)])).toString()}`;
 };
 
+/** The project's model as the server serializes it for the latest snapshot. Loaded once per project; see model/store.ts. */
+const liveModel = (id: string) => models.get(`live:${id}`, () => call<SerializedModel>("GET", `/api/projects/${id}/model`));
+
 const liveApi = {
   health: () => call<{ ok: boolean; version: string }>("GET", "/api/health"),
   projects: () => call<{ projects: Project[] }>("GET", "/api/projects").then((r) => r.projects),
@@ -374,7 +380,12 @@ const liveApi = {
     call<{ project: Project }>("POST", "/api/projects", body).then((r) => r.project),
   remove: (id: string) => call<void>("DELETE", `/api/projects/${id}`),
   reindex: (id: string, full = false) => call<{ result: string }>("POST", `/api/projects/${id}/reindex`, { full }),
-  overview: (id: string, snapshot?: string) => call<Overview>("GET", `/api/projects/${id}/overview${q({ snapshot })}`),
+  // The latest overview names the latest snapshot. When it has moved on, a model kept from the old one is dropped.
+  overview: (id: string, snapshot?: string) =>
+    call<Overview>("GET", `/api/projects/${id}/overview${q({ snapshot })}`).then((o) => {
+      if (snapshot === undefined) models.noteLatest(`live:${id}`, o.snapshot?.id);
+      return o;
+    }),
   lens: (id: string, lensId: string, snapshot?: string) =>
     call<{ snapshot: string | null; lens: LensRecord }>("GET", `/api/projects/${id}/lenses/${lensId}${q({ snapshot })}`).then((r) => r.lens),
   findings: (id: string, filter: { lens?: string; severity?: string; snapshot?: string } = {}) =>
@@ -391,10 +402,11 @@ const liveApi = {
   flow: (id: string, path: string) => call<FileFlow>("GET", `/api/projects/${id}/flow${q({ path })}`),
   flowSummary: (id: string) =>
     call<{ snapshot: string | null; files: FileFlowSummary[] }>("GET", `/api/projects/${id}/flow-summary`).then((r) => r.files),
-  // The server adds snapshot, scope and kind to the flow; the page does not use them.
-  scopeFlow: (id: string, scope: string) => call<ScopeFlow>("GET", `/api/projects/${id}/scope/flow?path=${encodeURIComponent(scope)}`),
-  // The server adds snapshot and kind to the model; the page does not use them.
-  getScopeExec: (id: string, scope: string) => call<ExecModel>("GET", `/api/projects/${id}/scope/exec?path=${encodeURIComponent(scope)}`),
+  // Computed in the page from the project model, which holds the same IR the server's /scope/flow route cuts.
+  // The payload equals the route's (snapshot, scope and kind included); the route stays for other clients.
+  scopeFlow: (id: string, scope: string): Promise<ScopeFlow> => liveModel(id).then(({ snapshot, model }) => scopeFlowFor(snapshot, model, scope)),
+  // Computed in the page from the project model, as /scope/exec answers it (see scopeFlow above).
+  getScopeExec: (id: string, scope: string): Promise<ExecModel> => liveModel(id).then(({ snapshot, model }) => scopeExecFor(snapshot, model, scope)),
   // The server adds scope, snapshot and kind to the model; the page does not use them. The model covers the whole project.
   getScopeArch: (id: string, scope: string) => call<ArchModel>("GET", `/api/projects/${id}/scope/arch?path=${encodeURIComponent(scope)}`),
   // The server lays the execution scene out whole and keeps it per snapshot. Any failure, a 404 included, gives undefined,

@@ -210,6 +210,29 @@ root view both are `inScope: true`.
 `normalizeScope` and `inScope` live in the model. Core re-exports them, and maps a bad scope to its `InputError`
 (400), so the route behavior is unchanged.
 
+### Serialized model and client-side views
+
+`serializeModel(model, snapshot)` and `loadModel(json)` (`packages/model/src/serialize.ts`) move the model
+across the wire. The file is `{ schema, snapshot, doc: { nodes, edges, findings } }` with `schema` set to
+`MODEL_SCHEMA` (1). The IR document is the source of truth, so the file holds no derived index: `loadModel`
+checks the schema and calls `buildProjectModel` again. A different schema number, or a missing `doc` array, throws.
+
+The browser builds each scope's views from this model, so a scope change needs no request:
+
+- `apps/web/src/model/store.ts` (`models`, a `ModelStore`) fetches the model once per project, builds it, and keeps
+  it. A key loaded from one snapshot is dropped when the latest overview names another. A failed load is not kept.
+- `apps/web/src/model/payloads.ts` (`scopeFlowFor`, `scopeExecFor`) answers the same payloads as `/scope/flow` and
+  `/scope/exec`. They run `summarizeScope` on `scopeView(model, scope).toDoc()` with the scope's files, and
+  `execModel` on the whole document, as `scopeFlowOf` and `scopeExecOf` do in `apps/server/src/reader.ts`.
+  The extra fields (`snapshot`, `scope`, `kind`) are the same too. The module has no browser globals, so the
+  demo capture (`scripts/capture-demo.mjs`) runs it under Node.
+- `liveApi` (`apps/web/src/api.ts`) and `staticApi` (`apps/web/src/staticApi.ts`) call those functions for
+  `scopeFlow` and `getScopeExec`. The live app reads `GET /api/projects/:id/model`. The demo reads `model.json`.
+- `apps/web/test/modelParity.test.ts` indexes this repository, and checks that both APIs return the server's JSON
+  for the root, a folder and a file, and that the live API fetches the model once.
+
+The server keeps the scope routes for other clients. Lens results and the exec layouts stay per scope.
+
 ## Server routes
 
 The routes are in `apps/server/src/app.ts`. They take `?path=<scope>`, and an optional
@@ -448,6 +471,14 @@ show in that scope.
 The result is kept in memory for up to 32 scopes, keyed by snapshot and scope. The errors are the same as
 the call flow route, which is the table below.
 
+### Whole-project model
+
+`GET /api/projects/:id/model`, with an optional `?snapshot=<id>`
+
+The serialized model of the snapshot (see "Serialized model and client-side views" above). It takes no `path`. The
+checks are the scope routes': an unknown project, `project has no snapshot yet`, and `unknown snapshot <id>`. The
+model covers the whole snapshot, so the same response serves every scope.
+
 ### Errors
 
 Errors are `{ "error": "<message>" }`.
@@ -471,8 +502,9 @@ So a bad path in a project with no snapshot gives the snapshot error.
 
 - The Web app calls these routes through `liveApi` in `apps/web/src/api.ts`. The demo build reads
   the same data from captured files under `scope/<key>/` (see `scripts/capture-demo.mjs`):
-  `lenses.json`, `<lensId>.json`, `flow.json` (the `/scope/flow` payload) and `exec.json` (the
-  `/scope/exec` payload). `flow.json` and `exec.json` exist only for a scope with at least one function.
+  `lenses.json`, `<lensId>.json`, and `exec-layout.json` (the laid-out exec scene, for a scope with at least one
+  function). The demo writes one `model.json` for the whole project. The browser computes each scope's flow and exec
+  from it (see "Serialized model and client-side views"), so the demo writes no per-scope `flow.json` or `exec.json`.
   The root key is `@root`.
 - The demo holds one project and its id is random on every capture, so `staticApi` ignores the id in
   the URL. A link from an earlier deploy keeps working.

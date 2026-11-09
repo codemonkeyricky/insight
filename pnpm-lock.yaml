@@ -91,6 +91,9 @@ importers:
       '@insight/lens-dependencies':
         specifier: workspace:*
         version: link:../../packages/lens-dependencies
+      '@insight/model':
+        specifier: workspace:*
+        version: link:../../packages/model
       '@types/cytoscape':
         specifier: 3.31.0
         version: 3.31.0

@@ -40,6 +40,7 @@ import {
   scopeFlowOf,
   scopeLensRows,
   scopeView,
+  serializedModelOf,
 } from "./reader.js";
 import { readFileText, sourceSlice } from "./source.js";
 import { closeExecLayoutWorker } from "./exec-layout.js";
@@ -285,6 +286,15 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
     if (!snapshot) throw new ProjectError(404, "project has no snapshot yet");
     const { scope, kind, arch } = scopeArchOf(pathsFor(p), snapshot, path);
     return { snapshot, scope, kind, ...arch };
+  });
+
+  // The whole-project model of a snapshot, serialized once per request. The browser builds its scope views from it,
+  // so the scope routes above stay for other clients. Same snapshot and errors as the scope routes.
+  app.get<{ Params: ProjectParams; Querystring: SnapshotQuery }>("/api/projects/:id/model", async (req) => {
+    const p = project(req.params.id);
+    const snapshot = resolveSnapshot(pathsFor(p), req.query.snapshot);
+    if (!snapshot) throw new ProjectError(404, "project has no snapshot yet");
+    return serializedModelOf(pathsFor(p), snapshot);
   });
 
   app.get<{ Params: ProjectParams; Querystring: SnapshotQuery & { lens?: string; severity?: string } }>(
