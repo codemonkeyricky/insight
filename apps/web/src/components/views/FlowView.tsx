@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { api, type FileEntry, type FileFlowSummary, type FindingRow } from "../../api";
 import { hrefFlow, hrefView, inScope } from "../../router";
 import { ExecStore } from "../../zoom/execStore";
+import { kindOf } from "../../findingGroups";
 import { findingCounts } from "../../zoom/findingsLayer";
 import { ZoomStore } from "../../zoom/scene";
 import type { MapBuild } from "../../zoom/source";
@@ -56,6 +57,8 @@ interface Props {
   emphasis: boolean;
   /** The source tab on a file: the side panel shows the file's source. */
   fileSource: boolean;
+  /** Set by "Show in Flow": the findings layer is on, drawing only the findings of this kind. */
+  findingKind?: string;
 }
 
 /**
@@ -68,12 +71,16 @@ const SIDE_INSET = 380 + 2 * 16;
 /** The Layers panel (200 px at 16 px from the left edge) and a 16 px gap: the map's left inset while it is open. */
 const LAYERS_INSET = 200 + 16 + 16;
 
-export function FlowView({ id, files, scope, fn, roots, line, layers, facts, emphasis, fileSource }: Props) {
+export function FlowView({ id, files, scope, fn, roots, line, layers, facts, emphasis, fileSource, findingKind }: Props) {
   const store = useMemo(() => new ZoomStore(id), [id]);
   const exec = useMemo(() => new ExecStore(id, roots), [id, roots]);
   const kind = scopeKind(scope, files);
   /** What the map shows: frames and calls on by default, findings off until the reader turns the layer on. */
-  const [shown, setShown] = useState<LayerState>({ frames: true, calls: true, findings: false });
+  const [shown, setShown] = useState<LayerState>(() => ({ frames: true, calls: true, findings: findingKind !== undefined }));
+  // A "Show in Flow" link for a kind turns the findings layer on, even when the flow is already open.
+  useEffect(() => {
+    if (findingKind !== undefined) setShown((s) => (s.findings ? s : { ...s, findings: true }));
+  }, [findingKind]);
   const findingsOn = shown.findings;
   /** The findings of the project, loaded the first time the findings layer is on. */
   const [found, setFound] = useState<{ id: string; rows: FindingRow[] } | undefined>();
@@ -93,7 +100,10 @@ export function FlowView({ id, files, scope, fn, roots, line, layers, facts, emp
       cancelled = true;
     };
   }, [id, findingsOn, found?.id]);
-  const findingRows = found?.id === id ? found.rows : undefined;
+  const findingRows = useMemo(
+    () => (found?.id === id ? (findingKind === undefined ? found.rows : found.rows.filter((f) => kindOf(f) === findingKind)) : undefined),
+    [found, id, findingKind],
+  );
   const counts = useMemo(() => (findingRows ? findingCounts(findingRows) : undefined), [findingRows]);
   const mapLayers = useMemo(() => ({ frames: shown.frames, calls: shown.calls }), [shown.frames, shown.calls]);
   /** The function the map selects, with its construct. */

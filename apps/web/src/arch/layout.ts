@@ -2,8 +2,9 @@ import type { ArchEdge, ArchModel, ArchPackage } from "@insight/lens-dependencie
 
 // Pure geometry for the Arch tab. The view draws what archLayout returns and keeps no sizes of its own.
 
-export const ARCH_BOX_W = 170;
-export const ARCH_BOX_H = 52;
+/** A folder card: wide and tall enough for a 23 px name over a 16 px line. */
+export const ARCH_BOX_W = 250;
+export const ARCH_BOX_H = 76;
 /** Space between two columns, where the arrows run. */
 export const ARCH_COL_GAP = 90;
 export const ARCH_BOX_GAP = 18;

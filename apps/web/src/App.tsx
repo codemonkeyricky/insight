@@ -62,6 +62,7 @@ export function App() {
             base={route.base}
             head={route.head}
             full={route.full}
+            findingKind={route.kind}
           />
         )}
         {route.name === "unknown" && (

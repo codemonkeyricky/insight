@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
-import { api, type ArchEdge, type ArchModel, type ArchPackage, type Span } from "../../api";
-import { ARCH_HEADER_H, ARCH_PAD, archLayout, arrowKey, arrowLabel, arrowsOf, type ArchBox } from "../../arch/layout";
-import { hrefFile } from "../../router";
+import { api, type ArchModel, type Span } from "../../api";
+import { ARCH_HEADER_H, ARCH_PAD, archLayout, arrowKey, arrowLabel, type ArchBox } from "../../arch/layout";
+import { hrefFile, hrefView } from "../../router";
 
-/** What is selected in the diagram: one package, or one arrow named by its key. */
-type Selection = { kind: "box"; id: string } | { kind: "arrow"; key: string } | null;
+/** What is selected in the diagram: one arrow, named by its key. A click on a folder opens it in Flow instead. */
+type Selection = { kind: "arrow"; key: string } | null;
 
-const LABEL_CHARS = 24;
+const LABEL_CHARS = 18;
 
 const fit = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
@@ -14,9 +14,9 @@ const layerTitle = (layer: string): string => (layer === "ir" ? "IR" : layer.cha
 const siteLine = (span: Span): number => span.start[0] + 1;
 
 /**
- * The arch tab: the package architecture of the project, drawn as one column per layer. Packages are boxes, and each
- * import between two packages is an arrow. Selecting a box or an arrow lights its arrows and fills the side panel.
- * The whole project is shown whatever the explorer scope is.
+ * The arch tab: the package architecture of the project, drawn as one column per layer. Packages are folder cards, and each
+ * import between two packages is an arrow. Clicking a folder opens it in Flow, scoped to that folder. Selecting an arrow
+ * lights its two ends and fills the side panel. The whole project is shown whatever the explorer scope is.
  */
 export function ArchView({ id }: { id: string }) {
   const [done, setDone] = useState<{ id: string; model?: ArchModel; error?: string } | null>(null);
@@ -47,29 +47,26 @@ function ArchDiagram({ id, model }: { id: string; model: ArchModel }) {
   const layout = useMemo(() => archLayout(model), [model]);
   const [sel, setSel] = useState<Selection>(null);
 
-  // The boxes lit by the selection: the package and its neighbours, or the two ends of the arrow.
+  // The boxes lit by the selection: the two ends of the selected arrow.
   const lit = useMemo<Set<string> | null>(() => {
     if (sel === null) return null;
-    if (sel.kind === "box") {
-      const { incoming, outgoing } = arrowsOf(model, sel.id);
-      return new Set([sel.id, ...incoming.map((e) => e.from), ...outgoing.map((e) => e.to)]);
-    }
     const arrow = layout.arrows.find((a) => a.key === sel.key);
     return arrow ? new Set([arrow.from, arrow.to]) : null;
-  }, [sel, model, layout]);
+  }, [sel, layout]);
 
-  const arrowLit = (from: string, to: string, key: string): boolean => {
-    if (sel === null) return false;
-    return sel.kind === "box" ? from === sel.id || to === sel.id : key === sel.key;
-  };
+  const arrowLit = (key: string): boolean => sel !== null && key === sel.key;
 
   // Lit arrows are drawn last, so they sit on top of the rest.
-  const arrows = [...layout.arrows].sort((a, b) => Number(arrowLit(a.from, a.to, a.key)) - Number(arrowLit(b.from, b.to, b.key)));
+  const arrows = [...layout.arrows].sort((a, b) => Number(arrowLit(a.key)) - Number(arrowLit(b.key)));
 
+  // A folder opens in Flow, scoped to it: the Flow far tier then shows the folder's child cards. The root package ('.') is the project.
+  const openBox = (box: ArchBox) => {
+    window.location.hash = hrefView(id, "flow", { scope: box.pkg.id === "." ? "" : box.pkg.id });
+  };
   const boxKey = (box: ArchBox, e: KeyboardEvent<SVGGElement>) => {
     if (e.key !== "Enter" && e.key !== " ") return;
     e.preventDefault();
-    setSel({ kind: "box", id: box.id });
+    openBox(box);
   };
 
   return (
@@ -92,7 +89,7 @@ function ArchDiagram({ id, model }: { id: string; model: ArchModel }) {
             </text>
           ))}
           {arrows.map((a) => {
-            const on = arrowLit(a.from, a.to, a.key);
+            const on = arrowLit(a.key);
             const dim = sel !== null && !on;
             const cls = ["arch-arrow", on && "lit", dim && "dim", a.violation && "violation", a.dashed && "dashed"].filter(Boolean).join(" ");
             const pick = (e: { stopPropagation: () => void }) => {
@@ -112,28 +109,27 @@ function ArchDiagram({ id, model }: { id: string; model: ArchModel }) {
             );
           })}
           {layout.boxes.map((box) => {
-            const selected = sel?.kind === "box" && sel.id === box.id;
             const dim = lit !== null && !lit.has(box.id);
-            const cls = ["arch-box", selected && "selected", dim && "dim"].filter(Boolean).join(" ");
+            const cls = ["arch-box", dim && "dim"].filter(Boolean).join(" ");
             return (
               <g
                 key={box.id}
                 className={cls}
                 role="button"
                 tabIndex={0}
-                aria-label={`${box.pkg.name}, ${plural(box.pkg.fileCount, "file")}`}
+                aria-label={`${box.pkg.name}, ${plural(box.pkg.fileCount, "file")}. Open in Flow`}
                 onClick={(e) => {
                   e.stopPropagation();
-                  setSel({ kind: "box", id: box.id });
+                  openBox(box);
                 }}
                 onKeyDown={(e) => boxKey(box, e)}
               >
-                <title>{box.pkg.path}</title>
-                <rect x={box.x} y={box.y} width={box.w} height={box.h} rx={10} style={{ fill: `var(--band-${box.column % 6})` }} />
-                <text className="arch-name" x={box.x + 12} y={box.y + 22}>
+                <title>{`${box.pkg.id}: open in Flow`}</title>
+                <rect x={box.x} y={box.y} width={box.w} height={box.h} rx={14} style={{ fill: `var(--band-${box.column % 6})` }} />
+                <text className="arch-name" x={box.x + 14} y={box.y + 34}>
                   {fit(box.pkg.name, LABEL_CHARS)}
                 </text>
-                <text className="arch-sub" x={box.x + 12} y={box.y + 40}>
+                <text className="arch-sub" x={box.x + 14} y={box.y + 60}>
                   {plural(box.pkg.fileCount, "file")}
                 </text>
               </g>
@@ -141,26 +137,24 @@ function ArchDiagram({ id, model }: { id: string; model: ArchModel }) {
           })}
         </svg>
       </div>
-      <Panel id={id} model={model} sel={sel} select={setSel} />
+      <Panel id={id} model={model} sel={sel} />
     </div>
   );
 }
 
-function Panel({ id, model, sel, select }: { id: string; model: ArchModel; sel: Selection; select: (s: Selection) => void }) {
+function Panel({ id, model, sel }: { id: string; model: ArchModel; sel: Selection }) {
   return (
     <aside className="arch-panel">
       {sel === null ? (
         <>
           <Violations id={id} model={model} />
           <p className="muted small">
-            Select a package to see what it imports and what imports it. Select an arrow to see its import sites. An arrow&apos;s number counts
-            imports; &quot;c&quot; means calls only. Dashed arrows are inferred, for example a workspace import matched by package name.
+            Click a folder to open it in Flow. Select an arrow to see its import sites. An arrow&apos;s number counts imports; &quot;c&quot;
+            means calls only. Dashed arrows are inferred, for example a workspace import matched by package name.
           </p>
         </>
-      ) : sel.kind === "arrow" ? (
-        <ArrowDetail id={id} model={model} arrow={sel.key} />
       ) : (
-        <BoxDetail model={model} pkgId={sel.id} select={select} />
+        <ArrowDetail id={id} model={model} arrow={sel.key} />
       )}
       <Unresolved id={id} model={model} />
     </aside>
@@ -227,55 +221,6 @@ function Sites({ id, sites }: { id: string; sites: Span[] }) {
           <a className="mono small" href={hrefFile(id, s.file, siteLine(s))}>
             {s.file}:{siteLine(s)}
           </a>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function BoxDetail({ model, pkgId, select }: { model: ArchModel; pkgId: string; select: (s: Selection) => void }) {
-  const pkg: ArchPackage | undefined = model.packages.find((p) => p.id === pkgId);
-  if (!pkg) return null;
-  const { incoming, outgoing } = arrowsOf(model, pkg.id);
-  const externals = model.externals.filter((x) => x.fromPackage === pkg.id);
-  return (
-    <section>
-      <h2>{pkg.name}</h2>
-      <p className="mono small">{pkg.path}</p>
-      <p className="muted small">
-        {layerTitle(pkg.layer)} layer, {plural(pkg.fileCount, "file")}
-      </p>
-      <h3>Imports ({outgoing.length})</h3>
-      <EdgeList edges={outgoing} end="to" select={select} empty="Imports no other package." />
-      <h3>Imported by ({incoming.length})</h3>
-      <EdgeList edges={incoming} end="from" select={select} empty="No other package imports it." />
-      <h3>External dependencies ({externals.length})</h3>
-      {externals.length === 0 ? (
-        <p className="muted small">Imports nothing from outside the project.</p>
-      ) : (
-        <ul className="arch-list">
-          {externals.map((x) => (
-            <li key={x.name} className="mono small">
-              {x.name} <span className="muted">({x.imports})</span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-}
-
-/** The packages on the other end of arrows. Each one selects its arrow, so its import sites show. */
-function EdgeList({ edges, end, select, empty }: { edges: ArchEdge[]; end: "from" | "to"; select: (s: Selection) => void; empty: string }) {
-  if (edges.length === 0) return <p className="muted small">{empty}</p>;
-  return (
-    <ul className="arch-list">
-      {edges.map((e) => (
-        <li key={arrowKey(e.from, e.to)}>
-          <button type="button" className="arch-link mono small" onClick={() => select({ kind: "arrow", key: arrowKey(e.from, e.to) })}>
-            {e[end]}
-          </button>{" "}
-          <span className="muted small">{plural(e.imports, "import")}</span>
         </li>
       ))}
     </ul>
