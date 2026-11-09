@@ -7,6 +7,8 @@ interface Props {
   /** The panel's name for screen readers. */
   label: string;
   onClose: () => void;
+  /** Content pinned above the scrolling body: it stays in view while the body scrolls. Capped at a share of the panel. */
+  pinned?: ReactNode;
   children: ReactNode;
 }
 
@@ -67,7 +69,7 @@ interface Motion {
  * rest nearest that point, with the release speed as the glide's start speed, so the motion has no seam. A drag past the
  * closed rest closes it. A glide can be caught mid-flight by a new press.
  */
-export function SidePanel({ open, label, onClose, children }: Props) {
+export function SidePanel({ open, label, onClose, pinned, children }: Props) {
   const asideRef = useRef<HTMLElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const [rest, setRestState] = useState<Motion["rest"]>("mid");
@@ -248,6 +250,7 @@ export function SidePanel({ open, label, onClose, children }: Props) {
           <path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
         </svg>
       </button>
+      {pinned && <div className="sh-pinned">{pinned}</div>}
       <div className="sh-side-body" ref={bodyRef}>
         {children}
       </div>

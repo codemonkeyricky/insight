@@ -16,6 +16,7 @@ import { TitleBlock, type TitleFacts } from "../sheet/TitleBlock";
 import { ExecContainerPanel } from "../zoom/ExecContainerPanel";
 import { ExecFunctionPanel } from "../zoom/ExecFunctionPanel";
 import { FunctionSource } from "../zoom/FunctionSource";
+import { FunctionRefs } from "../zoom/RefLists";
 import { Stat } from "../zoom/FunctionDetail";
 import { ZoomMap, type MapSelection } from "../zoom/ZoomMap";
 import { SourceView } from "./SourceView";
@@ -198,9 +199,10 @@ export function FlowView({ id, files, scope, fn, roots, line, layers, facts, emp
           open={open}
           label="Detail"
           onClose={() => setClosed({ build: focus, at })}
+          pinned={sel && <FunctionRefs id={id} sel={sel} roots={roots} />}
         >
           {fileSource && !sel && <SourceView id={id} files={files} scope={scope} line={line} />}
-          {sel && <FunctionSource id={id} store={store} sel={sel} roots={roots} />}
+          {sel && <FunctionSource id={id} store={store} sel={sel} />}
           <div className="sh-slot" ref={setSlot} />
         </SidePanel>
       </div>

@@ -316,6 +316,11 @@ a.flow-node:hover :is(rect, polygon, circle) { stroke: var(--accent); stroke-wid
 .ref-group { margin-top: 6px; }
 .ref-group h4 { margin: 0 0 2px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
 .ref-group .call-list li { font-size: 0.9rem; }
+/* A whole row is the link: a click or Enter anywhere on it opens the function. */
+.ref-row { display: block; padding: 3px 6px; border-radius: 6px; cursor: pointer; text-decoration: none; }
+.ref-row:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.ref-row:hover .ref-name { text-decoration: underline; }
+.ref-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* Lens tree */
 .tree { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; overflow-x: auto; }
@@ -613,6 +618,13 @@ table.grid th { background: var(--faint); }
 .sh-side.open { transform: none; visibility: visible; }
 .sh-side > .sh-close { position: absolute; top: 10px; right: 10px; z-index: 1; }
 .sh-side-body { flex: 1; min-height: 0; overflow: auto; padding-right: 30px; }
+/* The pinned lists sit above the scrolling source: at most 35% of the panel, scrolling inside it when longer. The right
+   padding keeps the close button clear of the lists. */
+.sh-pinned { flex: 0 1 auto; min-height: 0; max-height: 35%; overflow: auto; overscroll-behavior: contain; touch-action: pan-y; margin-bottom: 8px; padding-right: 30px; border-radius: 12px; background: color-mix(in srgb, var(--graphite) 10%, transparent); }
+.sh-pinned .ref-lists { padding: 8px 10px; border-bottom: 0; }
+.sh-pinned .ref-list > summary { font-size: var(--t-sm); }
+.sh-pinned .ref-group { margin-top: 4px; }
+.sh-pinned .muted.small { font-size: var(--t-xs); }
 .sh-side .sh-source { background: transparent; border: 0; padding: 0; margin: 0; }
 /* The outline sits above the code in the side panel as a collapsible section, never over it. */
 .sh-side .viewer-body { grid-template-columns: minmax(0, 1fr); gap: 10px; }
