@@ -1,65 +1,107 @@
+/* Visual system: Apple liquid-glass tokens. Light is the base; dark is the default (see theme.ts and the inline script in index.html). */
 :root {
-  --bg: #f6f7f9;
-  --fg: #1d2433;
-  --muted: #5d6578;
-  --panel: #ffffff;
-  --line: #d9dde6;
-  --accent: #3b6fd1;
-  --sync: #c2410c;
-  --ok: #2f7d5b;
-  --warn: #a86b00;
-  --error: #b3261e;
-  --code-hit: #fff3c4;
-  --band-0: #e6eefb;
-  --band-1: #e7f4ec;
-  --band-2: #fbf1de;
-  --band-3: #f1e8f7;
-  --band-4: #fbe7e4;
-  --band-5: #e3f2f4;
-  color-scheme: light dark;
+  --film: #F2F2F7;       /* window ground behind the cards */
+  --sheet: #FFFFFF;      /* cards, panels */
+  --box: #F5F5F7;        /* inputs, wells, code */
+  --raised: #FFFFFF;
+  --raised-box: #F5F5F7;
+  --ink: #1D1D1F;        /* primary text and lines */
+  --graphite: #6E6E73;   /* secondary text, thin lines */
+  --rule: #D2D2D7;       /* opaque separators */
+  --faint: rgba(118, 118, 128, 0.12);  /* tertiary fill: controls, hover */
+  --hair: rgba(60, 60, 67, 0.16);      /* hairline separators */
+  --accent: #0071E3;     /* selection, links, detail callouts */
+  --on-accent: #FFFFFF;
+  --thread: #5E5CE6;     /* indigo: thread frames */
+  --coroutine: #C26A00;  /* orange: coroutine frames, await */
+  --red: #E0352B;        /* findings, errors */
+  --switch-on: #34C759;
+  --thumb: #FFFFFF;      /* segmented control thumb */
+  --shadow: rgba(0, 0, 0, 0.10);
+  --glass: rgba(255, 255, 255, 0.46);          /* small floating cards */
+  --glass-strong: rgba(255, 255, 255, 0.60);   /* big panels read thicker */
+  --sheen: rgba(255, 255, 255, 0.65);          /* light catching the top of the material */
+  --gloss: rgba(255, 255, 255, 0.34);          /* highlight across a glossy button */
+  --rim: inset 0 1px 0 rgba(255, 255, 255, 0.95), inset 0 0 0 1px rgba(255, 255, 255, 0.45);
+  --btn-glass: linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.42));
+  --btn-glass-hover: linear-gradient(180deg, rgba(255, 255, 255, 1), rgba(255, 255, 255, 0.62));
+  --btn-rim: inset 0 1px 0 rgba(255, 255, 255, 1), inset 0 0 0 0.5px rgba(0, 0, 0, 0.10), 0 1px 2px rgba(0, 0, 0, 0.06), 0 3px 10px rgba(0, 0, 0, 0.06);
+  --zone-fill: rgba(255, 255, 255, 0.62);
+  --ambient: radial-gradient(60% 75% at 0% 0%, rgba(0, 122, 255, 0.22), transparent 70%),
+             radial-gradient(50% 65% at 100% 0%, rgba(175, 82, 222, 0.18), transparent 70%),
+             radial-gradient(60% 75% at 100% 100%, rgba(255, 149, 0, 0.16), transparent 70%),
+             radial-gradient(55% 70% at 0% 100%, rgba(52, 199, 89, 0.14), transparent 70%);
+  --float: 0 0 0 0.5px rgba(0, 0, 0, 0.06), 0 2px 6px rgba(0, 0, 0, 0.05), 0 14px 36px rgba(0, 0, 0, 0.10);
+
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter Variable", "Inter", system-ui, sans-serif;
+  --font-code: ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", Menlo, monospace;
+  --t-xs: 11px; --t-sm: 13px; --t-md: 14px; --t-lg: 17px; --t-xl: 22px;
+
+  /* Names the views already use, defined from the tokens above so old and new markup agree. */
+  --bg: var(--box);
+  --fg: var(--ink);
+  --muted: var(--graphite);
+  --panel: var(--sheet);
+  --line: var(--rule);
+  --sync: var(--coroutine);
+  --ok: var(--switch-on);
+  --warn: var(--coroutine);
+  --error: var(--red);
+  --code-hit: color-mix(in srgb, var(--coroutine) 22%, transparent);
+  --band-0: color-mix(in srgb, var(--accent) 14%, var(--sheet));
+  --band-1: color-mix(in srgb, var(--switch-on) 14%, var(--sheet));
+  --band-2: color-mix(in srgb, var(--coroutine) 16%, var(--sheet));
+  --band-3: color-mix(in srgb, var(--thread) 16%, var(--sheet));
+  --band-4: color-mix(in srgb, var(--red) 14%, var(--sheet));
+  --band-5: color-mix(in srgb, var(--graphite) 14%, var(--sheet));
+  color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #14171f;
-    --fg: #e6e9f0;
-    --muted: #9aa3b5;
-    --panel: #1c212c;
-    --line: #2e3545;
-    --accent: #7aa2f0;
-    --sync: #fb923c;
-    --ok: #5fbf93;
-    --warn: #e0a84d;
-    --error: #f08a80;
-    --code-hit: #4a3f10;
-    --band-0: #1f2d44;
-    --band-1: #1d3a2c;
-    --band-2: #3d3018;
-    --band-3: #33243f;
-    --band-4: #3f2422;
-    --band-5: #1b3436;
+    --film: #0E0E10; --sheet: #1C1C1E; --box: #2C2C2E; --raised: #2C2C2E; --raised-box: #3A3A3C; --ink: #F5F5F7; --graphite: #98989D; --rule: #3A3A3C;
+    --faint: rgba(118, 118, 128, 0.24); --hair: rgba(255, 255, 255, 0.10);
+    --accent: #2997FF; --thread: #8B89FF; --coroutine: #FF9F0A; --red: #FF453A; --switch-on: #30D158; --thumb: #636366;
+    --shadow: rgba(0, 0, 0, 0.5); --glass: rgba(30, 30, 34, 0.48); --glass-strong: rgba(30, 30, 34, 0.62);
+    --sheen: rgba(255, 255, 255, 0.09); --gloss: rgba(255, 255, 255, 0.16);
+    --rim: inset 0 1px 0 rgba(255, 255, 255, 0.20), inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+    --btn-glass: linear-gradient(180deg, rgba(255, 255, 255, 0.20), rgba(255, 255, 255, 0.06));
+    --btn-glass-hover: linear-gradient(180deg, rgba(255, 255, 255, 0.26), rgba(255, 255, 255, 0.11));
+    --btn-rim: inset 0 1px 0 rgba(255, 255, 255, 0.24), inset 0 0 0 0.5px rgba(255, 255, 255, 0.08), 0 1px 3px rgba(0, 0, 0, 0.4);
+    --zone-fill: rgba(28, 28, 30, 0.66);
+    --ambient: radial-gradient(60% 75% at 0% 0%, rgba(10, 132, 255, 0.30), transparent 70%),
+               radial-gradient(50% 65% at 100% 0%, rgba(191, 90, 242, 0.24), transparent 70%),
+               radial-gradient(60% 75% at 100% 100%, rgba(255, 159, 10, 0.16), transparent 70%),
+               radial-gradient(55% 70% at 0% 100%, rgba(48, 209, 88, 0.14), transparent 70%);
+    --float: 0 0 0 0.5px rgba(255, 255, 255, 0.09), 0 2px 6px rgba(0, 0, 0, 0.3), 0 14px 36px rgba(0, 0, 0, 0.5);
+    color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
-  --bg: #14171f;
-  --fg: #e6e9f0;
-  --muted: #9aa3b5;
-  --panel: #1c212c;
-  --line: #2e3545;
-  --accent: #7aa2f0;
-  --sync: #fb923c;
-  --ok: #5fbf93;
-  --warn: #e0a84d;
-  --error: #f08a80;
-  --code-hit: #4a3f10;
-  --band-0: #1f2d44;
-  --band-1: #1d3a2c;
-  --band-2: #3d3018;
-  --band-3: #33243f;
-  --band-4: #3f2422;
-  --band-5: #1b3436;
+  --film: #0E0E10; --sheet: #1C1C1E; --box: #2C2C2E; --raised: #2C2C2E; --raised-box: #3A3A3C; --ink: #F5F5F7; --graphite: #98989D; --rule: #3A3A3C;
+  --faint: rgba(118, 118, 128, 0.24); --hair: rgba(255, 255, 255, 0.10);
+  --accent: #2997FF; --thread: #8B89FF; --coroutine: #FF9F0A; --red: #FF453A; --switch-on: #30D158; --thumb: #636366;
+  --shadow: rgba(0, 0, 0, 0.5); --glass: rgba(30, 30, 34, 0.48); --glass-strong: rgba(30, 30, 34, 0.62);
+  --sheen: rgba(255, 255, 255, 0.09); --gloss: rgba(255, 255, 255, 0.16);
+  --rim: inset 0 1px 0 rgba(255, 255, 255, 0.20), inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --btn-glass: linear-gradient(180deg, rgba(255, 255, 255, 0.20), rgba(255, 255, 255, 0.06));
+  --btn-glass-hover: linear-gradient(180deg, rgba(255, 255, 255, 0.26), rgba(255, 255, 255, 0.11));
+  --btn-rim: inset 0 1px 0 rgba(255, 255, 255, 0.24), inset 0 0 0 0.5px rgba(255, 255, 255, 0.08), 0 1px 3px rgba(0, 0, 0, 0.4);
+  --zone-fill: rgba(28, 28, 30, 0.66);
+  --ambient: radial-gradient(60% 75% at 0% 0%, rgba(10, 132, 255, 0.30), transparent 70%),
+             radial-gradient(50% 65% at 100% 0%, rgba(191, 90, 242, 0.24), transparent 70%),
+             radial-gradient(60% 75% at 100% 100%, rgba(255, 159, 10, 0.16), transparent 70%),
+             radial-gradient(55% 70% at 0% 100%, rgba(48, 209, 88, 0.14), transparent 70%);
+  --float: 0 0 0 0.5px rgba(255, 255, 255, 0.09), 0 2px 6px rgba(0, 0, 0, 0.3), 0 14px 36px rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
 }
+:root[data-theme="light"] { color-scheme: light; }
+
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+body {
+  margin: 0; background: var(--ambient), var(--film); background-attachment: fixed; color: var(--ink);
+  font: 400 var(--t-md)/1.45 var(--font-ui); letter-spacing: -0.006em; font-optical-sizing: auto;
+  -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+}
 a { color: var(--accent); }
 h1 { font-size: 1.5rem; margin: 0.4rem 0; }
 h2 { font-size: 1.15rem; margin: 1.4rem 0 0.4rem; }
@@ -81,7 +123,7 @@ h3 { font-size: 1rem; margin: 1rem 0 0.3rem; }
 .field { display: grid; gap: 4px; }
 .field span { font-size: 0.85rem; color: var(--muted); }
 input[type="text"], input:not([type]), input[type="url"] { font: inherit; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
-button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; }
+button { font: inherit; padding: 6px 12px; border-radius: 6px; cursor: pointer; }
 button:disabled { opacity: 0.5; cursor: default; }
 button.link { background: none; border: none; color: var(--accent); padding: 0; text-decoration: underline; }
 .cards { list-style: none; padding: 0; display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
@@ -147,8 +189,8 @@ textarea { min-height: 3.2em; width: 100%; box-sizing: border-box; resize: verti
 .lens-empty { border: 1px dashed var(--line); border-radius: 8px; padding: 12px 14px; margin: 8px 0; color: var(--muted); }
 .lens-empty p { margin: 0; }
 /* The key of a graph: a dot in the colour of the nodes it stands for. */
-.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: middle; background: #3b6fd1; }
-.swatch.outside { background: #9aa3b2; }
+.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: middle; background: var(--accent); }
+.swatch.outside { background: var(--graphite); }
 .lens-empty p + p { margin-top: 4px; }
 
 /* Workspace: the explorer on the left, the view on the right */
@@ -163,7 +205,7 @@ textarea { min-height: 3.2em; width: 100%; box-sizing: border-box; resize: verti
 .explorer > p { margin: 6px 0; }
 .node { color: var(--fg); text-decoration: none; border-radius: 4px; padding: 1px 6px; }
 .node:hover, .file:hover { background: var(--bg); }
-.node.on, .file.on { background: var(--accent); color: #fff; }
+.node.on, .file.on { background: var(--accent); color: var(--on-accent); box-shadow: inset 0 1px 0 var(--gloss); }
 .node.root { display: block; font-weight: 600; margin-bottom: 4px; }
 .dir > summary { cursor: pointer; padding: 2px 0; }
 .dir-kids { margin-left: 8px; padding-left: 10px; border-left: 1px solid var(--line); }
@@ -171,12 +213,12 @@ textarea { min-height: 3.2em; width: 100%; box-sizing: border-box; resize: verti
 .fname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .count { font-size: 0.72rem; padding: 0 6px; border-radius: 999px; border: 1px solid var(--line); }
 .count.warn { color: var(--warn); border-color: var(--warn); }
-.node.on .count, .file.on .count { color: #fff; border-color: #fff; }
+.node.on .count, .file.on .count { color: var(--on-accent); border-color: var(--on-accent); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
 .chip { padding: 3px 10px; border: 1px solid var(--line); border-radius: 999px; text-decoration: none; color: var(--fg); background: var(--panel); font-size: 0.88rem; }
 .chip:hover { border-color: var(--accent); }
-.chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
-.chip.on .muted { color: #e8efff; }
+.chip.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.chip.on .muted { color: var(--on-accent); opacity: 0.8; }
 
 /* Control-flow chart */
 .flow-panel h2 { margin-top: 0; display: flex; align-items: center; gap: 8px; }
@@ -393,3 +435,62 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 pre.code > div.hit-range { background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .zm-chart .flow-node { cursor: pointer; }
 .flow-node.selected :is(rect, polygon, circle) { stroke: var(--accent); stroke-width: 3px; fill: color-mix(in srgb, var(--accent) 22%, var(--panel)); }
+
+/* Liquid glass on the existing elements: header, tab bar, cards, side panels, buttons, inputs and code. */
+button { background: var(--btn-glass); color: var(--ink); border: 0; box-shadow: var(--btn-rim); -webkit-backdrop-filter: blur(12px) saturate(180%); backdrop-filter: blur(12px) saturate(180%); transition: background-image 120ms ease-out, transform 100ms ease-out; }
+button:hover:not(:disabled) { background: var(--btn-glass-hover); }
+button:active:not(:disabled) { transform: scale(0.97); }
+button[type="submit"], button.primary { background: linear-gradient(180deg, var(--gloss), transparent 52%), var(--accent); color: var(--on-accent); box-shadow: inset 0 1px 0 var(--gloss), 0 2px 10px color-mix(in srgb, var(--accent) 38%, transparent); }
+button.link, button.link:hover { background: none; box-shadow: none; color: var(--accent); }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 2px; }
+input[type="text"], input:not([type]), input[type="url"], input[type="search"], select, textarea { background: var(--box); border-color: var(--hair); }
+.top {
+  position: sticky; top: 0; z-index: 5; margin: 0 -16px 16px; padding: 12px 16px; border-bottom: 0;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--sheet) 55%, transparent), color-mix(in srgb, var(--sheet) 25%, transparent));
+  -webkit-backdrop-filter: blur(30px) saturate(190%); backdrop-filter: blur(30px) saturate(190%);
+  box-shadow: inset 0 -0.5px 0 var(--hair), inset 0 1px 0 var(--sheen);
+}
+.tabs { background: linear-gradient(180deg, var(--sheen), transparent 60%), var(--glass); border-radius: 14px; box-shadow: var(--rim); padding: 4px 6px 0; border-bottom: 0; }
+.tab.on { background: var(--sheet); border-color: var(--hair); box-shadow: var(--rim); }
+.panel, .card, .stat, .explorer, .source, .zm-source, .outline {
+  background: linear-gradient(180deg, var(--sheen), transparent 38%), var(--glass-strong);
+  -webkit-backdrop-filter: blur(30px) saturate(190%); backdrop-filter: blur(30px) saturate(190%);
+  box-shadow: var(--rim), var(--float);
+}
+.panel, .card, .stat, .explorer, .source { border-color: var(--hair); }
+table.grid { background: var(--glass-strong); box-shadow: var(--rim); }
+table.grid th { background: var(--faint); }
+.log, .code, pre.code, .flow-scroll, .graph, .graph-scroll, .arch-scroll, .tree, .outside-list, .lens-empty { box-shadow: inset 0 0 0 0.5px var(--hair); }
+.code, pre.code { background: color-mix(in srgb, var(--graphite) 10%, transparent); border-radius: 12px; }
+.graph, .graph-scroll, .arch-scroll, .flow-scroll { background: var(--sheet); }
+.modes-seg, .seg { display: inline-flex; background: var(--faint); border-radius: 9px; padding: 2px; box-shadow: inset 0 0.5px 1.5px var(--shadow); }
+.seg button { background: none; box-shadow: none; border: 0; padding: 4px 11px; border-radius: 7px; font-size: var(--t-sm); font-weight: 500; color: var(--ink); -webkit-backdrop-filter: none; backdrop-filter: none; }
+.seg button:hover:not(:disabled) { background: none; }
+.seg button[aria-pressed="true"] { background: linear-gradient(180deg, var(--gloss), transparent 60%), var(--thumb); box-shadow: inset 0 1px 0 var(--gloss), 0 0 0 0.5px var(--hair), 0 1px 1px var(--shadow), 0 3px 8px var(--shadow); }
+.zm-stage, .zm-mini { background: var(--box); }
+.toast { background: var(--glass-strong); }
+
+/* Theme-independent behaviour: a light flash never happens because index.html sets data-theme before first paint. */
+
+/* Reduced motion: no sliding or fading, and the switch and camera-like transitions cut. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
+}
+/* Reduced transparency: solid surfaces, no blur. */
+@media (prefers-reduced-transparency: reduce) {
+  .top, .tabs, .panel, .card, .stat, .explorer, .source, .zm-source, .outline, table.grid, .toast, button, input, select, textarea {
+    background: var(--sheet); -webkit-backdrop-filter: none; backdrop-filter: none;
+  }
+  button[type="submit"], button.primary, .seg button[aria-pressed="true"] { background: var(--accent); }
+  .seg button[aria-pressed="true"] { background: var(--thumb); }
+  button.link { background: none; }
+}
+/* More contrast: solid outlines in ink, no faint fills behind text. */
+@media (prefers-contrast: more) {
+  .top, .tabs, .panel, .card, .stat, .explorer, .source, .zm-source, table.grid { background: var(--sheet); -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: 0 0 0 1.5px var(--ink); }
+  button, input, select, textarea, .seg, .tab, .chip { box-shadow: inset 0 0 0 1px var(--ink); }
+  .fg-muted, .muted, .tab, .fc, .where, .small { color: var(--ink); }
+  .fn rect, .zone-box, .cfg-node, .arch-box, .detail-bg, .zm-box-body { stroke: var(--ink); }
+  .graph, .graph-scroll, .arch-scroll, .flow-scroll { box-shadow: 0 0 0 1.5px var(--ink); }
+}
+.top .theme-switch { margin-left: auto; }
