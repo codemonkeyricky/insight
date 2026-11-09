@@ -16,6 +16,7 @@ import { anchoredTo, closeExpansion, connectorOf, openExpansion, refresh, reveal
 import { pickBox } from "../../zoom/gesture";
 import { edgeClass, edgeKey, edgeTitle, edgeWidth, type MapBuild, type MapEdge, type MapNode, type MapSelected, type MapSource } from "../../zoom/source";
 import { bucketScale, fitLabel, headerLabels, labelChars, lodBucket } from "../../zoom/lod";
+import { offMapSelected } from "../../zoom/offMap";
 import type { ZoomStore } from "../../zoom/scene";
 import { ExpansionShape } from "./Expansion";
 
@@ -89,6 +90,12 @@ interface Construct {
   span?: FlowSpan;
 }
 
+/** A function selected without a box on the map, with the build it was selected on (the map's build stays as it is). */
+interface OffMap {
+  build: MapBuild;
+  selected: MapSelected;
+}
+
 /**
  * The execution map: one camera over a scope's scene. Each node is a focus of the source; the map's items and edges
  * are named by node id, so a click or key that names a node is turned into a focus by the source first (`focusOf`).
@@ -107,6 +114,10 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
   const expRef = useRef<readonly Expansion[]>([]);
   /** The construct picked in an expansion's chart. */
   const [construct, setConstruct] = useState<Construct>();
+  /** The off-map selection, when the reader selected a function the map does not draw (see selectFunction). */
+  const [offMap, setOffMapState] = useState<OffMap>();
+  /** The same selection, for the handlers and the async selects, which read it when they run. */
+  const offMapRef = useRef<OffMap | undefined>(undefined);
   const stageRef = useRef<HTMLDivElement>(null);
   /** The stage's size at the last resize, so a resize that changes nothing does not refit the camera. */
   const lastSizeRef = useRef<{ width: number; height: number } | undefined>(undefined);
@@ -138,6 +149,11 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
   const setExp = (list: readonly Expansion[]) => {
     expRef.current = list;
     setExpansions(list);
+  };
+
+  const setOffMap = (v: OffMap | undefined) => {
+    offMapRef.current = v;
+    setOffMapState(v);
   };
 
   /** Works out which items and edges are on screen, and stores them only when they differ from the last set. */
@@ -255,6 +271,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
     buildRef.current = b;
     focusRef.current = focus;
     setBuild(b);
+    // A focus the map shows is an on-map selection, so an off-map one gives way to it.
+    setOffMap(undefined);
     setError(undefined);
     showView(b);
 
@@ -332,19 +350,37 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
     const added = next.find((e) => e.fnId === callee);
     if (added !== undefined) {
       moveTo(revealOf(cameraRef.current, added), true);
-      selectFunction(callee);
+      void selectFunction(callee);
     }
   };
 
   /**
-   * Selects a function of the build: the source panel and the URL show it, and the camera and the open expansions stay
-   * where they are. A function the scope does not draw cannot be selected, so the selection stays.
+   * Selects a function of the build: the source panel shows it, and the camera and the open expansions stay where they
+   * are. A function the scope draws is selected on the map, and the URL shows it. A function with no box (a callee outside
+   * the scope, or hidden by the roots-only view) is selected off the map: the panel takes its name and file from its
+   * chart. The URL is not written for it, since a `fn` the map does not draw would re-resolve and move the map; it keeps
+   * the last on-map focus.
    */
-  const selectFunction = (fnId: string) => {
+  const selectFunction = async (fnId: string) => {
     const b = buildRef.current;
-    const node = b ? source.placeFunction?.(b, fnId) : undefined;
-    if (!b || node === undefined || node === b.nodeId) return;
-    void show(source.focusOf?.(b, node) ?? node, false, true, false, true);
+    if (!b) return;
+    const node = source.placeFunction?.(b, fnId);
+    if (node !== undefined) {
+      if (node === b.nodeId && offMapRef.current === undefined) return;
+      void show(source.focusOf?.(b, node) ?? node, false, true, false, true);
+      return;
+    }
+    if (charts === undefined) return;
+    const seq = ++seqRef.current;
+    let fn: FunctionFlow | undefined;
+    try {
+      fn = await charts.store.chartOf(fnId);
+    } catch {
+      return;
+    }
+    // A newer selection or focus that started meanwhile wins.
+    if (seq !== seqRef.current || buildRef.current !== b || fn === undefined) return;
+    setOffMap({ build: b, selected: offMapSelected(fnId, fn) });
   };
 
   /**
@@ -358,7 +394,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
     if (callee !== undefined) void openStep(fnId, node, callee);
     else {
       setConstruct({ ref: fnId, nodeId: node.id, ...(node.span ? { span: node.span } : {}) });
-      selectFunction(fnId);
+      void selectFunction(fnId);
     }
     return true;
   };
@@ -404,6 +440,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
     focusRef.current = undefined;
     setExp([]);
     setConstruct(undefined);
+    setOffMap(undefined);
     const z = zoom<SVGSVGElement, unknown>()
       .scaleExtent(SCALE)
       .on("zoom", (ev: D3ZoomEvent<SVGSVGElement, unknown>) => applyCamera(toCamera(ev.transform)));
@@ -467,9 +504,15 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view]);
 
-  // The page's source panel follows the selected function, and the construct picked in its chart while it is selected.
+  // The page's source panel follows the selected function, and the construct picked in its chart while it is selected. An
+  // off-map selection is reported in preference to the build's own.
   useEffect(() => {
     if (!onSelect) return;
+    if (offMap !== undefined) {
+      const span = construct !== undefined && construct.ref === offMap.selected.ref ? construct.span : undefined;
+      onSelect({ build: offMap.build, selected: offMap.selected, ...(span !== undefined ? { construct: span } : {}) });
+      return;
+    }
     if (build?.selected === undefined) {
       onSelect(undefined);
       return;
@@ -478,7 +521,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
     onSelect({ build, selected: build.selected, ...(span !== undefined ? { construct: span } : {}) });
     // onSelect is the page's state setter: only the selection and the construct change what it receives.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [build, construct]);
+  }, [build, construct, offMap]);
 
   const onKey = (e: KeyEvent<HTMLDivElement>) => {
     const b = buildRef.current;
@@ -516,12 +559,12 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
         // Escape closes the last expansion (and any chained from it). When it hangs from the selected box, the selection
         // moves to the box's parent; a container selects nothing, so the source panel closes with it. When the selected
         // function is the callee of a chained expansion, the selection returns to the expansion it hangs from.
-        const selectedRef = b.node(b.nodeId)?.ref;
+        const selectedRef = offMapRef.current?.selected.ref ?? b.node(b.nodeId)?.ref;
         setExp(closeExpansion(list, last.fnId));
         if (last.anchor.kind === "box" && last.anchor.nodeId === b.nodeId && parent !== undefined) {
           void show(source.focusOf?.(b, parent) ?? parent, true, true);
         } else if (last.anchor.kind === "step" && selectedRef === last.fnId) {
-          selectFunction(last.anchor.fnId);
+          void selectFunction(last.anchor.fnId);
         }
         break;
       }
@@ -656,7 +699,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
                     k={labelScale}
                     selectedId={construct !== undefined && construct.ref === e.fnId ? construct.nodeId : undefined}
                     onNodeClick={(n) => chartStep(e.fnId, n)}
-                    onSelect={() => selectFunction(e.fnId)}
+                    onSelect={() => void selectFunction(e.fnId)}
                     onClose={() => setExp(closeExpansion(expRef.current, e.fnId))}
                   />
                 </g>

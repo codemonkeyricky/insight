@@ -36,7 +36,10 @@ The Flow tab draws the execution canvas of the scope: program, threads, coroutin
   selected. It shows the function's name and `file:line`, and its file through `FileViewer` with the lines highlighted
   (`hit-range`): the picked construct's span when there is one (`FlowSpan` from the chart, 1-based in `rangeOf`), else
   the whole function's span from `store.chartOf`, else the definition line. Its close button hides the panel for that
-  selection; a new selection opens it again. `FlowView.tsx` lays the map and the panel out as `.zm-split`, and stacks
+  selection; a new selection opens it again. Selecting a function that has an open expansion (a click on its header, a call
+  step's callee, or a step inside its chart) moves the panel to that function. A function with no box on the map (a callee
+  outside the scope, or hidden by the roots-only view) is selected off the map: the panel takes its name and file from its
+  chart (`apps/web/src/zoom/offMap.ts`), and the URL keeps the last on-map focus. `FlowView.tsx` lays the map and the panel out as `.zm-split`, and stacks
   them on a phone. A saved layout whose function boxes have other sizes does not cover the scene (`layoutCovers`), so a demo or
   server layout from before the charts is solved again.
 - A function's panel sits below the canvas. It shows the function's name and source line, where it runs ("Runs on
