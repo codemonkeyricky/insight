@@ -14,6 +14,7 @@ import {
   placeSceneLayout,
   sceneBoxOf,
   sceneBreadcrumb,
+  sceneClosedSize,
   sceneContainers,
   sceneDepth,
   sceneEdgeContainer,
@@ -408,6 +409,48 @@ describe("layoutScene", () => {
   it("gives the same layout twice", async () => {
     const a = await layoutScene(exec, solveElk);
     const b = await layoutScene(exec, solveElk);
+    expect(b).toEqual(a);
+  });
+
+  it("a closed coroutine is a compact box, and its subtree is not laid out", async () => {
+    const open = new Set(["P", "T1", "T2"]);
+    const layout = await layoutScene(exec, solveElk, { open });
+    expect(Object.keys(layout.containers).sort()).toEqual(["P", "T1", "T2"]);
+    expect(layoutCovers(exec, layout, undefined, open)).toBe(true);
+    const slot = layout.containers.T1?.slots.find((s) => s.id === "C1");
+    const label = exec.nodes.get("C1")?.label ?? "";
+    expect(slot).toMatchObject({ w: Math.max(110, 8 * label.length + 40), h: 40 });
+    expect(sceneClosedSize(exec, "C1")).toEqual({ w: slot?.w, h: 40 });
+    // The children of a closed coroutine have no slot anywhere.
+    for (const c of layout.containers.T1?.slots ?? []) expect(["f1", "f2"]).not.toContain(c.id);
+  });
+
+  it("an open coroutine is laid out at its children's size", async () => {
+    const closed = await layoutScene(exec, solveElk, { open: new Set(["P", "T1", "T2"]) });
+    const open = new Set(["P", "T1", "T2", "C1"]);
+    const layout = await layoutScene(exec, solveElk, { open });
+    expect(layout.containers.C1).toBeDefined();
+    expect(layoutCovers(exec, layout, undefined, open)).toBe(true);
+    const slot = layout.containers.T1?.slots.find((s) => s.id === "C1");
+    const own = layout.containers.C1;
+    expect(own).toBeDefined();
+    expect({ w: slot?.w, h: slot?.h }).toEqual(frameSize({ w: own?.w ?? 0, h: own?.h ?? 0 }));
+    expect(own?.h).toBeGreaterThan(40);
+    expect(closed.containers.T1?.slots.find((s) => s.id === "C1")).toMatchObject({ h: 40 });
+  });
+
+  it("opening a closed container over the default layout matches a fresh layout", async () => {
+    const base = await layoutScene(exec, solveElk, { open: new Set(["P", "T1", "T2"]) });
+    const open = new Set(["P", "T1", "T2", "C1"]);
+    const reused = await layoutScene(exec, solveElk, { open, reuse: { from: base, changed: ["C1"] } });
+    const fresh = await layoutScene(exec, solveElk, { open });
+    expect(reused).toEqual(fresh);
+  });
+
+  it("gives the same layout with a set of open containers twice", async () => {
+    const open = new Set(["P", "T1", "T2", "C1"]);
+    const a = await layoutScene(exec, solveElk, { open });
+    const b = await layoutScene(exec, solveElk, { open });
     expect(b).toEqual(a);
   });
 

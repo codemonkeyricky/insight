@@ -49,6 +49,11 @@ const toCamera = (t: ZoomTransform): Camera => ({ k: t.k, x: t.x, y: t.y });
 const toTransform = (c: Camera): ZoomTransform => zoomIdentity.translate(c.x, c.y).scale(c.k);
 const reduceMotion = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
+/** True when `id` is inside the box `box`: a node whose ancestor is `box`. */
+const insideBox = (b: MapBuild, id: string, box: string): boolean => {
+  for (let p = b.node(id)?.parent; p !== undefined; p = b.node(p)?.parent) if (p === box) return true;
+  return false;
+};
 
 /** What the map has selected, for the page's source panel: the function, its build, and the construct picked in its chart. */
 export interface MapSelection {
@@ -193,8 +198,10 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
     if (!rect || !svg || !z) return;
     const size = sizeOf();
     const room = { width: size.width, height: Math.max(1, size.height - MINI_RESERVE) };
-    // A function with a chart is capped at about 1.5x its natural size, but never below CHART_MIN_PX wide (fitChartCamera).
-    const target = b.node(b.nodeId)?.chart !== undefined ? fitChartCamera(rect, room, CHART_MIN_PX) : fitCamera(rect, room);
+    // A function with a chart, and a container that opens, is capped at about 1.5x its natural size, but never below
+    // CHART_MIN_PX wide (fitChartCamera). Any other box fits as it is.
+    const opens = b.placed.items.some((i) => i.id === b.nodeId && i.kind === "frame");
+    const target = opens || b.node(b.nodeId)?.chart !== undefined ? fitChartCamera(rect, room, CHART_MIN_PX) : fitCamera(rect, room);
     if (animate && !reduceMotion()) select(svg).transition().duration(ANIM_MS).call(z.transform, toTransform(target));
     else select(svg).call(z.transform, toTransform(target));
   };
@@ -398,7 +405,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
         if (!b) break;
         const parent = b.node(b.nodeId)?.parent;
         if (parent !== undefined) {
-          const base = expandedAfter(expandedRef.current, "escape", b.nodeId);
+          const base = expandedAfter(expandedRef.current, "escape", b.nodeId, (id) => insideBox(b, id, b.nodeId));
           void show(source.focusOf?.(b, parent) ?? parent, true, true, base);
         }
         break;

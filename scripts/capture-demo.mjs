@@ -22,7 +22,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildServer, loadSnapshot, resolveSnapshot } from "../apps/server/dist/index.js";
 import { edgeTargets } from "../packages/sdk/dist/index.js";
-import { buildExecScene, buildFileFlow, layoutScene, summarizeFlows } from "../packages/flow/dist/index.js";
+import { buildExecScene, buildFileFlow, execDefaultOpen, layoutScene, summarizeFlows } from "../packages/flow/dist/index.js";
 import { scopeKey } from "../apps/web/src/scopeKey.ts";
 import { resultHasContent } from "../apps/web/src/scopeLenses.ts";
 
@@ -207,7 +207,9 @@ try {
     let execLayout;
     if (exec) {
       const t0 = performance.now();
-      execLayout = roundLayout(await layoutScene(buildExecScene(exec), (g) => elk.layout(g)));
+      // Laid out with the containers the first view opens (execDefaultOpen); the canvas opens more from this one.
+      const scene = buildExecScene(exec);
+      execLayout = roundLayout(await layoutScene(scene, (g) => elk.layout(g), { open: execDefaultOpen(scene) }));
       layoutTimes.push({ scope, ms: performance.now() - t0 });
     }
     // The architecture covers the whole project, so only the root scope asks for it and writes it.

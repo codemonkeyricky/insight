@@ -3,6 +3,7 @@
 // layouts and hands them here.
 import {
   EXEC_PROJECT_ROOT,
+  execDefaultOpen,
   execThreadId,
   placeSceneEdges,
   placeSceneLayout,
@@ -122,18 +123,20 @@ export function execSelected(scene: Scene, fns: ReadonlyMap<string, ExecFunction
 }
 
 /**
- * The nodes open in a scope's first view (the project, with no function in the URL): the project, and every process and
- * thread box, so the view shows process ▸ thread ▸ function boxes. Coroutines and function charts stay closed.
+ * The containers open for an expanded set: the first view's containers (execDefaultOpen), and the ancestors of every
+ * expanded box, the box itself included when it is a container. Everything else is closed: a closed container is a
+ * compact box and its children are not laid out.
  */
-export function execFirstOpen(scene: Scene): Set<string> {
-  const open = sceneOpenFor(scene, scene.root);
-  for (const n of scene.nodes.values()) if ((n.kind === "program" || n.kind === "thread") && n.children.length > 0) open.add(n.id);
+export function execOpenSet(scene: Scene, expanded: ReadonlySet<string>): Set<string> {
+  const open = execDefaultOpen(scene);
+  for (const e of expanded) for (const p of sceneOpenFor(scene, e)) open.add(p);
   return open;
 }
 
 /**
- * The expanded set a build of `nodeId` draws: the set it starts from, with the function `nodeId` selects added (see
- * expandedAfter). The layout is chosen for this set, so a store calls it before it builds.
+ * The expanded set a build of `nodeId` draws: the set it starts from, with `nodeId` added when it is a function (its chart
+ * is drawn) or a container (it opens, see expandedAfter). The layout is chosen for this set, so a store calls it before
+ * it builds.
  */
 export function execExpandedFor(
   scene: Scene,
@@ -142,12 +145,13 @@ export function execExpandedFor(
   expanded: ReadonlySet<string>,
 ): ReadonlySet<string> {
   const selected = fns === undefined ? undefined : execSelected(scene, fns, nodeId);
-  return selected !== undefined ? expandedAfter(expanded, "click", nodeId) : expanded;
+  const container = (scene.nodes.get(nodeId)?.children.length ?? 0) > 0;
+  return selected !== undefined || container ? expandedAfter(expanded, "click", nodeId) : expanded;
 }
 
 /**
  * The map of a laid-out scene for a node: the node and its ancestors open, everything else closed. The project's own
- * map (the first view) opens the nesting instead, see execFirstOpen. `fns` (the model's functions by id) adds what the
+ * map opens the containers of execOpenSet. `fns` (the model's functions by id) adds what the
  * function panel shows for a function node. `openId` is the node whose open set is drawn, when it is not `nodeId`: the
  * node, crumbs and selection stay `nodeId`, while the boxes drawn follow `openId`.
  *
@@ -166,8 +170,8 @@ export function execBuild(
 ): MapBuild {
   const selected = fns === undefined ? undefined : execSelected(scene, fns, nodeId);
   const exp = execExpandedFor(scene, fns, nodeId, expanded);
-  const open = openId === scene.root ? execFirstOpen(scene) : sceneOpenFor(scene, openId);
-  for (const e of exp) for (const p of sceneOpenFor(scene, e)) open.add(p);
+  const open = execOpenSet(scene, exp);
+  for (const p of sceneOpenFor(scene, openId)) open.add(p);
   const placed = placeSceneLayout(scene, layout, open);
   const edges = placeSceneEdges(scene, open, placed.rects);
   const node = (id: string) => execMapNode(scene, id);

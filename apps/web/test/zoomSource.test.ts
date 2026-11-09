@@ -12,7 +12,7 @@ import {
   type SceneNode,
   type SolvedGraph,
 } from "@insight/flow";
-import { execBuild, execFirstOpen, execFocus, execMapNode, execResolve, execSelected, execUrl, splitExecFocus } from "../src/zoom/execMap.js";
+import { execBuild, execFocus, execMapNode, execOpenSet, execResolve, execSelected, execUrl, splitExecFocus } from "../src/zoom/execMap.js";
 import { chartOrigin } from "../src/components/zoom/BoxChart.js";
 import { deepestAt, edgeClass, edgeKey, edgeTitle, edgeWidth } from "../src/zoom/source.js";
 
@@ -161,7 +161,7 @@ describe("exec map", () => {
 
     const deep = execBuild(scene, layout, "src", "thread:w>a#help");
     expect(deep.focus).toBe(execFocus("src", "thread:w>a#help"));
-    expect(deep.placed.items.filter((i) => i.kind === "frame").map((i) => i.id)).toEqual(["thread:w"]);
+    expect(deep.placed.items.filter((i) => i.kind === "frame").map((i) => i.id)).toEqual(["thread:main", "thread:w"]);
     expect(deep.crumbs.map((c) => c.label)).toEqual(["program", "Thread · work", "help"]);
     // Every focus shares the layout, so a box sits in the same place open or closed.
     expect(deep.placed.rects.get("thread:w")).toEqual(top.placed.rects.get("thread:w"));
@@ -295,7 +295,7 @@ describe("exec first view", () => {
   const column = async (g: LayoutGraph): Promise<SolvedGraph> => ({ children: g.children.map((c, i) => ({ id: c.id, x: 0, y: i * 10 })) });
 
   it("opens every process and thread box, and no coroutine", () => {
-    expect([...execFirstOpen(scene)].sort()).toEqual([EXEC_PROJECT_ROOT, "prog:main", "thread:main"].sort());
+    expect([...execOpenSet(scene, new Set())].sort()).toEqual([EXEC_PROJECT_ROOT, "prog:main", "thread:main"].sort());
   });
 
   it("draws the process and thread frames on the project's view, with the coroutine as a closed box", async () => {

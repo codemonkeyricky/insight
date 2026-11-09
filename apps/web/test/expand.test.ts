@@ -37,4 +37,11 @@ describe("expandedAfter", () => {
     const closed = expandedAfter(start, "escape", "caller");
     expect([...expandedAfter(closed, "click", "caller")]).toEqual(["caller"]);
   });
+
+  it("escape with `under` also collapses every expanded box inside the escaped one", () => {
+    const inside = new Set(["callee", "other"]);
+    const both = new Set(["caller", "callee", "other"]);
+    expect([...expandedAfter(both, "escape", "caller", (id) => inside.has(id))]).toEqual([]);
+    expect(expandedAfter(start, "escape", "other", () => false)).toBe(start);
+  });
 });

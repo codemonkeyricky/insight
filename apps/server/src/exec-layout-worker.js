@@ -6,7 +6,7 @@
 // (tsconfig allowJs), so one path works in both.
 import { createRequire } from "node:module";
 import { parentPort } from "node:worker_threads";
-import { buildExecScene, layoutScene } from "@insight/flow";
+import { buildExecScene, execDefaultOpen, layoutScene } from "@insight/flow";
 
 const ElkClass = createRequire(import.meta.url)("elkjs/lib/elk.bundled.js");
 const elk = new ElkClass();
@@ -26,7 +26,9 @@ let queue = Promise.resolve();
 
 async function solve({ id, exec }) {
   try {
-    const layout = roundLayout(await layoutScene(buildExecScene(exec), (g) => elk.layout(g)));
+    // The first view's containers are open (execDefaultOpen); the canvas opens more from this layout (see ExecStore).
+    const scene = buildExecScene(exec);
+    const layout = roundLayout(await layoutScene(scene, (g) => elk.layout(g), { open: execDefaultOpen(scene) }));
     parentPort.postMessage({ id, layout });
   } catch (err) {
     parentPort.postMessage({ id, error: err instanceof Error ? err.message : String(err) });
