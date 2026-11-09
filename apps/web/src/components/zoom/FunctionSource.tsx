@@ -11,7 +11,8 @@ interface Props {
   id: string;
   store: ZoomStore;
   sel: MapSelection;
-  onClose: () => void;
+  /** Without a close button and header: the side panel that holds this source has its own. */
+  onClose?: () => void;
 }
 
 export function FunctionSource({ id, store, sel, onClose }: Props) {
@@ -33,6 +34,16 @@ export function FunctionSource({ id, store, sel, onClose }: Props) {
   }, [store, selected.ref]);
   const fnSpan = span?.ref === selected.ref ? span.span : undefined;
   const range = selectionRange(sel.construct, fnSpan, selected.line);
+  const body = (
+    <>
+      {selected.file ? (
+        <FileViewer key={`${selected.file}\0${selected.ref}`} id={id} path={selected.file} line={selected.line} range={range} />
+      ) : (
+        <p className="muted small">The IR has no source for this function.</p>
+      )}
+    </>
+  );
+  if (onClose === undefined) return <section className="sh-source" aria-label="Source of the selected function">{body}</section>;
   return (
     <aside className="zm-source panel" aria-label="Source of the selected function">
       <header className="zm-source-head">
@@ -46,11 +57,7 @@ export function FunctionSource({ id, store, sel, onClose }: Props) {
           Close
         </button>
       </header>
-      {selected.file ? (
-        <FileViewer key={`${selected.file}\0${selected.ref}`} id={id} path={selected.file} line={selected.line} range={range} />
-      ) : (
-        <p className="muted small">The IR has no source for this function.</p>
-      )}
+      {body}
     </aside>
   );
 }

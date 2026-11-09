@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { contentOf, flowScopeOf, modeOf, showsFileSource } from "../src/components/sheet/shell.js";
+import { fuzzyScore, rankFuzzy } from "../src/components/sheet/fuzzy.js";
 import { BUILTIN_TABS, hrefCompare, hrefFile, hrefFlow, hrefLens, hrefProject, hrefReview, hrefView, inScope, parseRoute, redirectFor } from "../src/router.js";
 
 describe("hash router", () => {
@@ -205,5 +207,66 @@ describe("hash router", () => {
     expect(inScope("src/ab.ts", "src/a")).toBe(false);
     expect(inScope("src/a.ts", "src/a.ts/x")).toBe(false);
     expect(inScope("other/a.ts", "src")).toBe(false);
+  });
+});
+
+describe("old URLs land on the sheet content", () => {
+  it("the bare project and the flow tabs draw the flow sheet", () => {
+    expect(parseRoute("#/projects/ab12")).toMatchObject({ tab: "overview" });
+    expect(contentOf("overview", "project")).toBe("flow");
+    expect(contentOf("flow", "folder")).toBe("flow");
+    expect(contentOf("flow", "file")).toBe("flow");
+  });
+
+  it("overview is the flow root, and the full overview page only with full=1", () => {
+    const route = parseRoute("#/projects/ab12/view/overview?full=1");
+    expect(route).toMatchObject({ tab: "overview", full: true });
+    expect(contentOf("overview", "project", true)).toBe("overview");
+    expect(contentOf("overview", "project")).toBe("flow");
+    expect(flowScopeOf("overview", "src/a")).toBe("");
+  });
+
+  it("source is the flow sheet on a file and the source page on a folder or the project", () => {
+    expect(contentOf("source", "file")).toBe("flow");
+    expect(showsFileSource("source", "file")).toBe(true);
+    expect(contentOf("source", "folder")).toBe("source");
+    expect(contentOf("source", "project")).toBe("source");
+    expect(showsFileSource("source", "folder")).toBe(false);
+  });
+
+  it("arch, findings, compare and review keep their own content, and lens ids draw lens pages", () => {
+    expect(contentOf("arch", "project")).toBe("arch");
+    expect(contentOf("findings", "folder")).toBe("findings");
+    expect(contentOf("compare", "project")).toBe("compare");
+    expect(contentOf("review", "project")).toBe("triage");
+    expect(contentOf("some-lens", "folder")).toBe("lens");
+  });
+
+  it("the mode switch knows the three modes and no others", () => {
+    expect(modeOf("flow")).toBe("flow");
+    expect(modeOf("arch")).toBe("arch");
+    expect(modeOf("findings")).toBe("findings");
+    expect(modeOf("compare")).toBeUndefined();
+    expect(modeOf("lens")).toBeUndefined();
+  });
+});
+
+describe("fuzzy matcher", () => {
+  it("matches a subsequence and rejects a non-subsequence", () => {
+    expect(fuzzyScore("pl", "planAssembly")).toBeDefined();
+    expect(fuzzyScore("zz", "planAssembly")).toBeUndefined();
+  });
+
+  it("scores a start or word-boundary match above a match inside a word", () => {
+    const boundary = fuzzyScore("ab", "a_b");
+    const inside = fuzzyScore("ab", "xaxb");
+    expect(boundary).toBeDefined();
+    expect(inside).toBeDefined();
+    expect(boundary!).toBeGreaterThan(inside!);
+  });
+
+  it("ranks the best match first and keeps the first items for an empty query", () => {
+    expect(rankFuzzy(["freedom", "place"], "pl", (s) => s)[0]).toBe("place");
+    expect(rankFuzzy(["one", "two", "three"], "", (s) => s, 2)).toEqual(["one", "two"]);
   });
 });

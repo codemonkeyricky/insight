@@ -74,6 +74,12 @@ interface Props {
   charts?: ChartSource;
   /** Reports the function the map selects (undefined when the focus is not a function), with the construct picked in it. */
   onSelect?: (sel: MapSelection | undefined) => void;
+  /** Reports the build the map is showing (its focus), or undefined before the first one. */
+  onFocus?: (build: MapBuild | undefined) => void;
+  /** Whether the map shows its key hints under the stage. The sheet keeps them in the layers panel instead. */
+  hint?: boolean;
+  /** Room the map gives up on the right, in px, such as a side panel over the stage. Fits and reveals keep clear of it. */
+  inset?: number;
 }
 
 /** What an expansion needs to draw its chart: the project, the scope its links resolve in, and the flow store. */
@@ -100,7 +106,7 @@ interface OffMap {
  * The execution map: one camera over a scope's scene. Each node is a focus of the source; the map's items and edges
  * are named by node id, so a click or key that names a node is turned into a focus by the source first (`focusOf`).
  */
-export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Props) {
+export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFocus, hint = true, inset = 0 }: Props) {
   /** The selection: the focus the breadcrumb, the detail panel and the URL show. Only explicit actions change it. */
   const [build, setBuild] = useState<MapBuild>();
   /** The map as drawn: the selection's build. Only a click or a key changes it; gestures move the camera alone. */
@@ -121,6 +127,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
   const stageRef = useRef<HTMLDivElement>(null);
   /** The stage's size at the last resize, so a resize that changes nothing does not refit the camera. */
   const lastSizeRef = useRef<{ width: number; height: number } | undefined>(undefined);
+  /** Refits the selected focus when the usable size changed since the last refit. Set by the stage's effect. */
+  const refitRef = useRef<(() => void) | undefined>(undefined);
   const svgRef = useRef<SVGSVGElement>(null);
   const worldRef = useRef<SVGGElement>(null);
   const miniRef = useRef<SVGSVGElement>(null);
@@ -139,7 +147,12 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
   const arrowId = `zm-arrow-${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
   const hintId = useId();
 
-  const sizeOf = () => ({ width: stageRef.current?.clientWidth ?? 0, height: stageRef.current?.clientHeight ?? 0 });
+  /** The inset in use. A ref, so the size readers below see it without a new closure. */
+  const insetRef = useRef(inset);
+  const sizeOf = () => ({
+    width: Math.max(1, (stageRef.current?.clientWidth ?? 0) - insetRef.current),
+    height: stageRef.current?.clientHeight ?? 0,
+  });
   /** The stage's room above the minimap: where a fit or a reveal may put things. */
   const roomOf = () => {
     const s = sizeOf();
@@ -449,7 +462,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
     // A resize that changes the stage's size refits a selected focus, so the panel opening or a window change keeps it
     // in view above the minimap. Culling alone is not enough for that.
     lastSizeRef.current = sizeOf();
-    const ro = new ResizeObserver(() => {
+    refitRef.current = () => {
       const size = sizeOf();
       const last = lastSizeRef.current;
       lastSizeRef.current = size;
@@ -462,9 +475,11 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
         const target = fit === undefined ? undefined : newest === undefined ? fit : revealOf(fit, newest);
         if (target !== undefined) moveTo(target, false);
       }
-    });
+    };
+    const ro = new ResizeObserver(() => refitRef.current?.());
     ro.observe(stage);
     return () => {
+      refitRef.current = undefined;
       ro.disconnect();
       sel.on(".zoom", null);
       zoomRef.current = undefined;
@@ -473,6 +488,12 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
     // The handlers read only refs and the source, so the ones from this render stay correct for the life of the effect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source, id]);
+
+  // A panel opening or closing over the stage changes the usable width without resizing it: refit as a resize would.
+  useEffect(() => {
+    insetRef.current = inset;
+    refitRef.current?.();
+  }, [inset]);
 
   // The URL drives the focus. A change this map made itself is already the focus, so it is skipped.
   useEffect(() => {
@@ -507,6 +528,12 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
   // The page's source panel follows the selected function, and the construct picked in its chart while it is selected. An
   // off-map selection is reported in preference to the build's own.
   useEffect(() => {
+    onFocus?.(build);
+    // onFocus is a page's state setter, so it is only called when the build changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [build]);
+
+  useEffect(() => {
     if (!onSelect) return;
     if (offMap !== undefined) {
       const span = construct !== undefined && construct.ref === offMap.selected.ref ? construct.span : undefined;
@@ -525,6 +552,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
 
   const onKey = (e: KeyEvent<HTMLDivElement>) => {
     const b = buildRef.current;
+    // Escape that the map acts on stops here, so a page-level Escape (the side panel's) does not close as well.
+    if (e.key === "Escape" && b && (expRef.current.length > 0 || b.node(b.nodeId)?.parent !== undefined)) e.preventDefault();
     switch (e.key) {
       case "+":
       case "=":
@@ -635,7 +664,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
         tabIndex={0}
         role="application"
         aria-label="Execution map of the scope"
-        aria-describedby={hintId}
+        aria-describedby={hint ? hintId : undefined}
         onKeyDown={onKey}
       >
         <svg ref={svgRef} className="zm-svg" width="100%" height="100%">
@@ -744,11 +773,13 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
           </svg>
         )}
       </div>
-      <p id={hintId} className="muted small zm-hint">
-        Scroll or press + and - to zoom; zooming never opens a box. Arrow keys pan. Click a function to open its chart beside
-        it, and a call step in the chart to open the callee beside the step. Click a step that is not a call to see its
-        source. Enter opens the item at the centre. Escape closes the last chart opened.
-      </p>
+      {hint && (
+        <p id={hintId} className="muted small zm-hint">
+          Scroll or press + and - to zoom; zooming never opens a box. Arrow keys pan. Click a function to open its chart beside
+          it, and a call step in the chart to open the callee beside the step. Click a step that is not a call to see its
+          source. Enter opens the item at the centre. Escape closes the last chart opened.
+        </p>
+      )}
       {build && detail?.(build, openNode)}
     </div>
   );
