@@ -5,10 +5,11 @@ import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as KeyE
 import { select } from "d3-selection";
 import "d3-transition";
 import { zoom, zoomIdentity, type D3ZoomEvent, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
-import { CHART_HEAD, ZOOM_SIZE, fitCamera, nextOpen, visibleWorld, type Camera, type PlacedItem, type Rect } from "@insight/flow";
+import { CHART_HEAD, ZOOM_SIZE, fitCamera, visibleWorld, type Camera, type PlacedItem, type Rect } from "@insight/flow";
 import { nameOfId } from "../../flowTargets";
 import { hrefView } from "../../router";
-import { deepestAt, edgeClass, edgeKey, edgeTitle, edgeWidth, nearestBox, type MapBuild, type MapEdge, type MapNode, type MapSource } from "../../zoom/source";
+import { openAfterGesture, pickBox } from "../../zoom/gesture";
+import { edgeClass, edgeKey, edgeTitle, edgeWidth, type MapBuild, type MapEdge, type MapNode, type MapSource } from "../../zoom/source";
 import { bucketScale, fitLabel, headerLabels, labelChars, lodBucket } from "../../zoom/lod";
 import type { ZoomStore } from "../../zoom/scene";
 import { BoxChart, CHART_MIN_PX } from "./BoxChart";
@@ -19,11 +20,6 @@ const ANIM_MS = 450;
 /** Items this far (world units) outside the view are still drawn, so a pan does not show a blank edge. */
 const CULL_MARGIN = 120;
 const PAN_PX = 80;
-/**
- * A gap between boxes this close on screen (px) still counts as the nearest box: a gesture or Enter that ends in a gap
- * opens the nearest box within it.
- */
-const GAP_PX = 60;
 
 const sameList = <T,>(a: readonly T[], b: readonly T[], key: (t: T) => string): boolean =>
   a.length === b.length &&
@@ -71,9 +67,12 @@ export interface ChartSource {
  * are named by node id, so a click or key that names a node is turned into a focus by the source first (`focusOf`).
  */
 export function ZoomMap({ id, source, scope, fn, detail, charts }: Props) {
+  /** The selection: the focus the breadcrumb, the detail panel and the URL show. Only explicit actions change it. */
   const [build, setBuild] = useState<MapBuild>();
+  /** The map as drawn: the selection's build with the open node's boxes. Gestures change it; the selection stays. */
+  const [view, setView] = useState<MapBuild>();
   /** `lod` is the camera's quarter-octave bucket (lod.ts): labels are cut to it, and it changes only with the bucket. */
-  const [shown, setShown] = useState<{ build?: MapBuild; items: PlacedItem[]; edges: MapEdge[]; lod: number }>({ items: [], edges: [], lod: 0 });
+  const [shown, setShown] = useState<{ view?: MapBuild; items: PlacedItem[]; edges: MapEdge[]; lod: number }>({ items: [], edges: [], lod: 0 });
   const [error, setError] = useState<string>();
   const stageRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -82,11 +81,18 @@ export function ZoomMap({ id, source, scope, fn, detail, charts }: Props) {
   const miniViewRef = useRef<SVGRectElement>(null);
   const zoomRef = useRef<ZoomBehavior<SVGSVGElement, unknown> | undefined>(undefined);
   const cameraRef = useRef<Camera>({ k: 1, x: 0, y: 0 });
+  /** The selection's build. Its `nodeId` is the node the focus stands for. */
   const buildRef = useRef<MapBuild | undefined>(undefined);
-  /** The focus the map shows. Its build's `nodeId` is the node it stands for. */
+  /** The build as drawn (see `view`). Its placed boxes are what the pointer and the gestures look at. */
+  const viewRef = useRef<MapBuild | undefined>(undefined);
+  /** The node whose children the map has open. Starts as the focus; gestures move it, the selection does not. */
+  const openRef = useRef<string | undefined>(undefined);
+  /** The focus the map shows (the selection). Its build's `nodeId` is the node it stands for. */
   const focusRef = useRef<string | undefined>(undefined);
   const boxesRef = useRef<{ id: string; x: number; y: number; w: number; h: number }[]>([]);
   const seqRef = useRef(0);
+  /** Bumped by every selection and every open change, so a slower build for an older state is dropped. */
+  const viewSeqRef = useRef(0);
   /** True while a camera move is ours (a focus change), so its end does not start a hysteresis decision. */
   const programmaticRef = useRef(false);
   const miniDragRef = useRef(false);
@@ -101,7 +107,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts }: Props) {
 
   /** Works out which items and edges are on screen, and stores them only when they differ from the last set. */
   const cull = (c: Camera) => {
-    const b = buildRef.current;
+    const b = viewRef.current;
     if (!b) return;
     const v = visibleWorld(c, sizeOf());
     const area = { x: v.x - CULL_MARGIN, y: v.y - CULL_MARGIN, w: v.w + 2 * CULL_MARGIN, h: v.h + 2 * CULL_MARGIN };
@@ -113,9 +119,9 @@ export function ZoomMap({ id, source, scope, fn, detail, charts }: Props) {
     });
     const lod = lodBucket(c.k);
     setShown((prev) =>
-      prev.build === b && prev.lod === lod && sameList(prev.items, items, (i) => i.id) && sameList(prev.edges, edges, edgeKey)
+      prev.view === b && prev.lod === lod && sameList(prev.items, items, (i) => i.id) && sameList(prev.edges, edges, edgeKey)
         ? prev
-        : { build: b, items, edges, lod },
+        : { view: b, items, edges, lod },
     );
   };
 
@@ -137,13 +143,6 @@ export function ZoomMap({ id, source, scope, fn, detail, charts }: Props) {
     }
     cull(c);
   };
-
-  /**
-   * The box a world point stands in: the deepest item under it, or else the nearest box within GAP_PX on screen (a point
-   * in a gap between boxes). Undefined when neither exists.
-   */
-  const pickAt = (b: MapBuild, x: number, y: number, c: Camera): string | undefined =>
-    deepestAt(boxesRef.current, b.depth, x, y) ?? nearestBox(boxesRef.current, b.depth, x, y, GAP_PX / c.k);
 
   /** The middle of the view, in world units. */
   const centreOf = (c: Camera) => {
@@ -172,6 +171,22 @@ export function ZoomMap({ id, source, scope, fn, detail, charts }: Props) {
    * Makes `focus` the focus: loads what it needs, builds the map for it, and moves the camera to fit it. `animate`
    * is false only for the first view, which is set at once.
    */
+  /**
+   * Draws the map for an open node: the boxes are placed for it, and the pointer and gestures look at them. The
+   * selection and the camera are not touched.
+   */
+  const showView = (v: MapBuild, open: string) => {
+    viewRef.current = v;
+    openRef.current = open;
+    boxesRef.current = v.placed.items.map((i) => ({ id: i.id, x: i.rect.x, y: i.rect.y, w: i.rect.w, h: i.rect.h }));
+    setView(v);
+    cull(cameraRef.current);
+  };
+
+  /**
+   * Makes `focus` the selection: loads what it needs, builds the map for it, and moves the camera to fit it. `animate`
+   * is false only for the first view, which is set at once. An explicit selection also opens the focus itself.
+   */
   const show = async (focus: string, animate: boolean, writeUrl: boolean) => {
     const seq = ++seqRef.current;
     let b: MapBuild;
@@ -184,11 +199,12 @@ export function ZoomMap({ id, source, scope, fn, detail, charts }: Props) {
       return;
     }
     if (seq !== seqRef.current) return;
+    viewSeqRef.current += 1;
     buildRef.current = b;
     focusRef.current = focus;
-    boxesRef.current = b.placed.items.map((i) => ({ id: i.id, x: i.rect.x, y: i.rect.y, w: i.rect.w, h: i.rect.h }));
     setBuild(b);
     setError(undefined);
+    showView(b, b.nodeId);
     const rect = b.placed.rects.get(b.nodeId);
     const svg = svgRef.current;
     const z = zoomRef.current;
@@ -198,38 +214,51 @@ export function ZoomMap({ id, source, scope, fn, detail, charts }: Props) {
       if (animate && !reduceMotion()) select(svg).transition().duration(ANIM_MS).call(z.transform, toTransform(target));
       else select(svg).call(z.transform, toTransform(target));
     }
-    cull(cameraRef.current);
     if (writeUrl) syncUrl(b, focus);
+  };
+
+  /** Draws the map with `open` as the open node, keeping the selection. Only the boxes change; no camera, no URL. */
+  const openOnly = async (open: string) => {
+    const b = buildRef.current;
+    const focus = focusRef.current;
+    if (!b || focus === undefined) return;
+    const seq = ++viewSeqRef.current;
+    let v: MapBuild;
+    try {
+      v = await source.build(focus, source.focusOf?.(b, open) ?? open);
+    } catch (e) {
+      if (seq === viewSeqRef.current) setError(messageOf(e));
+      return;
+    }
+    if (seq !== viewSeqRef.current || focusRef.current !== focus) return;
+    showView(v, open);
   };
 
   /**
    * The hysteresis step after a user gesture: the open node stays open until it is narrower than 200 px on screen,
    * and a node opens once it is wider than 240 px. Runs at the end of a wheel or key gesture, not during it. A wheel
-   * gesture looks at the item under the pointer; other gestures look at the middle of the view. Either point may lie in
-   * a gap between boxes, and then the nearest box within GAP_PX is the one looked at (`pickAt`).
+   * gesture looks at the item under the pointer; other gestures look at the middle of the view. The decision changes
+   * which boxes are open and nothing else: the camera stays, the selection stays, and the URL is not written.
    */
   const decide = () => {
-    const b = buildRef.current;
+    const v = viewRef.current;
+    const open = openRef.current;
     const point = pointRef.current;
     pointRef.current = undefined;
-    if (!b || focusRef.current === undefined) return;
+    if (!v || open === undefined || focusRef.current === undefined) return;
     const c = cameraRef.current;
-    const at = point ?? centreOf(c);
-    const under = pickAt(b, at.x, at.y, c);
-    const underRect = under === undefined ? undefined : b.placed.rects.get(under);
-    // The root is always open, so it is never the node that stays open; going up from it stays at it.
-    const parent = b.node(b.nodeId)?.parent;
-    const cur = parent === undefined ? null : b.nodeId;
-    const curRect = cur === null ? undefined : b.placed.rects.get(cur);
-    // Only a gesture that zoomed in or panned may open a child. A zoom out would otherwise reopen the child it just left.
-    const mayOpen = c.k >= gestureKRef.current;
-    const next = nextOpen(
-      cur,
-      curRect ? curRect.w * c.k : null,
-      mayOpen && under !== undefined && underRect ? { id: under, width: underRect.w * c.k } : null,
-    );
-    const target = next ?? parent ?? b.nodeId;
-    if (target !== b.nodeId) openNode(target);
+    const target = openAfterGesture({
+      open,
+      camera: c,
+      visible: visibleWorld(c, sizeOf()),
+      point,
+      gestureK: gestureKRef.current,
+      boxes: boxesRef.current,
+      rects: v.placed.rects,
+      parentOf: (id) => v.node(id)?.parent,
+      depth: (id) => v.depth(id),
+    });
+    if (target !== open) void openOnly(target);
   };
 
   /** Opens the node a click, key or link names: the source turns the node into its focus, then the map shows it. */
@@ -263,6 +292,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts }: Props) {
     const r = e.currentTarget.getBoundingClientRect();
     const W = Math.max(1, b.placed.width);
     const H = Math.max(1, b.placed.height);
+    // Minimap drag is an explicit move: the selection stays, and the view is panned by the camera only.
     const s = Math.max(W / r.width, H / r.height);
     const wx = (e.clientX - r.left - (r.width - W / s) / 2) * s;
     const wy = (e.clientY - r.top - (r.height - H / s) / 2) * s;
@@ -278,6 +308,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts }: Props) {
     const stage = stageRef.current;
     if (!svg || !stage) return;
     buildRef.current = undefined;
+    viewRef.current = undefined;
+    openRef.current = undefined;
     focusRef.current = undefined;
     const z = zoom<SVGSVGElement, unknown>()
       .scaleExtent(SCALE)
@@ -336,12 +368,12 @@ export function ZoomMap({ id, source, scope, fn, detail, charts }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source, scope, fn]);
 
-  // A new build may arrive while the camera stays put. Its minimap view box and world transform are set here.
+  // A new view may arrive while the camera stays put. Its minimap view box and world transform are set here.
   useEffect(() => {
-    if (build) applyCamera(cameraRef.current);
-    // applyCamera reads the refs only, so it runs once per build.
+    if (view) applyCamera(cameraRef.current);
+    // applyCamera reads the refs only, so it runs once per view.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [build]);
+  }, [view]);
 
   const onKey = (e: KeyEvent<HTMLDivElement>) => {
     const b = buildRef.current;
@@ -372,10 +404,11 @@ export function ZoomMap({ id, source, scope, fn, detail, charts }: Props) {
         break;
       }
       case "Enter": {
-        if (!b) break;
+        const v = viewRef.current;
+        if (!b || !v) break;
         const c = cameraRef.current;
         const at = centreOf(c);
-        const under = pickAt(b, at.x, at.y, c);
+        const under = pickBox(boxesRef.current, (id) => v.depth(id), at.x, at.y, c.k);
         if (under !== undefined && under !== b.nodeId) openNode(under);
         break;
       }
@@ -385,9 +418,9 @@ export function ZoomMap({ id, source, scope, fn, detail, charts }: Props) {
     e.preventDefault();
   };
 
-  const miniItems = useMemo(() => (build ? build.placed.items : []), [build]);
-  // The items and edges drawn are only those of the current build, so a stale set never shows.
-  const live = build !== undefined && shown.build === build ? shown : undefined;
+  const miniItems = useMemo(() => (view ? view.placed.items : []), [view]);
+  // The items and edges drawn are only those of the current view, so a stale set never shows.
+  const live = view !== undefined && shown.view === view ? shown : undefined;
   const drawn = (kind: PlacedItem["kind"]) => (live ? live.items.filter((i) => i.kind === kind) : []);
   /** The camera scale of the labels' bucket: labels are fitted to the boxes' width on screen at this scale. */
   const labelScale = bucketScale(shown.lod);
@@ -454,7 +487,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts }: Props) {
           </defs>
           <g ref={worldRef}>
             {drawn("frame").map((it) => (
-              <FrameShape key={it.id} item={it} node={build?.node(it.id)} k={labelScale} onOpen={openNode} />
+              <FrameShape key={it.id} item={it} node={view?.node(it.id)} k={labelScale} onOpen={openNode} />
             ))}
             {live?.edges.map((e) => (
               <path
@@ -468,7 +501,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts }: Props) {
               </path>
             ))}
             {drawn("box").map((it) => {
-              const node = build?.node(it.id);
+              const node = view?.node(it.id);
               return node ? <BoxShape key={it.id} item={it} node={node} k={labelScale} onOpen={openNode} charts={charts} /> : null;
             })}
           </g>

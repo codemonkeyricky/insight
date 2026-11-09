@@ -133,10 +133,18 @@ export function execFirstOpen(scene: Scene): Set<string> {
 /**
  * The map of a laid-out scene for a node: the node and its ancestors open, everything else closed. The project's own
  * map (the first view) opens the nesting instead, see execFirstOpen. `fns` (the model's functions by id) adds what the
- * function panel shows for a function node.
+ * function panel shows for a function node. `openId` is the node whose open set is drawn, when it is not `nodeId`: the
+ * node, crumbs and selection stay `nodeId`, while the boxes drawn follow `openId`.
  */
-export function execBuild(scene: Scene, layout: SceneLayout, scope: string, nodeId: string, fns?: ReadonlyMap<string, ExecFunctionRef>): MapBuild {
-  const open = nodeId === scene.root ? execFirstOpen(scene) : sceneOpenFor(scene, nodeId);
+export function execBuild(
+  scene: Scene,
+  layout: SceneLayout,
+  scope: string,
+  nodeId: string,
+  fns?: ReadonlyMap<string, ExecFunctionRef>,
+  openId: string = nodeId,
+): MapBuild {
+  const open = openId === scene.root ? execFirstOpen(scene) : sceneOpenFor(scene, openId);
   const placed = placeSceneLayout(scene, layout, open);
   const edges = placeSceneEdges(scene, open, placed.rects);
   const node = (id: string) => execMapNode(scene, id);

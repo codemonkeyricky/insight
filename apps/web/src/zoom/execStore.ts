@@ -85,11 +85,13 @@ export class ExecStore implements MapSource {
     if (!view.scene.nodes.has(nodeId)) throw new Error(`Nothing in the execution map at ${nodeId}`);
   }
 
-  async build(focus: string): Promise<MapBuild> {
+  async build(focus: string, open?: string): Promise<MapBuild> {
     const { scope, nodeId } = splitExecFocus(focus);
     const view = await this.load(scope);
     if (!view.scene.nodes.has(nodeId)) throw new Error(`Nothing in the execution map at ${nodeId}`);
-    return execBuild(view.scene, view.layout, scope, nodeId, view.fns);
+    const openId = open === undefined ? nodeId : splitExecFocus(open).nodeId;
+    if (!view.scene.nodes.has(openId)) throw new Error(`Nothing in the execution map at ${openId}`);
+    return execBuild(view.scene, view.layout, scope, nodeId, view.fns, openId);
   }
 
   /** The URL that shows a focus. Only a roots-only store writes `roots`, so its links keep the view. */
