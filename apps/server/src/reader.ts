@@ -9,7 +9,6 @@ import {
   readSnapshot,
   ROOT_SCOPE,
   runLensOnScope,
-  scopeDoc,
   scopeFacets,
   unavailableReason,
   type AnalysisFile,
@@ -31,6 +30,7 @@ import {
   type ScopeFlow,
   type SceneLayout,
 } from "@insight/flow";
+import { buildProjectModel, scopeView as modelScopeView, type ProjectModel } from "@insight/model";
 import { edgeTargets, IRView, isExternal, type ProjectRoot } from "@insight/sdk";
 import { createCoreRegistry, type IREdge, type IRDocument, type IRFinding, type IRNode, type IRRecord, type KindRegistry, type NodeId } from "@insight/ir";
 import { archModel, type ArchModel } from "@insight/lens-dependencies";
@@ -49,6 +49,8 @@ export interface LoadedSnapshot {
   outgoing: Map<NodeId, IREdge[]>;
   incoming: Map<NodeId, IREdge[]>;
   children: Map<NodeId, NodeId[]>;
+  /** The whole-project model of this snapshot. Built on first use, then kept with the snapshot. */
+  readonly model: ProjectModel;
 }
 
 const CACHE_LIMIT = 4;
@@ -76,7 +78,20 @@ function index(id: string, records: IRRecord[]): LoadedSnapshot {
     for (const t of edgeTargets(e).nodes) push(incoming, t, e);
   }
   for (const n of nodes.values()) if (n.parent !== undefined) push(children, n.parent, n.id);
-  return { id, nodes, edges, findings, outgoing, incoming, children };
+  let model: ProjectModel | undefined;
+  return {
+    id,
+    nodes,
+    edges,
+    findings,
+    outgoing,
+    incoming,
+    children,
+    get model() {
+      model ??= buildProjectModel({ nodes: [...nodes.values()], edges, findings });
+      return model;
+    },
+  };
 }
 
 export function loadSnapshot(paths: ProjectPaths, id: string): LoadedSnapshot {
@@ -370,9 +385,9 @@ export async function scopeView(paths: ProjectPaths, snapshot: string, path: str
   const snap = loadSnapshot(paths, snapshot);
   const kind = scopeKindOf(snap, scope);
   if (!kind) throw new ProjectError(404, "no such scope");
-  const doc: IRDocument = { nodes: [...snap.nodes.values()], edges: snap.edges, findings: snap.findings };
-  const cut = scopeDoc(doc, scope);
-  return { snapshot, scope, kind, doc, stats: cut.stats, facets: scopeFacets(cut.doc), plugins: await pluginsFor(paths.root) };
+  const view = modelScopeView(snap.model, scope);
+  const cut = view.toDoc();
+  return { snapshot, scope, kind, doc: snap.model.doc, stats: cut.stats, facets: scopeFacets(cut.doc), plugins: await pluginsFor(paths.root) };
 }
 
 /** The call flow of one scope, and the scope it names. */
@@ -397,8 +412,7 @@ export function scopeFlowOf(paths: ProjectPaths, snapshot: string, path: string)
   const snap = loadSnapshot(paths, snapshot);
   const kind = scopeKindOf(snap, scope);
   if (!kind) throw new ProjectError(404, "no such scope");
-  const doc: IRDocument = { nodes: [...snap.nodes.values()], edges: snap.edges, findings: snap.findings };
-  const cut = scopeDoc(doc, scope);
+  const cut = modelScopeView(snap.model, scope).toDoc();
   const files = cut.doc.nodes.filter((n) => n.kind === "structure.file" && !isExternal(n)).map((n) => String(n.attrs.path ?? n.id));
   const view: ScopeFlowView = { scope, kind, flow: summarizeScope(cut.doc.nodes, cut.doc.edges, files) };
   scopeFlows.set(key, view);
@@ -429,7 +443,7 @@ export function scopeExecOf(paths: ProjectPaths, snapshot: string, path: string)
   const snap = loadSnapshot(paths, snapshot);
   const kind = scopeKindOf(snap, scope);
   if (!kind) throw new ProjectError(404, "no such scope");
-  const view: ScopeExecView = { scope, kind, exec: execModel([...snap.nodes.values()], snap.edges, scope) };
+  const view: ScopeExecView = { scope, kind, exec: execModel(snap.model.doc.nodes, snap.model.doc.edges, scope) };
   scopeExecs.set(key, view);
   if (scopeExecs.size > SCOPE_EXEC_LIMIT) scopeExecs.delete(scopeExecs.keys().next().value as string);
   return view;

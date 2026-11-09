@@ -176,6 +176,40 @@ have the file path as `from`, and its counts go to the file's row in `files`.
 node, so files with no functions count too. `files` lists only the files with functions or
 module-level code.
 
+## Project model
+
+One snapshot has one whole-project model, `buildProjectModel(doc)` in `packages/model` (`@insight/model`).
+It is pure TypeScript with no `node:` imports, and it depends only on `@insight/ir` and `@insight/sdk`. The
+server builds it once per loaded snapshot (`LoadedSnapshot.model`, built on first use). A scope is a view of
+that model, not a cut that is recomputed per request.
+
+- `doc` is the original IRDocument, untouched. Lenses still read it.
+- `byId` and `fileOf(id)` give each node's file through its parent chain (the same rules as `scopeOfNode`).
+- `tree` holds a folder entity per directory: id `dir:<path>`, the root `dir:`, sorted child folders and
+  files, and subtree counts of files and functions.
+- `functions` lists every `structure.function` node with its file and whether it is anonymous.
+- `relations` normalizes four edge kinds into `{ kind, from, to, how?, candidate, edge }`: `calls.call` (call),
+  `calls.reference` (reference), `concurrency.dispatches` (dispatch) and `concurrency.spawns` (spawn). A candidate
+  set gives one relation per candidate, with `candidate: true`. Unresolved targets give no relation.
+- `out` indexes relations by `from`, and `in` by `to`. `in` is the reverse-reference index: who calls or references
+  a function.
+
+A scope is a view of the model: `scopeView(model, scope)` (`packages/model/src/view.ts`) returns
+- `kind`: `project`, `folder` or `file`, and `has(id)`, which tells whether a node is in the scope;
+- `files()` and `functions()`, the scope's files and functions;
+- `callers(id)` and `callees(id)`, the relations into and out of `id` across the whole project. Each one carries
+  `inScope`, which says whether the other end is in the view. A project-wide "called by" list is `callers` in the
+  root view, and in a folder view it splits into "in this scope" and "outside this scope";
+- `toDoc(opts)`, the scoped IR with the same stub and finding rules as before. `scopeDoc` in `@insight/core` is
+  now `scopeView(buildProjectModel(doc), scope).toDoc(opts)`, and its tests are unchanged.
+
+For example, with `src/a.ts` (function `a`) calling `lib/b.ts` (function `b`): in view `src`,
+`callees(a)` gives `b` with `inScope: false`; in view `lib`, `callers(b)` gives `a` with `inScope: false`; in the
+root view both are `inScope: true`.
+
+`normalizeScope` and `inScope` live in the model. Core re-exports them, and maps a bad scope to its `InputError`
+(400), so the route behavior is unchanged.
+
 ## Server routes
 
 The routes are in `apps/server/src/app.ts`. They take `?path=<scope>`, and an optional

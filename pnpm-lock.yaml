@@ -41,6 +41,9 @@ importers:
       '@insight/lens-dependencies':
         specifier: workspace:*
         version: link:../../packages/lens-dependencies
+      '@insight/model':
+        specifier: workspace:*
+        version: link:../../packages/model
       '@insight/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
@@ -130,6 +133,9 @@ importers:
       '@insight/ir':
         specifier: workspace:*
         version: link:../ir
+      '@insight/model':
+        specifier: workspace:*
+        version: link:../model
       '@insight/sdk':
         specifier: workspace:*
         version: link:../sdk
@@ -284,6 +290,15 @@ importers:
         version: link:../sdk
 
   packages/lens-lock-order:
+    dependencies:
+      '@insight/ir':
+        specifier: workspace:*
+        version: link:../ir
+      '@insight/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+
+  packages/model:
     dependencies:
       '@insight/ir':
         specifier: workspace:*
