@@ -22,9 +22,15 @@ export interface ProjectPaths {
   annotations: string;
 }
 
-export function projectPaths(root: string): ProjectPaths {
+/**
+ * Where a project's files live. The generated state (index, shards, snapshots, analysis, review) goes to `stateDir`
+ * when one is given, and to `<root>/.insight` otherwise. The user's own inputs never move: per-project plugins and
+ * lens settings are always read from `<root>/.insight`.
+ */
+export function projectPaths(root: string, stateDir?: string): ProjectPaths {
   const abs = resolve(root);
-  const state = join(abs, STATE_DIR);
+  const state = stateDir !== undefined ? resolve(stateDir) : join(abs, STATE_DIR);
+  const inputs = join(abs, STATE_DIR);
   return {
     root: abs,
     state,
@@ -34,9 +40,9 @@ export function projectPaths(root: string): ProjectPaths {
     treeFile: join(state, "tree.json"),
     statCache: join(state, "stat-cache.json"),
     indexDb: join(state, "index.sqlite"),
-    localPlugins: join(state, "plugins"),
+    localPlugins: join(inputs, "plugins"),
     analysis: join(state, "analysis"),
-    lensConfigs: join(state, "lenses"),
+    lensConfigs: join(inputs, "lenses"),
     review: join(state, "review.json"),
     annotations: join(state, "annotations.json"),
   };

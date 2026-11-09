@@ -24,6 +24,11 @@ export interface IndexOptions extends LoadOptions {
   onProgress?: (line: string) => void;
   /** The commit this tree was taken from, when known. Recorded on the snapshot. */
   commit?: string;
+  /**
+   * Where the generated state goes (index, shards, snapshots). Defaults to `<projectPath>/.insight`. The server
+   * sets it to a folder under its home, so the user's folder stays clean.
+   */
+  stateDir?: string;
 }
 
 export interface IndexReport {
@@ -74,7 +79,7 @@ export async function runIndex(opts: IndexOptions): Promise<IndexReport> {
   const started = Date.now();
   const root = resolve(opts.projectPath);
   if (!existsSync(root)) throw new Error(`project path does not exist: ${root}`);
-  const paths: ProjectPaths = projectPaths(root);
+  const paths: ProjectPaths = projectPaths(root, opts.stateDir);
   mkdirSync(paths.shards, { recursive: true });
   mkdirSync(paths.snapshots, { recursive: true });
 

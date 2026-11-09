@@ -14,6 +14,7 @@ import {
   unavailableReason,
   type AnalysisFile,
   type CoverageRow,
+  type ProjectPaths,
   type LensRecord,
   type LensStatus,
   type LoadedPlugins,
@@ -78,19 +79,19 @@ function index(id: string, records: IRRecord[]): LoadedSnapshot {
   return { id, nodes, edges, findings, outgoing, incoming, children };
 }
 
-export function loadSnapshot(root: string, id: string): LoadedSnapshot {
-  const key = `${root}\0${id}`;
+export function loadSnapshot(paths: ProjectPaths, id: string): LoadedSnapshot {
+  const key = `${paths.state}\0${id}`;
   const hit = cache.get(key);
   if (hit) return hit;
-  const loaded = index(id, readSnapshot(projectPaths(root), id));
+  const loaded = index(id, readSnapshot(paths, id));
   cache.set(key, loaded);
   if (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value as string);
   return loaded;
 }
 
 /** The snapshot a read refers to: the requested one when it exists for the project, else the latest. */
-export function resolveSnapshot(root: string, requested: string | undefined): string | undefined {
-  const state = loadState(projectPaths(root));
+export function resolveSnapshot(paths: ProjectPaths, requested: string | undefined): string | undefined {
+  const state = loadState(paths);
   if (requested !== undefined) {
     if (!state.snapshots.some((s) => s.id === requested)) throw new ProjectError(404, `unknown snapshot ${requested}`);
     return requested;
@@ -108,9 +109,9 @@ export interface FindingRow {
 }
 
 /** Lens findings and index findings in one list. Index findings use the lens name "index". */
-export function allFindings(root: string, snapshot: string): FindingRow[] {
+export function allFindings(paths: ProjectPaths, snapshot: string): FindingRow[] {
   const rows: FindingRow[] = [];
-  const analysis = readAnalysis(projectPaths(root), snapshot);
+  const analysis = readAnalysis(paths, snapshot);
   for (const lens of analysis?.lenses ?? []) {
     for (const f of lens.result?.findings ?? []) {
       rows.push({
@@ -123,7 +124,7 @@ export function allFindings(root: string, snapshot: string): FindingRow[] {
       });
     }
   }
-  loadSnapshot(root, snapshot).findings.forEach((f, i) => {
+  loadSnapshot(paths, snapshot).findings.forEach((f, i) => {
     rows.push({
       id: `index:${i}`,
       lens: "index",
@@ -136,11 +137,11 @@ export function allFindings(root: string, snapshot: string): FindingRow[] {
   return rows;
 }
 
-export function overview(record: ProjectRecord, jobs: JobRunner, root: string, requested?: string) {
-  const state = loadState(projectPaths(root));
-  const snapshot = resolveSnapshot(root, requested);
+export function overview(record: ProjectRecord, jobs: JobRunner, paths: ProjectPaths, requested?: string) {
+  const state = loadState(paths);
+  const snapshot = resolveSnapshot(paths, requested);
   const info = snapshot ? state.snapshots.find((s) => s.id === snapshot) : undefined;
-  const findings = snapshot ? allFindings(root, snapshot) : [];
+  const findings = snapshot ? allFindings(paths, snapshot) : [];
   const bySeverity: Record<string, number> = { error: 0, warning: 0, info: 0 };
   const byLens: Record<string, number> = {};
   for (const f of findings) {
@@ -159,14 +160,14 @@ export function overview(record: ProjectRecord, jobs: JobRunner, root: string, r
       : null,
     coverage: fromLastRun ? (last.coverage ?? []) : [],
     problems: fromLastRun ? (last.problems ?? []) : [],
-    lenses: lensSummaries(root, snapshot),
+    lenses: lensSummaries(paths, snapshot),
     findings: { total: findings.length, bySeverity, byLens },
   };
 }
 
-function lensSummaries(root: string, snapshot: string | undefined) {
+function lensSummaries(paths: ProjectPaths, snapshot: string | undefined) {
   if (!snapshot) return [];
-  const analysis = readAnalysis(projectPaths(root), snapshot);
+  const analysis = readAnalysis(paths, snapshot);
   return (analysis?.lenses ?? []).map((r) => ({
     id: r.id,
     title: r.title,
@@ -193,20 +194,20 @@ export function publicProject(p: ProjectRecord, jobs: JobRunner) {
   };
 }
 
-export function analysisFor(root: string, snapshot: string | undefined): AnalysisFile | undefined {
-  return snapshot ? readAnalysis(projectPaths(root), snapshot) : undefined;
+export function analysisFor(paths: ProjectPaths, snapshot: string | undefined): AnalysisFile | undefined {
+  return snapshot ? readAnalysis(paths, snapshot) : undefined;
 }
 
-export function lensRecord(root: string, snapshot: string | undefined, lensId: string): LensRecord {
-  const analysis = analysisFor(root, snapshot);
+export function lensRecord(paths: ProjectPaths, snapshot: string | undefined, lensId: string): LensRecord {
+  const analysis = analysisFor(paths, snapshot);
   const record = analysis?.lenses.find((r) => r.id === lensId);
   if (!record) throw new ProjectError(404, `no lens ${lensId} in this snapshot`);
   return record;
 }
 
 /** Node facts: the node, its ancestors, its children, and every edge into or out of it. */
-export function nodeFacts(root: string, snapshot: string, id: NodeId) {
-  const snap = loadSnapshot(root, snapshot);
+export function nodeFacts(paths: ProjectPaths, snapshot: string, id: NodeId) {
+  const snap = loadSnapshot(paths, snapshot);
   const node = snap.nodes.get(id);
   if (!node) throw new ProjectError(404, `no node ${id}`);
   const ancestors: IRNode[] = [];
@@ -256,8 +257,8 @@ export interface FileEntry {
 }
 
 /** Every file in the snapshot, with the counts the browser shows next to it. */
-export function listFiles(root: string, snapshot: string): FileEntry[] {
-  const snap = loadSnapshot(root, snapshot);
+export function listFiles(paths: ProjectPaths, snapshot: string): FileEntry[] {
+  const snap = loadSnapshot(paths, snapshot);
   const counts = new Map<string, { functions: number; types: number; findings: number }>();
   const bump = (file: string, key: "functions" | "types" | "findings") => {
     const c = counts.get(file) ?? { functions: 0, types: 0, findings: 0 };
@@ -268,14 +269,14 @@ export function listFiles(root: string, snapshot: string): FileEntry[] {
     if (n.kind === "structure.function" && n.span) bump(n.span.file, "functions");
     else if (n.kind === "structure.type" && n.span) bump(n.span.file, "types");
   }
-  for (const f of allFindings(root, snapshot)) if (f.span) bump(f.span.file, "findings");
+  for (const f of allFindings(paths, snapshot)) if (f.span) bump(f.span.file, "findings");
   const files: FileEntry[] = [];
   for (const n of snap.nodes.values()) {
     if (n.kind !== "structure.file") continue;
     const path = String(n.attrs.path ?? n.id);
     let size = 0;
     try {
-      size = statSync(join(root, path)).size;
+      size = statSync(join(paths.root, path)).size;
     } catch {
       /* the file is gone since the snapshot; it is listed with size 0 */
     }
@@ -294,27 +295,27 @@ export interface FileSymbol {
 }
 
 /** Functions and types declared in one file, in source order, and the findings that point into it. */
-export function fileFacts(root: string, snapshot: string, file: string): { symbols: FileSymbol[]; findings: FindingRow[] } {
-  const snap = loadSnapshot(root, snapshot);
+export function fileFacts(paths: ProjectPaths, snapshot: string, file: string): { symbols: FileSymbol[]; findings: FindingRow[] } {
+  const snap = loadSnapshot(paths, snapshot);
   const symbols: FileSymbol[] = [];
   for (const n of snap.nodes.values()) {
     if ((n.kind !== "structure.function" && n.kind !== "structure.type") || n.span?.file !== file) continue;
     symbols.push({ id: n.id, kind: n.kind, name: String(n.attrs.qualifiedName ?? n.attrs.name ?? n.id), span: n.span });
   }
   symbols.sort((a, b) => a.span.start[0] - b.span.start[0] || a.span.start[1] - b.span.start[1]);
-  return { symbols, findings: allFindings(root, snapshot).filter((f) => f.span?.file === file) };
+  return { symbols, findings: allFindings(paths, snapshot).filter((f) => f.span?.file === file) };
 }
 
 /** The control-flow charts of the functions in one file, rebuilt from the snapshot's IR. */
-export function fileFlow(root: string, snapshot: string, file: string): FileFlow {
-  const snap = loadSnapshot(root, snapshot);
+export function fileFlow(paths: ProjectPaths, snapshot: string, file: string): FileFlow {
+  const snap = loadSnapshot(paths, snapshot);
   const nodes = [...snap.nodes.values()].filter((n) => n.span?.file === file);
   return buildFileFlow(file, nodes, snap.edges.filter((e) => e.span?.file === file));
 }
 
 /** How branchy each file is, for the folder and project scopes of the flow view. */
-export function flowSummary(root: string, snapshot: string): FileFlowSummary[] {
-  const snap = loadSnapshot(root, snapshot);
+export function flowSummary(paths: ProjectPaths, snapshot: string): FileFlowSummary[] {
+  const snap = loadSnapshot(paths, snapshot);
   return summarizeFlows(snap.nodes.values(), snap.edges);
 }
 
@@ -364,14 +365,14 @@ export interface ScopeView {
  * Checks a scope path against one snapshot and cuts its IR. A path that leaves the project is an
  * InputError (400). A path with no indexed file under it is a 404.
  */
-export async function scopeView(root: string, snapshot: string, path: string): Promise<ScopeView> {
+export async function scopeView(paths: ProjectPaths, snapshot: string, path: string): Promise<ScopeView> {
   const scope = normalizeScope(path);
-  const snap = loadSnapshot(root, snapshot);
+  const snap = loadSnapshot(paths, snapshot);
   const kind = scopeKindOf(snap, scope);
   if (!kind) throw new ProjectError(404, "no such scope");
   const doc: IRDocument = { nodes: [...snap.nodes.values()], edges: snap.edges, findings: snap.findings };
   const cut = scopeDoc(doc, scope);
-  return { snapshot, scope, kind, doc, stats: cut.stats, facets: scopeFacets(cut.doc), plugins: await pluginsFor(root) };
+  return { snapshot, scope, kind, doc, stats: cut.stats, facets: scopeFacets(cut.doc), plugins: await pluginsFor(paths.root) };
 }
 
 /** The call flow of one scope, and the scope it names. */
@@ -388,12 +389,12 @@ const scopeFlows = new Map<string, ScopeFlowView>();
  * The call flow of a scope, summarized from its scoped IR (see docs/scoped-ir.md). A snapshot never
  * changes, so each scope's summary is kept until enough other scopes push it out.
  */
-export function scopeFlowOf(root: string, snapshot: string, path: string): ScopeFlowView {
+export function scopeFlowOf(paths: ProjectPaths, snapshot: string, path: string): ScopeFlowView {
   const scope = normalizeScope(path);
-  const key = `${root}\0${snapshot}\0${scope}`;
+  const key = `${paths.state}\0${snapshot}\0${scope}`;
   const hit = scopeFlows.get(key);
   if (hit) return hit;
-  const snap = loadSnapshot(root, snapshot);
+  const snap = loadSnapshot(paths, snapshot);
   const kind = scopeKindOf(snap, scope);
   if (!kind) throw new ProjectError(404, "no such scope");
   const doc: IRDocument = { nodes: [...snap.nodes.values()], edges: snap.edges, findings: snap.findings };
@@ -420,12 +421,12 @@ const scopeExecs = new Map<string, ScopeExecView>();
  * whole snapshot, not the cut, because a thread's reach follows calls out of the scope. A snapshot never changes,
  * so each scope's model is kept until enough other scopes push it out.
  */
-export function scopeExecOf(root: string, snapshot: string, path: string): ScopeExecView {
+export function scopeExecOf(paths: ProjectPaths, snapshot: string, path: string): ScopeExecView {
   const scope = normalizeScope(path);
-  const key = `${root}\0${snapshot}\0${scope}`;
+  const key = `${paths.state}\0${snapshot}\0${scope}`;
   const hit = scopeExecs.get(key);
   if (hit) return hit;
-  const snap = loadSnapshot(root, snapshot);
+  const snap = loadSnapshot(paths, snapshot);
   const kind = scopeKindOf(snap, scope);
   if (!kind) throw new ProjectError(404, "no such scope");
   const view: ScopeExecView = { scope, kind, exec: execModel([...snap.nodes.values()], snap.edges, scope) };
@@ -450,12 +451,12 @@ let coreRegistry: KindRegistry | undefined;
  * snapshot, not the cut, since packages and the imports between them lie outside any one scope. A snapshot never
  * changes, so each scope's answer is kept until enough other scopes push it out.
  */
-export function scopeArchOf(root: string, snapshot: string, path: string): ScopeArchView {
+export function scopeArchOf(paths: ProjectPaths, snapshot: string, path: string): ScopeArchView {
   const scope = normalizeScope(path);
-  const key = `${root}\0${snapshot}\0${scope}`;
+  const key = `${paths.state}\0${snapshot}\0${scope}`;
   const hit = scopeArchs.get(key);
   if (hit) return hit;
-  const snap = loadSnapshot(root, snapshot);
+  const snap = loadSnapshot(paths, snapshot);
   const kind = scopeKindOf(snap, scope);
   if (!kind) throw new ProjectError(404, "no such scope");
   coreRegistry ??= createCoreRegistry();
@@ -489,13 +490,13 @@ const scopeExecLayouts = new Map<string, Promise<ScopeExecLayoutView>>();
  * as a promise: a second request, even one that arrives while the first is still solving, waits for the same work.
  * A failed solve is dropped from the cache, so the next request tries again.
  */
-export function scopeExecLayoutOf(root: string, snapshot: string, path: string): Promise<ScopeExecLayoutView> {
+export function scopeExecLayoutOf(paths: ProjectPaths, snapshot: string, path: string): Promise<ScopeExecLayoutView> {
   const scope = normalizeScope(path);
-  const key = `${root}\0${snapshot}\0${scope}`;
+  const key = `${paths.state}\0${snapshot}\0${scope}`;
   const hit = scopeExecLayouts.get(key);
   if (hit) return hit;
   const solved = (async (): Promise<ScopeExecLayoutView> => {
-    const { kind, exec } = scopeExecOf(root, snapshot, scope);
+    const { kind, exec } = scopeExecOf(paths, snapshot, scope);
     layoutSolves += 1;
     return { scope, kind, layout: await solveExecLayout(exec) };
   })();
@@ -518,8 +519,7 @@ export interface ScopeLensRow {
 }
 
 /** Each lens with the status of its latest stored run on the scope. */
-export function scopeLensRows(view: ScopeView, root: string): ScopeLensRow[] {
-  const paths = projectPaths(root);
+export function scopeLensRows(view: ScopeView, paths: ProjectPaths): ScopeLensRow[] {
   const projectRecords = view.scope === ROOT_SCOPE ? readAnalysis(paths, view.snapshot)?.lenses : undefined;
   return view.plugins.lenses.map(({ lens }): ScopeLensRow => {
     const missing = lens.requires.filter((f) => !view.facets.includes(f));
@@ -555,7 +555,7 @@ function readLensConfigs(root: string, lensIds: string[]): Record<string, unknow
  * Runs one lens on the scope, or reads its stored result when the inputs have not changed. A lens
  * that throws comes back with status "error" and is not stored.
  */
-export async function runScopedLens(view: ScopeView, lensId: string, project: ProjectRoot): Promise<LensRecord> {
+export async function runScopedLens(view: ScopeView, lensId: string, project: ProjectRoot, stateDir: string): Promise<LensRecord> {
   const item = view.plugins.lenses.find((l) => l.lens.id === lensId);
   if (!item) throw new ProjectError(404, `no lens ${lensId}`);
   return runLensOnScope({
@@ -567,6 +567,7 @@ export async function runScopedLens(view: ScopeView, lensId: string, project: Pr
     lens: item,
     lenses: view.plugins.lenses,
     configs: readLensConfigs(project.path, view.plugins.lenses.map((l) => l.lens.id)),
+    stateDir,
   });
 }
 

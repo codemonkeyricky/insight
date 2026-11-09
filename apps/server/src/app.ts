@@ -3,7 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import fastifyStatic from "@fastify/static";
-import { ProjectError, ProjectRegistry, insightHome, type ProjectRecord } from "./registry.js";
+import { ProjectError, ProjectRegistry, insightHome, ownsStateDir, type ProjectRecord } from "./registry.js";
 import { JobRunner, type IndexFn, type JobEvent } from "./jobs.js";
 import {
   addAnnotation,
@@ -111,6 +111,8 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
     return p;
   };
   const rootFor = (p: ProjectRecord): string => registry.rootOf(p);
+  /** The project's folder and its state folder. Reads of the index take this. */
+  const pathsFor = (p: ProjectRecord) => projectPaths(rootFor(p), registry.stateOf(p));
   const projectRoot = (p: ProjectRecord): ProjectRoot => ({ path: rootFor(p), name: p.name, allowBuildTools: p.allowBuildTools });
 
   app.get("/api/health", async () => ({ ok: true, version: SERVER_VERSION, home }));
@@ -140,8 +142,10 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
     const p = project(req.params.id);
     if (jobs.isIndexing(p.id)) throw new ProjectError(409, "project is indexing; try again when it finishes");
     registry.remove(p.id);
-    // A clone is ours to delete. A local folder is the user's, and only its .insight folder is ours, which stays.
+    // A clone is ours to delete. A local folder is the user's and is never touched. The state folder goes only when the
+    // server made it under its home; a legacy state folder inside the user's folder stays.
     if (p.source.kind === "git") rmSync(p.source.checkout, { recursive: true, force: true });
+    if (ownsStateDir(registry.home, p.stateDir)) rmSync(p.stateDir, { recursive: true, force: true });
     return reply.code(204).send();
   });
 
@@ -184,13 +188,13 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
 
   app.get<{ Params: ProjectParams; Querystring: SnapshotQuery }>("/api/projects/:id/overview", async (req) => {
     const p = project(req.params.id);
-    return overview(p, jobs, rootFor(p), req.query.snapshot);
+    return overview(p, jobs, pathsFor(p), req.query.snapshot);
   });
 
   app.get<{ Params: ProjectParams; Querystring: SnapshotQuery }>("/api/projects/:id/lenses", async (req) => {
     const p = project(req.params.id);
-    const snapshot = resolveSnapshot(rootFor(p), req.query.snapshot);
-    const analysis = analysisFor(rootFor(p), snapshot);
+    const snapshot = resolveSnapshot(pathsFor(p), req.query.snapshot);
+    const analysis = analysisFor(pathsFor(p), snapshot);
     return {
       snapshot: snapshot ?? null,
       lenses: (analysis?.lenses ?? []).map(({ result: _result, ...rest }) => ({
@@ -205,8 +209,8 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
     "/api/projects/:id/lenses/:lensId",
     async (req) => {
       const p = project(req.params.id);
-      const snapshot = resolveSnapshot(rootFor(p), req.query.snapshot);
-      return { snapshot: snapshot ?? null, lens: lensRecord(rootFor(p), snapshot, req.params.lensId) };
+      const snapshot = resolveSnapshot(pathsFor(p), req.query.snapshot);
+      return { snapshot: snapshot ?? null, lens: lensRecord(pathsFor(p), snapshot, req.params.lensId) };
     },
   );
 
@@ -214,16 +218,16 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
   app.get<{ Params: ProjectParams; Querystring: SnapshotQuery & { path?: string } }>("/api/projects/:id/scope/lenses", async (req) => {
     const p = project(req.params.id);
     const path = scopePathOf(req.query.path);
-    const snapshot = resolveSnapshot(rootFor(p), req.query.snapshot);
+    const snapshot = resolveSnapshot(pathsFor(p), req.query.snapshot);
     if (!snapshot) throw new ProjectError(404, "project has no snapshot yet");
-    const view = await scopeView(rootFor(p), snapshot, path);
+    const view = await scopeView(pathsFor(p), snapshot, path);
     return {
       snapshot,
       scope: view.scope,
       kind: view.kind,
       stats: view.stats,
       facets: view.facets,
-      lenses: scopeLensRows(view, rootFor(p)),
+      lenses: scopeLensRows(view, pathsFor(p)),
     };
   });
 
@@ -232,10 +236,10 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
     async (req) => {
       const p = project(req.params.id);
       const path = scopePathOf(req.query.path);
-      const snapshot = resolveSnapshot(rootFor(p), req.query.snapshot);
+      const snapshot = resolveSnapshot(pathsFor(p), req.query.snapshot);
       if (!snapshot) throw new ProjectError(404, "project has no snapshot yet");
-      const view = await scopeView(rootFor(p), snapshot, path);
-      return { snapshot, scope: view.scope, kind: view.kind, lens: await runScopedLens(view, req.params.lensId, projectRoot(p)) };
+      const view = await scopeView(pathsFor(p), snapshot, path);
+      return { snapshot, scope: view.scope, kind: view.kind, lens: await runScopedLens(view, req.params.lensId, projectRoot(p), registry.stateOf(p)) };
     },
   );
 
@@ -243,9 +247,9 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
   app.get<{ Params: ProjectParams; Querystring: SnapshotQuery & { path?: string } }>("/api/projects/:id/scope/flow", async (req) => {
     const p = project(req.params.id);
     const path = scopePathOf(req.query.path);
-    const snapshot = resolveSnapshot(rootFor(p), req.query.snapshot);
+    const snapshot = resolveSnapshot(pathsFor(p), req.query.snapshot);
     if (!snapshot) throw new ProjectError(404, "project has no snapshot yet");
-    const { scope, kind, flow } = scopeFlowOf(rootFor(p), snapshot, path);
+    const { scope, kind, flow } = scopeFlowOf(pathsFor(p), snapshot, path);
     return { snapshot, scope, kind, ...flow };
   });
 
@@ -254,10 +258,10 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
   app.get<{ Params: ProjectParams; Querystring: SnapshotQuery & { path?: string } }>("/api/projects/:id/scope/exec", async (req) => {
     const p = project(req.params.id);
     const path = scopePathOf(req.query.path);
-    const snapshot = resolveSnapshot(rootFor(p), req.query.snapshot);
+    const snapshot = resolveSnapshot(pathsFor(p), req.query.snapshot);
     if (!snapshot) throw new ProjectError(404, "project has no snapshot yet");
     // exec.scope is the normalized scope, so the spread supplies it. Naming it again would be overwritten.
-    const { kind, exec } = scopeExecOf(rootFor(p), snapshot, path);
+    const { kind, exec } = scopeExecOf(pathsFor(p), snapshot, path);
     return { snapshot, kind, ...exec };
   });
 
@@ -266,9 +270,9 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
   app.get<{ Params: ProjectParams; Querystring: SnapshotQuery & { path?: string } }>("/api/projects/:id/scope/exec-layout", async (req) => {
     const p = project(req.params.id);
     const path = scopePathOf(req.query.path);
-    const snapshot = resolveSnapshot(rootFor(p), req.query.snapshot);
+    const snapshot = resolveSnapshot(pathsFor(p), req.query.snapshot);
     if (!snapshot) throw new ProjectError(404, "project has no snapshot yet");
-    const { kind, layout } = await scopeExecLayoutOf(rootFor(p), snapshot, path);
+    const { kind, layout } = await scopeExecLayoutOf(pathsFor(p), snapshot, path);
     return { snapshot, kind, ...layout };
   });
 
@@ -277,9 +281,9 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
   app.get<{ Params: ProjectParams; Querystring: SnapshotQuery & { path?: string } }>("/api/projects/:id/scope/arch", async (req) => {
     const p = project(req.params.id);
     const path = scopePathOf(req.query.path);
-    const snapshot = resolveSnapshot(rootFor(p), req.query.snapshot);
+    const snapshot = resolveSnapshot(pathsFor(p), req.query.snapshot);
     if (!snapshot) throw new ProjectError(404, "project has no snapshot yet");
-    const { scope, kind, arch } = scopeArchOf(rootFor(p), snapshot, path);
+    const { scope, kind, arch } = scopeArchOf(pathsFor(p), snapshot, path);
     return { snapshot, scope, kind, ...arch };
   });
 
@@ -287,10 +291,10 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
     "/api/projects/:id/findings",
     async (req) => {
       const p = project(req.params.id);
-      const snapshot = resolveSnapshot(rootFor(p), req.query.snapshot);
+      const snapshot = resolveSnapshot(pathsFor(p), req.query.snapshot);
       if (!snapshot) return { snapshot: null, findings: [] };
       const { lens, severity } = req.query;
-      const findings = allFindings(rootFor(p), snapshot).filter(
+      const findings = allFindings(pathsFor(p), snapshot).filter(
         (f) => (lens === undefined || f.lens === lens) && (severity === undefined || f.severity === severity),
       );
       return { snapshot, findings };
@@ -301,16 +305,16 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
     "/api/projects/:id/nodes/*",
     async (req) => {
       const p = project(req.params.id);
-      const snapshot = resolveSnapshot(rootFor(p), req.query.snapshot);
+      const snapshot = resolveSnapshot(pathsFor(p), req.query.snapshot);
       if (!snapshot) throw new ProjectError(404, "project has no snapshot yet");
-      return { snapshot, ...nodeFacts(rootFor(p), snapshot, req.params["*"]) };
+      return { snapshot, ...nodeFacts(pathsFor(p), snapshot, req.params["*"]) };
     },
   );
 
   app.get<{ Params: ProjectParams; Querystring: SnapshotQuery }>("/api/projects/:id/files", async (req) => {
     const p = project(req.params.id);
-    const snapshot = resolveSnapshot(rootFor(p), req.query.snapshot);
-    return { snapshot: snapshot ?? null, files: snapshot ? listFiles(rootFor(p), snapshot) : [] };
+    const snapshot = resolveSnapshot(pathsFor(p), req.query.snapshot);
+    return { snapshot: snapshot ?? null, files: snapshot ? listFiles(pathsFor(p), snapshot) : [] };
   });
 
   app.get<{ Params: ProjectParams; Querystring: SnapshotQuery & { path?: string } }>("/api/projects/:id/file", async (req) => {
@@ -318,8 +322,8 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
     const path = req.query.path;
     if (!path) throw new ProjectError(400, "path is required");
     const text = readFileText(rootFor(p), path);
-    const snapshot = resolveSnapshot(rootFor(p), req.query.snapshot);
-    const facts = snapshot ? fileFacts(rootFor(p), snapshot, path) : { symbols: [], findings: [] };
+    const snapshot = resolveSnapshot(pathsFor(p), req.query.snapshot);
+    const facts = snapshot ? fileFacts(pathsFor(p), snapshot, path) : { symbols: [], findings: [] };
     const language = languageOf(path);
     return { snapshot: snapshot ?? null, ...text, ...(language ? { language } : {}), ...facts };
   });
@@ -328,15 +332,15 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
     const p = project(req.params.id);
     const path = req.query.path;
     if (!path) throw new ProjectError(400, "path is required");
-    const snapshot = resolveSnapshot(rootFor(p), req.query.snapshot);
+    const snapshot = resolveSnapshot(pathsFor(p), req.query.snapshot);
     if (!snapshot) throw new ProjectError(404, "project has no snapshot yet");
-    return { snapshot, ...fileFlow(rootFor(p), snapshot, path) };
+    return { snapshot, ...fileFlow(pathsFor(p), snapshot, path) };
   });
 
   app.get<{ Params: ProjectParams; Querystring: SnapshotQuery }>("/api/projects/:id/flow-summary", async (req) => {
     const p = project(req.params.id);
-    const snapshot = resolveSnapshot(rootFor(p), req.query.snapshot);
-    return { snapshot: snapshot ?? null, files: snapshot ? flowSummary(rootFor(p), snapshot) : [] };
+    const snapshot = resolveSnapshot(pathsFor(p), req.query.snapshot);
+    return { snapshot: snapshot ?? null, files: snapshot ? flowSummary(pathsFor(p), snapshot) : [] };
   });
 
   app.get<{ Params: ProjectParams; Querystring: { file?: string; start?: string; end?: string; context?: string } }>(
@@ -370,20 +374,22 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
     const p = project(req.params.id);
     const { base, head } = req.query;
     if (!base || !head) throw new ProjectError(400, "base and head are required");
-    const result = await serialized(p.id, () => compareCommits(rootFor(p), base, head, { allowBuildTools: p.allowBuildTools }));
+    const result = await serialized(p.id, () =>
+      compareCommits(rootFor(p), base, head, { allowBuildTools: p.allowBuildTools, stateDir: registry.stateOf(p) }),
+    );
     const side = (s: { commit: string; snapshot: string; reused: boolean }) => ({ commit: s.commit, snapshot: s.snapshot, reused: s.reused });
     return { base: side(result.base), head: side(result.head), diff: result.diff };
   });
 
   app.get<{ Params: ProjectParams; Querystring: { type?: string; key?: string } }>("/api/projects/:id/annotations", async (req) => {
     const p = project(req.params.id);
-    return { annotations: listAnnotations(projectPaths(rootFor(p)), req.query) };
+    return { annotations: listAnnotations(pathsFor(p), req.query) };
   });
 
   app.post<{ Params: ProjectParams; Body: Record<string, unknown> }>("/api/projects/:id/annotations", async (req, reply) => {
     const p = project(req.params.id);
     const body = req.body ?? {};
-    const annotation = addAnnotation(projectPaths(rootFor(p)), { type: body.type, key: body.key, text: body.text });
+    const annotation = addAnnotation(pathsFor(p), { type: body.type, key: body.key, text: body.text });
     return reply.code(201).send({ annotation });
   });
 
@@ -391,7 +397,7 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
     "/api/projects/:id/annotations/:annId",
     async (req) => {
       const p = project(req.params.id);
-      const annotation = updateAnnotation(projectPaths(rootFor(p)), req.params.annId, req.body?.text);
+      const annotation = updateAnnotation(pathsFor(p), req.params.annId, req.body?.text);
       if (!annotation) throw new ProjectError(404, `no annotation ${req.params.annId}`);
       return { annotation };
     },
@@ -399,22 +405,22 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
 
   app.delete<{ Params: ProjectParams & { annId: string } }>("/api/projects/:id/annotations/:annId", async (req, reply) => {
     const p = project(req.params.id);
-    if (!deleteAnnotation(projectPaths(rootFor(p)), req.params.annId)) throw new ProjectError(404, `no annotation ${req.params.annId}`);
+    if (!deleteAnnotation(pathsFor(p), req.params.annId)) throw new ProjectError(404, `no annotation ${req.params.annId}`);
     return reply.code(204).send();
   });
 
   app.get<{ Params: ProjectParams; Querystring: SnapshotQuery }>("/api/projects/:id/review", async (req) => {
     const p = project(req.params.id);
-    const root = rootFor(p);
-    const snapshot = resolveSnapshot(root, req.query.snapshot);
-    const findings = snapshot ? keyedFindings(analysisFor(root, snapshot)) : [];
-    return { snapshot: snapshot ?? null, ...checklist(findings, readReview(projectPaths(root))) };
+    const paths = pathsFor(p);
+    const snapshot = resolveSnapshot(paths, req.query.snapshot);
+    const findings = snapshot ? keyedFindings(analysisFor(paths, snapshot)) : [];
+    return { snapshot: snapshot ?? null, ...checklist(findings, readReview(paths)) };
   });
 
   app.put<{ Params: ProjectParams; Body: Record<string, unknown> }>("/api/projects/:id/review", async (req) => {
     const p = project(req.params.id);
     const body = req.body ?? {};
-    const decision = setDecision(projectPaths(rootFor(p)), body.key, body.status, body.note);
+    const decision = setDecision(pathsFor(p), body.key, body.status, body.note);
     return { key: String(body.key), decision };
   });
 
@@ -422,7 +428,7 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
     const p = project(req.params.id);
     const key = req.query.key;
     if (typeof key !== "string" || key.trim() === "") throw new ProjectError(400, "key is required");
-    clearDecision(projectPaths(rootFor(p)), key);
+    clearDecision(pathsFor(p), key);
     return reply.code(204).send();
   });
 

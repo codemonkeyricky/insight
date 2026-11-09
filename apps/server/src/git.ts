@@ -11,14 +11,31 @@ async function git(cwd: string | undefined, args: string[]): Promise<string> {
   return stdout.trim();
 }
 
-/** Clones a repository, or fast-forwards an existing clone. Returns the checkout's HEAD commit. */
-export async function syncCheckout(url: string, dir: string): Promise<string> {
+export interface SyncResult {
+  /** The HEAD commit of the checkout that gets indexed. */
+  commit: string;
+  /** Set when the remote could not be reached and the last clone is indexed instead. The run log shows it. */
+  warning?: string;
+}
+
+/**
+ * Clones a repository, or fast-forwards an existing clone. When the fast-forward fails (offline, or the remote is
+ * unreachable), the last clone is kept and indexed, with a warning. A first clone that fails is an error.
+ */
+export async function syncCheckout(url: string, dir: string): Promise<SyncResult> {
   if (existsSync(join(dir, ".git"))) {
-    await git(dir, ["pull", "--ff-only", "--quiet"]);
+    try {
+      await git(dir, ["pull", "--ff-only", "--quiet"]);
+    } catch (err) {
+      const commit = await headOf(dir);
+      if (commit === undefined) throw err;
+      const reason = (err instanceof Error ? err.message : String(err)).split("\n")[0];
+      return { commit, warning: `could not update ${url}; indexing the last fetched copy (${reason})` };
+    }
   } else {
     await git(undefined, ["clone", "--quiet", url, dir]);
   }
-  return headOf(dir) as Promise<string>;
+  return { commit: (await headOf(dir)) as string };
 }
 
 /** The HEAD commit of a checkout, or undefined when the folder is not a git repository. */

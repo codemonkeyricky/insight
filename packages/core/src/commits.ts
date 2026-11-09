@@ -35,8 +35,8 @@ export function resolveCommit(dir: string, ref: string): string {
 }
 
 /** Per-commit folder under the project's state folder. Its tree is the commit, unpacked. */
-export function commitRoot(projectPath: string, commit: string): string {
-  return join(projectPaths(projectPath).state, "commits", commit, "tree");
+export function commitRoot(projectPath: string, commit: string, stateDir?: string): string {
+  return join(projectPaths(projectPath, stateDir).state, "commits", commit, "tree");
 }
 
 /**
@@ -65,14 +65,16 @@ export interface IndexedCommit {
   reused: boolean;
 }
 
-export type CommitIndexOptions = Pick<IndexOptions, "builtinRoot" | "userPluginDir" | "extraDirs" | "allowBuildTools" | "onProgress">;
+export type CommitIndexOptions = Pick<IndexOptions, "builtinRoot" | "userPluginDir" | "extraDirs" | "allowBuildTools" | "onProgress" | "stateDir">;
 
 /**
  * Makes sure a commit has a full index under the project's state folder and returns its snapshot. A commit
  * that was indexed before is reused as it is, since a commit's content never changes.
  */
 export async function indexCommit(projectPath: string, commit: string, opts: CommitIndexOptions = {}): Promise<IndexedCommit> {
-  const root = commitRoot(projectPath, commit);
+  // The commit tree lives under the project's state dir. Its own index keeps the default state, inside that tree.
+  const { stateDir, ...runOpts } = opts;
+  const root = commitRoot(projectPath, commit, stateDir);
   const paths = projectPaths(root);
   const state = loadState(paths);
   // A commit's content never changes, so any earlier snapshot of it is still the right answer, as long as its files are there.
@@ -83,7 +85,7 @@ export async function indexCommit(projectPath: string, commit: string, opts: Com
     return { commit, root, snapshot: earlier.id, reused: true };
   }
   archiveCommit(projectPath, commit, root);
-  const report = await runIndex({ ...opts, projectPath: root, commit, full: true });
+  const report = await runIndex({ ...runOpts, projectPath: root, commit, full: true });
   return { commit, root, snapshot: report.snapshot, reused: false };
 }
 
