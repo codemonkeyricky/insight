@@ -74,6 +74,8 @@ interface Props {
   charts?: ChartSource;
   /** Reports the function the map selects (undefined when the focus is not a function), with the construct picked in it. */
   onSelect?: (sel: MapSelection | undefined) => void;
+  /** Reports the build the map is showing (its focus), or undefined before the first one. */
+  onFocus?: (build: MapBuild | undefined) => void;
 }
 
 /** What an expansion needs to draw its chart: the project, the scope its links resolve in, and the flow store. */
@@ -100,7 +102,7 @@ interface OffMap {
  * The execution map: one camera over a scope's scene. Each node is a focus of the source; the map's items and edges
  * are named by node id, so a click or key that names a node is turned into a focus by the source first (`focusOf`).
  */
-export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Props) {
+export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFocus }: Props) {
   /** The selection: the focus the breadcrumb, the detail panel and the URL show. Only explicit actions change it. */
   const [build, setBuild] = useState<MapBuild>();
   /** The map as drawn: the selection's build. Only a click or a key changes it; gestures move the camera alone. */
@@ -507,6 +509,12 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
   // The page's source panel follows the selected function, and the construct picked in its chart while it is selected. An
   // off-map selection is reported in preference to the build's own.
   useEffect(() => {
+    onFocus?.(build);
+    // onFocus is a page's state setter, so it is only called when the build changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [build]);
+
+  useEffect(() => {
     if (!onSelect) return;
     if (offMap !== undefined) {
       const span = construct !== undefined && construct.ref === offMap.selected.ref ? construct.span : undefined;
@@ -525,6 +533,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
 
   const onKey = (e: KeyEvent<HTMLDivElement>) => {
     const b = buildRef.current;
+    // Escape that the map acts on stops here, so a page-level Escape (the side panel's) does not close as well.
+    if (e.key === "Escape" && b && (expRef.current.length > 0 || b.node(b.nodeId)?.parent !== undefined)) e.preventDefault();
     switch (e.key) {
       case "+":
       case "=":
