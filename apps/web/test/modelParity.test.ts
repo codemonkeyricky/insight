@@ -62,6 +62,17 @@ describe("browser scope payloads equal the server's", () => {
     expect((await api.getScopeExec(id, "packages/flow")).functions.length).toBeGreaterThan(0);
   }, 600_000);
 
+  it("the live api computes the reverse references of a function from the model, as the refs route answers them", async () => {
+    const fnId = (await api.getScopeExec(id, "packages/model")).functions.find((f) => f.name === "inScope")?.id;
+    expect(fnId, "a function named inScope in packages/model").toBeDefined();
+    const q = `?path=packages/model&id=${encodeURIComponent(fnId!)}`;
+    const refs = await api.getRefs(id, "packages/model", fnId!);
+    expect(refs).toEqual(await serverJson(`/api/projects/${id}/refs${q}`));
+    // inScope is called from outside its own folder, so the list names a caller outside the scope.
+    expect(refs.calledBy.some((r) => !r.inScope)).toBe(true);
+    expect(modelCalls).toHaveLength(1);
+  }, 600_000);
+
   it("the live api names the same error as the server for a scope that leaves the project", async () => {
     const server400 = await server.app.inject({ method: "GET", url: `/api/projects/${id}/scope/flow?path=${encodeURIComponent("../x")}` });
     await expect(api.scopeFlow(id, "../x")).rejects.toMatchObject({ status: 400, message: server400.json().error });
@@ -83,6 +94,10 @@ describe("browser scope payloads equal the server's", () => {
         expect(await staticApi.scopeFlow(id, scope), `demo flow ${scope}`).toEqual(await serverJson(`/api/projects/${id}/scope/flow${q}`));
         expect(await staticApi.getScopeExec(id, scope), `demo exec ${scope}`).toEqual(await serverJson(`/api/projects/${id}/scope/exec${q}`));
       }
+      const fnId = (await staticApi.getScopeExec(id, "packages/model")).functions.find((f) => f.name === "inScope")?.id ?? "";
+      expect(await staticApi.getRefs(id, "packages/model", fnId), "demo refs").toEqual(
+        await serverJson(`/api/projects/${id}/refs?path=packages/model&id=${encodeURIComponent(fnId)}`),
+      );
     } finally {
       globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);

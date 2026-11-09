@@ -9,6 +9,7 @@ vi.mock("../src/api", () => ({
   api: {
     getScopeExec: async () => fixture.model,
     scopeExecLayout: async () => undefined,
+    getScopeCallers: async () => undefined,
   },
 }));
 vi.mock("../src/zoom/elk", () => ({

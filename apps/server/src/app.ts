@@ -39,6 +39,7 @@ import {
   scopeExecOf,
   scopeFlowOf,
   scopeLensRows,
+  scopeRefsOf,
   scopeView,
   serializedModelOf,
 } from "./reader.js";
@@ -295,6 +296,19 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
     const snapshot = resolveSnapshot(pathsFor(p), req.query.snapshot);
     if (!snapshot) throw new ProjectError(404, "project has no snapshot yet");
     return serializedModelOf(pathsFor(p), snapshot);
+  });
+
+  // The reverse references of one node in a scope: what calls or references it, and what it calls, across the whole
+  // project. `id` is a node id of the snapshot. Same path and snapshot checks as the scope routes; an unknown id is a 404.
+  app.get<{ Params: ProjectParams; Querystring: SnapshotQuery & { path?: string; id?: string } }>("/api/projects/:id/refs", async (req) => {
+    const p = project(req.params.id);
+    const path = scopePathOf(req.query.path);
+    const id = req.query.id;
+    if (typeof id !== "string" || id === "") throw new ProjectError(400, "id is required");
+    const snapshot = resolveSnapshot(pathsFor(p), req.query.snapshot);
+    if (!snapshot) throw new ProjectError(404, "project has no snapshot yet");
+    const { scope, kind, calledBy, calls } = scopeRefsOf(pathsFor(p), snapshot, path, id);
+    return { snapshot, scope, kind, id, calledBy, calls };
   });
 
   app.get<{ Params: ProjectParams; Querystring: SnapshotQuery & { lens?: string; severity?: string } }>(

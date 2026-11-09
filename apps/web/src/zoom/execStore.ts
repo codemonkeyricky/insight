@@ -62,8 +62,8 @@ export class ExecStore implements MapSource {
     const key = this.keyOf(scope);
     let load = this.loads.get(key);
     if (load === undefined) {
-      load = Promise.all([api.getScopeExec(this.id, scope), api.scopeExecLayout(this.id, scope)])
-        .then(async ([model, saved]) => {
+      load = Promise.all([api.getScopeExec(this.id, scope), api.scopeExecLayout(this.id, scope), api.getScopeCallers(this.id, scope)])
+        .then(async ([model, saved, callers]) => {
           const scene = this.sceneOf(model);
           const open = execDefaultOpen(scene);
           // The saved layout is the full scene's, with the default containers open. A roots-only scene is a different scene,
@@ -73,7 +73,7 @@ export class ExecStore implements MapSource {
               ? saved
               : await layoutScene(scene, (g) => solve(g).then((s) => s.result), { open });
           const fns = new Map(model.functions.map((f): [string, ExecFunctionRef] => [f.id, f]));
-          const view: ExecView = { scene, layout, open, fns, index: execIndex(scene, model), layouts: new Map() };
+          const view: ExecView = { scene, layout, open, fns, index: execIndex(scene, model, callers), layouts: new Map() };
           this.views.set(key, view);
           return view;
         })

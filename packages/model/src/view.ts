@@ -15,6 +15,8 @@ export interface ScopeRel extends Rel {
  * which nodes are in the scope, and how the scope's functions relate to the rest of the project.
  */
 export interface ScopeView {
+  /** The whole-project model the view reads. */
+  model: ProjectModel;
   /** The canonical scope path ("" for the project). */
   scope: string;
   kind: ScopeKindName;
@@ -51,6 +53,7 @@ export function scopeView(model: ProjectModel, scope: string): ScopeView {
   const has = (id: NodeId): boolean => (s === ROOT_SCOPE ? model.byId.has(id) : localNodes().has(id));
 
   return {
+    model,
     scope: s,
     kind,
     has,

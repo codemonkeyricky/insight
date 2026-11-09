@@ -84,7 +84,7 @@ export function FlowView({ id, files, scope, fn, roots }: Props) {
             }}
           />
         </div>
-        {split && sel && <FunctionSource id={id} store={store} sel={sel} onClose={() => setClosed(sel.build)} />}
+        {split && sel && <FunctionSource id={id} store={store} sel={sel} roots={roots} onClose={() => setClosed(sel.build)} />}
       </div>
       {kind !== "file" && <FlowFolders id={id} scope={scope} />}
     </div>

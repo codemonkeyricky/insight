@@ -2,20 +2,44 @@
 // picked in the function's chart, else the whole function, else its definition line.
 import { useEffect, useState } from "react";
 import type { FlowSpan } from "@insight/flow";
+import type { Refs } from "@insight/model";
+import { api } from "../../api";
 import { FileViewer } from "../FileViewer";
 import type { ZoomStore } from "../../zoom/scene";
 import { selectionRange } from "../../zoom/chart";
 import type { MapSelection } from "./ZoomMap";
+import { RefLists } from "./RefLists";
 
 interface Props {
   id: string;
   store: ZoomStore;
   sel: MapSelection;
+  /** Whether the Flow tab is roots-only, which the lists' links keep. */
+  roots: boolean;
   onClose: () => void;
 }
 
-export function FunctionSource({ id, store, sel, onClose }: Props) {
+export function FunctionSource({ id, store, sel, roots, onClose }: Props) {
   const { selected } = sel;
+  const scope = sel.build.path;
+  const [refState, setRefState] = useState<{ key: string; refs?: Refs; error?: string }>();
+  const refKey = `${id}\0${scope}\0${selected.ref}`;
+  useEffect(() => {
+    let cancelled = false;
+    const key = `${id}\0${scope}\0${selected.ref}`;
+    api.getRefs(id, scope, selected.ref).then(
+      (refs) => {
+        if (!cancelled) setRefState({ key, refs });
+      },
+      (e: unknown) => {
+        if (!cancelled) setRefState({ key, error: e instanceof Error ? e.message : String(e) });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [id, scope, selected.ref]);
+  const shownRefs = refState?.key === refKey ? refState : undefined;
   const [span, setSpan] = useState<{ ref: string; span?: FlowSpan }>();
   useEffect(() => {
     let cancelled = false;
@@ -46,6 +70,9 @@ export function FunctionSource({ id, store, sel, onClose }: Props) {
           Close
         </button>
       </header>
+      {shownRefs?.refs && <RefLists id={id} scope={scope} roots={roots} refs={shownRefs.refs} />}
+      {shownRefs?.error && <p className="muted small">The references of this function are not available: {shownRefs.error}</p>}
+      {!shownRefs && <p className="muted small">Loading the references</p>}
       {selected.file ? (
         <FileViewer key={`${selected.file}\0${selected.ref}`} id={id} path={selected.file} line={selected.line} range={range} />
       ) : (

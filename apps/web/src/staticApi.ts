@@ -5,6 +5,7 @@ import type {
   Annotation,
   ArchModel,
   Compare,
+  ExecFunctionRef,
   ExecModel,
   FileEntry,
   FileFlow,
@@ -27,7 +28,7 @@ import type {
   TargetType,
 } from "./api";
 import type { SerializedModel } from "@insight/model";
-import { scopeExecFor, scopeFlowFor } from "./model/payloads";
+import { refsFor, scopeCallersFor, scopeExecFor, scopeFlowFor, type ScopeRefsPayload } from "./model/payloads";
 import { models } from "./model/store";
 import { canonicalScope, scopeKey, scopeProblem } from "./scopeKey";
 
@@ -283,6 +284,22 @@ export const staticApi = {
     if (problem) throw new ApiError(400, problem);
     const { snapshot, model } = await demoModel();
     return scopeExecFor(snapshot, model, scope);
+  },
+  /** The reverse references of a node, computed from the demo's model the way the live server computes them. */
+  getRefs: async (id: string, scope: string, fnId: string): Promise<ScopeRefsPayload> => {
+    await checkProject(id);
+    const problem = scopeProblem(scope);
+    if (problem) throw new ApiError(400, problem);
+    const { snapshot, model } = await demoModel();
+    return refsFor(snapshot, model, scope, fnId);
+  },
+  /** The project-wide callers of each function of a scope, computed from the demo's model. */
+  getScopeCallers: async (id: string, scope: string): Promise<ReadonlyMap<string, readonly ExecFunctionRef[]>> => {
+    await checkProject(id);
+    const problem = scopeProblem(scope);
+    if (problem) throw new ApiError(400, problem);
+    const { model } = await demoModel();
+    return scopeCallersFor(model, scope);
   },
   /**
    * The architecture model as the capture saved it. The model covers the whole project, so the capture writes it

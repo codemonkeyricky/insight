@@ -30,7 +30,7 @@ import {
   type ScopeFlow,
   type SceneLayout,
 } from "@insight/flow";
-import { buildProjectModel, scopeView as modelScopeView, serializeModel, type ProjectModel, type SerializedModel } from "@insight/model";
+import { buildProjectModel, refsOf as modelRefsOf, scopeView as modelScopeView, serializeModel, type ProjectModel, type Refs, type SerializedModel } from "@insight/model";
 import { edgeTargets, IRView, isExternal, type ProjectRoot } from "@insight/sdk";
 import { createCoreRegistry, type IREdge, type IRDocument, type IRFinding, type IRNode, type IRRecord, type KindRegistry, type NodeId } from "@insight/ir";
 import { archModel, type ArchModel } from "@insight/lens-dependencies";
@@ -423,6 +423,25 @@ export function scopeFlowOf(paths: ProjectPaths, snapshot: string, path: string)
   scopeFlows.set(key, view);
   if (scopeFlows.size > SCOPE_FLOW_LIMIT) scopeFlows.delete(scopeFlows.keys().next().value as string);
   return view;
+}
+
+/** The reverse references of one node, and the scope it is asked from. The lists cover the whole project. */
+export interface ScopeRefsView extends Refs {
+  scope: string;
+  kind: ScopeKind;
+}
+
+/**
+ * The calledBy and calls lists of a node (see refsOf in @insight/model). The path is checked as the scope routes check it,
+ * then the node: an id the snapshot does not hold is a 404.
+ */
+export function scopeRefsOf(paths: ProjectPaths, snapshot: string, path: string, id: NodeId): ScopeRefsView {
+  const scope = normalizeScope(path);
+  const snap = loadSnapshot(paths, snapshot);
+  const kind = scopeKindOf(snap, scope);
+  if (!kind) throw new ProjectError(404, "no such scope");
+  if (!snap.model.byId.has(id)) throw new ProjectError(404, `no node ${id}`);
+  return { scope, kind, ...modelRefsOf(modelScopeView(snap.model, scope), id) };
 }
 
 /** The execution model of one scope, and the scope it names. */

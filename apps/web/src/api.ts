@@ -1,8 +1,8 @@
-import type { ExecModel, FileFlow, FileFlowSummary, SceneLayout, ScopeFlow } from "@insight/flow";
+import type { ExecFunctionRef, ExecModel, FileFlow, FileFlowSummary, SceneLayout, ScopeFlow } from "@insight/flow";
 import type { ArchModel } from "@insight/lens-dependencies";
 import { ApiError } from "./apiError";
 import type { SerializedModel } from "@insight/model";
-import { scopeExecFor, scopeFlowFor } from "./model/payloads";
+import { refsFor, scopeCallersFor, scopeExecFor, scopeFlowFor, type ScopeRefsPayload } from "./model/payloads";
 import { models } from "./model/store";
 import { staticApi } from "./staticApi";
 
@@ -407,6 +407,11 @@ const liveApi = {
   scopeFlow: (id: string, scope: string): Promise<ScopeFlow> => liveModel(id).then(({ snapshot, model }) => scopeFlowFor(snapshot, model, scope)),
   // Computed in the page from the project model, as /scope/exec answers it (see scopeFlow above).
   getScopeExec: (id: string, scope: string): Promise<ExecModel> => liveModel(id).then(({ snapshot, model }) => scopeExecFor(snapshot, model, scope)),
+  // The reverse references of a node, computed from the project model (no request). The lists cover the whole project.
+  getRefs: (id: string, scope: string, fnId: string): Promise<ScopeRefsPayload> => liveModel(id).then(({ snapshot, model }) => refsFor(snapshot, model, scope, fnId)),
+  // The project-wide callers of each function of a scope, for the exec index (see zoom/execStore.ts). Computed from the model.
+  getScopeCallers: (id: string, scope: string): Promise<ReadonlyMap<string, readonly ExecFunctionRef[]>> =>
+    liveModel(id).then(({ model }) => scopeCallersFor(model, scope)),
   // The server adds scope, snapshot and kind to the model; the page does not use them. The model covers the whole project.
   getScopeArch: (id: string, scope: string) => call<ArchModel>("GET", `/api/projects/${id}/scope/arch?path=${encodeURIComponent(scope)}`),
   // The server lays the execution scene out whole and keeps it per snapshot. Any failure, a 404 included, gives undefined,

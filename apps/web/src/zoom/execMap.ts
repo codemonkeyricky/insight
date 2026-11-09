@@ -235,8 +235,12 @@ function depthIn(scene: Scene, nodeId: string): number {
   return d;
 }
 
-/** Builds the index of one scope. Pure: the same scene and model give the same index. */
-export function execIndex(scene: Scene, model: ExecModel): ExecIndex {
+/**
+ * Builds the index of one scope. Pure: the same scene and model give the same index. `projectCallers` (see
+ * scopeCallersFor in model/payloads.ts) adds each function's callers from anywhere in the project to the callers the
+ * scope's own model gives, so the Called by lists and counts name them too.
+ */
+export function execIndex(scene: Scene, model: ExecModel, projectCallers?: ReadonlyMap<string, readonly ExecFunctionRef[]>): ExecIndex {
   const fns = new Map<string, ExecFunctionRef>();
   for (const f of model.functions) fns.set(f.id, f);
   const nameOf = (id: string): string => fns.get(id)?.name ?? id;
@@ -255,6 +259,12 @@ export function execIndex(scene: Scene, model: ExecModel): ExecIndex {
     if (a === undefined || b === undefined) continue;
     add(calleeSets, a.id, b.id);
     add(callerSets, b.id, a.id);
+  }
+  for (const [fnId, callers] of projectCallers ?? []) {
+    for (const c of callers) {
+      add(callerSets, fnId, c.id);
+      if (!fns.has(c.id)) fns.set(c.id, c);
+    }
   }
   const sorted = (m: Map<string, Set<string>>): Map<string, readonly string[]> =>
     new Map([...m].map(([k, s]): [string, string[]] => [k, [...s].sort(byName)]));

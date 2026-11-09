@@ -479,6 +479,31 @@ The serialized model of the snapshot (see "Serialized model and client-side view
 checks are the scope routes': an unknown project, `project has no snapshot yet`, and `unknown snapshot <id>`. The
 model covers the whole snapshot, so the same response serves every scope.
 
+### Reverse references of a node
+
+`GET /api/projects/:id/refs?id=<node>&path=<scope>&snapshot=<id>` lists what refers to a node and what it
+refers to. The result is `{ "snapshot", "scope", "kind", "id", "calledBy": RefRow[], "calls": RefRow[] }`.
+`calledBy` holds the nodes with a relation into `id`, and `calls` the nodes `id` has a relation to. It is
+computed by `refsOf` in `packages/model/src/refs.ts` from the project model, not from the scope's cut, so
+callers outside the scope are listed.
+
+Each row has `id`, `name`, `file`, `line`, `isFunction`, `kind`, `candidate`, `count`, `inScope`, and `how`
+when the relation has one:
+
+- Anonymous functions are attributed to the nearest named function, or to their file when none encloses
+  them. A callback written inside `a` that calls `b` is a call from `a`.
+- Rows collapse by the other node and the relation kind. `count` is the number of call sites. `candidate`
+  is true only when every relation is a candidate (see `edgeTargets` in `@insight/sdk`).
+- For a function row, `file` and `line` are its definition. For a file row, `line` is the earliest call site.
+- Rows are ordered in-scope first, then by file, line, name, id and kind.
+- `inScope` says whether the other node is inside the scope. The Web app uses it to split the rows into
+  "In this scope" and "Outside this scope", and an outside row switches the scope to its file.
+
+The Web app does not fetch this route. `refsFor` in `apps/web/src/model/payloads.ts` computes the same
+result from the ModelStore, and the parity tests check that the two agree. Project-wide function callers
+also feed `ExecIndex.callers` in `apps/web/src/zoom/execMap.ts`. A caller outside the scope has
+`runtime: "none"`.
+
 ### Errors
 
 Errors are `{ "error": "<message>" }`.
@@ -494,9 +519,12 @@ Errors are `{ "error": "<message>" }`.
 | 404    | `unknown snapshot <id>`       | `?snapshot=` names a snapshot the project does not have            |
 | 404    | `no such scope`               | no indexed file is at the path or under it                         |
 | 404    | `no lens <id>`                | the lens id is not loaded                                          |
+| 400    | `id is required`              | the refs route has no `id`                                         |
+| 404    | `no node <id>`                | the refs route: the node id is not in the snapshot                 |
 
 The checks run in this order: project, `path` presence and repetition, snapshot, scope path, lens.
 So a bad path in a project with no snapshot gives the snapshot error.
+The refs route checks project, `path`, `id`, snapshot, scope path, then the node.
 
 ## Limits
 
