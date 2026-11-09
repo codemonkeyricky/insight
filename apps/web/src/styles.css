@@ -642,18 +642,34 @@ table.grid th { background: var(--faint); }
 .sh-find-detail { color: var(--muted); font-family: var(--font-code); font-size: var(--t-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sh-find-empty { margin: 0; padding: 8px 10px; color: var(--muted); font-size: var(--t-sm); }
 
-@media (max-width: 720px) {
-  .sh-side { top: auto; left: var(--sh-gap); right: var(--sh-gap); bottom: var(--sh-gap); width: auto; max-height: 60%; transform: translateY(calc(100% + 24px)); }
+/* The grab region is a phone-only header: its handle and label are the drag target of the bottom sheet. */
+.sh-grab { display: none; }
+@media (max-width: 860px) {
+  /* A bottom sheet: fixed to the viewport's bottom edge, 90% tall at most. SidePanel moves it with a transform and sets its
+     height, so the CSS only parks it off screen while closed. The sheet owns the touch: the page does not scroll under it. */
+  .sh-side { top: auto; left: 0; right: 0; bottom: 0; width: auto; max-width: none; height: 90vh; height: 90dvh; padding: 8px 16px calc(12px + env(safe-area-inset-bottom, 0px)); border-radius: 18px 18px 0 0; position: fixed; z-index: 70; transform: translateY(calc(100% + 24px)); transition: visibility .3s; touch-action: none; overscroll-behavior: contain; }
   .sh-side.open { transform: none; }
-  .sh-sheet[data-panel="open"] .sh-title { right: var(--sh-gap); }
+  .sh-grab { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 2px 0 10px; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
+  .sh-handle { width: 40px; height: 5px; border-radius: 3px; background: var(--muted); opacity: 0.5; }
+  .sh-grab-label { font-size: var(--t-xs); color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .sh-side > .sh-close { top: 10px; right: 10px; }
+  /* Only the top rest scrolls the content; at 40% it is cut to its top, and a drag moves the sheet. */
+  .sh-side:not(.is-top) .sh-side-body { overflow: hidden; }
+  .sh-side.is-top .sh-side-body { overflow-y: auto; touch-action: pan-y; overscroll-behavior: contain; }
+  .sh-sheet[data-panel="open"] .sh-title, .sh-sheet[data-panel="open"] .sh-layers, .sh-sheet[data-panel="open"] .sh-layers-open, .sh-sheet[data-panel="open"] .sh-roots { display: none; }
   .sh-layers { width: 176px; }
   .sh-canvas .zm-crumbs { display: none; }
 }
 @media (max-width: 520px) {
   :root { --sh-top: 96px; }
   .sh-top { flex-wrap: wrap; align-content: center; row-gap: 6px; padding-top: 6px; padding-bottom: 6px; height: var(--sh-top); }
-  .sh-mark-name { display: none; }
-  .sh-crumbs { display: none; }
+  /* The logo goes, so the crumbs (whose first item links to all projects) get the row's room. */
+  .sh-mark { display: none; }
+  /* The crumbs collapse to the current item: the last crumb is always the current one. */
+  .sh-crumbs { flex: 1 1 0; min-width: 0; }
+  .sh-tools, .sh-theme { flex-shrink: 0; }
+  .sh-crumb:not(:last-child) { display: none; }
+  .sh-crumb a { max-width: 100%; }
   .sh-modes { order: 3; width: 100%; box-sizing: border-box; justify-content: space-between; }
   .sh-mode { flex: 1; justify-content: center; }
   .sh-lbl { display: none; }
@@ -665,6 +681,12 @@ table.grid th { background: var(--faint); }
   .sh-find-detail { display: none; }
   .sh-files { width: calc(100vw - 2 * var(--sh-gap)); }
   .sh-page { padding-top: 14px; }
+  /* The Layers card opens as a full-width drawer from the bottom edge, and the roots-only switch lives in it. */
+  .sh-layers { left: 0; right: 0; top: auto; bottom: 0; width: auto; max-height: 62%; border-radius: 16px 16px 0 0; }
+  /* A wide table scrolls inside its page rather than widening the page. */
+  .sh-page table.grid { display: block; max-width: 100%; overflow-x: auto; }
+  .sh-roots { display: none; }
+  .sh-sheet[data-panel="open"] .sh-canvas .zm-keyplan { display: none; }
 }
 .sh-count-inline { color: var(--muted); font-size: var(--t-xs); }
 
