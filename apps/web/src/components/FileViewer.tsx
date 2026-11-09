@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { api, type FileView } from "../api";
 import { hrefFile } from "../router";
 import type { LineRange } from "../zoom/chart";
@@ -48,6 +48,8 @@ export function FileViewer({ id, path, line, range }: { id: string; path: string
 
   if (error) return <p className="error" role="alert">{error}</p>;
   if (!file) return <p className="muted">Loading</p>;
+  // The gutter fits the widest line number, so a 1000-line file shows all its digits.
+  const digits = String(file.lines.length).length;
   const flagged = new Map<number, string>();
   for (const f of file.findings) if (f.span) flagged.set(f.span.start[0] + 1, f.message);
   return (
@@ -61,7 +63,7 @@ export function FileViewer({ id, path, line, range }: { id: string; path: string
         </div>
       </header>
       <div className="viewer-body">
-        <pre className="code" data-testid="file-lines">
+        <pre className="code" data-testid="file-lines" style={{ "--gutter-ch": digits + 1 } as CSSProperties}>
           {file.lines.map((text, i) => {
             const n = i + 1;
             const note = flagged.get(n);
@@ -75,9 +77,10 @@ export function FileViewer({ id, path, line, range }: { id: string; path: string
         </pre>
         {(file.symbols.length > 0 || file.findings.length > 0) && (
           <aside className="outline" aria-label="Outline">
+            <details open>
+            <summary>Outline</summary>
             {file.symbols.length > 0 && (
               <>
-                <h3>Outline</h3>
                 <ul className="plain">
                   {file.symbols.map((s) => (
                     <li key={s.id}>
@@ -110,6 +113,7 @@ export function FileViewer({ id, path, line, range }: { id: string; path: string
                 </ul>
               </>
             )}
+            </details>
           </aside>
         )}
       </div>

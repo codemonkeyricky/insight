@@ -150,7 +150,12 @@ export function execBuild(
   const open = execOpenSet(scene, openId);
   const placed = placeSceneLayout(scene, layout, open);
   const edges = placeSceneEdges(scene, open, placed.rects);
-  const node = (id: string) => execMapNode(scene, id);
+  const node = (id: string): MapNode | undefined => {
+    const m = execMapNode(scene, id);
+    const f = m?.ref !== undefined ? fns?.get(m.ref) : undefined;
+    if (m !== undefined && f !== undefined && f.file !== "") m.file = f.file;
+    return m;
+  };
   const out: MapBuild = {
     focus: execFocus(scope, nodeId),
     nodeId,

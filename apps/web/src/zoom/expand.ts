@@ -4,6 +4,7 @@
 // each expansion goes, how a chain follows its parent, what closes with what, and how the camera shows a new one. Pure,
 // so these rules are unit tested (test/expand.test.ts).
 import { CHART_FIT_MAX_K, CHART_HEAD, CHART_PAD, type Camera, type FunctionFlow, type Rect } from "@insight/flow";
+import { zoneLetter } from "./zones";
 
 /** The room between an anchor and the expansion beside it. */
 export const EXPAND_GAP = 40;
@@ -29,6 +30,34 @@ export interface Expansion {
   y: number;
   w: number;
   h: number;
+  /** The detail's letter: its index in open order (0 is A). Unique among the open expansions. */
+  index: number;
+  /**
+   * The x (world units, before any shift) the columns to the right of this detail slide from: the right edge of the
+   * function box its chain starts at. A call step's detail shares its parent's pivot, so a chain slides as one.
+   */
+  pivot: number;
+}
+
+/** The letter of a detail: A, B, C ... in open order (see Expansion.index). */
+export function detailLetter(index: number): string {
+  return zoneLetter(index);
+}
+
+/**
+ * How far an item at `placed` (its rect, or an edge point as {x}) moves when a detail of width `width` opens at `pivotX`:
+ * nothing at or left of the pivot, and the detail's width plus the gap to the right of it, so the columns slide over and
+ * the detail fits in the room they leave.
+ */
+export function shiftOf(placed: { x: number }, pivotX: number, width: number): number {
+  return placed.x > pivotX ? width + EXPAND_GAP : 0;
+}
+
+/** The total shift an item at x moves by, summed over every open expansion (a chain's details add up). */
+export function shiftAt(list: readonly Expansion[], x: number): number {
+  let dx = 0;
+  for (const e of list) dx += shiftOf({ x }, e.pivot, e.w);
+  return dx;
 }
 
 /** The size of an expansion box that holds a chart of `chart`'s natural size, with its header and padding. */
@@ -65,7 +94,8 @@ export function placeOnStep(parent: Expansion, rect: Rect, view: Rect): { x: num
 
 /**
  * Places every expansion from its anchor, each parent before the children it holds. An expansion whose parent is not in
- * the list is dropped with its chain. The list's order is kept.
+ * the list is dropped with its chain. The list's order is kept. A box's detail takes the box's right edge as its pivot; a
+ * step's detail takes its parent's pivot.
  */
 export function reflow(list: readonly Expansion[], view: Rect): Expansion[] {
   const byFn = new Map(list.map((e) => [e.fnId, e] as const));
@@ -74,14 +104,14 @@ export function reflow(list: readonly Expansion[], view: Rect): Expansion[] {
     const done = placed.get(e.fnId);
     if (done !== undefined) return done;
     if (hops > list.length) return undefined;
-    let at: { x: number; y: number };
+    let at: { x: number; y: number; pivot: number };
     if (e.anchor.kind === "box") {
-      at = placeOnBox(e.anchor.rect, view);
+      at = { ...placeOnBox(e.anchor.rect, view), pivot: e.anchor.rect.x + e.anchor.rect.w };
     } else {
       const parent = byFn.get(e.anchor.fnId);
       const from = parent === undefined ? undefined : place(parent, hops + 1);
       if (from === undefined) return undefined;
-      at = placeOnStep(from, e.anchor.rect, view);
+      at = { ...placeOnStep(from, e.anchor.rect, view), pivot: from.pivot };
     }
     const out: Expansion = { ...e, ...at };
     placed.set(e.fnId, out);
@@ -130,7 +160,10 @@ export function openExpansion(list: readonly Expansion[], fnId: string, anchor: 
   if (anchor.kind === "step" && chainHas(list, anchor.fnId, fnId)) return list as Expansion[];
   const size = expansionSize(chart);
   const others = list.filter((e) => e.fnId !== fnId);
-  return reflow([...others, { fnId, anchor, chart, ...size, x: 0, y: 0 }], view);
+  // A reattached expansion keeps its letter; a new one takes the next letter after the highest one open.
+  const kept = list.find((e) => e.fnId === fnId);
+  const index = kept?.index ?? others.reduce((hi, e) => Math.max(hi, e.index + 1), 0);
+  return reflow([...others, { fnId, anchor, chart, ...size, x: 0, y: 0, index, pivot: 0 }], view);
 }
 
 /** The list without `fnId`'s expansion and every expansion chained from it, at any depth. */
@@ -168,6 +201,50 @@ export function connectorOf(e: Expansion, list: readonly Expansion[]): { x1: num
   const o = contentOrigin(parent);
   const r = e.anchor.rect;
   return { x1: o.x + r.x + r.w, y1: o.y + r.y + r.h / 2, x2, y2 };
+}
+
+/** The room the callout ellipse leaves around the tile it circles: its half-width and half-height beyond the tile. */
+export const CALLOUT_PAD_X = 12;
+export const CALLOUT_PAD_Y = 10;
+
+/**
+ * The callout of an expansion: an ellipse round the tile it hangs from, and a leader from the ellipse's right side to the
+ * detail's header. The letter bubble sits on the middle of the leader. All in world units, before the side shift.
+ */
+export interface Callout {
+  cx: number;
+  cy: number;
+  rx: number;
+  ry: number;
+  leader: { x1: number; y1: number; x2: number; y2: number };
+  bubble: { x: number; y: number };
+}
+
+/** The world rect of the tile an expansion hangs from (a box, or a call step inside its parent's chart), before the shift. */
+export function anchorRectOf(e: Expansion, list: readonly Expansion[]): Rect | undefined {
+  const anchor = e.anchor;
+  if (anchor.kind === "box") return anchor.rect;
+  const parentId = anchor.fnId;
+  const parent = list.find((p) => p.fnId === parentId);
+  if (parent === undefined) return undefined;
+  const o = contentOrigin(parent);
+  const r = anchor.rect;
+  return { x: o.x + r.x, y: o.y + r.y, w: r.w, h: r.h };
+}
+
+/** The callout of an expansion, or undefined when its anchor is no longer in the list. */
+export function calloutOf(e: Expansion, list: readonly Expansion[]): Callout | undefined {
+  const r = anchorRectOf(e, list);
+  if (r === undefined) return undefined;
+  const cx = r.x + r.w / 2;
+  const cy = r.y + r.h / 2;
+  const rx = r.w / 2 + CALLOUT_PAD_X;
+  const ry = r.h / 2 + CALLOUT_PAD_Y;
+  const x1 = cx + rx;
+  const y1 = cy;
+  const x2 = e.x;
+  const y2 = e.y + CHART_HEAD / 2;
+  return { cx, cy, rx, ry, leader: { x1, y1, x2, y2 }, bubble: { x: (x1 + x2) / 2, y: (y1 + y2) / 2 } };
 }
 
 /** Moves a span of `size` that starts at `start` inside a room of `room`, the least that keeps it in the room. */

@@ -16,7 +16,8 @@ interface Props {
   sel: MapSelection;
   /** Whether the Flow tab is roots-only, which the lists' links keep. */
   roots: boolean;
-  onClose: () => void;
+  /** Without a close button and header: the side panel that holds this source has its own. */
+  onClose?: () => void;
 }
 
 export function FunctionSource({ id, store, sel, roots, onClose }: Props) {
@@ -57,6 +58,19 @@ export function FunctionSource({ id, store, sel, roots, onClose }: Props) {
   }, [store, selected.ref]);
   const fnSpan = span?.ref === selected.ref ? span.span : undefined;
   const range = selectionRange(sel.construct, fnSpan, selected.line);
+  const body = (
+    <>
+      {shownRefs?.refs && <RefLists id={id} scope={scope} roots={roots} refs={shownRefs.refs} />}
+      {shownRefs?.error && <p className="muted small">The references of this function are not available: {shownRefs.error}</p>}
+      {!shownRefs && <p className="muted small">Loading the references</p>}
+      {selected.file ? (
+        <FileViewer key={`${selected.file}\0${selected.ref}`} id={id} path={selected.file} line={selected.line} range={range} />
+      ) : (
+        <p className="muted small">The IR has no source for this function.</p>
+      )}
+    </>
+  );
+  if (onClose === undefined) return <section className="sh-source" aria-label="Source of the selected function">{body}</section>;
   return (
     <aside className="zm-source panel" aria-label="Source of the selected function">
       <header className="zm-source-head">
@@ -70,14 +84,7 @@ export function FunctionSource({ id, store, sel, roots, onClose }: Props) {
           Close
         </button>
       </header>
-      {shownRefs?.refs && <RefLists id={id} scope={scope} roots={roots} refs={shownRefs.refs} />}
-      {shownRefs?.error && <p className="muted small">The references of this function are not available: {shownRefs.error}</p>}
-      {!shownRefs && <p className="muted small">Loading the references</p>}
-      {selected.file ? (
-        <FileViewer key={`${selected.file}\0${selected.ref}`} id={id} path={selected.file} line={selected.line} range={range} />
-      ) : (
-        <p className="muted small">The IR has no source for this function.</p>
-      )}
+      {body}
     </aside>
   );
 }

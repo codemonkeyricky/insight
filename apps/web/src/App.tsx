@@ -34,18 +34,20 @@ export function App() {
 
   return (
     <div className={route.name === "workspace" ? "app wide" : "app"}>
-      <header className="top">
-        <a className="brand" href="#/">
-          Insight
-        </a>
-        <span className="muted small">{IS_DEMO ? "read-only demo" : server}</span>
-        {IS_DEMO && meta && (
-          <span className="muted small mono" title={`captured ${meta.capturedAt}`}>
-            Insight at {meta.commit}
-          </span>
-        )}
-        <ThemeSwitch />
-      </header>
+      {route.name !== "workspace" && (
+        <header className="top">
+          <a className="brand" href="#/">
+            Insight
+          </a>
+          <span className="muted small">{IS_DEMO ? "read-only demo" : server}</span>
+          {IS_DEMO && meta && (
+            <span className="muted small mono" title={`captured ${meta.capturedAt}`}>
+              Insight at {meta.commit}
+            </span>
+          )}
+          <ThemeSwitch />
+        </header>
+      )}
       <main>
         {route.name === "projects" && <ProjectsPage />}
         {route.name === "workspace" && (
@@ -59,6 +61,8 @@ export function App() {
             roots={route.roots}
             base={route.base}
             head={route.head}
+            full={route.full}
+            findingKind={route.kind}
           />
         )}
         {route.name === "unknown" && (

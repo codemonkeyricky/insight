@@ -161,7 +161,7 @@ table.grid td.break-any { overflow-wrap: anywhere; }
 pre.code { margin: 0; font-size: 0.8rem; overflow-x: auto; }
 pre.code > div { white-space: pre; }
 pre.code > div.hit { background: var(--code-hit); }
-pre.code .gutter { display: inline-block; width: 3.5em; color: var(--muted); text-align: right; margin-right: 0.8em; user-select: none; }
+pre.code .gutter { display: inline-block; flex: none; width: var(--gutter-ch, 4ch); color: var(--muted); text-align: right; margin-right: 0.8em; user-select: none; }
 .crumbs { margin-bottom: 4px; }
 select, textarea { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
 textarea { min-height: 3.2em; width: 100%; box-sizing: border-box; resize: vertical; }
@@ -250,23 +250,23 @@ a.flow-node:hover :is(rect, polygon, circle) { stroke: var(--accent); stroke-wid
 /* The Arch tab: a column per layer, a box per package, an arrow per import. Colours are the same tokens as the flow chart. */
 .arch { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
 .arch-scroll { flex: 1 1 100%; min-width: 0; max-height: 75vh; overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
-.arch-svg { display: block; max-width: 100%; height: auto; }
+.arch-svg { display: block; flex: none; }
 .arch-bg { fill: transparent; }
-.arch-layer { fill: var(--muted); font: 600 12px system-ui, sans-serif; }
+.arch-layer { fill: var(--muted); font: 600 17px system-ui, sans-serif; }
 .arch-box { cursor: pointer; }
 .arch-box rect { stroke: var(--muted); stroke-width: 1.2; }
 .arch-box:hover rect, .arch-box.selected rect, .arch-box:focus-visible rect { stroke: var(--accent); stroke-width: 2; }
 .arch-box:focus-visible { outline: none; }
 .arch-box.dim { opacity: 0.35; }
-.arch-name { fill: var(--fg); font: 600 13px system-ui, sans-serif; pointer-events: none; }
-.arch-sub { fill: var(--muted); font: 11px system-ui, sans-serif; pointer-events: none; }
+.arch-name { fill: var(--fg); font: 600 23px system-ui, sans-serif; pointer-events: none; }
+.arch-sub { fill: var(--muted); font: 16px system-ui, sans-serif; pointer-events: none; }
 .arch-arrow { fill: none; stroke: var(--muted); stroke-width: 1.3; }
 .arch-arrow.dashed { stroke-dasharray: 6 4; }
 .arch-arrow.lit { stroke: var(--accent); }
 .arch-arrow.violation { stroke: var(--error); }
 .arch-arrow.dim { opacity: 0.15; }
 .arch-hit { fill: none; stroke: transparent; stroke-width: 12px; cursor: pointer; }
-.arch-count { fill: var(--fg); font: 11px system-ui, sans-serif; cursor: pointer; paint-order: stroke; stroke: var(--panel); stroke-width: 3px; }
+.arch-count { fill: var(--fg); font: 15px system-ui, sans-serif; cursor: pointer; paint-order: stroke; stroke: var(--sheet); stroke-width: 4px; }
 .arch-count.dim { opacity: 0.15; }
 .arch-head { fill: var(--muted); }
 .arch-head.error { fill: var(--error); }
@@ -358,22 +358,18 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 .zm-count { fill: var(--muted); font-family: system-ui, sans-serif; font-size: calc(11px * var(--zinv, 1)); pointer-events: none; }
 .zm-box { cursor: pointer; }
 .zm-box-body, .zm-frame-body, .zm-frame-head, .zm-stub-body, .zm-cfg-body { vector-effect: non-scaling-stroke; }
-.zm-box-body { fill: var(--band, var(--panel)); stroke: var(--line); stroke-width: 1.2; }
+.zm-box-body { fill: var(--band, var(--raised)); stroke: var(--hair); stroke-width: 1.2; }
 .zm-box.zm-function .zm-label { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 500; font-size: calc(12px * var(--zinv, 1)); }
 .zm-box:hover .zm-box-body { stroke: var(--accent); stroke-width: 2; }
 .zm-stub-body { fill: none; stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 6 4; }
 .zm-label-stub { fill: var(--muted); font-weight: 400; font-style: italic; }
-.zm-edge { fill: none; stroke: var(--muted); opacity: 0.75; vector-effect: non-scaling-stroke; }
+.zm-edge { fill: none; stroke: var(--muted); opacity: 0.85; vector-effect: non-scaling-stroke; }
 .zm-edge.stub { stroke-dasharray: 6 4; }
 .zm-edge.candidate { stroke-dasharray: 2 3; }
 .zm-arrow { fill: var(--muted); }
 /* The execution canvas. Scoped to its map. File groups use a band fill on the box (set inline as --band) and a plain frame. */
-.zm-exec .zm-frame.zm-program .zm-frame-body, .zm-exec .zm-box.zm-program .zm-box-body { stroke: var(--fg); stroke-width: 1.6; }
-.zm-exec .zm-frame.zm-thread .zm-frame-body { stroke: var(--accent); stroke-width: 1.5; }
-.zm-exec .zm-frame.zm-thread .zm-frame-head { fill: color-mix(in srgb, var(--accent) 10%, var(--bg)); stroke: var(--accent); }
-.zm-exec .zm-box.zm-thread .zm-box-body { fill: color-mix(in srgb, var(--accent) 8%, var(--panel)); stroke: var(--accent); stroke-width: 1.5; }
-.zm-exec .zm-frame.zm-coroutine .zm-frame-body, .zm-exec .zm-box.zm-coroutine .zm-box-body { stroke: var(--accent); stroke-dasharray: 6 3; }
-.zm-exec .zm-frame.zm-coroutine .zm-frame-head { stroke-dasharray: 6 3; }
+.zm-exec .zm-frame.zm-thread .zm-frame-head { fill: color-mix(in srgb, var(--thread) 10%, var(--bg)); }
+.zm-exec .zm-box.zm-thread .zm-box-body { fill: color-mix(in srgb, var(--thread) 8%, var(--raised)); }
 .zm-exec .zm-frame.zm-group .zm-frame-body, .zm-exec .zm-box.zm-group .zm-box-body { fill: color-mix(in srgb, var(--muted) 12%, var(--panel)); }
 .zm-exec .zm-frame.zm-group .zm-frame-head { fill: color-mix(in srgb, var(--muted) 16%, var(--bg)); }
 .zm-exec .zm-group .zm-label { fill: var(--muted); }
@@ -384,23 +380,72 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 .zm-edge.sync { stroke: var(--sync); stroke-dasharray: 2 3; opacity: 0.9; }
 .zm-edge.sync.channel { stroke-dasharray: none; }
 /* A program is a build target: a heavier frame than a thread. The project root holds programs. */
-.zm-exec .zm-frame.zm-program .zm-frame-head { fill: color-mix(in srgb, var(--fg) 6%, var(--bg)); }
-.zm-exec .zm-frame.zm-project .zm-frame-body, .zm-exec .zm-box.zm-project .zm-box-body { stroke: var(--fg); stroke-width: 2; }
+.zm-exec .zm-frame.zm-program .zm-frame-head { fill: color-mix(in srgb, var(--ink) 6%, var(--bg)); }
+.zm-exec .zm-frame.zm-project .zm-frame-body, .zm-exec .zm-box.zm-project .zm-box-body { stroke: var(--ink); stroke-width: 2; }
+/*
+ * Line types (the runtime a node runs on, see runtimeLine): a process is a thick ink line, a thread a thin verdigris-indigo
+ * line, a coroutine a dashed ochre line, and no runtime a dotted graphite line. Frames and boxes share the same line.
+ */
+.zm-line-process .zm-frame-body, .zm-line-process .zm-box-body { stroke: var(--ink); stroke-width: 2.4; }
+.zm-line-thread .zm-frame-body, .zm-line-thread .zm-box-body { stroke: var(--thread); stroke-width: 1.5; }
+.zm-line-coroutine .zm-frame-body, .zm-line-coroutine .zm-box-body { stroke: var(--coroutine); stroke-width: 1.5; stroke-dasharray: 6 3; }
+.zm-line-none .zm-frame-body, .zm-line-none .zm-box-body { stroke: var(--graphite); stroke-width: 1; stroke-dasharray: 1 3; stroke-linecap: round; }
+.zm-line-process .zm-frame-head { stroke: var(--ink); }
+.zm-line-thread .zm-frame-head { stroke: var(--thread); }
+.zm-line-coroutine .zm-frame-head { stroke: var(--coroutine); stroke-dasharray: 6 3; }
 .zm-cfg-body { fill: var(--panel); stroke: var(--accent); stroke-width: 1.5; }
-.zm-expansion-body { fill: var(--panel); stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
-.zm-expansion-head { fill: color-mix(in srgb, var(--accent) 10%, var(--bg)); stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.zm-expansion-body { fill: var(--glass-strong); stroke: var(--accent); stroke-width: 1.2; vector-effect: non-scaling-stroke; filter: drop-shadow(0 14px 30px var(--shadow)); }
+.zm-expansion-head { fill: color-mix(in srgb, var(--accent) 12%, transparent); stroke: none; }
 .zm-expansion-close { cursor: pointer; }
 .zm-expansion-close-hit { fill: transparent; }
 .zm-expansion-close text { fill: var(--muted); font-size: calc(16px * var(--zinv, 1)); pointer-events: none; }
 .zm-expansion-close:hover text { fill: var(--fg); }
 .zm-connector { fill: none; stroke: var(--accent); stroke-width: 1.2; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+/* The callout of a detail: a dashed ring round the tile it hangs from, a leader to the detail, and a lettered bubble. */
+.zm-callout-ring { fill: none; stroke: var(--accent); stroke-width: 1.2; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+.zm-leader { fill: none; stroke: var(--accent); stroke-width: 1; stroke-dasharray: 1 4; stroke-linecap: round; vector-effect: non-scaling-stroke; pointer-events: none; }
+.zm-bubble { fill: var(--accent); stroke: var(--rim-stroke, #fff); stroke-width: 1.5; pointer-events: none; }
+.zm-bubble-text { fill: #fff; font-family: var(--font-ui); font-weight: 700; font-size: 12px; pointer-events: none; }
+.flow-call-bar { stroke: currentColor; stroke-width: 1.2; fill: none; }
 .zm-box.expanded .zm-box-body { stroke: var(--accent); stroke-width: 2; }
 .zm-loading { position: absolute; inset: 0; margin: 0; display: flex; align-items: center; justify-content: center; }
-.zm-mini { position: absolute; right: 10px; bottom: 10px; width: 160px; height: 110px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; cursor: crosshair; touch-action: none; }
+.zm-keyplan { position: absolute; left: var(--sh-gap, 10px); bottom: calc(var(--sh-gap, 10px) + 44px); z-index: 4; margin: 0; padding: 6px; border-radius: 10px; background: var(--glass); box-shadow: var(--float); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
+.zm-keyplan figcaption { margin: 0 0 4px 2px; font-size: 11px; color: var(--muted); }
+.zm-mini { display: block; width: 160px; height: 110px; background: var(--raised-box); border: 0; border-radius: 6px; cursor: crosshair; touch-action: none; }
 .zm-mini-frame { fill: none; stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .zm-mini-box { fill: var(--muted); opacity: 0.45; }
 .zm-mini-cfg { fill: var(--accent); }
 .zm-mini-view { fill: var(--accent); fill-opacity: 0.12; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+/* The zone grid: hairlines every 480 units with the zone reference in the corner of each cell. */
+.zm-zone-line { fill: none; stroke: var(--hair); stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
+/* Rulers: zone letters along the top edge and numbers down the left, in screen space, faint. */
+.zm-rulers { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
+.zm-rulers text { fill: var(--graphite); font-family: var(--font-code); font-size: 11px; opacity: 0.85; }
+.zm-rulers line { stroke: var(--graphite); stroke-width: 1; opacity: 0.6; }
+.zm-rulers.zm-rulers-off { display: none; }
+/* Far tier: the function map fades out and the card grid (one card per child of the scope) fades in over it. */
+.zm-world { transition: opacity 180ms ease; }
+.zm-world.zm-far { opacity: 0; pointer-events: none; }
+.zm-far-layer { position: absolute; visibility: hidden; opacity: 0; pointer-events: none; transition: opacity 180ms ease, visibility 180ms; }
+.zm-far-layer.on { visibility: visible; opacity: 1; }
+.zm-far-scroll { position: absolute; inset: 0; overflow-y: auto; overscroll-behavior: contain; pointer-events: auto; }
+.zm-far-content { position: relative; }
+.zm-far-links { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.zm-far-link { fill: none; stroke: var(--graphite); opacity: 0.4; stroke-linecap: round; }
+.zm-far-card { position: absolute; display: flex; flex-direction: column; align-items: stretch; justify-content: center; gap: 4px; padding: 12px 14px; box-sizing: border-box; text-align: left; background: var(--zone-fill); border: 1px solid var(--hair); border-radius: 14px; color: var(--ink); cursor: pointer; overflow: hidden; }
+.zm-far-card:hover:not(:disabled), .zm-far-card:focus-visible { background: var(--btn-glass-hover); }
+.zm-far-card:disabled { cursor: default; }
+.zm-far-name { font: 600 15px/1.2 system-ui, sans-serif; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.zm-far-count { font: 400 12px/1.2 system-ui, sans-serif; color: var(--graphite); opacity: 0.8; white-space: nowrap; }
+.zm-far-pill { position: absolute; top: 8px; right: 8px; min-width: 22px; padding: 1px 7px; border-radius: 999px; background: var(--red); color: #fff; font: 600 11px/16px system-ui, sans-serif; text-align: center; }
+@media (prefers-reduced-motion: reduce) { .zm-world, .zm-far-layer { transition: none; } }
+/* Aggregated calls between cards: screen-pixel width grows with log(count) (farEdgeWidth), faint, no arrows. */
+/* Findings: a red revision cloud around the box, a red triangle top-left and a count badge top-right. */
+.zm-cloud { fill: color-mix(in srgb, var(--red) 6%, transparent); stroke: var(--red); stroke-width: 1.6; vector-effect: non-scaling-stroke; pointer-events: none; }
+.zm-finding .zm-marker, .zm-finding .zm-badge { cursor: pointer; }
+.zm-marker-tri { fill: var(--red); stroke: var(--sheet); stroke-width: 1.5; }
+.zm-badge rect { fill: var(--red); stroke: var(--sheet); stroke-width: 1.5; }
+.zm-badge text { fill: var(--on-accent); font-family: var(--font-ui); font-size: 10px; font-weight: 600; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
 .zm-hint { margin: 6px 0 0; }
 .zm-detail { margin-top: 14px; }
 .zm-roots { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 2px; margin: 0 0 8px; font-size: 0.88rem; cursor: pointer; }
@@ -420,6 +465,7 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 @media (max-width: 600px) {
   .zm-stage { height: 360px; }
   .zm-mini { width: 120px; height: 80px; }
+  .zm-keyplan { bottom: calc(var(--sh-gap, 10px) + 44px); }
 }
 
 @media (max-width: 860px) {
@@ -500,3 +546,213 @@ table.grid th { background: var(--faint); }
   .graph, .graph-scroll, .arch-scroll, .flow-scroll { box-shadow: 0 0 0 1.5px var(--ink); }
 }
 .top .theme-switch { margin-left: auto; }
+
+/* ---- Sheet shell (phase 2): glass top bar, full-height stage, overlays. Tokens only; dark follows the theme tokens. ---- */
+:root { --sh-top: 56px; --side-w: 380px; --sh-gap: 16px; }
+.sh-top {
+  position: sticky; top: 0; z-index: 40; height: var(--sh-top); display: flex; align-items: center; gap: 14px;
+  margin: 0 -16px; padding: 0 16px; background: var(--glass-strong); border-bottom: 1px solid var(--hair);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6); backdrop-filter: blur(24px) saturate(1.6); min-width: 0;
+}
+.sh-mark { display: inline-flex; align-items: center; gap: 8px; color: var(--ink); text-decoration: none; font-weight: 600; flex: none; }
+.sh-mark-name { font-size: var(--t-md); }
+.sh-crumbs { display: flex; align-items: center; min-width: 0; overflow: hidden; font-size: var(--t-sm); white-space: nowrap; }
+.sh-crumb { display: inline-flex; align-items: center; min-width: 0; }
+.sh-crumb a { color: var(--muted); text-decoration: none; overflow: hidden; text-overflow: ellipsis; max-width: 18ch; }
+.sh-crumb a[aria-current="page"] { color: var(--ink); font-weight: 600; }
+.sh-sep { color: var(--muted); margin: 0 6px; }
+.sh-modes { display: inline-flex; padding: 2px; border-radius: 9px; background: var(--faint); flex: none; }
+.sh-mode { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 7px; color: var(--muted); text-decoration: none; font-size: var(--t-sm); font-weight: 500; }
+.sh-mode[aria-current="page"] { background: var(--thumb); color: var(--ink); box-shadow: var(--shadow); }
+.sh-mode:focus-visible, .sh-tool:focus-visible, .sh-close:focus-visible, .sh-layer-list a:focus-visible, .sh-crumb a:focus-visible, .sh-find-input:focus-visible, .sh-find-list a:focus-visible, .sh-layers-open:focus-visible, .sh-roots input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sh-count { min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--red); color: var(--on-accent); font-size: var(--t-xs); line-height: 16px; text-align: center; }
+.sh-spacer { flex: 1; min-width: 0; }
+.sh-tools { display: inline-flex; align-items: center; gap: 8px; flex: none; }
+.sh-tool { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border: 0; border-radius: 8px; background: var(--btn-glass); box-shadow: var(--btn-rim); color: var(--ink); font: inherit; font-size: var(--t-sm); cursor: pointer; }
+.sh-tool:hover { background: var(--btn-glass-hover); }
+.sh-tool[aria-expanded="true"] { color: var(--accent); }
+.sh-tool kbd { font-family: var(--font-code); font-size: var(--t-xs); color: var(--muted); }
+.sh-stage { position: relative; }
+.sh-page { padding: 20px 0 48px; }
+.sh-page-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.sh-page-head h1 { margin: 0; font-size: var(--t-xl); }
+
+/* The sheet: the map fills the stage at the height of the window under the bar. */
+.sh-sheet { position: relative; height: max(420px, calc(100dvh - var(--sh-top))); margin: 0 -16px; overflow: hidden; background: var(--film); background-image: var(--ambient); }
+.sh-canvas { position: absolute; inset: 0; }
+.sh-canvas .zm-stage { position: absolute; inset: 0; height: auto; border: 0; border-radius: 0; background: transparent; }
+.sh-slot:empty { display: none; }
+.sh-roots { position: absolute; left: var(--sh-gap); bottom: var(--sh-gap); z-index: 5; display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 9px; background: var(--glass); box-shadow: var(--float); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); font-size: var(--t-sm); color: var(--ink); }
+
+.sh-card { background: var(--glass-strong); border: 0; border-radius: 14px; box-shadow: var(--float), var(--rim); -webkit-backdrop-filter: blur(24px) saturate(1.6); backdrop-filter: blur(24px) saturate(1.6); color: var(--ink); }
+.sh-card-head, .sh-files-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.sh-card-head h2, .sh-files-head h2 { margin: 0; font-size: var(--t-sm); font-weight: 600; }
+.sh-close { display: inline-grid; place-items: center; width: 24px; height: 24px; border: 0; border-radius: 7px; background: var(--faint); color: var(--muted); cursor: pointer; flex: none; }
+.sh-close:hover { color: var(--ink); }
+
+.sh-layers { position: absolute; left: var(--sh-gap); top: var(--sh-gap); z-index: 6; width: 200px; max-height: calc(100% - 2 * var(--sh-gap) - 60px); overflow: auto; padding: 12px; }
+.sh-layers-open { position: absolute; left: var(--sh-gap); top: var(--sh-gap); z-index: 6; padding: 6px 12px; border: 0; font: inherit; font-size: var(--t-sm); color: var(--ink); cursor: pointer; }
+.sh-layer-list { list-style: none; margin: 0; padding: 0; }
+.sh-layer-list a { display: block; padding: 5px 8px; border-radius: 7px; color: var(--ink); text-decoration: none; font-size: var(--t-sm); }
+.sh-layer-list a:hover { background: var(--faint); }
+.sh-layer-list a[aria-current="page"] { background: var(--accent); color: var(--on-accent); }
+.sh-layer-list a.dim { color: var(--muted); }
+.sh-layer-head { margin: 12px 0 4px; font-size: var(--t-xs); font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.sh-check { display: flex; align-items: center; gap: 8px; font-size: var(--t-sm); padding: 3px 0; }
+
+.sh-title { position: absolute; right: var(--sh-gap); bottom: var(--sh-gap); z-index: 5; width: min(360px, calc(100% - 2 * var(--sh-gap))); padding: 12px 14px; transition: right .3s ease; }
+.sh-sheet[data-panel="open"] .sh-title { right: calc(var(--sh-gap) + var(--side-w) + var(--sh-gap)); }
+.sh-title.emph { width: min(420px, calc(100% - 2 * var(--sh-gap))); }
+.sh-title-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px 14px; margin: 0; }
+.sh-title-grid .wide { grid-column: 1 / -1; }
+.sh-title-grid dt { font-size: var(--t-xs); color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.sh-title-grid dd { margin: 2px 0 0; font-family: var(--font-code); font-size: var(--t-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sh-title.emph .sh-title-grid dd { font-size: var(--t-md); }
+
+.sh-side { position: absolute; top: var(--sh-gap); right: var(--sh-gap); bottom: var(--sh-gap); z-index: 8; width: var(--side-w); max-width: calc(100% - 2 * var(--sh-gap)); display: flex; flex-direction: column; padding: 12px; overflow: hidden; background: var(--glass-strong); border-radius: 14px; box-shadow: var(--float), var(--rim); -webkit-backdrop-filter: blur(28px) saturate(1.6); backdrop-filter: blur(28px) saturate(1.6); transform: translateX(calc(100% + 24px)); visibility: hidden; transition: transform .3s ease, visibility .3s; }
+.sh-side.open { transform: none; visibility: visible; }
+.sh-side > .sh-close { position: absolute; top: 10px; right: 10px; z-index: 1; }
+.sh-side-body { flex: 1; min-height: 0; overflow: auto; padding-right: 30px; }
+.sh-side .sh-source { background: transparent; border: 0; padding: 0; margin: 0; }
+/* The outline sits above the code in the side panel as a collapsible section, never over it. */
+.sh-side .viewer-body { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.sh-side .outline { position: static; order: -1; max-height: 34vh; overflow: auto; padding: 8px 10px; border-radius: 12px; background: color-mix(in srgb, var(--graphite) 10%, transparent); }
+.sh-side .outline summary { cursor: pointer; font-size: var(--t-sm); font-weight: 600; }
+.sh-side .outline details[open] > summary { margin-bottom: 6px; }
+.sh-side .outline h3 { margin: 8px 0 4px; font-size: var(--t-xs); }
+.sh-side pre.code { color: var(--ink); }
+.sh-side .viewer-body pre.code { max-height: none; }
+.sh-side .viewer-head { margin-bottom: 6px; }
+.sh-keys { margin-top: 12px; font-size: var(--t-sm); }
+.sh-keys summary { cursor: pointer; color: var(--muted); }
+.sh-keys ul { margin: 6px 0 0; padding-left: 16px; display: grid; gap: 4px; color: var(--muted); }
+.sh-canvas .zm-crumbs { position: absolute; left: calc(var(--sh-gap) + 212px); top: var(--sh-gap); z-index: 6; padding: 6px 10px; border-radius: 10px; background: var(--glass-strong); box-shadow: var(--rim); }
+.sh-canvas .zm-crumbs ol { margin: 0; }
+.sh-slot { margin-top: 10px; }
+
+.sh-files { position: fixed; top: calc(var(--sh-top) + var(--sh-gap)); left: var(--sh-gap); bottom: var(--sh-gap); z-index: 50; width: min(360px, calc(100vw - 2 * var(--sh-gap))); display: flex; flex-direction: column; padding: 12px; }
+.sh-files-body { flex: 1; min-height: 0; overflow: auto; margin-top: 8px; }
+.sh-files-body .explorer { position: static; max-height: none; background: transparent; border: 0; padding: 0; }
+
+.sh-below { padding: 16px var(--sh-gap) 48px; }
+
+.sh-scrim { position: fixed; inset: 0; z-index: 60; background: rgba(0, 0, 0, 0.18); display: flex; justify-content: center; align-items: flex-start; padding: 12vh 16px 16px; }
+.sh-palette { width: min(640px, 100%); padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.sh-find-input { width: 100%; box-sizing: border-box; height: 40px; padding: 0 12px; border: 0; border-radius: 10px; background: var(--box); color: var(--ink); font: inherit; font-size: var(--t-md); outline: none; }
+.sh-find-list { list-style: none; margin: 0; padding: 0; max-height: min(60vh, 480px); overflow: auto; }
+.sh-find-list a { display: grid; grid-template-columns: 64px minmax(0, 1fr) minmax(0, 1.2fr); align-items: baseline; gap: 10px; padding: 7px 10px; border-radius: 8px; color: var(--ink); text-decoration: none; font-size: var(--t-sm); }
+.sh-find-list a.on { background: var(--accent); color: var(--on-accent); }
+.sh-find-list a.on .sh-kind, .sh-find-list a.on .sh-find-detail { color: var(--on-accent); opacity: 0.8; }
+.sh-kind { font-size: var(--t-xs); color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.sh-find-label { font-family: var(--font-code); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sh-find-detail { color: var(--muted); font-family: var(--font-code); font-size: var(--t-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sh-find-empty { margin: 0; padding: 8px 10px; color: var(--muted); font-size: var(--t-sm); }
+
+/* The grab region is a phone-only header: its handle and label are the drag target of the bottom sheet. */
+.sh-grab { display: none; }
+@media (max-width: 860px) {
+  /* A bottom sheet: fixed to the viewport's bottom edge, 90% tall at most. SidePanel moves it with a transform and sets its
+     height, so the CSS only parks it off screen while closed. The sheet owns the touch: the page does not scroll under it. */
+  .sh-side { top: auto; left: 0; right: 0; bottom: 0; width: auto; max-width: none; height: 90vh; height: 90dvh; padding: 8px 16px calc(12px + env(safe-area-inset-bottom, 0px)); border-radius: 18px 18px 0 0; position: fixed; z-index: 70; transform: translateY(calc(100% + 24px)); transition: visibility .3s; touch-action: none; overscroll-behavior: contain; }
+  .sh-side.open { transform: none; }
+  .sh-grab { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 2px 0 10px; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
+  .sh-handle { width: 40px; height: 5px; border-radius: 3px; background: var(--muted); opacity: 0.5; }
+  .sh-grab-label { font-size: var(--t-xs); color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .sh-side > .sh-close { top: 10px; right: 10px; }
+  /* Only the top rest scrolls the content; at 40% it is cut to its top, and a drag moves the sheet. */
+  .sh-side:not(.is-top) .sh-side-body { overflow: hidden; }
+  .sh-side.is-top .sh-side-body { overflow-y: auto; touch-action: pan-y; overscroll-behavior: contain; }
+  .sh-sheet[data-panel="open"] .sh-title, .sh-sheet[data-panel="open"] .sh-layers, .sh-sheet[data-panel="open"] .sh-layers-open, .sh-sheet[data-panel="open"] .sh-roots { display: none; }
+  .sh-layers { width: 176px; }
+  .sh-canvas .zm-crumbs { display: none; }
+}
+@media (max-width: 520px) {
+  :root { --sh-top: 96px; }
+  .sh-top { flex-wrap: wrap; align-content: center; row-gap: 6px; padding-top: 6px; padding-bottom: 6px; height: var(--sh-top); }
+  /* The logo goes, so the crumbs (whose first item links to all projects) get the row's room. */
+  .sh-mark { display: none; }
+  /* The crumbs collapse to the current item: the last crumb is always the current one. */
+  .sh-crumbs { flex: 1 1 0; min-width: 0; }
+  .sh-tools, .sh-theme { flex-shrink: 0; }
+  .sh-crumb:not(:last-child) { display: none; }
+  .sh-crumb a { max-width: 100%; }
+  .sh-modes { order: 3; width: 100%; box-sizing: border-box; justify-content: space-between; }
+  .sh-mode { flex: 1; justify-content: center; }
+  .sh-lbl { display: none; }
+  .sh-tool kbd { display: none; }
+  .sh-title { display: none; }
+  .sh-sheet[data-panel="open"] .sh-title { display: none; }
+  .sh-title-grid { grid-template-columns: 1fr 1fr; }
+  .sh-find-list a { grid-template-columns: 56px minmax(0, 1fr); }
+  .sh-find-detail { display: none; }
+  .sh-files { width: calc(100vw - 2 * var(--sh-gap)); }
+  .sh-page { padding-top: 14px; }
+  /* The Layers card opens as a full-width drawer from the bottom edge, and the roots-only switch lives in it. */
+  .sh-layers { left: 0; right: 0; top: auto; bottom: 0; width: auto; max-height: 62%; border-radius: 16px 16px 0 0; }
+  /* A wide table scrolls inside its page rather than widening the page. */
+  .sh-page table.grid { display: block; max-width: 100%; overflow-x: auto; }
+  .sh-roots { display: none; }
+  .sh-sheet[data-panel="open"] .sh-canvas .zm-keyplan { display: none; }
+}
+.sh-count-inline { color: var(--muted); font-size: var(--t-xs); }
+
+/* Title block: one line by default (scope, selection, zone) with a Details disclosure; the table shows when expanded. */
+.sh-title-line { display: flex; align-items: center; gap: 10px; min-width: 0; font-size: var(--t-sm); }
+.sh-title-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+.sh-title-toggle { flex: none; padding: 2px 8px; font-size: var(--t-xs); }
+.sh-title-toggle:disabled { opacity: 0.4; cursor: default; }
+
+/* Arch restyle: folders are glass cards with a rim and a shadow; their labels sit on the card in the plan's sizes. */
+.arch-scroll { background: var(--glass-strong); border: 0; box-shadow: var(--rim), var(--float); -webkit-backdrop-filter: blur(30px) saturate(190%); backdrop-filter: blur(30px) saturate(190%); }
+.arch-box rect { stroke: var(--hair); stroke-width: 1; fill-opacity: 0.86; filter: drop-shadow(0 2px 6px var(--shadow)); }
+.arch-box:hover rect, .arch-box:focus-visible rect { stroke: var(--accent); stroke-width: 2; }
+.arch-box.dim { opacity: 0.35; }
+
+/* Findings page: a revision table in glass. Rows are a grid; at phone width the cells stack, so the page never scrolls sideways. */
+.rv-page { display: grid; gap: 12px; }
+.revtable { background: linear-gradient(180deg, var(--sheen), transparent 32%), var(--glass-strong); border-radius: 18px; box-shadow: var(--rim), var(--float); -webkit-backdrop-filter: blur(44px) saturate(200%); backdrop-filter: blur(44px) saturate(200%); overflow: hidden; color: var(--ink); }
+.revhead, .revrow { display: grid; grid-template-columns: 96px minmax(0, 1.4fr) minmax(0, 1.3fr) minmax(0, 1fr) 150px; }
+.revhead > span { padding: 12px 14px 8px; font-size: var(--t-xs); font-weight: 600; color: var(--muted); }
+.revrow { border-top: 1px solid var(--hair); }
+.rv-cell, .rv-examples { padding: 14px; min-width: 0; }
+.rv-examples { list-style: none; margin: 0; display: grid; gap: 6px; align-content: start; }
+.rv-examples li { min-width: 0; overflow-wrap: anywhere; }
+.rv-count { display: block; }
+.rv-num { font-size: 28px; font-weight: 700; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; line-height: 1; }
+.rv-msg { margin: 0 0 4px; font-size: var(--t-lg); font-weight: 600; line-height: 1.25; letter-spacing: -0.02em; overflow-wrap: anywhere; }
+.rv-finding p { margin: 0; }
+.rv-bars { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.rv-bar { display: grid; grid-template-columns: minmax(0, 1fr) 72px 28px; gap: 8px; align-items: center; min-width: 0; font-size: var(--t-sm); }
+.rv-bar-file { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; font-size: 12px; }
+.rv-bar-track { position: relative; height: 8px; border-radius: 4px; background: var(--faint); overflow: hidden; }
+.rv-bar-track i { position: absolute; inset: 0 auto 0 0; background: var(--red); border-radius: 4px; }
+.rv-bar-n { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+a.btn { display: inline-flex; align-items: center; justify-content: center; min-height: 28px; padding: 4px 12px; border-radius: 8px; text-decoration: none; font-size: var(--t-sm); font-weight: 500; background: var(--btn-glass); color: var(--ink); box-shadow: var(--btn-rim); box-sizing: border-box; }
+a.btn.primary { background: linear-gradient(180deg, var(--gloss), transparent 52%), var(--accent); color: var(--on-accent); box-shadow: inset 0 1px 0 var(--gloss), 0 2px 10px color-mix(in srgb, var(--accent) 38%, transparent); }
+.rv-show { width: 100%; }
+@media (max-width: 720px) {
+  .revhead { display: none; }
+  .revrow { grid-template-columns: minmax(0, 1fr); }
+  .rv-cell[data-label]::before, .rv-examples[data-label]::before { content: attr(data-label); display: block; margin-bottom: 4px; font-size: var(--t-xs); font-weight: 600; color: var(--muted); }
+  .rv-count { display: flex; align-items: baseline; gap: 8px; padding-bottom: 6px; }
+  .rv-count::before { content: none; }
+  .rv-count::after { content: "findings"; font-size: var(--t-sm); color: var(--muted); }
+  .rv-bar { grid-template-columns: minmax(0, 1fr) 56px 28px; }
+  .rv-show { width: auto; }
+}
+
+/* Arch, folder view and phone. The diagram keeps its natural size and pans inside .arch-scroll, so the 23 px names stay
+   readable and the page itself never scrolls sideways. */
+.arch { min-width: 0; max-width: 100%; }
+.arch-caption { margin: 0 0 8px; }
+.arch-scroll { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+.arch-panel { min-width: 0; }
+.arch-unresolved { margin-top: 16px; }
+.arch-unresolved summary { cursor: pointer; list-style-position: outside; }
+.arch-unresolved summary h2 { display: inline; }
+@media (max-width: 720px) {
+  .arch { gap: 12px; }
+  .arch-scroll { max-height: 60vh; }
+  .arch-name { font-size: 21px; }
+}
+.arch-other { flex: 1 1 100%; margin: 0; }

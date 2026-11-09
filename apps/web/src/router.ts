@@ -17,6 +17,10 @@ export type Route =
       fn?: string;
       /** The flow tab's canvas shows only the functions each thread starts in. */
       roots?: boolean;
+      /** The overview tab's full page (`full=1`), rather than the flow sheet with its title block. */
+      full?: boolean;
+      /** The flow tab with the findings layer on, drawing only the findings of this kind (`kind=`). */
+      kind?: string;
       base?: string;
       head?: string;
     }
@@ -28,6 +32,10 @@ export interface ViewOptions {
   fn?: string;
   /** The flow tab's roots-only canvas. Written as `roots=1`, and only when true. */
   roots?: boolean;
+  /** The overview tab's full page. Written as `full=1`, and only when true. */
+  full?: boolean;
+  /** The findings layer of the flow tab, for one kind of finding. Written as `kind=`. */
+  kind?: string;
   base?: string;
   head?: string;
 }
@@ -64,6 +72,8 @@ export function parseRoute(hash: string): Route {
       ...(line ? { line } : {}),
       ...opt("fn", query.get("fn")),
       ...(query.get("roots") === "1" ? { roots: true } : {}),
+      ...(query.get("full") === "1" ? { full: true } : {}),
+      ...opt("kind", query.get("kind")),
       ...opt("base", query.get("base")),
       ...opt("head", query.get("head")),
     };
@@ -90,6 +100,8 @@ export function hrefView(id: string, tab: string, opts: ViewOptions = {}): strin
   if (opts.line) params.set("line", String(opts.line));
   if (opts.fn) params.set("fn", opts.fn);
   if (opts.roots) params.set("roots", "1");
+  if (opts.full) params.set("full", "1");
+  if (opts.kind) params.set("kind", opts.kind);
   if (opts.base) params.set("base", opts.base);
   if (opts.head) params.set("head", opts.head);
   const qs = params.toString();

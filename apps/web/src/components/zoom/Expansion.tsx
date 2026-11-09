@@ -4,7 +4,7 @@
 // and shrinks with the camera like the rest of the map.
 import { CHART_HEAD, CHART_PAD, type FlowNode } from "@insight/flow";
 import { chartShown } from "../../zoom/chart";
-import type { Expansion } from "../../zoom/expand";
+import { detailLetter, type Callout, type Expansion } from "../../zoom/expand";
 import { fitLabel, labelChars } from "../../zoom/lod";
 import { FlowChart } from "../FlowChart";
 
@@ -25,17 +25,37 @@ interface Props {
   onClose: () => void;
 }
 
+/** The letter-named callout of a detail: a dashed ring around the tile it hangs from, a leader to the detail, and a bubble. */
+export function CalloutShape({ callout, letter, k }: { callout: Callout; letter: string; k: number }) {
+  const { cx, cy, rx, ry, leader, bubble } = callout;
+  // The bubble keeps its size on screen: it is drawn at the inverse of the camera's scale about its own centre.
+  const inv = 1 / k;
+  return (
+    <g className="zm-callout">
+      <ellipse cx={cx} cy={cy} rx={rx} ry={ry} className="zm-callout-ring" />
+      <line x1={leader.x1} y1={leader.y1} x2={leader.x2} y2={leader.y2} className="zm-leader" />
+      <g transform={`translate(${bubble.x} ${bubble.y}) scale(${inv}) translate(${-bubble.x} ${-bubble.y})`}>
+        <circle cx={bubble.x} cy={bubble.y} r={14} className="zm-bubble" />
+        <text x={bubble.x} y={bubble.y} dominantBaseline="central" textAnchor="middle" className="zm-bubble-text">
+          {letter}
+        </text>
+      </g>
+    </g>
+  );
+}
+
 export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClick, onSelect, onClose }: Props) {
   const { chart, x, y, w, h } = expansion;
-  const label = fitLabel(chart.name, labelChars(w * k));
+  const title = `Detail ${detailLetter(expansion.index)}: ${chart.name}`;
+  const label = fitLabel(title, labelChars(w * k));
   return (
     <g className="zm-expansion">
-      <title>{chart.name}</title>
-      <rect x={x} y={y} width={w} height={h} rx={8} className="zm-expansion-body" />
+      <title>{title}</title>
+      <rect x={x} y={y} width={w} height={h} rx={18} className="zm-expansion-body" />
       <g className="zm-expansion-title" onClick={onSelect}>
-        <rect x={x} y={y} width={w} height={CHART_HEAD} rx={8} className="zm-expansion-head" />
+        <rect x={x} y={y} width={w} height={CHART_HEAD} rx={18} className="zm-expansion-head" />
         {label !== null && (
-          <text x={x + 12} y={y + CHART_HEAD / 2} dominantBaseline="central" className="zm-label">
+          <text x={x + 14} y={y + CHART_HEAD / 2} dominantBaseline="central" className="zm-label">
             {label}
           </text>
         )}

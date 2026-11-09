@@ -48,6 +48,8 @@ export function prefixesOf(path: string): string[] {
 interface Links {
   id: string;
   tab: string;
+  /** The tab a file opens in. Folders stay on `tab`. */
+  fileTab: string;
   scope: string;
   isOpen: (dir: Dir) => boolean;
   setOpen: (path: string, open: boolean) => void;
@@ -76,7 +78,7 @@ function Rows({ dir, links }: { dir: Dir; links: Links }) {
       {dir.files.map((f) => (
         <a
           key={f.path}
-          href={hrefView(links.id, links.tab, { scope: f.path })}
+          href={hrefView(links.id, links.fileTab, { scope: f.path })}
           className={f.path === links.scope ? "file on" : "file"}
           aria-current={f.path === links.scope ? "page" : undefined}
           title={f.path}
@@ -93,7 +95,7 @@ function Rows({ dir, links }: { dir: Dir; links: Links }) {
  * The source directory tree, kept on the left of every workspace view. Choosing a file or folder
  * sets the scope; the folders above the scope open by themselves.
  */
-export function Explorer({ id, tab, scope, files }: { id: string; tab: string; scope: string; files: FileEntry[] }) {
+export function Explorer({ id, tab, fileTab = tab, scope, files }: { id: string; tab: string; fileTab?: string; scope: string; files: FileEntry[] }) {
   const [filter, setFilter] = useState("");
   // Folders the user opened or closed by hand. A folder without an entry is open when it lies on the path to the scope, or at the top.
   const [toggled, setToggled] = useState<Record<string, boolean>>({});
@@ -117,6 +119,7 @@ export function Explorer({ id, tab, scope, files }: { id: string; tab: string; s
   const links: Links = {
     id,
     tab,
+    fileTab,
     scope,
     // A filter opens every folder so the matches are visible.
     isOpen: (dir) => needle !== "" || (toggled[dir.path] ?? (!dir.path.includes("/") || onPath.has(dir.path))),

@@ -26,8 +26,12 @@ export function writeTheme(choice: ThemeChoice): void {
   }
 }
 
+/** Fired on window after the theme changes, so every switch on the page shows the same choice. */
+export const THEME_EVENT = "insight-theme-change";
+
 export function applyTheme(choice: ThemeChoice): void {
   document.documentElement.dataset.theme = choice;
+  window.dispatchEvent(new Event(THEME_EVENT));
 }
 
 /** A design token's current value on the root element, e.g. tokenValue("--ink") gives "#F5F5F7". */
