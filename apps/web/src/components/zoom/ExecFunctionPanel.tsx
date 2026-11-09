@@ -1,6 +1,6 @@
 // The panel under the execution map when the focus is a function: the call path to it (its trail), its name and source
 // line, where it runs, the other places it runs, the chart's stats and legend, and its Calls and Called by lists. The
-// chart itself is drawn in the function's box on the map (BoxChart.tsx). The stats come from the flow store; the rest
+// chart itself is drawn in the function's expansion beside the map (Expansion.tsx). The stats come from the flow store; the rest
 // from the map's build and the scope's index.
 import { useEffect, useMemo, useState } from "react";
 import type { FunctionFlow } from "@insight/flow";
@@ -105,7 +105,7 @@ export function ExecFunctionPanel({ id, scope, roots, store, index, nodeId, sele
       {loaded === undefined && <p className="muted small">Loading the chart</p>}
       {loaded !== undefined && fn === undefined && loaded.error === undefined && <p className="muted small">No control-flow chart for this function.</p>}
       {fn !== undefined && !fn.tooLarge && fn.nodes.length > 0 && (
-        <p className="muted small">The control-flow chart is drawn inside the function's box on the map. Click a step in it to see its source.</p>
+        <p className="muted small">The control-flow chart is drawn in an expansion to the right of the function's box on the map. Click a step in it to see its source.</p>
       )}
       {fn !== undefined && <FunctionDetail id={id} fn={fn} scope={scope} />}
       <CallLists base={base} lists={lists} />

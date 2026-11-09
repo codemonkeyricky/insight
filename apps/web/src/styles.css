@@ -339,6 +339,14 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 .zm-exec .zm-frame.zm-program .zm-frame-head { fill: color-mix(in srgb, var(--fg) 6%, var(--bg)); }
 .zm-exec .zm-frame.zm-project .zm-frame-body, .zm-exec .zm-box.zm-project .zm-box-body { stroke: var(--fg); stroke-width: 2; }
 .zm-cfg-body { fill: var(--panel); stroke: var(--accent); stroke-width: 1.5; }
+.zm-expansion-body { fill: var(--panel); stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.zm-expansion-head { fill: color-mix(in srgb, var(--accent) 10%, var(--bg)); stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.zm-expansion-close { cursor: pointer; }
+.zm-expansion-close-hit { fill: transparent; }
+.zm-expansion-close text { fill: var(--muted); font-size: calc(16px * var(--zinv, 1)); pointer-events: none; }
+.zm-expansion-close:hover text { fill: var(--fg); }
+.zm-connector { fill: none; stroke: var(--accent); stroke-width: 1.2; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+.zm-box.expanded .zm-box-body { stroke: var(--accent); stroke-width: 2; }
 .zm-loading { position: absolute; inset: 0; margin: 0; display: flex; align-items: center; justify-content: center; }
 .zm-mini { position: absolute; right: 10px; bottom: 10px; width: 160px; height: 110px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; cursor: crosshair; touch-action: none; }
 .zm-mini-frame { fill: none; stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }

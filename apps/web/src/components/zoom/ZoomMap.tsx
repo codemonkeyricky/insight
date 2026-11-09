@@ -1,22 +1,23 @@
 // The zoom map: one d3-zoom camera over a scene from a MapSource (the execution canvas of a scope). The camera only moves
-// (wheel, drag, keys, minimap) and never opens or closes a box. A click, a key or a link opens a box, and the URL follows
-// the focus. A function's control-flow chart is drawn only once the function is expanded: by a click on its box, by the
-// URL's fn, or by a call to it from another chart. The camera transform is written straight onto a <g>; React re-renders
-// only when the set of drawn items changes.
+// (wheel, drag, keys, minimap). A click, a key or a link opens a box, and the URL follows the focus. A function box with
+// a control-flow chart opens an expansion: its chart drawn in a box to the right of the function (zoom/expand.ts), and a
+// call step in that chart opens the callee's expansion to the right of the step. Expansions are the map's own state, so
+// no layout depends on them. The camera transform is written straight onto a <g>; React re-renders only when the set of
+// drawn items changes.
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as KeyEvent, type PointerEvent as PointerEv, type ReactNode } from "react";
 import { select } from "d3-selection";
 import "d3-transition";
 import { zoom, zoomIdentity, type D3ZoomEvent, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
-import { CHART_HEAD, ZOOM_SIZE, fitCamera, fitChartCamera, visibleWorld, type Camera, type FlowNode, type FlowSpan, type PlacedItem, type Rect } from "@insight/flow";
+import { ZOOM_SIZE, fitCamera, fitChartCamera, visibleWorld, type Camera, type FlowNode, type FlowSpan, type FunctionFlow, type PlacedItem, type Rect } from "@insight/flow";
 import { nameOfId } from "../../flowTargets";
 import { hrefView } from "../../router";
-import { CHART_MIN_PX, chartShown } from "../../zoom/chart";
-import { expandedAfter } from "../../zoom/expand";
+import { CHART_MIN_PX } from "../../zoom/chart";
+import { anchoredTo, closeExpansion, connectorOf, openExpansion, refresh, revealCamera, type Expansion, type ExpandAnchor } from "../../zoom/expand";
 import { pickBox } from "../../zoom/gesture";
 import { edgeClass, edgeKey, edgeTitle, edgeWidth, type MapBuild, type MapEdge, type MapNode, type MapSelected, type MapSource } from "../../zoom/source";
 import { bucketScale, fitLabel, headerLabels, labelChars, lodBucket } from "../../zoom/lod";
 import type { ZoomStore } from "../../zoom/scene";
-import { BoxChart } from "./BoxChart";
+import { ExpansionShape } from "./Expansion";
 
 /** The camera's scale range: from the whole project down to a single line of a chart. */
 const SCALE: [number, number] = [0.02, 16];
@@ -49,11 +50,6 @@ const toCamera = (t: ZoomTransform): Camera => ({ k: t.k, x: t.x, y: t.y });
 const toTransform = (c: Camera): ZoomTransform => zoomIdentity.translate(c.x, c.y).scale(c.k);
 const reduceMotion = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
-/** True when `id` is inside the box `box`: a node whose ancestor is `box`. */
-const insideBox = (b: MapBuild, id: string, box: string): boolean => {
-  for (let p = b.node(id)?.parent; p !== undefined; p = b.node(p)?.parent) if (p === box) return true;
-  return false;
-};
 
 /** What the map has selected, for the page's source panel: the function, its build, and the construct picked in its chart. */
 export interface MapSelection {
@@ -73,17 +69,24 @@ interface Props {
   fn?: string;
   /** What the page draws below the map for the focus, such as the function panel. `open` moves the map to a node id. */
   detail?: (build: MapBuild, open: (nodeId: string) => void) => ReactNode;
-  /** Where a function box's control-flow chart is loaded from. Without it, function boxes show only their names. */
+  /** Where a function's control-flow chart is loaded from. Without it, function boxes open no expansion. */
   charts?: ChartSource;
   /** Reports the function the map selects (undefined when the focus is not a function), with the construct picked in it. */
   onSelect?: (sel: MapSelection | undefined) => void;
 }
 
-/** What a box needs to draw its chart: the project, the scope its links resolve in, and the flow store. */
+/** What an expansion needs to draw its chart: the project, the scope its links resolve in, and the flow store. */
 export interface ChartSource {
   id: string;
   scope: string;
   store: ZoomStore;
+}
+
+/** A construct picked in an expansion's chart: the function whose chart it is, the step, and its span. */
+interface Construct {
+  ref: string;
+  nodeId: string;
+  span?: FlowSpan;
 }
 
 /**
@@ -98,12 +101,12 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
   /** `lod` is the camera's quarter-octave bucket (lod.ts): labels are cut to it, and it changes only with the bucket. */
   const [shown, setShown] = useState<{ view?: MapBuild; items: PlacedItem[]; edges: MapEdge[]; lod: number }>({ items: [], edges: [], lod: 0 });
   const [error, setError] = useState<string>();
-  /** The function boxes whose chart is drawn, by placement id. A click on a function box adds it; Escape removes it. */
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
-  /** The same set, for the handlers and the async `show`, which read it when they run. */
-  const expandedRef = useRef<ReadonlySet<string>>(expanded);
-  /** The construct picked in an expanded chart: the placement of that chart, the step, and its span. */
-  const [construct, setConstruct] = useState<{ placement: string; nodeId: string; span?: FlowSpan }>();
+  /** The open expansions, in the order they opened (the last is closed first by Escape). */
+  const [expansions, setExpansions] = useState<readonly Expansion[]>([]);
+  /** The same list, for the handlers and the async `show`, which read it when they run. */
+  const expRef = useRef<readonly Expansion[]>([]);
+  /** The construct picked in an expansion's chart. */
+  const [construct, setConstruct] = useState<Construct>();
   const stageRef = useRef<HTMLDivElement>(null);
   /** The stage's size at the last resize, so a resize that changes nothing does not refit the camera. */
   const lastSizeRef = useRef<{ width: number; height: number } | undefined>(undefined);
@@ -126,6 +129,16 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
   const hintId = useId();
 
   const sizeOf = () => ({ width: stageRef.current?.clientWidth ?? 0, height: stageRef.current?.clientHeight ?? 0 });
+  /** The stage's room above the minimap: where a fit or a reveal may put things. */
+  const roomOf = () => {
+    const s = sizeOf();
+    return { width: s.width, height: Math.max(1, s.height - MINI_RESERVE) };
+  };
+
+  const setExp = (list: readonly Expansion[]) => {
+    expRef.current = list;
+    setExpansions(list);
+  };
 
   /** Works out which items and edges are on screen, and stores them only when they differ from the last set. */
   const cull = (c: Camera) => {
@@ -187,37 +200,53 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
     cull(cameraRef.current);
   };
 
-  /**
-   * Moves the camera to fit the build's node, in the stage's room above the minimap. `animate` is false for a refit that
-   * follows a resize, which must not animate.
-   */
-  const fitFocus = (b: MapBuild, animate: boolean) => {
+  /** The camera that fits the build's node in the stage's room (a function with a chart is capped, see fitChartCamera). */
+  const fitTarget = (b: MapBuild): Camera | undefined => {
     const rect = b.placed.rects.get(b.nodeId);
+    if (!rect || !svgRef.current || !zoomRef.current) return undefined;
+    const room = roomOf();
+    const opens = b.placed.items.some((i) => i.id === b.nodeId && i.kind === "frame");
+    return opens || b.node(b.nodeId)?.chart !== undefined ? fitChartCamera(rect, room, CHART_MIN_PX) : fitCamera(rect, room);
+  };
+
+  /** Moves the camera to `target`. `animate` is false for a move that must not animate (a resize, the first view). */
+  const moveTo = (target: Camera, animate: boolean) => {
     const svg = svgRef.current;
     const z = zoomRef.current;
-    if (!rect || !svg || !z) return;
-    const size = sizeOf();
-    const room = { width: size.width, height: Math.max(1, size.height - MINI_RESERVE) };
-    // A function with a chart, and a container that opens, is capped at about 1.5x its natural size, but never below
-    // CHART_MIN_PX wide (fitChartCamera). Any other box fits as it is.
-    const opens = b.placed.items.some((i) => i.id === b.nodeId && i.kind === "frame");
-    const target = opens || b.node(b.nodeId)?.chart !== undefined ? fitChartCamera(rect, room, CHART_MIN_PX) : fitCamera(rect, room);
+    if (!svg || !z) return;
     if (animate && !reduceMotion()) select(svg).transition().duration(ANIM_MS).call(z.transform, toTransform(target));
     else select(svg).call(z.transform, toTransform(target));
   };
 
+  /** The camera that shows an expansion from `from`, the least it can move (see revealCamera). */
+  const revealOf = (from: Camera, e: Expansion): Camera => revealCamera(from, { x: e.x, y: e.y, w: e.w, h: e.h }, e.chart.width, roomOf(), CHART_MIN_PX);
+
+  /** The expansions as the build places them: the boxes they hang from, in the build's layout, placed on the current view. */
+  const placeAll = (b: MapBuild, list: readonly Expansion[]): Expansion[] => refresh(list, (nodeId) => b.placed.rects.get(nodeId), visibleWorld(cameraRef.current, sizeOf()));
+
+  /** A function's chart, or undefined when it has none to draw (no chart source, no such function, too large, empty). */
+  const loadChart = async (fnId: string): Promise<FunctionFlow | undefined> => {
+    if (charts === undefined) return undefined;
+    try {
+      const f = await charts.store.chartOf(fnId);
+      return f === undefined || f.tooLarge || f.nodes.length === 0 ? undefined : f;
+    } catch {
+      return undefined;
+    }
+  };
+
   /**
-   * Makes `focus` the selection: loads what it needs, builds the map for it, and moves the camera to fit it. `animate`
-   * is false only for the first view, which is set at once. `base` is the expanded set the focus starts from: a function
-   * it selects is added to it, so nothing already open closes. A focus that is a function is drawn with its chart open.
+   * Makes `focus` the selection: loads what it needs, builds the map for it, and draws its expansions. A function focus
+   * opens its expansion beside its box (`toggle` is false), or closes it when `toggle` is true and it is open. The camera
+   * fits the focus, unless a toggle left it alone, then shows the expansion it opened or closed.
    */
-  const show = async (focus: string, animate: boolean, writeUrl: boolean, base: ReadonlySet<string> = expandedRef.current) => {
+  const show = async (focus: string, animate: boolean, writeUrl: boolean, toggle = false, select = false) => {
     const seq = ++seqRef.current;
     let b: MapBuild;
     try {
       // A focus reached by a click may not be loaded yet: the source loads what it needs first.
       await source.ensureFocus(focus);
-      b = await source.build(focus, base);
+      b = await source.build(focus);
     } catch (e) {
       if (seq === seqRef.current) setError(messageOf(e));
       return;
@@ -227,13 +256,45 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
     focusRef.current = focus;
     setBuild(b);
     setError(undefined);
-    setConstruct(undefined);
-    const exp = b.expanded ?? base;
-    expandedRef.current = exp;
-    setExpanded(exp);
     showView(b);
-    fitFocus(b, animate);
+
+    // A selection alone moves the source panel and the URL. The expansions stay open, placed on this build, and the camera
+    // does not move. The construct picked in a chart is kept: the panel shows it only for its own function.
+    if (select) {
+      setExp(placeAll(b, expRef.current));
+      if (writeUrl) syncUrl(b, focus);
+      return;
+    }
+    setConstruct(undefined);
+
+    const node = b.node(b.nodeId);
+    const boxRect = b.placed.rects.get(b.nodeId);
+    const ref = node?.ref;
+    const holds = ref !== undefined && node?.chart !== undefined && boxRect !== undefined && charts !== undefined;
+    let list = placeAll(b, expRef.current);
+    let opened: Expansion | undefined;
+    if (holds) {
+      const anchored = anchoredTo(list, b.nodeId);
+      if (toggle && anchored !== undefined) {
+        list = closeExpansion(list, anchored.fnId);
+      } else {
+        const chart = await loadChart(ref);
+        if (seq !== seqRef.current) return;
+        if (chart !== undefined) {
+          list = placeAll(b, expRef.current);
+          list = openExpansion(list, ref, { kind: "box", nodeId: b.nodeId, rect: boxRect }, chart, visibleWorld(cameraRef.current, sizeOf()));
+          opened = list.find((e) => e.fnId === ref);
+        }
+      }
+    }
+    setExp(list);
     if (writeUrl) syncUrl(b, focus);
+
+    // A toggle keeps the camera where it is; any other focus fits, then the expansion it opened is shown.
+    const fit = !(toggle && holds);
+    let target = fit ? fitTarget(b) ?? cameraRef.current : cameraRef.current;
+    if (opened !== undefined) target = revealOf(target, opened);
+    if (fit || opened !== undefined) moveTo(target, animate);
   };
 
   /** Opens the node a click, key or link names: the source turns the node into its focus, then the map shows it. */
@@ -245,20 +306,60 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
     if (b) void show(source.focusOf?.(b, nodeId) ?? nodeId, true, true);
   };
 
-  /**
-   * A click on a step of a function's chart. A call to a function in scope opens that function in place: it is expanded,
-   * selected and fitted, and this one stays expanded. A step of a chart that is not the selection's selects its function.
-   * Any other step becomes the construct the source panel highlights. A step never navigates.
-   */
-  const chartStep = (placement: string, node: FlowNode): boolean => {
+  /** A click on a box. A function with a chart toggles its expansion; any other box opens as a link does. */
+  const boxClick = (nodeId: string) => {
     const b = buildRef.current;
     stageRef.current?.focus({ preventScroll: true });
-    if (!b) return true;
-    const own = b.node(placement)?.ref;
-    const callee = node.target !== undefined && node.target !== own ? source.placeFunction?.(b, node.target) : undefined;
-    if (callee !== undefined) openNode(callee);
-    else if (placement !== b.nodeId) openNode(placement);
-    else setConstruct({ placement, nodeId: node.id, ...(node.span ? { span: node.span } : {}) });
+    if (!b) return;
+    const toggle = b.node(nodeId)?.chart !== undefined;
+    void show(source.focusOf?.(b, nodeId) ?? nodeId, true, true, toggle);
+  };
+
+  /**
+   * Opens the expansion of a call step's callee to the right of the step, and shows it. The step's rect is in the parent
+   * expansion's chart units. Nothing else moves: the focus stays where it is.
+   */
+  const openStep = async (fnId: string, node: FlowNode, callee: string) => {
+    const b = buildRef.current;
+    if (!b || !expRef.current.some((e) => e.fnId === fnId)) return;
+    const chart = await loadChart(callee);
+    if (chart === undefined) return;
+    const list = placeAll(b, expRef.current);
+    const anchor: ExpandAnchor = { kind: "step", fnId, rect: { x: node.x, y: node.y, w: node.w, h: node.h } };
+    const next = openExpansion(list, callee, anchor, chart, visibleWorld(cameraRef.current, sizeOf()));
+    if (next === list) return;
+    setExp(next);
+    const added = next.find((e) => e.fnId === callee);
+    if (added !== undefined) {
+      moveTo(revealOf(cameraRef.current, added), true);
+      selectFunction(callee);
+    }
+  };
+
+  /**
+   * Selects a function of the build: the source panel and the URL show it, and the camera and the open expansions stay
+   * where they are. A function the scope does not draw cannot be selected, so the selection stays.
+   */
+  const selectFunction = (fnId: string) => {
+    const b = buildRef.current;
+    const node = b ? source.placeFunction?.(b, fnId) : undefined;
+    if (!b || node === undefined || node === b.nodeId) return;
+    void show(source.focusOf?.(b, node) ?? node, false, true, false, true);
+  };
+
+  /**
+   * A click on a step of an expansion's chart. A call to a function opens that function's expansion beside the step, and
+   * selects the callee. Any other step becomes the construct the source panel highlights, and selects the expansion's
+   * function. A step never navigates.
+   */
+  const chartStep = (fnId: string, node: FlowNode): boolean => {
+    stageRef.current?.focus({ preventScroll: true });
+    const callee = node.target !== undefined && node.target !== fnId ? node.target : undefined;
+    if (callee !== undefined) void openStep(fnId, node, callee);
+    else {
+      setConstruct({ ref: fnId, nodeId: node.id, ...(node.span ? { span: node.span } : {}) });
+      selectFunction(fnId);
+    }
     return true;
   };
 
@@ -301,8 +402,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
     buildRef.current = undefined;
     viewRef.current = undefined;
     focusRef.current = undefined;
-    expandedRef.current = new Set();
-    setExpanded(expandedRef.current);
+    setExp([]);
     setConstruct(undefined);
     const z = zoom<SVGSVGElement, unknown>()
       .scaleExtent(SCALE)
@@ -319,7 +419,11 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
       cull(cameraRef.current);
       const b = buildRef.current;
       if (b?.selected !== undefined && last !== undefined && (last.width !== size.width || last.height !== size.height)) {
-        fitFocus(b, false);
+        // The refit keeps the newest expansion in view too: the source panel opening narrows the stage under it.
+        const fit = fitTarget(b);
+        const newest = expRef.current[expRef.current.length - 1];
+        const target = fit === undefined ? undefined : newest === undefined ? fit : revealOf(fit, newest);
+        if (target !== undefined) moveTo(target, false);
       }
     });
     ro.observe(stage);
@@ -370,7 +474,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
       onSelect(undefined);
       return;
     }
-    const span = construct !== undefined && construct.placement === build.nodeId ? construct.span : undefined;
+    const span = construct !== undefined && construct.ref === build.selected.ref ? construct.span : undefined;
     onSelect({ build, selected: build.selected, ...(span !== undefined ? { construct: span } : {}) });
     // onSelect is the page's state setter: only the selection and the construct change what it receives.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -400,13 +504,24 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
         panStep(0, -PAN_PX);
         break;
       case "Escape": {
-        // Escape closes the selected function's chart and goes up one level. The parent is not a function, so its build
-        // selects nothing and the source panel closes with it.
         if (!b) break;
+        const list = expRef.current;
+        const last = list[list.length - 1];
         const parent = b.node(b.nodeId)?.parent;
-        if (parent !== undefined) {
-          const base = expandedAfter(expandedRef.current, "escape", b.nodeId, (id) => insideBox(b, id, b.nodeId));
-          void show(source.focusOf?.(b, parent) ?? parent, true, true, base);
+        if (last === undefined) {
+          // Nothing is expanded: Escape goes up one level.
+          if (parent !== undefined) void show(source.focusOf?.(b, parent) ?? parent, true, true);
+          break;
+        }
+        // Escape closes the last expansion (and any chained from it). When it hangs from the selected box, the selection
+        // moves to the box's parent; a container selects nothing, so the source panel closes with it. When the selected
+        // function is the callee of a chained expansion, the selection returns to the expansion it hangs from.
+        const selectedRef = b.node(b.nodeId)?.ref;
+        setExp(closeExpansion(list, last.fnId));
+        if (last.anchor.kind === "box" && last.anchor.nodeId === b.nodeId && parent !== undefined) {
+          void show(source.focusOf?.(b, parent) ?? parent, true, true);
+        } else if (last.anchor.kind === "step" && selectedRef === last.fnId) {
+          selectFunction(last.anchor.fnId);
         }
         break;
       }
@@ -432,6 +547,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
   const drawn = (kind: PlacedItem["kind"]) => (live ? live.items.filter((i) => i.kind === kind) : []);
   /** The camera scale of the labels' bucket: labels are fitted to the boxes' width on screen at this scale. */
   const labelScale = bucketScale(shown.lod);
+  /** The functions with an expansion open, by id: their boxes are drawn as expanded. */
+  const expandedFns = new Set(expansions.map((e) => e.fnId));
 
   return (
     <div className="zm zm-exec">
@@ -517,12 +634,32 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
                   item={it}
                   node={node}
                   k={labelScale}
-                  onOpen={openNode}
-                  charts={charts}
-                  chartOpen={expanded.has(it.id)}
-                  selectedId={construct !== undefined && construct.placement === it.id ? construct.nodeId : undefined}
-                  onChartStep={(n) => chartStep(it.id, n)}
+                  onOpen={boxClick}
+                  chartOpen={node.ref !== undefined && expandedFns.has(node.ref)}
                 />
+              );
+            })}
+            {expansions.map((e) => {
+              const c = connectorOf(e, expansions);
+              return (
+                <g key={`exp-${e.fnId}`}>
+                  {c !== undefined && (
+                    <path
+                      className="zm-connector"
+                      d={`M${c.x1} ${c.y1} C${c.x1 + 20} ${c.y1} ${c.x2 - 20} ${c.y2} ${c.x2} ${c.y2}`}
+                    />
+                  )}
+                  <ExpansionShape
+                    id={id}
+                    scope={charts?.scope ?? scope}
+                    expansion={e}
+                    k={labelScale}
+                    selectedId={construct !== undefined && construct.ref === e.fnId ? construct.nodeId : undefined}
+                    onNodeClick={(n) => chartStep(e.fnId, n)}
+                    onSelect={() => selectFunction(e.fnId)}
+                    onClose={() => setExp(closeExpansion(expRef.current, e.fnId))}
+                  />
+                </g>
               );
             })}
           </g>
@@ -565,9 +702,9 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
         )}
       </div>
       <p id={hintId} className="muted small zm-hint">
-        Scroll or press + and - to zoom; zooming never opens a box. Arrow keys pan. Click a box to open it, and a function to
-        draw its chart. Click a step in the chart to see its source. Enter opens the item at the centre. Escape closes the
-        selected function's chart and goes up one level.
+        Scroll or press + and - to zoom; zooming never opens a box. Arrow keys pan. Click a function to open its chart beside
+        it, and a call step in the chart to open the callee beside the step. Click a step that is not a call to see its
+        source. Enter opens the item at the centre. Escape closes the last chart opened.
       </p>
       {build && detail?.(build, openNode)}
     </div>
@@ -604,45 +741,35 @@ function FrameShape({ item, node, k, onOpen }: { item: PlacedItem; node: MapNode
 }
 
 /**
- * A box with a chart (a function that has a control-flow chart) keeps its name in a header and draws the chart below it
- * once the box is expanded and CHART_MIN_PX wide on screen. Any other box has its name in the middle.
+ * A box keeps its name in the middle. A function with a chart is marked, and `expanded` while its chart is open beside it.
  */
 function BoxShape({
   item,
   node,
   k,
   onOpen,
-  charts,
   chartOpen,
-  selectedId,
-  onChartStep,
 }: {
   item: PlacedItem;
   node: MapNode;
   k: number;
   onOpen: (id: string) => void;
-  charts?: ChartSource;
   chartOpen: boolean;
-  selectedId?: string;
-  onChartStep: (node: FlowNode) => boolean;
 }) {
   const { rect } = item;
   const label = fitLabel(node.label, labelChars(rect.w * k));
   const holdsChart = node.chart !== undefined;
-  const showChart = chartShown({ holdsChart, hasCharts: charts !== undefined, hasRef: node.ref !== undefined, expanded: chartOpen, widthPx: rect.w * k });
-  // A collapsed chart box is just its name, centred; an expanded one keeps the name in the header above its chart.
-  const headed = holdsChart && chartOpen;
   return (
-    <g className={`zm-box zm-${node.kind}${holdsChart ? " zm-has-chart" : ""}`} onClick={() => onOpen(item.id)}>
+    <g
+      className={`zm-box zm-${node.kind}${holdsChart ? " zm-has-chart" : ""}${chartOpen ? " expanded" : ""}`}
+      onClick={() => onOpen(item.id)}
+    >
       <title>{node.title || node.label}</title>
       <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={8} className="zm-box-body" />
       {label !== null && (
-        <text x={rect.x + 12} y={headed ? rect.y + CHART_HEAD / 2 : rect.y + rect.h / 2} dominantBaseline="central" className="zm-label">
+        <text x={rect.x + 12} y={rect.y + rect.h / 2} dominantBaseline="central" className="zm-label">
           {label}
         </text>
-      )}
-      {showChart && charts !== undefined && node.ref !== undefined && (
-        <BoxChart id={charts.id} scope={charts.scope} store={charts.store} fnId={node.ref} rect={rect} onNodeClick={onChartStep} selectedId={selectedId} />
       )}
     </g>
   );

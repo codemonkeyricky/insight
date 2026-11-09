@@ -20,8 +20,8 @@ export interface MapNode {
   /** The entity the box draws, such as the function id whose chart the box holds. */
   ref?: string;
   /**
-   * The natural size of the control-flow chart the box holds. A box with a chart is drawn with its name in a header and,
-   * once it is large on screen, the chart below it.
+   * The natural size of the control-flow chart the box's expansion draws. The box itself is always drawn at its compact
+   * size, with its name only.
    */
   chart?: { w: number; h: number };
 }
@@ -67,8 +67,6 @@ export interface MapBuild {
   crumbs: MapNode[];
   /** For a function focus: what the function is and where it runs. */
   selected?: MapSelected;
-  /** The function boxes drawn with their chart, the focus included when it is a function. */
-  expanded?: ReadonlySet<string>;
 }
 
 /** The URL that shows a focus: the scope, the function, and whether the map is the roots-only view. */
@@ -88,11 +86,8 @@ export interface MapSource {
   resolve(scope: string, fn?: string): Promise<string>;
   /** Loads what a focus reached by a gesture needs before it is built. */
   ensureFocus(focus: string): Promise<void>;
-  /**
-   * Lays out and places the map for a focus. `expanded` is the set of function boxes drawn with their chart; the build
-   * returns the set it used (see MapBuild.expanded), which adds the focus when it is a function.
-   */
-  build(focus: string, expanded?: ReadonlySet<string>): Promise<MapBuild>;
+  /** Lays out and places the map for a focus. The map's expansions are the map's own state, not the source's. */
+  build(focus: string): Promise<MapBuild>;
   /** The URL (scope and function) that shows `focus` of `build`. Undefined when it has none. */
   url(build: MapBuild, focus: string): MapUrl | undefined;
   /**

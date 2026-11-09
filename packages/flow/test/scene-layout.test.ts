@@ -389,21 +389,20 @@ describe("layoutScene", () => {
     }
   });
 
-  it("a saved layout from before a chart was sized does not cover the scene", async () => {
-    const saved = await layoutScene(exec, solveElk);
-    const next: Scene = { ...exec, nodes: new Map(exec.nodes) };
+  it("a saved layout covers a scene whose chart changes size, since a charted function's box is its compact size", async () => {
     const f1 = exec.nodes.get("f1");
     if (f1 === undefined) throw new Error("no f1");
-    next.nodes.set("f1", { ...f1, chart: { w: 500, h: 400 }, compact: { w: 120, h: 36 } });
-    expect(layoutCovers(next, saved)).toBe(false);
-    // Laid out again with the chart open, the box is the chart's size and the layout covers.
-    const open = new Set(["f1"]);
-    expect(layoutCovers(next, saved, open)).toBe(false);
-    const fresh = await layoutScene(next, solveElk, { expanded: open });
-    expect(layoutCovers(next, fresh, open)).toBe(true);
-    const slot = fresh.containers.C1?.slots.find((s) => s.id === "f1");
-    expect(slot?.w).toBeGreaterThanOrEqual(500);
-    expect(slot?.h).toBeGreaterThanOrEqual(400);
+    const before: Scene = { ...exec, nodes: new Map(exec.nodes) };
+    before.nodes.set("f1", { ...f1, chart: { w: 500, h: 400 }, compact: { w: 120, h: 36 } });
+    const saved = await layoutScene(before, solveElk);
+    const next: Scene = { ...exec, nodes: new Map(exec.nodes) };
+    next.nodes.set("f1", { ...f1, chart: { w: 900, h: 700 }, compact: { w: 120, h: 36 } });
+    expect(layoutCovers(next, saved)).toBe(true);
+    // A saved layout whose box is the old, larger size does not cover it.
+    const slot = saved.containers.C1?.slots.find((s) => s.id === "f1");
+    if (slot === undefined) throw new Error("no f1 slot");
+    const stale = { containers: { ...saved.containers, C1: { ...saved.containers.C1!, slots: saved.containers.C1!.slots.map((s) => (s.id === "f1" ? { ...s, w: 900 } : s)) } } };
+    expect(layoutCovers(next, stale)).toBe(false);
   });
 
   it("gives the same layout twice", async () => {
@@ -416,7 +415,7 @@ describe("layoutScene", () => {
     const open = new Set(["P", "T1", "T2"]);
     const layout = await layoutScene(exec, solveElk, { open });
     expect(Object.keys(layout.containers).sort()).toEqual(["P", "T1", "T2"]);
-    expect(layoutCovers(exec, layout, undefined, open)).toBe(true);
+    expect(layoutCovers(exec, layout, open)).toBe(true);
     const slot = layout.containers.T1?.slots.find((s) => s.id === "C1");
     const label = exec.nodes.get("C1")?.label ?? "";
     expect(slot).toMatchObject({ w: Math.max(110, 8 * label.length + 40), h: 40 });
@@ -430,7 +429,7 @@ describe("layoutScene", () => {
     const open = new Set(["P", "T1", "T2", "C1"]);
     const layout = await layoutScene(exec, solveElk, { open });
     expect(layout.containers.C1).toBeDefined();
-    expect(layoutCovers(exec, layout, undefined, open)).toBe(true);
+    expect(layoutCovers(exec, layout, open)).toBe(true);
     const slot = layout.containers.T1?.slots.find((s) => s.id === "C1");
     const own = layout.containers.C1;
     expect(own).toBeDefined();
@@ -719,52 +718,35 @@ describe("packRows", () => {
   });
 });
 
-// --- Collapsed and expanded function charts: a chart box is compact until it is expanded ---
+// --- Function charts: a function's box is always compact. Its chart is drawn in an expansion beside the map. ---
 
-describe("collapsed and expanded charts", () => {
-  /** The exec fixture with every function holding a chart: collapsed boxes are 120 x 36, expanded ones hold 400 x 300. */
-  const charted = (): Scene => {
+describe("function charts never change the layout", () => {
+  /** The exec fixture with five functions holding a chart of `chart` size. Their boxes are compact (120 x 36). */
+  const withCharts = (chart: Size): Scene => {
     const scene: Scene = { ...exec, nodes: new Map(exec.nodes) };
     for (const id of ["f1", "f2", "f3", "g1", "g2"]) {
       const n = exec.nodes.get(id);
       if (n === undefined) throw new Error(`no ${id}`);
-      scene.nodes.set(id, { ...n, chart: { w: 400, h: 300 }, compact: { w: 120, h: 36 } });
+      scene.nodes.set(id, { ...n, chart, compact: { w: 120, h: 36 } });
     }
     return scene;
   };
+  const withCompact = (): Scene => withCharts({ w: 400, h: 300 });
 
-  it("a collapsed chart box is compact, and an expanded one holds its chart", async () => {
-    const scene = charted();
-    const open = new Set(["f1"]);
-    const collapsed = await layoutScene(scene, solveElk);
-    expect(layoutCovers(scene, collapsed)).toBe(true);
-    expect(collapsed.containers.C1?.slots.find((s) => s.id === "f1")).toMatchObject({ w: 120, h: 36 });
-    // The collapsed layout does not cover an expanded set: the chart needs its own slot.
-    expect(layoutCovers(scene, collapsed, open)).toBe(false);
-    const expanded = await layoutScene(scene, solveElk, { expanded: open });
-    expect(layoutCovers(scene, expanded, open)).toBe(true);
-    // The chart plus its padding, and the header above it: 400 + 2 * 12 by 28 + 300 + 2 * 12.
-    expect(expanded.containers.C1?.slots.find((s) => s.id === "f1")).toMatchObject({ w: 424, h: 352 });
+  it("a chart box is compact, and its slot does not grow", async () => {
+    const scene = withCompact();
+    const layout = await layoutScene(scene, solveElk);
+    expect(layoutCovers(scene, layout)).toBe(true);
+    expect(layout.containers.C1?.slots.find((s) => s.id === "f1")).toMatchObject({ w: 120, h: 36 });
+    // Every container open: the slots still cover the same boxes, since a chart is never a slot of its own.
+    const all = new Set(sceneContainers(scene));
+    expect(layoutCovers(scene, layout, all)).toBe(true);
   });
 
-  it("reusing the collapsed layout gives the layout from scratch, and solves only the path above the open charts", async () => {
-    const scene = charted();
-    const open = new Set(["f1"]);
-    const base = await layoutScene(scene, gridSolver());
-    let fromScratch = 0;
-    const fresh = await layoutScene(scene, (g) => {
-      fromScratch += 1;
-      return gridSolver()(g);
-    }, { expanded: open });
-    let reusing = 0;
-    const reused = await layoutScene(scene, (g) => {
-      reusing += 1;
-      return gridSolver()(g);
-    }, { expanded: open, reuse: { from: base, changed: [...open] } });
-    expect(reused).toEqual(fresh);
-    expect(reusing).toBeLessThan(fromScratch);
-    // f1 sits in C1, under T1 and P: those three are solved again. C2, C3 and T2 are reused as they are.
-    expect(reusing).toBe(3);
+  it("the size of a chart never changes the layout", async () => {
+    const small = await layoutScene(withCharts({ w: 400, h: 300 }), gridSolver());
+    const large = await layoutScene(withCharts({ w: 900, h: 1400 }), gridSolver());
+    expect(large).toEqual(small);
   });
 
   it("a 300-child container is laid out in call columns, without the solver, in under 200 ms", async () => {

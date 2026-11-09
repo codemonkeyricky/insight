@@ -15,25 +15,24 @@ import {
 } from "@insight/flow";
 import { api } from "../api";
 import { solve } from "./elk";
-import { execBuild, execExpandedFor, execFocus, execIndex, execOpenSet, execPlacementFor, execResolve, execThreadKeyOf, execUrl, splitExecFocus, type ExecIndex } from "./execMap";
+import { execBuild, execFocus, execIndex, execOpenSet, execPlacementFor, execResolve, execThreadKeyOf, execUrl, splitExecFocus, type ExecIndex } from "./execMap";
 import type { MapBuild, MapSource, MapUrl } from "./source";
 
 /** One scope's loaded canvas: its scene and layout, the model's functions, and the index the panels read. */
 export interface ExecView {
   scene: Scene;
-  /** The layout with no chart open and the default containers open (execDefaultOpen). Every other layout of the view is
-   * this one with some containers opened or charts opened (see layoutFor). */
+  /** The layout with the default containers open (execDefaultOpen). Every other layout of the view is this one with
+   * some containers opened as well (see layoutFor). */
   layout: SceneLayout;
   /** The containers open in `layout`: execDefaultOpen of the scene. */
   open: ReadonlySet<string>;
   fns: ReadonlyMap<string, ExecFunctionRef>;
   index: ExecIndex;
-  /** The layouts with containers or charts open, by the sorted ids that differ from `layout`. Bounded (see LAYOUTS_MAX). */
+  /** The layouts with more containers open, by the sorted ids that differ from `layout`. Bounded (see LAYOUTS_MAX). */
   layouts: Map<string, Promise<SceneLayout>>;
 }
 
-const NONE: ReadonlySet<string> = new Set();
-/** The most layouts with charts open a view keeps. Each one reuses the base layout, so a few are cheap. */
+/** The most layouts with containers opened a view keeps. Each one reuses the base layout, so a few are cheap. */
 const LAYOUTS_MAX = 32;
 
 export class ExecStore implements MapSource {
@@ -70,7 +69,7 @@ export class ExecStore implements MapSource {
           // The saved layout is the full scene's, with the default containers open. A roots-only scene is a different scene,
           // so it is always solved here.
           const layout =
-            !this.rootsOnly && saved !== undefined && layoutCovers(scene, saved, undefined, open)
+            !this.rootsOnly && saved !== undefined && layoutCovers(scene, saved, open)
               ? saved
               : await layoutScene(scene, (g) => solve(g).then((s) => s.result), { open });
           const fns = new Map(model.functions.map((f): [string, ExecFunctionRef] => [f.id, f]));
@@ -98,23 +97,21 @@ export class ExecStore implements MapSource {
     if (!view.scene.nodes.has(nodeId)) throw new Error(`Nothing in the execution map at ${nodeId}`);
   }
 
-  async build(focus: string, expanded: ReadonlySet<string> = NONE): Promise<MapBuild> {
+  async build(focus: string): Promise<MapBuild> {
     const { scope, nodeId } = splitExecFocus(focus);
     const view = await this.load(scope);
     if (!view.scene.nodes.has(nodeId)) throw new Error(`Nothing in the execution map at ${nodeId}`);
-    const layout = await this.layoutFor(view, execExpandedFor(view.scene, view.fns, nodeId, expanded));
-    return execBuild(view.scene, layout, scope, nodeId, view.fns, nodeId, expanded);
+    const layout = await this.layoutFor(view, execOpenSet(view.scene, nodeId));
+    return execBuild(view.scene, layout, scope, nodeId, view.fns);
   }
 
   /**
-   * The layout for a set of open containers and drawn charts. Only the containers and charts that differ from the base
-   * layout are laid out again, along with the containers above them (see layoutScene). A set is solved once and kept until
-   * LAYOUTS_MAX other sets push it out.
+   * The layout for a set of open containers. Only the containers that differ from the base layout are laid out again,
+   * along with the containers above them (see layoutScene). A set is solved once and kept until LAYOUTS_MAX other sets
+   * push it out.
    */
-  private layoutFor(view: ExecView, expanded: ReadonlySet<string>): Promise<SceneLayout> {
-    const opened = execOpenSet(view.scene, expanded);
-    const drawn = [...expanded].filter((id) => view.scene.nodes.get(id)?.chart !== undefined).sort();
-    const changed = [...opened].filter((id) => !view.open.has(id)).concat(drawn).sort();
+  private layoutFor(view: ExecView, opened: ReadonlySet<string>): Promise<SceneLayout> {
+    const changed = [...opened].filter((id) => !view.open.has(id)).sort();
     if (changed.length === 0) return Promise.resolve(view.layout);
     const key = changed.join("\u0000");
     let layout = view.layouts.get(key);
@@ -124,7 +121,6 @@ export class ExecStore implements MapSource {
         if (oldest !== undefined) view.layouts.delete(oldest);
       }
       layout = layoutScene(view.scene, (g) => solve(g).then((s) => s.result), {
-        expanded: new Set(drawn),
         open: opened,
         reuse: { from: view.layout, changed },
       });

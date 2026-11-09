@@ -2,19 +2,12 @@ import { describe, expect, it } from "vitest";
 import { CHART_MIN_PX, chartShown, rangeOf, selectionRange } from "../src/zoom/chart.js";
 import { lineClass } from "../src/components/FileViewer.js";
 
-const open = { holdsChart: true, hasCharts: true, hasRef: true, expanded: true, widthPx: CHART_MIN_PX };
-
 describe("chartShown", () => {
-  it("draws a chart only when expanded and wide enough on screen", () => {
-    expect(chartShown(open)).toBe(true);
-    expect(chartShown({ ...open, expanded: false })).toBe(false);
-    expect(chartShown({ ...open, widthPx: CHART_MIN_PX - 1 })).toBe(false);
-  });
-
-  it("needs a chart, a chart source and a function to load", () => {
-    expect(chartShown({ ...open, holdsChart: false })).toBe(false);
-    expect(chartShown({ ...open, hasCharts: false })).toBe(false);
-    expect(chartShown({ ...open, hasRef: false })).toBe(false);
+  it("draws a chart only when it is at least CHART_MIN_PX wide on screen", () => {
+    expect(chartShown(CHART_MIN_PX)).toBe(true);
+    expect(chartShown(CHART_MIN_PX + 200)).toBe(true);
+    expect(chartShown(CHART_MIN_PX - 1)).toBe(false);
+    expect(chartShown(0)).toBe(false);
   });
 });
 
