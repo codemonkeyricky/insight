@@ -629,7 +629,7 @@ table.grid th { background: var(--faint); }
 .sh-side .sh-source { background: transparent; border: 0; padding: 0; margin: 0; }
 /* The outline sits above the code in the side panel as a collapsible section, never over it. */
 .sh-side .viewer-body { grid-template-columns: minmax(0, 1fr); gap: 10px; }
-.sh-side .outline { position: static; order: -1; max-height: 34vh; overflow: auto; padding: 8px 10px; border-radius: 12px; background: color-mix(in srgb, var(--graphite) 10%, transparent); }
+.sh-side .outline { position: static; max-height: 34vh; overflow: auto; padding: 8px 10px; border-radius: 12px; background: color-mix(in srgb, var(--graphite) 10%, transparent); }
 .sh-side .outline summary { cursor: pointer; font-size: var(--t-sm); font-weight: 600; }
 .sh-side .outline details[open] > summary { margin-bottom: 6px; }
 .sh-side .outline h3 { margin: 8px 0 4px; font-size: var(--t-xs); }
@@ -649,7 +649,7 @@ table.grid th { background: var(--faint); }
 .sh-split::before { content: ""; position: absolute; top: 0; bottom: 0; left: -4px; right: -4px; }
 .sh-split:hover, .sh-split:focus-visible { background: var(--accent); outline: none; }
 .sh-split.is-off { visibility: hidden; }
-.sh-tabs { flex: none; display: flex; align-items: center; gap: 2px; min-width: 0; padding: 8px 12px; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--hair); }
+.sh-tabs { flex: none; position: relative; display: flex; align-items: center; gap: 2px; min-width: 0; padding: 8px 12px; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--hair); --fade-l: 0px; --fade-r: 0px; mask-image: linear-gradient(to right, transparent 0, #000 var(--fade-l), #000 calc(100% - var(--fade-r)), transparent 100%); -webkit-mask-image: linear-gradient(to right, transparent 0, #000 var(--fade-l), #000 calc(100% - var(--fade-r)), transparent 100%); }
 .sh-tabs::-webkit-scrollbar { display: none; }
 .sh-tab { display: inline-flex; align-items: center; gap: 6px; flex: none; padding: 5px 10px; border-radius: 8px; color: var(--muted); text-decoration: none; font-size: var(--t-sm); font-weight: 500; white-space: nowrap; }
 .sh-tab:hover { color: var(--ink); background: var(--faint); }
@@ -664,6 +664,8 @@ table.grid th { background: var(--faint); }
 .sh-dock-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; font-size: var(--t-sm); }
 .sh-dock-title strong { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sh-dock-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sh-dock-title strong.sh-dock-file { flex: 1 1 auto; max-width: none; }
+.sh-dock-facts { flex: none; white-space: nowrap; }
 .sh-side.is-docked .sh-side-body, .sh-side.is-docked .sh-pinned { padding-right: 0; }
 .sh-side:not(.is-docked) .sh-dock-title { padding-right: 30px; }
 .sh-side .panel.viewer { border: 0; background: transparent; padding: 0; border-radius: 0; box-shadow: none; }

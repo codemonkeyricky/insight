@@ -1,4 +1,5 @@
-import type { Ref } from "react";
+import { useState, type Ref } from "react";
+import type { FileView } from "../../api";
 import { targetPath, type CodeTarget } from "../../codeTarget";
 import type { ZoomStore } from "../../zoom/scene";
 import { FileViewer } from "../FileViewer";
@@ -29,6 +30,9 @@ interface Props {
 export function CodePane({ id, roots, store, target, open, docked, onClose, onSlot }: Props) {
   const fn = target?.kind === "function" ? target : undefined;
   const path = target ? targetPath(target) : "";
+  // A file's facts (language, line count) come from its loaded source; they show only once it has loaded for this path.
+  const [facts, setFacts] = useState<FileView>();
+  const loaded = facts !== undefined && facts.file === path ? facts : undefined;
   const head = fn ? (
     <>
       <strong className="mono">{fn.sel.selected.name}</strong>
@@ -36,8 +40,13 @@ export function CodePane({ id, roots, store, target, open, docked, onClose, onSl
         {fn.sel.selected.file ? `${fn.sel.selected.file}:${fn.sel.selected.line}` : "No source for this function"}
       </span>
     </>
-  ) : target ? (
-    <span className="mono sh-dock-path">{target.kind === "file" && target.line !== undefined ? `${path}:${target.line}` : path}</span>
+  ) : target?.kind === "file" ? (
+    <>
+      <strong className="mono sh-dock-path sh-dock-file">{path}</strong>
+      {loaded && (
+        <span className="muted small sh-dock-facts">{[loaded.language, `${loaded.totalLines} lines`].filter(Boolean).join(" · ")}</span>
+      )}
+    </>
   ) : (
     <span className="muted small">Code</span>
   );
@@ -52,7 +61,16 @@ export function CodePane({ id, roots, store, target, open, docked, onClose, onSl
     >
       <div className="sh-slot" ref={onSlot} />
       {target === undefined && <p className="muted">Click a file or function to see its code.</p>}
-      {target?.kind === "file" && <FileViewer key={path} id={id} path={path} {...(target.line !== undefined ? { line: target.line } : {})} />}
+      {target?.kind === "file" && (
+        <FileViewer
+          key={path}
+          id={id}
+          path={path}
+          hideHead
+          onLoad={setFacts}
+          {...(target.line !== undefined ? { line: target.line } : {})}
+        />
+      )}
       {fn && <FunctionSource id={id} store={store} sel={fn.sel} />}
     </SidePanel>
   );

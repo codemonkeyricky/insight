@@ -13,7 +13,6 @@ import { scopeKind } from "../ScopeNote";
 import { LayersPanel, type LayerState } from "../sheet/LayersPanel";
 import { SHEET_MID, SHEET_MAX_WIDTH } from "../sheet/bottomSheet";
 import { TitleBlock, type TitleFacts } from "../sheet/TitleBlock";
-import { ExecContainerPanel } from "../zoom/ExecContainerPanel";
 import { ExecFunctionPanel } from "../zoom/ExecFunctionPanel";
 import { Stat } from "../zoom/FunctionDetail";
 import { ZoomMap, type MapSelection } from "../zoom/ZoomMap";
@@ -148,17 +147,11 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
             layers={mapLayers}
             findings={findingsOn ? counts ?? new Map<string, number>() : undefined}
             detail={(build, openNode) => {
+              // The code pane shows code. A function's exec panel goes there; a file's or folder's summary stays in the centre.
               const view = exec.viewOf(build);
-              if (view === undefined || slot === null) return null;
+              if (view === undefined || slot === null || build.selected === undefined) return null;
               const panel = { id, scope: build.path, roots, store, index: view.index, nodeId: build.nodeId, onOpen: openNode };
-              return createPortal(
-                build.selected ? (
-                  <ExecFunctionPanel {...panel} selected={build.selected} />
-                ) : (
-                  <ExecContainerPanel {...panel} rootKind={kind} />
-                ),
-                slot,
-              );
+              return createPortal(<ExecFunctionPanel {...panel} selected={build.selected} />, slot);
             }}
           />
         </div>

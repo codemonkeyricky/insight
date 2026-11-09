@@ -26,10 +26,31 @@ function scrollBoxOf(el: HTMLElement): HTMLElement | null {
  * One source file: its lines with the findings flagged, an outline of its symbols, and the line in `line` scrolled to. A
  * `range` (1-based, inclusive) is tinted line by line instead, and its first line is scrolled to.
  */
-export function FileViewer({ id, path, line, range }: { id: string; path: string; line?: number; range?: LineRange }) {
+export function FileViewer({
+  id,
+  path,
+  line,
+  range,
+  hideHead = false,
+  onLoad,
+}: {
+  id: string;
+  path: string;
+  line?: number;
+  range?: LineRange;
+  /** Without the file's name and facts: a pane that shows them in its own header row. */
+  hideHead?: boolean;
+  /** Called with the file once it has loaded. */
+  onLoad?: (file: FileView) => void;
+}) {
   const [file, setFile] = useState<FileView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const hit = useRef<HTMLDivElement | null>(null);
+  const root = useRef<HTMLDivElement | null>(null);
+  const onLoadRef = useRef(onLoad);
+  useEffect(() => {
+    onLoadRef.current = onLoad;
+  });
   const rangeStart = range?.start;
   const rangeEnd = range?.end;
   const top = rangeStart ?? line;
@@ -60,8 +81,17 @@ export function FileViewer({ id, path, line, range }: { id: string; path: string
         const offset = block === "start" ? 0 : (b.height - r.height) / 2;
         box.scrollTop += r.top - b.top - offset;
       } else hit.current.scrollIntoView({ block });
-    } else if (file && rangeStart === undefined) window.scrollTo({ top: 0 });
+    } else if (file && rangeStart === undefined) {
+      // A file with no line starts at its top: the scrolling box (the side panel's body) keeps its position across files.
+      const box = root.current ? scrollBoxOf(root.current) : null;
+      if (box) box.scrollTop = 0;
+      else window.scrollTo({ top: 0 });
+    }
   }, [file, top, rangeStart, rangeEnd]);
+
+  useEffect(() => {
+    if (file) onLoadRef.current?.(file);
+  }, [file]);
 
   if (error) return <p className="error" role="alert">{error}</p>;
   if (!file) return <p className="muted">Loading</p>;
@@ -70,15 +100,17 @@ export function FileViewer({ id, path, line, range }: { id: string; path: string
   const flagged = new Map<number, string>();
   for (const f of file.findings) if (f.span) flagged.set(f.span.start[0] + 1, f.message);
   return (
-    <div className="panel viewer">
-      <header className="viewer-head">
-        <div>
-          <strong className="mono">{file.file}</strong>
-          <div className="muted small">
-            {[file.language, `${file.totalLines} lines`, humanSize(file.size)].filter(Boolean).join(" · ")}
+    <div className="panel viewer" ref={root}>
+      {!hideHead && (
+        <header className="viewer-head">
+          <div>
+            <strong className="mono">{file.file}</strong>
+            <div className="muted small">
+              {[file.language, `${file.totalLines} lines`, humanSize(file.size)].filter(Boolean).join(" · ")}
+            </div>
           </div>
-        </div>
-      </header>
+        </header>
+      )}
       <div className="viewer-body">
         <pre className="code" data-testid="file-lines" style={{ "--gutter-ch": digits + 1 } as CSSProperties}>
           {file.lines.map((text, i) => {
