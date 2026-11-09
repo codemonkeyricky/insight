@@ -86,8 +86,11 @@ export interface MapSource {
   resolve(scope: string, fn?: string): Promise<string>;
   /** Loads what a focus reached by a gesture needs before it is built. */
   ensureFocus(focus: string): Promise<void>;
-  /** Lays out and places the map for a focus. */
-  build(focus: string): Promise<MapBuild>;
+  /**
+   * Lays out and places the map for a focus. `open` is the focus whose children are drawn open, when it is not the
+   * focus itself: the selection (breadcrumb, panel, URL) stays the focus, while the drawn boxes follow `open`.
+   */
+  build(focus: string, open?: string): Promise<MapBuild>;
   /** The URL (scope and function) that shows `focus` of `build`. Undefined when it has none. */
   url(build: MapBuild, focus: string): MapUrl | undefined;
   /**
