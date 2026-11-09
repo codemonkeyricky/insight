@@ -132,6 +132,20 @@ export function execFirstOpen(scene: Scene): Set<string> {
 }
 
 /**
+ * The expanded set a build of `nodeId` draws: the set it starts from, with the function `nodeId` selects added (see
+ * expandedAfter). The layout is chosen for this set, so a store calls it before it builds.
+ */
+export function execExpandedFor(
+  scene: Scene,
+  fns: ReadonlyMap<string, ExecFunctionRef> | undefined,
+  nodeId: string,
+  expanded: ReadonlySet<string>,
+): ReadonlySet<string> {
+  const selected = fns === undefined ? undefined : execSelected(scene, fns, nodeId);
+  return selected !== undefined ? expandedAfter(expanded, "click", nodeId) : expanded;
+}
+
+/**
  * The map of a laid-out scene for a node: the node and its ancestors open, everything else closed. The project's own
  * map (the first view) opens the nesting instead, see execFirstOpen. `fns` (the model's functions by id) adds what the
  * function panel shows for a function node. `openId` is the node whose open set is drawn, when it is not `nodeId`: the
@@ -151,7 +165,7 @@ export function execBuild(
   expanded: ReadonlySet<string> = new Set(),
 ): MapBuild {
   const selected = fns === undefined ? undefined : execSelected(scene, fns, nodeId);
-  const exp = selected !== undefined ? expandedAfter(expanded, "click", nodeId) : expanded;
+  const exp = execExpandedFor(scene, fns, nodeId, expanded);
   const open = openId === scene.root ? execFirstOpen(scene) : sceneOpenFor(scene, openId);
   for (const e of exp) for (const p of sceneOpenFor(scene, e)) open.add(p);
   const placed = placeSceneLayout(scene, layout, open);

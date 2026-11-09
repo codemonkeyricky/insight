@@ -14,18 +14,23 @@ import {
 } from "@insight/flow";
 import { api } from "../api";
 import { solve } from "./elk";
-import { execBuild, execFocus, execIndex, execPlacementFor, execResolve, execThreadKeyOf, execUrl, splitExecFocus, type ExecIndex } from "./execMap";
+import { execBuild, execExpandedFor, execFocus, execIndex, execPlacementFor, execResolve, execThreadKeyOf, execUrl, splitExecFocus, type ExecIndex } from "./execMap";
 import type { MapBuild, MapSource, MapUrl } from "./source";
 
 /** One scope's loaded canvas: its scene and layout, the model's functions, and the index the panels read. */
 export interface ExecView {
   scene: Scene;
+  /** The layout with no chart open. Every other layout of the view is this one with some charts opened (see layoutFor). */
   layout: SceneLayout;
   fns: ReadonlyMap<string, ExecFunctionRef>;
   index: ExecIndex;
+  /** The layouts with charts open, by the sorted ids of the open charts. Bounded (see LAYOUTS_MAX). */
+  layouts: Map<string, Promise<SceneLayout>>;
 }
 
 const NONE: ReadonlySet<string> = new Set();
+/** The most layouts with charts open a view keeps. Each one reuses the base layout, so a few are cheap. */
+const LAYOUTS_MAX = 32;
 
 export class ExecStore implements MapSource {
   private readonly id: string;
@@ -63,7 +68,7 @@ export class ExecStore implements MapSource {
               ? saved
               : await layoutScene(scene, (g) => solve(g).then((s) => s.result));
           const fns = new Map(model.functions.map((f): [string, ExecFunctionRef] => [f.id, f]));
-          const view: ExecView = { scene, layout, fns, index: execIndex(scene, model) };
+          const view: ExecView = { scene, layout, fns, index: execIndex(scene, model), layouts: new Map() };
           this.views.set(key, view);
           return view;
         })
@@ -91,7 +96,33 @@ export class ExecStore implements MapSource {
     const { scope, nodeId } = splitExecFocus(focus);
     const view = await this.load(scope);
     if (!view.scene.nodes.has(nodeId)) throw new Error(`Nothing in the execution map at ${nodeId}`);
-    return execBuild(view.scene, view.layout, scope, nodeId, view.fns, nodeId, expanded);
+    const layout = await this.layoutFor(view, execExpandedFor(view.scene, view.fns, nodeId, expanded));
+    return execBuild(view.scene, layout, scope, nodeId, view.fns, nodeId, expanded);
+  }
+
+  /**
+   * The layout for a set of drawn charts. Sizes differ only for the charts open, so the base layout is reused everywhere
+   * except above them (see layoutScene). A set is solved once and kept until LAYOUTS_MAX other sets push it out.
+   */
+  private layoutFor(view: ExecView, expanded: ReadonlySet<string>): Promise<SceneLayout> {
+    const opened = [...expanded].filter((id) => view.scene.nodes.get(id)?.chart !== undefined).sort();
+    if (opened.length === 0) return Promise.resolve(view.layout);
+    const key = opened.join("\u0000");
+    let layout = view.layouts.get(key);
+    if (layout === undefined) {
+      if (view.layouts.size >= LAYOUTS_MAX) {
+        const oldest = view.layouts.keys().next().value;
+        if (oldest !== undefined) view.layouts.delete(oldest);
+      }
+      layout = layoutScene(view.scene, (g) => solve(g).then((s) => s.result), {
+        expanded: new Set(opened),
+        reuse: { from: view.layout, changed: opened },
+      });
+      view.layouts.set(key, layout);
+      // A failed solve is dropped, so the next build tries again.
+      layout.catch(() => view.layouts.delete(key));
+    }
+    return layout;
   }
 
   /** The URL that shows a focus. Only a roots-only store writes `roots`, so its links keep the view. */

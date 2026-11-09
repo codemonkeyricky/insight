@@ -393,11 +393,13 @@ describe("layoutScene", () => {
     const next: Scene = { ...exec, nodes: new Map(exec.nodes) };
     const f1 = exec.nodes.get("f1");
     if (f1 === undefined) throw new Error("no f1");
-    next.nodes.set("f1", { ...f1, chart: { w: 500, h: 400 } });
+    next.nodes.set("f1", { ...f1, chart: { w: 500, h: 400 }, compact: { w: 120, h: 36 } });
     expect(layoutCovers(next, saved)).toBe(false);
-    // Laid out again with the chart, the box is the chart's size and the layout covers.
-    const fresh = await layoutScene(next, solveElk);
-    expect(layoutCovers(next, fresh)).toBe(true);
+    // Laid out again with the chart open, the box is the chart's size and the layout covers.
+    const open = new Set(["f1"]);
+    expect(layoutCovers(next, saved, open)).toBe(false);
+    const fresh = await layoutScene(next, solveElk, { expanded: open });
+    expect(layoutCovers(next, fresh, open)).toBe(true);
     const slot = fresh.containers.C1?.slots.find((s) => s.id === "f1");
     expect(slot?.w).toBeGreaterThanOrEqual(500);
     expect(slot?.h).toBeGreaterThanOrEqual(400);
@@ -670,6 +672,77 @@ describe("packRows", () => {
     });
     expect(asked).toEqual(["P"]);
     expect(layout.containers.G?.slots).toHaveLength(6);
+    expect(layoutCovers(scene, layout)).toBe(true);
+  });
+});
+
+// --- Collapsed and expanded function charts: a chart box is compact until it is expanded ---
+
+describe("collapsed and expanded charts", () => {
+  /** The exec fixture with every function holding a chart: collapsed boxes are 120 x 36, expanded ones hold 400 x 300. */
+  const charted = (): Scene => {
+    const scene: Scene = { ...exec, nodes: new Map(exec.nodes) };
+    for (const id of ["f1", "f2", "f3", "g1", "g2"]) {
+      const n = exec.nodes.get(id);
+      if (n === undefined) throw new Error(`no ${id}`);
+      scene.nodes.set(id, { ...n, chart: { w: 400, h: 300 }, compact: { w: 120, h: 36 } });
+    }
+    return scene;
+  };
+
+  it("a collapsed chart box is compact, and an expanded one holds its chart", async () => {
+    const scene = charted();
+    const open = new Set(["f1"]);
+    const collapsed = await layoutScene(scene, solveElk);
+    expect(layoutCovers(scene, collapsed)).toBe(true);
+    expect(collapsed.containers.C1?.slots.find((s) => s.id === "f1")).toMatchObject({ w: 120, h: 36 });
+    // The collapsed layout does not cover an expanded set: the chart needs its own slot.
+    expect(layoutCovers(scene, collapsed, open)).toBe(false);
+    const expanded = await layoutScene(scene, solveElk, { expanded: open });
+    expect(layoutCovers(scene, expanded, open)).toBe(true);
+    // The chart plus its padding, and the header above it: 400 + 2 * 12 by 28 + 300 + 2 * 12.
+    expect(expanded.containers.C1?.slots.find((s) => s.id === "f1")).toMatchObject({ w: 424, h: 352 });
+  });
+
+  it("reusing the collapsed layout gives the layout from scratch, and solves only the path above the open charts", async () => {
+    const scene = charted();
+    const open = new Set(["f1"]);
+    const base = await layoutScene(scene, gridSolver());
+    let fromScratch = 0;
+    const fresh = await layoutScene(scene, (g) => {
+      fromScratch += 1;
+      return gridSolver()(g);
+    }, { expanded: open });
+    let reusing = 0;
+    const reused = await layoutScene(scene, (g) => {
+      reusing += 1;
+      return gridSolver()(g);
+    }, { expanded: open, reuse: { from: base, changed: [...open] } });
+    expect(reused).toEqual(fresh);
+    expect(reusing).toBeLessThan(fromScratch);
+    // f1 sits in C1, under T1 and P: those three are solved again. C2, C3 and T2 are reused as they are.
+    expect(reusing).toBe(3);
+  });
+
+  it("a 300-child container is laid out in call columns, without the solver, in under 200 ms", async () => {
+    const spec: Record<string, { kind: string; parent?: string }> = { P: { kind: "program" } };
+    const edges: SceneEdge[] = [];
+    for (let i = 0; i < 300; i += 1) spec[`c${i}`] = { kind: "function", parent: "P" };
+    for (let i = 1; i < 300; i += 1) edges.push({ from: `c${i - 1}`, to: `c${i}`, kind: "call", count: 1 });
+    const scene = makeScene(spec, edges, LEVELS, "P");
+    for (let i = 0; i < 300; i += 1) {
+      const n = scene.nodes.get(`c${i}`);
+      if (n !== undefined) {
+        n.chart = { w: 300, h: 200 };
+        n.compact = { w: 120, h: 36 };
+      }
+    }
+    const noSolver: SceneSolver = () => {
+      throw new Error("the solver was asked for a container that is laid out in columns");
+    };
+    const t0 = performance.now();
+    const layout = await layoutScene(scene, noSolver);
+    expect(performance.now() - t0).toBeLessThan(200);
     expect(layoutCovers(scene, layout)).toBe(true);
   });
 });

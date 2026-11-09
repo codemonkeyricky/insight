@@ -617,12 +617,14 @@ function BoxShape({
   const label = fitLabel(node.label, labelChars(rect.w * k));
   const holdsChart = node.chart !== undefined;
   const showChart = chartShown({ holdsChart, hasCharts: charts !== undefined, hasRef: node.ref !== undefined, expanded: chartOpen, widthPx: rect.w * k });
+  // A collapsed chart box is just its name, centred; an expanded one keeps the name in the header above its chart.
+  const headed = holdsChart && chartOpen;
   return (
     <g className={`zm-box zm-${node.kind}${holdsChart ? " zm-has-chart" : ""}`} onClick={() => onOpen(item.id)}>
       <title>{node.title || node.label}</title>
       <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={8} className="zm-box-body" />
       {label !== null && (
-        <text x={rect.x + 12} y={holdsChart ? rect.y + CHART_HEAD / 2 : rect.y + rect.h / 2} dominantBaseline="central" className="zm-label">
+        <text x={rect.x + 12} y={headed ? rect.y + CHART_HEAD / 2 : rect.y + rect.h / 2} dominantBaseline="central" className="zm-label">
           {label}
         </text>
       )}

@@ -13,13 +13,16 @@ The Flow tab draws the execution canvas of the scope: program, threads, coroutin
 - A function's control-flow chart is drawn inside its box on the canvas. The exec model gives each function the
   chart's size (`ExecFunctionRef.chart`, from `layoutFunction` in `packages/flow/src/layout.ts`), the scene node keeps
   it (`SceneNode.chart`), and `sceneLeafSize` makes the box large enough to hold the chart under a header for the name.
-  Zooming never opens a box. A function's box is opened by a click (or by `fn=` in the URL, or by a call to it from
-  another chart), and only an expanded function draws its chart. The chart is drawn once the box is also 160 px wide on
+  A collapsed function with a chart is compact: a box just wide enough for its name (`SceneNode.compact`, 36 px high),
+  and that is the size it is laid out at. Expanding it grows the box to the chart, so the layout changes with the set of
+  expanded functions. Zooming never opens a box. A function's box is opened by a click (or by `fn=` in the URL, or by a
+  call to it from another chart), and only an expanded function draws its chart. The chart is drawn once the box is also 160 px wide on
   screen (`CHART_MIN_PX` and `chartShown` in `apps/web/src/zoom/chart.ts`). The chart is loaded through the flow store
   and drawn in the box at its natural scale, so it grows with the camera. A function with no chart, or one too large
-  to chart, keeps the plain box. Escape collapses the selected expanded function before the map goes up a level.
-  A click on a call to a function in scope opens that callee in place and keeps the caller expanded. A click on any
-  other step selects it as a construct (`ZoomMap.tsx`, `chartStep`) and does not navigate.
+  to chart, keeps the plain box. Escape closes the selected function's chart and goes up one level (`expandedAfter` in
+  `apps/web/src/zoom/expand.ts`). A click, call or URL keeps every expanded caller open, so a callee is opened in place
+  without closing its caller (`ZoomMap.tsx`, `chartStep`). A click on any other step selects it as a construct and does
+  not navigate.
 - A right source panel (`apps/web/src/components/zoom/FunctionSource.tsx`) sits beside the map while a function is
   selected. It shows the function's name and `file:line`, and its file through `FileViewer` with the lines highlighted
   (`hit-range`): the picked construct's span when there is one (`FlowSpan` from the chart, 1-based in `rangeOf`), else
@@ -45,9 +48,11 @@ The Flow tab draws the execution canvas of the scope: program, threads, coroutin
   sender to its receiver with a solid one.
 - Labels fit their box's on-screen width and drop out when too small (`apps/web/src/zoom/lod.ts`). A gesture or Enter
   over a gap opens the nearest box within 60 px. Only a click, Enter or a link opens a box; a gesture only moves the camera.
-- Layouts: the demo reads `scope/<key>/exec-layout.json`; the live app asks the server
+- Layouts: the demo reads `scope/<key>/exec-layout.json`, laid out with no chart expanded; the live app asks the server
   (`GET /api/projects/:id/scope/exec-layout`), which solves in a worker thread and caches per snapshot and scope. The
-  browser solves only when neither has one.
+  browser solves only when neither has one. A layout with charts open is solved in the browser from that base layout
+  (`layoutScene` with `expanded` and `reuse`): only the containers above an open chart are solved again, and each set
+  of open charts is kept (`ExecStore.layoutFor`, up to 32 sets per scope).
 - For a folder or the project, the table of files sits below the canvas.
 - A focus carries its scope: `execFocus(scope, nodeId)` in `apps/web/src/zoom/execMap.ts`. A node id is unique only
   within one scope's scene. `MapSource.focusOf` turns a clicked node id into a focus.

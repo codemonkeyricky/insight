@@ -113,7 +113,10 @@ export function buildExecScene(model: ExecModel): Scene {
   const placeOne = (threadKey: string, container: string, f: ExecFunctionRef, note?: string): void => {
     const id = execFnId(container, f.id);
     const node: SceneNode = { id, kind: "function", label: f.name, parent: container, children: [], ref: f.id };
-    if (f.chart !== undefined) node.chart = { w: f.chart[0], h: f.chart[1] };
+    if (f.chart !== undefined) {
+      node.chart = { w: f.chart[0], h: f.chart[1] };
+      node.compact = { w: Math.max(90, 8 * f.name.length + 24), h: 36 };
+    }
     if (f.file !== "") node.detail = `${f.file}:${f.line}`;
     const n = note ?? (f.anonymous ? anonymousNote(f) : undefined);
     if (n !== undefined) node.note = n;
