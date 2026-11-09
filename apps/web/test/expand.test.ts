@@ -3,6 +3,7 @@ import { CHART_HEAD, CHART_PAD, type FunctionFlow, type Rect } from "@insight/fl
 import {
   EXPAND_GAP,
   anchoredTo,
+  calloutOf,
   clampTop,
   closeExpansion,
   connectorOf,
@@ -11,7 +12,10 @@ import {
   openExpansion,
   refresh,
   reflow,
+  detailLetter,
   revealCamera,
+  shiftAt,
+  shiftOf,
   type Expansion,
 } from "../src/zoom/expand.js";
 
@@ -143,5 +147,67 @@ describe("revealCamera", () => {
 
   it("does not zoom a chart that is already wide enough", () => {
     expect(revealCamera({ k: 2, x: 0, y: 0 }, rect, 300, room, 120).k).toBe(2);
+  });
+});
+
+describe("the side shift", () => {
+  it("moves an item right of the pivot by the detail's width plus the gap, and leaves one at or left of it", () => {
+    expect(shiftOf({ x: 500 }, 300, 200)).toBe(200 + EXPAND_GAP);
+    expect(shiftOf({ x: 300 }, 300, 200)).toBe(0);
+    expect(shiftOf({ x: 120 }, 300, 200)).toBe(0);
+  });
+
+  it("leaves items left of the pivot where they are, once a detail is open", () => {
+    const a = openExpansion([], "A", { kind: "box", nodeId: "n", rect: box }, chart("A", 300, 200), view);
+    expect(shiftAt(a, box.x)).toBe(0);
+    expect(shiftAt(a, box.x + box.w)).toBe(0);
+    expect(shiftAt(a, box.x + box.w + 1)).toBe(300 + 2 * CHART_PAD + EXPAND_GAP);
+  });
+
+  it("sums a nested chain: a call step's detail shares its parent's pivot, so both widths shift the columns", () => {
+    const a = openExpansion([], "A", { kind: "box", nodeId: "n", rect: box }, chart("A", 300, 200), view);
+    const both = openExpansion(a, "B", { kind: "step", fnId: "A", rect: { x: 10, y: 20, w: 50, h: 20 } }, chart("B", 200, 100), view);
+    const pa = both.find((e) => e.fnId === "A");
+    const pb = both.find((e) => e.fnId === "B");
+    expect(pb?.pivot).toBe(pa?.pivot);
+    const far = box.x + box.w + 500;
+    expect(shiftAt(both, far)).toBe((pa?.w ?? 0) + EXPAND_GAP + (pb?.w ?? 0) + EXPAND_GAP);
+  });
+
+  it("restores zero when the detail closes, and when the chain it held closes with it", () => {
+    const a = openExpansion([], "A", { kind: "box", nodeId: "n", rect: box }, chart("A", 300, 200), view);
+    const both = openExpansion(a, "B", { kind: "step", fnId: "A", rect: { x: 10, y: 20, w: 50, h: 20 } }, chart("B", 200, 100), view);
+    expect(shiftAt(closeExpansion(both, "B"), box.x + 900)).toBe((both[0]?.w ?? 0) + EXPAND_GAP);
+    expect(shiftAt(closeExpansion(both, "A"), box.x + 900)).toBe(0);
+    expect(shiftAt([], box.x + 900)).toBe(0);
+  });
+
+  it("gives each open detail the next letter, A then B, and keeps a reattached detail's letter", () => {
+    const a = openExpansion([], "A", { kind: "box", nodeId: "n", rect: box }, chart("A", 300, 200), view);
+    const both = openExpansion(a, "B", { kind: "step", fnId: "A", rect: { x: 10, y: 20, w: 50, h: 20 } }, chart("B", 200, 100), view);
+    expect(both.map((e) => detailLetter(e.index))).toEqual(["A", "B"]);
+    const moved = openExpansion(both, "A", { kind: "box", nodeId: "n", rect: { ...box, x: 400 } }, chart("A", 300, 200), view);
+    expect(moved.find((e) => e.fnId === "A")?.index).toBe(0);
+    expect(detailLetter(26)).toBe("AA");
+  });
+});
+
+describe("callouts", () => {
+  it("circles a box's tile and puts its bubble on a leader to the detail's header, inside the gap", () => {
+    const a = openExpansion([], "A", { kind: "box", nodeId: "n", rect: box }, chart("A", 300, 200), view);
+    const c = calloutOf(a[0] as Expansion, a);
+    expect(c?.cx).toBe(box.x + box.w / 2);
+    expect(c?.rx).toBeCloseTo(box.w / 2 + 12, 9);
+    expect(c?.leader.x2).toBe(box.x + box.w + EXPAND_GAP);
+    expect(c?.bubble.x).toBeGreaterThan(box.x + box.w);
+    expect(c?.bubble.x).toBeLessThan(box.x + box.w + EXPAND_GAP);
+  });
+
+  it("circles a call step inside its parent's chart", () => {
+    const a = openExpansion([], "A", { kind: "box", nodeId: "n", rect: box }, chart("A", 300, 200), view);
+    const both = openExpansion(a, "B", { kind: "step", fnId: "A", rect: { x: 10, y: 20, w: 50, h: 20 } }, chart("B", 200, 100), view);
+    const c = calloutOf(both[1] as Expansion, both);
+    expect(c?.cx).toBe((both[0]?.x ?? 0) + CHART_PAD + 10 + 25);
+    expect(c?.cy).toBe((both[0]?.y ?? 0) + CHART_HEAD + CHART_PAD + 20 + 10);
   });
 });

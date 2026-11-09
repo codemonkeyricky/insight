@@ -4,15 +4,16 @@
 // call step in that chart opens the callee's expansion to the right of the step. Expansions are the map's own state, so
 // no layout depends on them. The camera transform is written straight onto a <g>; React re-renders only when the set of
 // drawn items changes.
-import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as KeyEvent, type PointerEvent as PointerEv, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as KeyEvent, type PointerEvent as PointerEv, type ReactNode } from "react";
 import { select } from "d3-selection";
-import "d3-transition";
 import { zoom, zoomIdentity, type D3ZoomEvent, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
 import { ZOOM_SIZE, fitCamera, fitChartCamera, visibleWorld, type Camera, type FlowNode, type FlowSpan, type FunctionFlow, type PlacedItem, type Rect } from "@insight/flow";
 import { nameOfId } from "../../flowTargets";
 import { hrefView } from "../../router";
 import { CHART_MIN_PX } from "../../zoom/chart";
-import { anchoredTo, closeExpansion, connectorOf, openExpansion, refresh, revealCamera, type Expansion, type ExpandAnchor } from "../../zoom/expand";
+import { anchoredTo, calloutOf, closeExpansion, detailLetter, openExpansion, refresh, revealCamera, shiftAt, type Expansion, type ExpandAnchor } from "../../zoom/expand";
+import { advance, atRest, releaseVelocity, restingAt, type DragSample, type Spring } from "../../zoom/spring";
+import { useCameraSpring } from "../../zoom/useCameraSpring";
 import { pickBox } from "../../zoom/gesture";
 import { edgeClass, edgeKey, edgeTitle, edgeWidth, lineClass, runtimeLine, type MapBuild, type MapEdge, type MapNode, type MapSelected, type MapSource, type RuntimeLine } from "../../zoom/source";
 import { bucketScale, FAR_TILE_PX, fitLabel, headerLabels, labelChars, lodBucket, MID_TILE_PX } from "../../zoom/lod";
@@ -22,11 +23,10 @@ import { FarCards, type FarCard } from "./FarCards";
 import { zoneCells, zoneLetter, zoneLines } from "../../zoom/zones";
 import { offMapSelected } from "../../zoom/offMap";
 import type { ZoomStore } from "../../zoom/scene";
-import { ExpansionShape } from "./Expansion";
+import { CalloutShape, ExpansionShape } from "./Expansion";
 
 /** The camera's scale range: from the whole project down to a single line of a chart. */
 const SCALE: [number, number] = [0.02, 16];
-const ANIM_MS = 450;
 /** Items this far (world units) outside the view are still drawn, so a pan does not show a blank edge. */
 const CULL_MARGIN = 120;
 const PAN_PX = 80;
@@ -60,6 +60,46 @@ const toCamera = (t: ZoomTransform): Camera => ({ k: t.k, x: t.x, y: t.y });
 const toTransform = (c: Camera): ZoomTransform => zoomIdentity.translate(c.x, c.y).scale(c.k);
 const reduceMotion = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
+/** A d3 event that came from the user's pointer (a drag), not from a programmatic move of the camera. */
+const isPointerGesture = (e: unknown) => e instanceof Event && /^(pointer|mouse|touch)/.test(e.type);
+
+/**
+ * The side shift on screen: each open detail pushes the columns right of its pivot over by its width. `base` is the shift
+ * being eased away from, `to` the expansions it eases toward, and `s` the spring from 0 (base) to 1 (to).
+ */
+interface ShiftState {
+  base: (x: number) => number;
+  to: readonly Expansion[];
+  s: Spring;
+  frame?: number;
+  last: number;
+}
+
+/** The shift an item at x shows now: the eased value between the base and the target expansions. */
+function displayShift(sh: ShiftState, x: number): number {
+  const b = sh.base(x);
+  return b + (shiftAt(sh.to, x) - b) * sh.s.value;
+}
+
+/**
+ * Writes the side shift onto the world's drawn parts, without React: an item marked `data-sx` (its unshifted x) moves by
+ * its shift, and an edge's curve (`data-sd`, its unshifted path) is redrawn with each point moved by the shift at its x, so
+ * a call that crosses a pivot stretches. Runs once a frame while the shift eases, and after each render.
+ */
+function writeShift(root: SVGGElement, sh: ShiftState) {
+  for (const el of root.querySelectorAll<SVGElement>("[data-sx]")) {
+    const dx = displayShift(sh, Number(el.getAttribute("data-sx")));
+    if (dx === 0) el.removeAttribute("transform");
+    else el.setAttribute("transform", `translate(${dx} 0)`);
+  }
+  for (const el of root.querySelectorAll<SVGPathElement>("path[data-sd]")) {
+    const nums = (el.getAttribute("data-sd") ?? "").match(/-?\d+(?:\.\d+)?/g)?.map(Number);
+    if (nums === undefined || nums.length !== 8) continue;
+    const [sx, sy, c1x, c1y, c2x, c2y, ex, ey] = nums as [number, number, number, number, number, number, number, number];
+    const at = (x: number) => x + displayShift(sh, x);
+    el.setAttribute("d", `M${at(sx)} ${sy} C${at(c1x)} ${c1y} ${at(c2x)} ${c2y} ${at(ex)} ${ey}`);
+  }
+}
 
 /** What the map has selected, for the page's source panel: the function, its build, and the construct picked in its chart. */
 export interface MapSelection {
@@ -163,6 +203,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   const boxesRef = useRef<{ id: string; x: number; y: number; w: number; h: number }[]>([]);
   const seqRef = useRef(0);
   const miniDragRef = useRef(false);
+  /** The side shift's state (see ShiftState). The spring starts at rest on the shift of the open details. */
+  const shiftRef = useRef<ShiftState>({ base: () => 0, to: [], s: restingAt(1), last: 0 });
   const arrowId = `zm-arrow-${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
   const hintId = useId();
 
@@ -180,9 +222,69 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     return { width: Math.max(1, s.width - leftRef.current), height: Math.max(1, s.height - MINI_RESERVE) };
   };
 
+  /** The camera's spring. Every programmatic move goes through it; a user's gesture stops it (see the camera effect). */
+  const cam = useCameraSpring(
+    () => cameraRef.current,
+    (c) => {
+      const svg = svgRef.current;
+      const z = zoomRef.current;
+      if (svg && z) select(svg).call(z.transform, toTransform(c));
+      else applyCamera(c);
+    },
+  );
+
+  /** One frame of the side shift's spring: eases the columns, then writes them. Settles on the target and snaps to it. */
+  const shiftFrame = (now: number) => {
+    const sh = shiftRef.current;
+    sh.frame = undefined;
+    const dt = sh.last === 0 ? 1 / 60 : Math.min(0.1, (now - sh.last) / 1000);
+    sh.last = now;
+    sh.s = advance(sh.s, 1, dt);
+    if (atRest(sh.s, 1, 1e-4)) {
+      const to = sh.to;
+      sh.s = restingAt(1);
+      sh.base = (x) => shiftAt(to, x);
+      sh.last = 0;
+    } else {
+      sh.frame = requestAnimationFrame(shiftFrame);
+    }
+    const root = worldRef.current;
+    if (root) writeShift(root, sh);
+  };
+
+  /**
+   * Starts the side shift easing toward `next`, from the shift on screen now, so an interrupted ease does not jump. Reduced
+   * motion cuts to it.
+   */
+  const retargetShift = (next: readonly Expansion[]) => {
+    const sh = shiftRef.current;
+    const from = sh.base;
+    const toPrev = sh.to;
+    const sPrev = sh.s.value;
+    sh.to = next;
+    if (reduceMotion()) {
+      sh.base = (x) => shiftAt(next, x);
+      sh.s = restingAt(1);
+      if (sh.frame !== undefined) cancelAnimationFrame(sh.frame);
+      sh.frame = undefined;
+      const root = worldRef.current;
+      if (root) writeShift(root, sh);
+      return;
+    }
+    // The shift on screen now becomes the base: the spring starts at 0, so nothing jumps.
+    sh.base = (x) => {
+      const b = from(x);
+      return b + (shiftAt(toPrev, x) - b) * sPrev;
+    };
+    sh.s = restingAt(0);
+    sh.last = 0;
+    if (sh.frame === undefined) sh.frame = requestAnimationFrame(shiftFrame);
+  };
+
   const setExp = (list: readonly Expansion[]) => {
     expRef.current = list;
     setExpansions(list);
+    retargetShift(list);
   };
 
   const setOffMap = (v: OffMap | undefined) => {
@@ -321,11 +423,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
 
   /** Moves the camera to `target`. `animate` is false for a move that must not animate (a resize, the first view). */
   const moveTo = (target: Camera, animate: boolean) => {
-    const svg = svgRef.current;
-    const z = zoomRef.current;
-    if (!svg || !z) return;
-    if (animate && !reduceMotion()) select(svg).transition().duration(ANIM_MS).call(z.transform, toTransform(target));
-    else select(svg).call(z.transform, toTransform(target));
+    cam.to(target, !animate);
   };
 
   /** The camera that shows an expansion from `from`, the least it can move (see revealCamera). */
@@ -389,7 +487,6 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     const ref = node?.ref;
     const holds = ref !== undefined && node?.chart !== undefined && boxRect !== undefined && charts !== undefined;
     let list = placeAll(b, expRef.current);
-    let opened: Expansion | undefined;
     if (holds) {
       const anchored = anchoredTo(list, b.nodeId);
       if (toggle && anchored !== undefined) {
@@ -400,18 +497,18 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
         if (chart !== undefined) {
           list = placeAll(b, expRef.current);
           list = openExpansion(list, ref, { kind: "box", nodeId: b.nodeId, rect: boxRect }, chart, visibleWorld(cameraRef.current, sizeOf()));
-          opened = list.find((e) => e.fnId === ref);
         }
       }
     }
     setExp(list);
     if (writeUrl) syncUrl(b, focus);
 
-    // A toggle keeps the camera where it is; any other focus fits, then the expansion it opened is shown.
+    // A toggle keeps the camera where it is; any other focus fits. Opening or closing a detail never moves the camera.
     const fit = !(toggle && holds);
-    let target = fit ? fitTarget(b) ?? cameraRef.current : cameraRef.current;
-    if (opened !== undefined) target = revealOf(target, opened);
-    if (fit || opened !== undefined) moveTo(target, animate);
+    if (fit) {
+      const target = fitTarget(b);
+      if (target !== undefined) moveTo(target, animate);
+    }
   };
 
   /** Opens the node a click, key or link names: the source turns the node into its focus, then the map shows it. */
@@ -420,7 +517,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     // The keys go to the map after a click: the chart's link that had the focus is removed by the re-render, and the
     // focus would fall to the page, so the stage takes it here.
     stageRef.current?.focus({ preventScroll: true });
-    if (b) void show(source.focusOf?.(b, nodeId) ?? nodeId, true, true);
+    // A function with a chart toggles its detail, as a click does, so the camera stays put.
+    if (b) void show(source.focusOf?.(b, nodeId) ?? nodeId, true, true, b.node(nodeId)?.chart !== undefined);
   };
 
   /** A click on a box. A function with a chart toggles its expansion; any other box opens as a link does. */
@@ -446,11 +544,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     const next = openExpansion(list, callee, anchor, chart, visibleWorld(cameraRef.current, sizeOf()));
     if (next === list) return;
     setExp(next);
-    const added = next.find((e) => e.fnId === callee);
-    if (added !== undefined) {
-      moveTo(revealOf(cameraRef.current, added), true);
-      void selectFunction(callee);
-    }
+    // The detail opens beside the step and the camera stays where it is: only the selection follows the chain.
+    if (next.some((e) => e.fnId === callee)) void selectFunction(callee);
   };
 
   /**
@@ -498,18 +593,24 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     return true;
   };
 
+  /** A key's zoom: about the middle of the stage, as d3's scaleBy does. */
   const zoomStep = (factor: number) => {
     const svg = svgRef.current;
     const z = zoomRef.current;
     if (!svg || !z) return;
-    select(svg).transition().duration(180).call(z.scaleBy, factor);
+    const c = cameraRef.current;
+    const k = Math.min(SCALE[1], Math.max(SCALE[0], c.k * factor));
+    const ratio = k / c.k;
+    const cx = svg.clientWidth / 2;
+    const cy = svg.clientHeight / 2;
+    cam.to({ k, x: cx - (cx - c.x) * ratio, y: cy - (cy - c.y) * ratio }, false);
   };
 
   const panStep = (dx: number, dy: number) => {
-    const svg = svgRef.current;
     const z = zoomRef.current;
-    if (!svg || !z) return;
-    select(svg).transition().duration(180).call(z.translateBy, dx, dy);
+    if (!z) return;
+    const c = cameraRef.current;
+    cam.to({ k: c.k, x: c.x + dx, y: c.y + dy }, false);
   };
 
   /** Moves the view so the point under the pointer is the middle of the stage. The minimap maps pixels to the world. */
@@ -526,8 +627,15 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     const wy = (e.clientY - r.top - (r.height - H / s) / 2) * s;
     const c = cameraRef.current;
     const size = sizeOf();
+    cam.stop();
     select(svg).call(z.transform, zoomIdentity.translate(size.width / 2 - wx * c.k, size.height / 2 - wy * c.k).scale(c.k));
   };
+
+  // The side shift is written after each render, so the items React just drew take the shift they should have now.
+  useLayoutEffect(() => {
+    const root = worldRef.current;
+    if (root) writeShift(root, shiftRef.current);
+  });
 
   // The camera. Wheel and drag are d3-zoom's, and only move the camera.
   useEffect(() => {
@@ -540,9 +648,27 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     setExp([]);
     setConstruct(undefined);
     setOffMap(undefined);
+    // The pointer samples of the drag in progress: a release carries the drag's speed as a fling.
+    let samples: DragSample[] = [];
     const z = zoom<SVGSVGElement, unknown>()
       .scaleExtent(SCALE)
-      .on("zoom", (ev: D3ZoomEvent<SVGSVGElement, unknown>) => applyCamera(toCamera(ev.transform)));
+      .on("start", (ev: D3ZoomEvent<SVGSVGElement, unknown>) => {
+        // A user's gesture takes the camera back from a move in flight, where it is.
+        if (ev.sourceEvent) {
+          cam.stop();
+          samples = [];
+        }
+      })
+      .on("zoom", (ev: D3ZoomEvent<SVGSVGElement, unknown>) => {
+        applyCamera(toCamera(ev.transform));
+        if (isPointerGesture(ev.sourceEvent)) samples.push({ t: performance.now(), x: ev.transform.x, y: ev.transform.y });
+      })
+      .on("end", (ev: D3ZoomEvent<SVGSVGElement, unknown>) => {
+        if (!isPointerGesture(ev.sourceEvent)) return;
+        const v = releaseVelocity(samples, performance.now());
+        samples = [];
+        cam.fling(v.vx, v.vy);
+      });
     zoomRef.current = z;
     const sel = select(svg).call(z);
     // A resize that changes the stage's size refits a selected focus, so the panel opening or a window change keeps it
@@ -884,6 +1010,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
               <path
                 key={edgeKey(e)}
                 d={e.d}
+                data-sd={e.d}
                 className={edgeClass(e)}
                 style={{ strokeWidth: edgeWidth(e) }}
                 markerEnd={`url(#${arrowId})`}
@@ -918,15 +1045,10 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
                 return <FindingShape key={`finding-${it.id}`} rect={it.rect} count={count} k={labelScale} onSelect={() => void selectFunction(ref)} />;
               })}
             {expansions.map((e) => {
-              const c = connectorOf(e, expansions);
+              const c = calloutOf(e, expansions);
               return (
-                <g key={`exp-${e.fnId}`}>
-                  {c !== undefined && (
-                    <path
-                      className="zm-connector"
-                      d={`M${c.x1} ${c.y1} C${c.x1 + 20} ${c.y1} ${c.x2 - 20} ${c.y2} ${c.x2} ${c.y2}`}
-                    />
-                  )}
+                <g key={`exp-${e.fnId}`} className="zm-expansion-group" data-sx={e.pivot}>
+                  {c !== undefined && <CalloutShape callout={c} letter={detailLetter(e.index)} k={labelScale} />}
                   <ExpansionShape
                     id={id}
                     scope={charts?.scope ?? scope}
@@ -954,7 +1076,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
           />
         )}
         {!build && !error && <p className="zm-loading muted">Loading</p>}
-        <svg ref={rulerRef} className="zm-rulers" width="100%" height="100%" aria-hidden="true" />
+        <svg ref={rulerRef} className={far ? "zm-rulers zm-rulers-off" : "zm-rulers"} width="100%" height="100%" aria-hidden="true" />
         {build && (
           <figure className="zm-keyplan">
           <figcaption>Key plan</figcaption>
@@ -1027,7 +1149,7 @@ function FrameShape({
   const head = ZOOM_SIZE.head;
   const text = headerLabels(node?.label ?? nameOfId(item.id), node?.detail, rect.w * k);
   return (
-    <g className={`zm-frame${node ? ` zm-${node.kind}` : ""} ${lineClass(line)}`}>
+    <g className={`zm-frame${node ? ` zm-${node.kind}` : ""} ${lineClass(line)}`} data-sx={rect.x}>
       <title>{node?.title || item.id}</title>
       <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={10} className="zm-frame-body" />
       <g className="zm-hit" onClick={() => onOpen(item.id)}>
@@ -1079,6 +1201,7 @@ function BoxShape({
   return (
     <g
       className={`zm-box zm-${node.kind} ${lineClass(line)}${holdsChart ? " zm-has-chart" : ""}${chartOpen ? " expanded" : ""}${bare ? " zm-tile" : ""}`}
+      data-sx={rect.x}
       onClick={() => onOpen(item.id)}
     >
       <title>{node.title || node.label}</title>
@@ -1148,7 +1271,7 @@ function FindingShape({ rect, count, k, onSelect }: { rect: Rect; count: number;
   const s = 1 / k;
   const tip = MARKER_TRIANGLE.map(([x, y]) => `${x},${y}`).join(" ");
   return (
-    <g className="zm-finding">
+    <g className="zm-finding" data-sx={rect.x}>
       <title>{`${count} finding${count === 1 ? "" : "s"}`}</title>
       <path d={cloudPath(rect)} className="zm-cloud" />
       <g transform={`translate(${at.triangle.x} ${at.triangle.y}) scale(${s})`} className="zm-marker" onClick={onSelect}>

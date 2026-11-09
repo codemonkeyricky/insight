@@ -388,13 +388,19 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 .zm-line-thread .zm-frame-head { stroke: var(--thread); }
 .zm-line-coroutine .zm-frame-head { stroke: var(--coroutine); stroke-dasharray: 6 3; }
 .zm-cfg-body { fill: var(--panel); stroke: var(--accent); stroke-width: 1.5; }
-.zm-expansion-body { fill: var(--panel); stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
-.zm-expansion-head { fill: color-mix(in srgb, var(--accent) 10%, var(--bg)); stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.zm-expansion-body { fill: var(--glass-strong); stroke: var(--accent); stroke-width: 1.2; vector-effect: non-scaling-stroke; filter: drop-shadow(0 14px 30px var(--shadow)); }
+.zm-expansion-head { fill: color-mix(in srgb, var(--accent) 12%, transparent); stroke: none; }
 .zm-expansion-close { cursor: pointer; }
 .zm-expansion-close-hit { fill: transparent; }
 .zm-expansion-close text { fill: var(--muted); font-size: calc(16px * var(--zinv, 1)); pointer-events: none; }
 .zm-expansion-close:hover text { fill: var(--fg); }
 .zm-connector { fill: none; stroke: var(--accent); stroke-width: 1.2; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+/* The callout of a detail: a dashed ring round the tile it hangs from, a leader to the detail, and a lettered bubble. */
+.zm-callout-ring { fill: none; stroke: var(--accent); stroke-width: 1.2; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+.zm-leader { fill: none; stroke: var(--accent); stroke-width: 1; stroke-dasharray: 1 4; stroke-linecap: round; vector-effect: non-scaling-stroke; pointer-events: none; }
+.zm-bubble { fill: var(--accent); stroke: var(--rim-stroke, #fff); stroke-width: 1.5; pointer-events: none; }
+.zm-bubble-text { fill: #fff; font-family: var(--font-ui); font-weight: 700; font-size: 12px; pointer-events: none; }
+.flow-call-bar { stroke: currentColor; stroke-width: 1.2; fill: none; }
 .zm-box.expanded .zm-box-body { stroke: var(--accent); stroke-width: 2; }
 .zm-loading { position: absolute; inset: 0; margin: 0; display: flex; align-items: center; justify-content: center; }
 .zm-keyplan { position: absolute; left: var(--sh-gap, 10px); bottom: calc(var(--sh-gap, 10px) + 44px); z-index: 4; margin: 0; padding: 6px; border-radius: 10px; background: var(--glass); box-shadow: var(--float); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
@@ -410,6 +416,7 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 .zm-rulers { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
 .zm-rulers text { fill: var(--graphite); font-family: var(--font-code); font-size: 11px; opacity: 0.85; }
 .zm-rulers line { stroke: var(--graphite); stroke-width: 1; opacity: 0.6; }
+.zm-rulers.zm-rulers-off { display: none; }
 /* Far tier: the function map fades out and the card grid (one card per child of the scope) fades in over it. */
 .zm-world { transition: opacity 180ms ease; }
 .zm-world.zm-far { opacity: 0; pointer-events: none; }

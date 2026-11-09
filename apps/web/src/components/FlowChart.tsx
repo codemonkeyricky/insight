@@ -84,10 +84,18 @@ function Node({ id, node, fnId, scope, onNodeClick, selected }: { id: string; no
         {node.label}
       </text>
     );
+  // A call step is drawn with a double bar down each side, the ISO 5807 mark for a predefined process.
+  const bars = node.role === "call" && shape !== "label" ? (
+    <>
+      <line x1={x + 6} y1={y} x2={x + 6} y2={y + h} className="flow-call-bar" />
+      <line x1={x + w - 6} y1={y} x2={x + w - 6} y2={y + h} className="flow-call-bar" />
+    </>
+  ) : null;
   const body = (
     <>
       <title>{outside && target !== undefined ? outsideText(target) : (node.title ?? node.label)}</title>
       {mark}
+      {bars}
       {text}
       {outside && (
         <text x={x + w - 6} y={y + 12} textAnchor="end" className="flow-mark">
