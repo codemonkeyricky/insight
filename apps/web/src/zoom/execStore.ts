@@ -25,6 +25,8 @@ export interface ExecView {
   index: ExecIndex;
 }
 
+const NONE: ReadonlySet<string> = new Set();
+
 export class ExecStore implements MapSource {
   private readonly id: string;
   private readonly rootsOnly: boolean;
@@ -85,13 +87,11 @@ export class ExecStore implements MapSource {
     if (!view.scene.nodes.has(nodeId)) throw new Error(`Nothing in the execution map at ${nodeId}`);
   }
 
-  async build(focus: string, open?: string): Promise<MapBuild> {
+  async build(focus: string, expanded: ReadonlySet<string> = NONE): Promise<MapBuild> {
     const { scope, nodeId } = splitExecFocus(focus);
     const view = await this.load(scope);
     if (!view.scene.nodes.has(nodeId)) throw new Error(`Nothing in the execution map at ${nodeId}`);
-    const openId = open === undefined ? nodeId : splitExecFocus(open).nodeId;
-    if (!view.scene.nodes.has(openId)) throw new Error(`Nothing in the execution map at ${openId}`);
-    return execBuild(view.scene, view.layout, scope, nodeId, view.fns, openId);
+    return execBuild(view.scene, view.layout, scope, nodeId, view.fns, nodeId, expanded);
   }
 
   /** The URL that shows a focus. Only a roots-only store writes `roots`, so its links keep the view. */

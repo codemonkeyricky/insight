@@ -67,6 +67,8 @@ export interface MapBuild {
   crumbs: MapNode[];
   /** For a function focus: what the function is and where it runs. */
   selected?: MapSelected;
+  /** The function boxes drawn with their chart, the focus included when it is a function. */
+  expanded?: ReadonlySet<string>;
 }
 
 /** The URL that shows a focus: the scope, the function, and whether the map is the roots-only view. */
@@ -87,10 +89,10 @@ export interface MapSource {
   /** Loads what a focus reached by a gesture needs before it is built. */
   ensureFocus(focus: string): Promise<void>;
   /**
-   * Lays out and places the map for a focus. `open` is the focus whose children are drawn open, when it is not the
-   * focus itself: the selection (breadcrumb, panel, URL) stays the focus, while the drawn boxes follow `open`.
+   * Lays out and places the map for a focus. `expanded` is the set of function boxes drawn with their chart; the build
+   * returns the set it used (see MapBuild.expanded), which adds the focus when it is a function.
    */
-  build(focus: string, open?: string): Promise<MapBuild>;
+  build(focus: string, expanded?: ReadonlySet<string>): Promise<MapBuild>;
   /** The URL (scope and function) that shows `focus` of `build`. Undefined when it has none. */
   url(build: MapBuild, focus: string): MapUrl | undefined;
   /**

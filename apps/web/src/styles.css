@@ -340,7 +340,7 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 .zm-exec .zm-frame.zm-project .zm-frame-body, .zm-exec .zm-box.zm-project .zm-box-body { stroke: var(--fg); stroke-width: 2; }
 .zm-cfg-body { fill: var(--panel); stroke: var(--accent); stroke-width: 1.5; }
 .zm-loading { position: absolute; inset: 0; margin: 0; display: flex; align-items: center; justify-content: center; }
-.zm-mini { position: absolute; right: 10px; bottom: 10px; width: 180px; height: 120px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; cursor: crosshair; touch-action: none; }
+.zm-mini { position: absolute; right: 10px; bottom: 10px; width: 160px; height: 110px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; cursor: crosshair; touch-action: none; }
 .zm-mini-frame { fill: none; stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .zm-mini-box { fill: var(--muted); opacity: 0.45; }
 .zm-mini-cfg { fill: var(--accent); }
@@ -381,6 +381,7 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 .zm-source-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
 .zm-source .outline { display: none; }
 .zm-source .viewer-body pre.code { max-height: none; }
+.zm-source .viewer-body { grid-template-columns: minmax(0, 1fr); }
 pre.code > div.hit-range { background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .zm-chart .flow-node { cursor: pointer; }
-.flow-node.selected :is(rect, polygon, circle) { stroke: var(--accent); stroke-width: 2.4; }
+.flow-node.selected :is(rect, polygon, circle) { stroke: var(--accent); stroke-width: 3px; fill: color-mix(in srgb, var(--accent) 22%, var(--panel)); }

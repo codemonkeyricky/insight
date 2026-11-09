@@ -11,6 +11,7 @@ import { CHART_HEAD, ZOOM_SIZE, fitCamera, visibleWorld, type Camera, type FlowN
 import { nameOfId } from "../../flowTargets";
 import { hrefView } from "../../router";
 import { chartShown } from "../../zoom/chart";
+import { expandedAfter } from "../../zoom/expand";
 import { pickBox } from "../../zoom/gesture";
 import { edgeClass, edgeKey, edgeTitle, edgeWidth, type MapBuild, type MapEdge, type MapNode, type MapSelected, type MapSource } from "../../zoom/source";
 import { bucketScale, fitLabel, headerLabels, labelChars, lodBucket } from "../../zoom/lod";
@@ -23,6 +24,11 @@ const ANIM_MS = 450;
 /** Items this far (world units) outside the view are still drawn, so a pan does not show a blank edge. */
 const CULL_MARGIN = 120;
 const PAN_PX = 80;
+/**
+ * Room at the bottom of the stage that a fit leaves clear for the minimap: its height (110 px, see styles.css), its 10 px
+ * inset and a 10 px margin. A selected function fits above it, so the minimap never covers the chart.
+ */
+const MINI_RESERVE = 130;
 
 const sameList = <T,>(a: readonly T[], b: readonly T[], key: (t: T) => string): boolean =>
   a.length === b.length &&
@@ -37,12 +43,6 @@ const union = (a: Rect, b: Rect): Rect => {
   const x = Math.min(a.x, b.x);
   const y = Math.min(a.y, b.y);
   return { x, y, w: Math.max(a.x + a.w, b.x + b.w) - x, h: Math.max(a.y + a.h, b.y + b.h) - y };
-};
-
-const without = (set: ReadonlySet<string>, id: string): ReadonlySet<string> => {
-  const next = new Set(set);
-  next.delete(id);
-  return next;
 };
 
 const toCamera = (t: ZoomTransform): Camera => ({ k: t.k, x: t.x, y: t.y });
@@ -95,9 +95,13 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
   const [error, setError] = useState<string>();
   /** The function boxes whose chart is drawn, by placement id. A click on a function box adds it; Escape removes it. */
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+  /** The same set, for the handlers and the async `show`, which read it when they run. */
+  const expandedRef = useRef<ReadonlySet<string>>(expanded);
   /** The construct picked in an expanded chart: the placement of that chart, the step, and its span. */
   const [construct, setConstruct] = useState<{ placement: string; nodeId: string; span?: FlowSpan }>();
   const stageRef = useRef<HTMLDivElement>(null);
+  /** The stage's size at the last resize, so a resize that changes nothing does not refit the camera. */
+  const lastSizeRef = useRef<{ width: number; height: number } | undefined>(undefined);
   const svgRef = useRef<SVGSVGElement>(null);
   const worldRef = useRef<SVGGElement>(null);
   const miniRef = useRef<SVGSVGElement>(null);
@@ -179,16 +183,32 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
   };
 
   /**
-   * Makes `focus` the selection: loads what it needs, builds the map for it, and moves the camera to fit it. `animate`
-   * is false only for the first view, which is set at once. A function selected is drawn with its chart open.
+   * Moves the camera to fit the build's node, in the stage's room above the minimap. `animate` is false for a refit that
+   * follows a resize, which must not animate.
    */
-  const show = async (focus: string, animate: boolean, writeUrl: boolean) => {
+  const fitFocus = (b: MapBuild, animate: boolean) => {
+    const rect = b.placed.rects.get(b.nodeId);
+    const svg = svgRef.current;
+    const z = zoomRef.current;
+    if (!rect || !svg || !z) return;
+    const size = sizeOf();
+    const target = fitCamera(rect, { width: size.width, height: Math.max(1, size.height - MINI_RESERVE) });
+    if (animate && !reduceMotion()) select(svg).transition().duration(ANIM_MS).call(z.transform, toTransform(target));
+    else select(svg).call(z.transform, toTransform(target));
+  };
+
+  /**
+   * Makes `focus` the selection: loads what it needs, builds the map for it, and moves the camera to fit it. `animate`
+   * is false only for the first view, which is set at once. `base` is the expanded set the focus starts from: a function
+   * it selects is added to it, so nothing already open closes. A focus that is a function is drawn with its chart open.
+   */
+  const show = async (focus: string, animate: boolean, writeUrl: boolean, base: ReadonlySet<string> = expandedRef.current) => {
     const seq = ++seqRef.current;
     let b: MapBuild;
     try {
       // A focus reached by a click may not be loaded yet: the source loads what it needs first.
       await source.ensureFocus(focus);
-      b = await source.build(focus);
+      b = await source.build(focus, base);
     } catch (e) {
       if (seq === seqRef.current) setError(messageOf(e));
       return;
@@ -199,16 +219,11 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
     setBuild(b);
     setError(undefined);
     setConstruct(undefined);
-    if (b.selected) setExpanded((prev) => (prev.has(b.nodeId) ? prev : new Set(prev).add(b.nodeId)));
+    const exp = b.expanded ?? base;
+    expandedRef.current = exp;
+    setExpanded(exp);
     showView(b);
-    const rect = b.placed.rects.get(b.nodeId);
-    const svg = svgRef.current;
-    const z = zoomRef.current;
-    if (rect && svg && z) {
-      const target = fitCamera(rect, sizeOf());
-      if (animate && !reduceMotion()) select(svg).transition().duration(ANIM_MS).call(z.transform, toTransform(target));
-      else select(svg).call(z.transform, toTransform(target));
-    }
+    fitFocus(b, animate);
     if (writeUrl) syncUrl(b, focus);
   };
 
@@ -273,14 +288,27 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
     buildRef.current = undefined;
     viewRef.current = undefined;
     focusRef.current = undefined;
-    setExpanded(new Set());
+    expandedRef.current = new Set();
+    setExpanded(expandedRef.current);
     setConstruct(undefined);
     const z = zoom<SVGSVGElement, unknown>()
       .scaleExtent(SCALE)
       .on("zoom", (ev: D3ZoomEvent<SVGSVGElement, unknown>) => applyCamera(toCamera(ev.transform)));
     zoomRef.current = z;
     const sel = select(svg).call(z);
-    const ro = new ResizeObserver(() => cull(cameraRef.current));
+    // A resize that changes the stage's size refits a selected focus, so the panel opening or a window change keeps it
+    // in view above the minimap. Culling alone is not enough for that.
+    lastSizeRef.current = sizeOf();
+    const ro = new ResizeObserver(() => {
+      const size = sizeOf();
+      const last = lastSizeRef.current;
+      lastSizeRef.current = size;
+      cull(cameraRef.current);
+      const b = buildRef.current;
+      if (b?.selected !== undefined && last !== undefined && (last.width !== size.width || last.height !== size.height)) {
+        fitFocus(b, false);
+      }
+    });
     ro.observe(stage);
     return () => {
       ro.disconnect();
@@ -359,13 +387,14 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
         panStep(0, -PAN_PX);
         break;
       case "Escape": {
-        // An expanded function collapses first; the map then goes up one level, as it always does.
-        if (b?.selected !== undefined && expanded.has(b.nodeId)) {
-          setExpanded((prev) => without(prev, b.nodeId));
-          break;
+        // Escape closes the selected function's chart and goes up one level. The parent is not a function, so its build
+        // selects nothing and the source panel closes with it.
+        if (!b) break;
+        const parent = b.node(b.nodeId)?.parent;
+        if (parent !== undefined) {
+          const base = expandedAfter(expandedRef.current, "escape", b.nodeId);
+          void show(source.focusOf?.(b, parent) ?? parent, true, true, base);
         }
-        const parent = b?.node(b.nodeId)?.parent;
-        if (parent !== undefined) openNode(parent);
         break;
       }
       case "Enter": {
@@ -524,8 +553,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
       </div>
       <p id={hintId} className="muted small zm-hint">
         Scroll or press + and - to zoom; zooming never opens a box. Arrow keys pan. Click a box to open it, and a function to
-        draw its chart. Click a step in the chart to see its source. Enter opens the item at the centre and Escape goes up one
-        level.
+        draw its chart. Click a step in the chart to see its source. Enter opens the item at the centre. Escape closes the
+        selected function's chart and goes up one level.
       </p>
       {build && detail?.(build, openNode)}
     </div>

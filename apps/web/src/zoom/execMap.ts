@@ -17,6 +17,7 @@ import {
   type SceneLayout,
   type SceneNode,
 } from "@insight/flow";
+import { expandedAfter } from "./expand";
 import type { MapBuild, MapNode, MapSelected } from "./source";
 
 /** The separator between a scope and a node id in a focus. A path cannot hold it. */
@@ -135,6 +136,10 @@ export function execFirstOpen(scene: Scene): Set<string> {
  * map (the first view) opens the nesting instead, see execFirstOpen. `fns` (the model's functions by id) adds what the
  * function panel shows for a function node. `openId` is the node whose open set is drawn, when it is not `nodeId`: the
  * node, crumbs and selection stay `nodeId`, while the boxes drawn follow `openId`.
+ *
+ * `expanded` is the set of function boxes whose chart is drawn. The function `nodeId` selects is added to it, and the
+ * ancestors of every expanded function open too, so a caller that stays expanded stays on screen when its callee is
+ * the focus. The build carries the set it was made with (`expanded`).
  */
 export function execBuild(
   scene: Scene,
@@ -143,8 +148,12 @@ export function execBuild(
   nodeId: string,
   fns?: ReadonlyMap<string, ExecFunctionRef>,
   openId: string = nodeId,
+  expanded: ReadonlySet<string> = new Set(),
 ): MapBuild {
+  const selected = fns === undefined ? undefined : execSelected(scene, fns, nodeId);
+  const exp = selected !== undefined ? expandedAfter(expanded, "click", nodeId) : expanded;
   const open = openId === scene.root ? execFirstOpen(scene) : sceneOpenFor(scene, openId);
+  for (const e of exp) for (const p of sceneOpenFor(scene, e)) open.add(p);
   const placed = placeSceneLayout(scene, layout, open);
   const edges = placeSceneEdges(scene, open, placed.rects);
   const node = (id: string) => execMapNode(scene, id);
@@ -157,8 +166,8 @@ export function execBuild(
     node,
     depth: (id) => sceneDepth(scene, id),
     crumbs: sceneBreadcrumb(scene, nodeId).flatMap((n) => node(n.id) ?? []),
+    expanded: exp,
   };
-  const selected = fns === undefined ? undefined : execSelected(scene, fns, nodeId);
   if (selected !== undefined) out.selected = selected;
   return out;
 }
