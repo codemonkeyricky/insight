@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+
 /** One row of the layers list: a page of the project, or a lens of the scope. */
 export interface LayerLink {
   id: string;
@@ -23,10 +25,12 @@ interface Props {
   findingCount?: number;
   onChange: (key: keyof LayerState, on: boolean) => void;
   onClose: () => void;
+  /** The roots-only switch. On a phone the switch lives here, since the map has no room for it. */
+  roots?: ReactNode;
 }
 
 /** The layers card at the top left of the sheet: every page of the project and the lenses of the scope, one list. */
-export function LayersPanel({ links, shown, findingCount, onChange, onClose }: Props) {
+export function LayersPanel({ links, shown, findingCount, onChange, onClose, roots }: Props) {
   const pages = links.filter((l) => l.group === "page");
   const lenses = links.filter((l) => l.group === "lens");
   return (
@@ -73,6 +77,7 @@ export function LayersPanel({ links, shown, findingCount, onChange, onClose }: P
         <input type="checkbox" checked={shown.findings} onChange={(e) => onChange("findings", e.target.checked)} /> Findings
         {findingCount !== undefined && <span className="sh-count-inline"> {findingCount}</span>}
       </label>
+      {roots !== undefined && <div className="sh-layers-roots">{roots}</div>}
       <details className="sh-keys">
         <summary>? Keyboard and mouse</summary>
         <ul>

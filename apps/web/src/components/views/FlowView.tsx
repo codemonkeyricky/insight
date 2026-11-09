@@ -10,6 +10,7 @@ import type { MapBuild } from "../../zoom/source";
 import { zoneOf } from "../../zoom/zones";
 import { scopeKind } from "../ScopeNote";
 import { LayersPanel, type LayerLink, type LayerState } from "../sheet/LayersPanel";
+import { SHEET_MAX_WIDTH, SHEET_MID } from "../sheet/bottomSheet";
 import { SidePanel } from "../sheet/SidePanel";
 import { TitleBlock, type TitleFacts } from "../sheet/TitleBlock";
 import { ExecContainerPanel } from "../zoom/ExecContainerPanel";
@@ -128,10 +129,14 @@ export function FlowView({ id, files, scope, fn, roots, line, layers, facts, emp
   // The zone the focused node sits in, by the centre of its box (zones.ts). A focus with no box has no zone.
   const focusRect = focus?.placed.rects.get(focus.nodeId);
   const zone = focusRect ? zoneOf(focusRect).label : undefined;
+  // On a phone the side panel is a bottom sheet. Its middle rest hides the lower part of the map, so an open detail is fitted
+  // above it (once, when the sheet opens: see ZoomMap's bottomInset).
+  const narrow = typeof window !== "undefined" && window.innerWidth <= SHEET_MAX_WIDTH;
   // The side panel (380px) sits 16px in from the right edge with a 16px gap: on a wide screen the map keeps clear of it.
-  const inset = open && (typeof window === "undefined" || window.innerWidth > 720) ? SIDE_INSET : 0;
+  const inset = open && !narrow ? SIDE_INSET : 0;
+  const bottomInset = open && narrow ? Math.round(window.innerHeight * SHEET_MID) : 0;
   // The Layers card sits over the map's left edge on a desktop: the fit and the rulers keep clear of it.
-  const leftInset = layersOpen && (typeof window === "undefined" || window.innerWidth > 860) ? LAYERS_INSET : 0;
+  const leftInset = layersOpen && !narrow ? LAYERS_INSET : 0;
 
   return (
     <>
@@ -149,6 +154,7 @@ export function FlowView({ id, files, scope, fn, roots, line, layers, facts, emp
             onFocus={setFocus}
             hint={false}
             inset={inset}
+            bottomInset={bottomInset}
             leftInset={leftInset}
             layers={mapLayers}
             findings={findingsOn ? counts ?? new Map<string, number>() : undefined}
@@ -174,6 +180,7 @@ export function FlowView({ id, files, scope, fn, roots, line, layers, facts, emp
             findingCount={findingRows?.length}
             onChange={(key, on) => setShown((s) => ({ ...s, [key]: on }))}
             onClose={() => setLayersOpen(false)}
+            roots={<RootsOnly id={id} scope={scope} fn={fn} roots={roots} className="sh-check" />}
           />
         ) : (
           <button type="button" className="sh-card sh-layers-open" onClick={() => setLayersOpen(true)}>
@@ -203,9 +210,9 @@ export function FlowView({ id, files, scope, fn, roots, line, layers, facts, emp
 }
 
 /** The roots-only switch on the canvas. Turning it on or off changes the URL, and the canvas follows the URL. */
-function RootsOnly({ id, scope, fn, roots }: { id: string; scope: string; fn?: string; roots: boolean }) {
+function RootsOnly({ id, scope, fn, roots, className = "sh-roots" }: { id: string; scope: string; fn?: string; roots: boolean; className?: string }) {
   return (
-    <label className="sh-roots">
+    <label className={className}>
       <input
         type="checkbox"
         checked={roots}

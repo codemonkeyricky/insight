@@ -9,6 +9,12 @@ type Selection = { kind: "arrow"; key: string } | null;
 
 const LABEL_CHARS = 18;
 
+/**
+ * Folder cards per row: the full grid on a desktop, two on a tablet and one on a phone. A card is 250 px wide, so only one
+ * fits a 390 px phone without shrinking it past reading.
+ */
+const cardsPerRow = (width: number): number => (width <= 520 ? 1 : width <= 860 ? 2 : FOLDER_GRID);
+
 const fit = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
 const layerTitle = (layer: string): string => (layer === "ir" ? "IR" : layer.charAt(0).toUpperCase() + layer.slice(1));
@@ -48,7 +54,16 @@ function ArchDiagram({ id, model: whole }: { id: string; model: ArchModel }) {
   // A project with one package draws its folders instead (see arch/folders.ts). Everything below reads the shown model.
   const shown = useMemo<DiagramModel>(() => diagramModel(whole), [whole]);
   const model = shown.model;
-  const layout = useMemo(() => archLayout(model, shown.depth !== undefined ? { grid: FOLDER_GRID } : {}), [model, shown.depth]);
+  const [perRow, setPerRow] = useState(() => cardsPerRow(window.innerWidth));
+  useEffect(() => {
+    const onResize = () => setPerRow(cardsPerRow(window.innerWidth));
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  const folders = shown.depth !== undefined;
+  const layout = useMemo(() => archLayout(model, folders ? { grid: perRow } : {}), [model, folders, perRow]);
+  // A folder grid narrower than its cards' full row is drawn to the container's width, so every edge stays inside it.
+  const fitWidth = folders && perRow < FOLDER_GRID;
   const [sel, setSel] = useState<Selection>(null);
 
   // The boxes lit by the selection: the two ends of the selected arrow.
@@ -82,7 +97,15 @@ function ArchDiagram({ id, model: whole }: { id: string; model: ArchModel }) {
         </p>
       )}
       <div className="arch-scroll">
-        <svg className="arch-svg" width={layout.width} height={layout.height} viewBox={`0 0 ${layout.width} ${layout.height}`} role="img" aria-label="Package architecture">
+        <svg
+          className="arch-svg"
+          width={fitWidth ? undefined : layout.width}
+          height={fitWidth ? undefined : layout.height}
+          style={fitWidth ? { width: "100%", height: "auto" } : undefined}
+          viewBox={`0 0 ${layout.width} ${layout.height}`}
+          role="img"
+          aria-label="Package architecture"
+        >
           <defs>
             <marker id="arch-head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
               <path className="arch-head" d="M0 0 L10 5 L0 10 z" />

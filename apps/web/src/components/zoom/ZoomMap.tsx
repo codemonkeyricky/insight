@@ -38,6 +38,8 @@ const MINI_RESERVE = 130;
 /** On a phone-width stage the key plan sits higher, so the far grid keeps clear of it by more. */
 const MINI_RESERVE_NARROW = 184;
 const NARROW_STAGE_PX = 520;
+/** The gap a fit keeps above a bottom sheet's top edge. */
+const SHEET_ROOM_MARGIN = 16;
 /** A function tile at least this tall on screen (px) shows its name in the mid tier. */
 const TILE_LABEL_PX = 16;
 
@@ -131,6 +133,11 @@ interface Props {
   inset?: number;
   /** Room the map gives up on the left, in px, such as the Layers panel. Fits and the zone rulers start after it. */
   leftInset?: number;
+  /**
+   * Room the map gives up at the bottom, in px: a bottom sheet over the stage. A fit leaves it clear, and the reader's open
+   * detail is fitted above it once, when the sheet opens. Closing it does not move the camera.
+   */
+  bottomInset?: number;
   /** The findings layer: how many findings each function (by its id) has. Undefined when the layer is off. */
   findings?: ReadonlyMap<string, number>;
   /** Which parts of the map are drawn: the frames (file and runtime frames) and the call edges. Both on by default. */
@@ -161,7 +168,7 @@ interface OffMap {
  * The execution map: one camera over a scope's scene. Each node is a focus of the source; the map's items and edges
  * are named by node id, so a click or key that names a node is turned into a focus by the source first (`focusOf`).
  */
-export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFocus, hint = true, inset = 0, leftInset = 0, findings, layers = { frames: true, calls: true } }: Props) {
+export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFocus, hint = true, inset = 0, leftInset = 0, bottomInset = 0, findings, layers = { frames: true, calls: true } }: Props) {
   /** The selection: the focus the breadcrumb, the detail panel and the URL show. Only explicit actions change it. */
   const [build, setBuild] = useState<MapBuild>();
   /** The map as drawn: the selection's build. Only a click or a key changes it; gestures move the camera alone. */
@@ -185,7 +192,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   /** The stage's size at the last resize, so a resize that changes nothing does not refit the camera. */
   const lastSizeRef = useRef<{ width: number; height: number } | undefined>(undefined);
   /** Refits the selected focus when the usable size changed since the last refit. Set by the stage's effect. */
-  const refitRef = useRef<(() => void) | undefined>(undefined);
+  const refitRef = useRef<((force?: boolean) => void) | undefined>(undefined);
   const svgRef = useRef<SVGSVGElement>(null);
   const worldRef = useRef<SVGGElement>(null);
   const miniRef = useRef<SVGSVGElement>(null);
@@ -212,6 +219,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   const insetRef = useRef(inset);
   /** The room given up on the left (the Layers panel). Fits and reveals start after it; the rulers start after it. */
   const leftRef = useRef(leftInset);
+  /** The bottom sheet's room in use (see bottomInset). */
+  const bottomRef = useRef(bottomInset);
   const sizeOf = () => ({
     width: Math.max(1, (stageRef.current?.clientWidth ?? 0) - insetRef.current),
     height: stageRef.current?.clientHeight ?? 0,
@@ -219,7 +228,9 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   /** The stage's room above the minimap, and right of the left inset: where a fit or a reveal may put things. */
   const roomOf = () => {
     const s = sizeOf();
-    return { width: Math.max(1, s.width - leftRef.current), height: Math.max(1, s.height - MINI_RESERVE) };
+    // Above a bottom sheet the room ends at its top edge, with the same margin the minimap keeps.
+    const reserve = bottomRef.current > 0 ? bottomRef.current + SHEET_ROOM_MARGIN : MINI_RESERVE;
+    return { width: Math.max(1, s.width - leftRef.current), height: Math.max(1, s.height - reserve) };
   };
 
   /** The camera's spring. Every programmatic move goes through it; a user's gesture stops it (see the camera effect). */
@@ -421,6 +432,21 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     return { ...c, x: c.x + leftRef.current };
   };
 
+  /**
+   * On a phone with the bottom sheet open, the camera fits the focus and every open detail into the room above the sheet,
+   * scaling them down as needed. Undefined otherwise: the focus alone is fitted, as on a desktop.
+   */
+  const fitDetails = (b: MapBuild, list: readonly Expansion[]): Camera | undefined => {
+    if (bottomRef.current <= 0 || list.length === 0) return undefined;
+    const rect = b.placed.rects.get(b.nodeId);
+    if (!rect) return undefined;
+    const all = list.reduce((r, e) => union(r, { x: e.x, y: e.y, w: e.w, h: e.h }), rect);
+    // The scale stays at the mid tier's floor, so the boxes stay out of the far tier while the details scale down.
+    const boxH = medianOf(b.placed.items.filter((i) => i.kind === "box").map((i) => i.rect.h));
+    const c = fitCamera(all, roomOf(), { minK: boxH > 0 ? MID_TILE_PX / boxH : undefined });
+    return { ...c, x: c.x + leftRef.current };
+  };
+
   /** Moves the camera to `target`. `animate` is false for a move that must not animate (a resize, the first view). */
   const moveTo = (target: Camera, animate: boolean) => {
     cam.to(target, !animate);
@@ -486,6 +512,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     const boxRect = b.placed.rects.get(b.nodeId);
     const ref = node?.ref;
     const holds = ref !== undefined && node?.chart !== undefined && boxRect !== undefined && charts !== undefined;
+    const openBefore = expRef.current.length;
     let list = placeAll(b, expRef.current);
     if (holds) {
       const anchored = anchoredTo(list, b.nodeId);
@@ -503,10 +530,11 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     setExp(list);
     if (writeUrl) syncUrl(b, focus);
 
-    // A toggle keeps the camera where it is; any other focus fits. Opening or closing a detail never moves the camera.
-    const fit = !(toggle && holds);
+    // A toggle keeps the camera where it is; any other focus fits. Opening or closing a detail never moves the camera on a
+    // desktop. On a phone, a detail that opens is fitted with the sheet over the map: the one move that is allowed there.
+    const fit = !(toggle && holds) || (bottomRef.current > 0 && list.length > openBefore);
     if (fit) {
-      const target = fitTarget(b);
+      const target = fitDetails(b, list) ?? fitTarget(b);
       if (target !== undefined) moveTo(target, animate);
     }
   };
@@ -674,19 +702,21 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     // A resize that changes the stage's size refits a selected focus, so the panel opening or a window change keeps it
     // in view above the minimap. Culling alone is not enough for that.
     lastSizeRef.current = sizeOf();
-    refitRef.current = () => {
+    refitRef.current = (force = false) => {
       const size = sizeOf();
       const last = lastSizeRef.current;
       lastSizeRef.current = size;
       setStageSize({ width: size.width, height: size.height });
       cull(cameraRef.current);
       const b = buildRef.current;
-      if (b?.selected !== undefined && last !== undefined && (last.width !== size.width || last.height !== size.height)) {
+      const changed = last !== undefined && (last.width !== size.width || last.height !== size.height);
+      if (b?.selected !== undefined && (force || changed)) {
         // The refit keeps the newest expansion in view too: the source panel opening narrows the stage under it.
-        const fit = fitTarget(b);
         const newest = expRef.current[expRef.current.length - 1];
-        const target = fit === undefined ? undefined : newest === undefined ? fit : revealOf(fit, newest);
-        if (target !== undefined) moveTo(target, false);
+        const fit = fitDetails(b, expRef.current) ?? fitTarget(b);
+        const target = fit === undefined ? undefined : newest === undefined || bottomRef.current > 0 ? fit : revealOf(fit, newest);
+        // A forced fit (a sheet opening) glides; a resize cuts, as it always has.
+        if (target !== undefined) moveTo(target, force);
       }
     };
     const ro = new ResizeObserver(() => refitRef.current?.());
@@ -707,6 +737,13 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     insetRef.current = inset;
     refitRef.current?.();
   }, [inset]);
+
+  // A bottom sheet opening fits the selection above it, once. Closing it leaves the camera where the reader put it.
+  useEffect(() => {
+    const grew = bottomInset > bottomRef.current;
+    bottomRef.current = bottomInset;
+    if (grew) refitRef.current?.(true);
+  }, [bottomInset]);
 
   // The Layers panel opening or closing over the stage's left edge refits the same way.
   useEffect(() => {
