@@ -1,6 +1,17 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
   <head>
+    <script>
+      // Set the theme before first paint so a light page never flashes. Dark is the default.
+      (function () {
+        var t = "dark";
+        try {
+          var v = localStorage.getItem("insight-theme");
+          if (v === "light" || v === "system") t = v;
+        } catch (e) {}
+        document.documentElement.dataset.theme = t;
+      })();
+    </script>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" href="data:," />
