@@ -230,6 +230,9 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
   /** Opens the node a click, key or link names: the source turns the node into its focus, then the map shows it. */
   const openNode = (nodeId: string) => {
     const b = buildRef.current;
+    // The keys go to the map after a click: the chart's link that had the focus is removed by the re-render, and the
+    // focus would fall to the page, so the stage takes it here.
+    stageRef.current?.focus({ preventScroll: true });
     if (b) void show(source.focusOf?.(b, nodeId) ?? nodeId, true, true);
   };
 
@@ -240,6 +243,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect }: Pro
    */
   const chartStep = (placement: string, node: FlowNode): boolean => {
     const b = buildRef.current;
+    stageRef.current?.focus({ preventScroll: true });
     if (!b) return true;
     const own = b.node(placement)?.ref;
     const callee = node.target !== undefined && node.target !== own ? source.placeFunction?.(b, node.target) : undefined;
