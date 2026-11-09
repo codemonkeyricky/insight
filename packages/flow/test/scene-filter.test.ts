@@ -168,7 +168,7 @@ describe("keepScene", () => {
 });
 
 describe("execRootsOnly", () => {
-  it("keeps each thread and the placements of its roots, and drops coroutines and the no-runtime group", () => {
+  it("keeps each thread and the placements of its roots, and drops coroutines and the non-root plain code flow", () => {
     const m = basic();
     const full = buildExecScene(m);
     // The full scene has the nodes the cut must remove.
@@ -176,10 +176,12 @@ describe("execRootsOnly", () => {
     expect(full.nodes.has("project>f")).toBe(true);
 
     const out = execRootsOnly(full, m);
+    // "project>f" runs on no thread and nothing calls it, so it is a root of the plain code flow and is kept.
     expect(keysOf(out)).toEqual(
       [
         full.root,
         "prog:main",
+        execFnId(full.root, "f"),
         execThreadId("main"),
         execFnId(execThreadId("main"), "main"),
         execThreadId("spawn:1"),
@@ -225,6 +227,26 @@ describe("execRootsOnly", () => {
     const full = buildExecScene(m);
     const out = execRootsOnly(full, m);
     expect(keysOf(out)).toEqual(["prog:main", full.root, execThreadId("main"), execFnId(execThreadId("main"), "main")].sort());
+  });
+
+  it("keeps the flat roots of plain code flow: an ungrounded thread's roots and the functions nothing calls", () => {
+    // No thread is grounded: main (an inferred entry) calls helper, and lone is called by nothing.
+    const m = model({
+      functions: [fn("main", 1), fn("helper", 2), fn("lone", 3), fn("leaf", 4)],
+      threads: [mainThread({ id: "main", kind: "main", grounded: false, roots: ["main"], reached: ["main", "helper", "leaf"] })],
+      calls: [
+        ["main", "helper"],
+        ["helper", "leaf"],
+      ],
+      unthreaded: ["lone"],
+    });
+    const full = buildExecScene(m);
+    expect(full.nodes.has("project>main")).toBe(true);
+    const out = execRootsOnly(full, m);
+    expect(keysOf(out)).toEqual([full.root, "project>lone", "project>main"].sort());
+    expect(out.nodes.get(full.root)?.children).toEqual(["project>main", "project>lone"]);
+    expect(out.nodes.has("project>helper")).toBe(false);
+    expect(edgesOf(out)).toEqual([]);
   });
 
   describe("a thread with many functions over two files", () => {

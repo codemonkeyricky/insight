@@ -7,8 +7,9 @@ The Flow tab draws the execution canvas of the scope: program, threads, coroutin
 
 - The tab opens on the canvas. `#/projects/:id/view/flow?scope=X` opens at X, and `fn=` opens on that function's first
   place. A `mode` parameter from the old views is ignored.
-- Roots only: a checkbox above the canvas writes `roots=1`. Each thread then shows only the functions it starts in
-  (`execRootsOnly` in `packages/flow/src/scene-filter.ts`). The layout of that cut is solved in the browser.
+- Roots only: a checkbox above the canvas writes `roots=1`. Each grounded thread then shows only the functions it starts
+  in, and the plain code flow shows only the functions nothing in the flow calls (`execRootsOnly` in
+  `packages/flow/src/scene-filter.ts`). The layout of that cut is solved in the browser.
 - A function's control-flow chart is drawn inside its box on the canvas. The exec model gives each function the
   chart's size (`ExecFunctionRef.chart`, from `layoutFunction` in `packages/flow/src/layout.ts`), the scene node keeps
   it (`SceneNode.chart`), and `sceneLeafSize` makes the box large enough to hold the chart under a header for the name.
@@ -19,11 +20,16 @@ The Flow tab draws the execution canvas of the scope: program, threads, coroutin
   server layout from before the charts is solved again.
 - A function's panel sits below the canvas. It shows the function's name and source line, where it runs ("Runs on
   <thread>", with the coroutine it runs in), the other places it runs, and the chart's stats and legend. A function in
-  the no-runtime group says "Plain call with no runtime context. Zoom out to see where it runs."
+  plain code flow says "Plain code flow, no runtime context found"
   (`apps/web/src/components/zoom/ExecFunctionPanel.tsx`).
-- The function panel also shows the call trail from its thread's roots and its Calls and Called by lists. A file
-  group, coroutine, thread or the no-runtime group shows its functions as pills and a sortable table
+- The function panel also shows its call trail and its Calls and Called by lists. The trail is the call path from its
+  thread's roots; a function in plain code flow has the trail project, then the function. A coroutine, thread or the
+  project (when it holds plain code flow) shows its functions as pills and a sortable table
   (`ExecContainerPanel.tsx`, `ExecLists.tsx`, helpers in `execMap.ts`).
+- The map's breadcrumb is the scene path: project, process, thread, coroutine, function. There is no file level.
+- The first view of a scope (no `fn=`) opens the project, every process box and every thread box, so it shows
+  process ▸ thread ▸ function boxes. Coroutines and function charts stay closed (`execFirstOpen` in `execMap.ts`). With
+  `fn=`, only the function's ancestors open.
 - With build targets in the IR, the root is a project holding one node per executable (Bazel `*_binary`, CMake
   `add_executable`), each with its own main thread and the threads it spawns.
 - Threads that take the same lock (including C++ RAII guards) are joined by a dotted `sync` edge; a channel joins its
@@ -236,7 +242,17 @@ It is the Flow tab's view since Phase 4 (see `.claude/plans/execution-canvas.md`
   `focusOf`. The canvas's source is `ExecStore`.
 - The canvas uses the generic engine in `packages/flow/src/scene.ts` and `scene-layout.ts`: the whole scene is laid
   out once, and zoom only changes which containers draw open, so nothing moves as the camera goes in.
-- `buildExecScene` (`packages/flow/src/exec-scene.ts`) groups a big container's functions by file, and a layered
-  container past 150 children is packed instead, because ELK's layered algorithm takes seconds past a few hundred.
+- The hierarchy is project ▸ process ▸ thread ▸ coroutine ▸ function (`buildExecScene`, `packages/flow/src/exec-scene.ts`).
+  The project is the root. A process box (kind `program`, labelled "Process" on screen) holds the threads of one build
+  target or spawned process. A function is drawn once in each thread or coroutine it runs in.
+- Runtime boxes are drawn only where grounded. A thread is grounded when its existence rests on evidence in the IR
+  (`ExecThread.grounded` in `packages/flow/src/exec-model.ts`): every spawn is, and a main thread is when one of its
+  roots is a program's `main` or a function named `main`. A main thread inferred only from the scope's unreferenced
+  entry functions is not grounded, and gets no thread box.
+- Plain code flow: the functions of an ungrounded thread, and the functions no thread runs, sit flat on the project, with
+  their call edges and no wrapper box. The project's note says "Code flow, no runtime context found in this scope." when
+  no thread is grounded. There are no file nodes and no "no runtime" group.
+- A container past `LAYERED_MAX_CHILDREN` (150) children is laid out in call columns (`callColumns` in
+  `packages/flow/src/scene-layout.ts`), not by ELK's layered algorithm, which takes seconds past a few hundred.
 - The demo capture saves each scope's layout as `scope/<key>/exec-layout.json`; the page uses it when it covers the
   scene, else it solves in the elkjs worker.

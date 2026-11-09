@@ -19,9 +19,6 @@ import {
 } from "@insight/flow";
 import type { MapBuild, MapNode, MapSelected } from "./source";
 
-/** File colour bands, in the order files are listed. Matches --band-0 .. --band-5 in styles.css. */
-export const BANDS = 6;
-
 /** The separator between a scope and a node id in a focus. A path cannot hold it. */
 const FOCUS_SEP = "\u0001";
 
@@ -37,17 +34,8 @@ export function splitExecFocus(focus: string): { scope: string; nodeId: string }
   return { scope: focus.slice(0, at), nodeId: focus.slice(at + FOCUS_SEP.length) };
 }
 
-/** A band for each file group of the scene, by its path (the note), in path order. */
-export function execFileBands(scene: Scene, bands = BANDS): Map<string, number> {
-  const paths = new Set<string>();
-  for (const n of scene.nodes.values()) if (n.kind === "file") paths.add(n.note ?? n.label);
-  const out = new Map<string, number>();
-  [...paths].sort().forEach((p, i) => out.set(p, i % Math.max(1, bands)));
-  return out;
-}
-
 /** A scene node as the map draws it. Undefined for an id that is not in the scene. */
-export function execMapNode(scene: Scene, id: string, bands?: ReadonlyMap<string, number>): MapNode | undefined {
+export function execMapNode(scene: Scene, id: string): MapNode | undefined {
   const n = scene.nodes.get(id);
   if (n === undefined) return undefined;
   const node: MapNode = { id, kind: n.kind, label: n.label, title: n.note ?? n.label };
@@ -55,10 +43,6 @@ export function execMapNode(scene: Scene, id: string, bands?: ReadonlyMap<string
   if (n.parent !== undefined) node.parent = n.parent;
   if (n.kind === "function" && n.ref !== undefined) node.ref = n.ref;
   if (n.chart !== undefined) node.chart = n.chart;
-  if (n.kind === "file") {
-    const band = bands?.get(n.note ?? n.label);
-    if (band !== undefined) node.band = band;
-  }
   return node;
 }
 
@@ -83,9 +67,12 @@ interface Where {
   coroutine?: string;
 }
 
+/** The caption of a function that runs on no thread: it is plain code flow on the project, with no runtime box. */
+export const PLAIN_FLOW_WORD = "Plain code flow, no runtime context found";
+
 /**
- * Where a node runs: the nearest thread above it, and the nearest coroutine between the two. A node in the no-runtime
- * group, or with no thread above it, runs nowhere.
+ * Where a node runs: the nearest thread above it, and the nearest coroutine between the two. A function placed flat on
+ * the project (plain code flow), or with no thread above it, runs nowhere.
  */
 function whereOf(scene: Scene, nodeId: string): Where {
   let coroutine: string | undefined;
@@ -100,9 +87,9 @@ function whereOf(scene: Scene, nodeId: string): Where {
   return { runtime: "none" };
 }
 
-/** A placement's link text: "Main thread", "Main thread in coroutine handle", or the no-runtime group. */
+/** A placement's link text: "Main thread", "Main thread in coroutine handle", or the plain code flow. */
 function placeLabel(w: Where): string {
-  if (w.runtime === "none") return "No runtime context";
+  if (w.runtime === "none") return PLAIN_FLOW_WORD;
   return w.runtime === "coroutine" ? `${w.thread} in coroutine ${w.coroutine}` : (w.thread ?? "");
 }
 
@@ -134,15 +121,25 @@ export function execSelected(scene: Scene, fns: ReadonlyMap<string, ExecFunction
 }
 
 /**
- * The map of a laid-out scene for a node: the node and its ancestors open, everything else closed. `fns` (the model's
- * functions by id) adds what the function panel shows for a function node.
+ * The nodes open in a scope's first view (the project, with no function in the URL): the project, and every process and
+ * thread box, so the view shows process ▸ thread ▸ function boxes. Coroutines and function charts stay closed.
+ */
+export function execFirstOpen(scene: Scene): Set<string> {
+  const open = sceneOpenFor(scene, scene.root);
+  for (const n of scene.nodes.values()) if ((n.kind === "program" || n.kind === "thread") && n.children.length > 0) open.add(n.id);
+  return open;
+}
+
+/**
+ * The map of a laid-out scene for a node: the node and its ancestors open, everything else closed. The project's own
+ * map (the first view) opens the nesting instead, see execFirstOpen. `fns` (the model's functions by id) adds what the
+ * function panel shows for a function node.
  */
 export function execBuild(scene: Scene, layout: SceneLayout, scope: string, nodeId: string, fns?: ReadonlyMap<string, ExecFunctionRef>): MapBuild {
-  const open = sceneOpenFor(scene, nodeId);
+  const open = nodeId === scene.root ? execFirstOpen(scene) : sceneOpenFor(scene, nodeId);
   const placed = placeSceneLayout(scene, layout, open);
   const edges = placeSceneEdges(scene, open, placed.rects);
-  const bands = execFileBands(scene);
-  const node = (id: string) => execMapNode(scene, id, bands);
+  const node = (id: string) => execMapNode(scene, id);
   const out: MapBuild = {
     focus: execFocus(scope, nodeId),
     nodeId,
@@ -193,7 +190,7 @@ export interface ExecPlacement {
   nodeId: string;
   /** The thread's scene id, or EXEC_PROJECT_ROOT for plain code flow. "" when no thread or project is above the node. */
   thread: string;
-  /** Ancestors above the node. A placement directly in its thread is shallower than one in a coroutine or a file group. */
+  /** Ancestors above the node. A placement directly in its thread is shallower than one in a coroutine. */
   depth: number;
 }
 
@@ -210,7 +207,7 @@ export interface ExecIndex {
   placements: ReadonlyMap<string, readonly ExecPlacement[]>;
 }
 
-/** The thread (its scene id) a node runs on, or the no-runtime group. Undefined for a node that runs nowhere. */
+/** The thread (its scene id) a node runs on, or the project for plain code flow. Undefined for a node with no project above it. */
 export function execThreadKeyOf(scene: Scene, nodeId: string): string | undefined {
   let cur: string | undefined = nodeId;
   while (cur !== undefined) {
@@ -327,15 +324,25 @@ export function execDegrees(index: ExecIndex, fnId: string): { calls: number; ca
  * The shortest call path from a root of the focused placement's thread to the function, the function last. Calls count
  * only between the thread's functions (its reached ones); an await of a coroutine is a step from each function that
  * dispatches it to the coroutine's target. Ties go to the smaller ids, so the path is the same whatever the order.
- * Undefined for a node that is not a function, for a function on no thread (the no-runtime group), or when no path
- * exists. A root's trail is the root alone.
+ * A function in plain code flow (placed on the project, no thread) has the trail project, then the function. Undefined
+ * for a node that is not a function, or when no path exists. A root's trail is the root alone.
  */
 export function execTrail(index: ExecIndex, nodeId: string): ExecLink[] | undefined {
   const node = index.scene.nodes.get(nodeId);
   const target = node?.ref;
   if (node === undefined || node.kind !== "function" || target === undefined) return undefined;
   const threadKey = execThreadKeyOf(index.scene, nodeId);
-  if (threadKey === undefined || threadKey === EXEC_PROJECT_ROOT) return undefined;
+  if (threadKey === undefined) return undefined;
+  if (threadKey === EXEC_PROJECT_ROOT) {
+    const project: ExecLink = {
+      id: EXEC_PROJECT_ROOT,
+      name: index.scene.nodes.get(EXEC_PROJECT_ROOT)?.label ?? "Project",
+      file: "",
+      line: 0,
+      nodeId: EXEC_PROJECT_ROOT,
+    };
+    return [project, { ...linkOf(index, target), nodeId }];
+  }
   const thread = index.threads.get(threadKey);
   if (thread === undefined) return undefined;
 
@@ -380,16 +387,11 @@ export function execTrail(index: ExecIndex, nodeId: string): ExecLink[] | undefi
   });
 }
 
-/** The scene nodes of the functions a container holds: its function children, and those inside its file groups. */
+/** The scene nodes of the functions a container holds directly: a thread's, a coroutine's, or the project's plain code flow. */
 export function execChildFunctions(scene: Scene, nodeId: string): string[] {
   const out: string[] = [];
   for (const c of scene.nodes.get(nodeId)?.children ?? []) {
-    const child = scene.nodes.get(c);
-    if (child === undefined) continue;
-    if (child.kind === "function") out.push(child.id);
-    else if (child.kind === "file") {
-      for (const g of child.children) if (scene.nodes.get(g)?.kind === "function") out.push(g);
-    }
+    if (scene.nodes.get(c)?.kind === "function") out.push(c);
   }
   return out;
 }

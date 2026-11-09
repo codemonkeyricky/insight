@@ -2,6 +2,7 @@
 // Calls and Called by lists, a container's pills, and the table of its functions. Each link calls `onOpen` with the
 // placement's node id, so the map moves there; the href is the same URL for a middle click or a copy.
 import { useMemo, useState, type ReactNode } from "react";
+import { EXEC_PROJECT_ROOT } from "@insight/flow";
 import { hrefView } from "../../router";
 import {
   RUNTIME_WORD,
@@ -31,7 +32,8 @@ function FnLink({
   children,
 }: {
   base: ListBase;
-  fn: string;
+  /** The function the link names. Undefined for a link to the project, which names no function. */
+  fn?: string;
   nodeId?: string;
   className?: string;
   children: ReactNode;
@@ -40,7 +42,7 @@ function FnLink({
   return (
     <a
       className={className}
-      href={hrefView(base.id, "flow", { scope: base.scope, fn, roots: base.roots })}
+      href={hrefView(base.id, "flow", { scope: base.scope, ...(fn !== undefined ? { fn } : {}), roots: base.roots })}
       onClick={(e) => {
         e.preventDefault();
         base.onOpen(nodeId);
@@ -59,7 +61,13 @@ export function ExecTrail({ base, steps }: { base: ListBase; steps: ExecLink[] }
       {steps.map((s, i) => (
         <span key={`${i}:${s.id}`}>
           {i > 0 && <span className="sep"> › </span>}
-          {i === last ? <strong>{s.name}</strong> : <FnLink base={base} fn={s.id} nodeId={s.nodeId}>{s.name}</FnLink>}
+          {i === last ? (
+            <strong>{s.name}</strong>
+          ) : (
+            <FnLink base={base} fn={s.id === EXEC_PROJECT_ROOT ? undefined : s.id} nodeId={s.nodeId}>
+              {s.name}
+            </FnLink>
+          )}
         </span>
       ))}
     </nav>

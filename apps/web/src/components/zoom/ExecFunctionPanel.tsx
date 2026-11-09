@@ -3,9 +3,9 @@
 // chart itself is drawn in the function's box on the map (BoxChart.tsx). The stats come from the flow store; the rest
 // from the map's build and the scope's index.
 import { useEffect, useMemo, useState } from "react";
-import { NO_RUNTIME_NOTE, type FunctionFlow } from "@insight/flow";
+import type { FunctionFlow } from "@insight/flow";
 import { hrefFile, hrefView } from "../../router";
-import { execCallLists, execTrail, type ExecIndex } from "../../zoom/execMap";
+import { execCallLists, execTrail, PLAIN_FLOW_WORD, type ExecIndex } from "../../zoom/execMap";
 import type { ZoomStore } from "../../zoom/scene";
 import type { MapSelected } from "../../zoom/source";
 import { CallLists, ExecTrail, type ListBase } from "./ExecLists";
@@ -35,9 +35,9 @@ interface ChartState {
   error?: string;
 }
 
-/** Where the function runs, in words. A function with no runtime context says so, in the same words the map's note does. */
+/** Where the function runs, in words. A function with no runtime context is plain code flow, and says so. */
 export function runsLine(s: MapSelected): string {
-  if (s.runtime === "none") return NO_RUNTIME_NOTE;
+  if (s.runtime === "none") return PLAIN_FLOW_WORD;
   const thread = `Runs on ${s.thread ?? "a thread"}`;
   return s.runtime === "coroutine" ? `${thread} in coroutine ${s.coroutine ?? ""}` : thread;
 }

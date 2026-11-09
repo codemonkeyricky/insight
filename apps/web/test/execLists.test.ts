@@ -268,10 +268,17 @@ describe("trail", () => {
     expect(trail?.map((l) => l.nodeId)).toEqual(["thread:w>worker", "thread:w>load"]);
   });
 
-  it("is undefined when no path exists, for a function on no thread, and for a non-function", () => {
+  it("is the project, then the function, for a function in plain code flow", () => {
+    const { index } = mainScene();
+    expect(execTrail(index, `${EXEC_PROJECT_ROOT}>lonely`)).toEqual([
+      { id: EXEC_PROJECT_ROOT, name: "Project", file: "", line: 0, nodeId: EXEC_PROJECT_ROOT },
+      { id: "lonely", name: "lonely", file: "util.py", line: 3, nodeId: `${EXEC_PROJECT_ROOT}>lonely` },
+    ]);
+  });
+
+  it("is undefined when no path exists, and for a non-function", () => {
     const { index } = mainScene();
     expect(execTrail(index, "thread:main>orphan")).toBeUndefined();
-    expect(execTrail(index, `${EXEC_PROJECT_ROOT}>lonely`)).toBeUndefined();
     expect(execTrail(index, "thread:main")).toBeUndefined();
   });
 

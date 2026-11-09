@@ -14,8 +14,8 @@ describe("runsLine", () => {
     expect(runsLine(sel({ runtime: "coroutine", thread: "Main thread", coroutine: "step loop" }))).toBe("Runs on Main thread in coroutine step loop");
   });
 
-  it("says exactly the no-runtime note for a function that runs nowhere", () => {
-    expect(runsLine(sel({ runtime: "none", note: NO_RUNTIME_NOTE }))).toBe("Plain call with no runtime context. Zoom out to see where it runs.");
-    expect(runsLine(sel({ runtime: "none" }))).toBe(NO_RUNTIME_NOTE);
+  it("says plain code flow, with no runtime context, for a function that runs nowhere", () => {
+    expect(runsLine(sel({ runtime: "none", note: NO_RUNTIME_NOTE }))).toBe("Plain code flow, no runtime context found");
+    expect(runsLine(sel({ runtime: "none" }))).toBe("Plain code flow, no runtime context found");
   });
 });
