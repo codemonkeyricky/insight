@@ -1,5 +1,3 @@
-import { useState } from "react";
-
 /** One row of the layers list: a page of the project, or a lens of the scope. */
 export interface LayerLink {
   id: string;
@@ -11,15 +9,24 @@ export interface LayerLink {
   reason?: string;
 }
 
+/** What the map shows: the frames, the call edges, and the findings layer (clouds and markers). */
+export interface LayerState {
+  frames: boolean;
+  calls: boolean;
+  findings: boolean;
+}
+
 interface Props {
   links: LayerLink[];
+  shown: LayerState;
+  /** How many findings the project has, once the findings layer has loaded them. */
+  findingCount?: number;
+  onChange: (key: keyof LayerState, on: boolean) => void;
   onClose: () => void;
 }
 
 /** The layers card at the top left of the sheet: every page of the project and the lenses of the scope, one list. */
-export function LayersPanel({ links, onClose }: Props) {
-  const [frames, setFrames] = useState(true);
-  const [calls, setCalls] = useState(true);
+export function LayersPanel({ links, shown, findingCount, onChange, onClose }: Props) {
   const pages = links.filter((l) => l.group === "page");
   const lenses = links.filter((l) => l.group === "lens");
   return (
@@ -57,10 +64,14 @@ export function LayersPanel({ links, onClose }: Props) {
       )}
       <h3 className="sh-layer-head">Show on the map</h3>
       <label className="sh-check">
-        <input type="checkbox" checked={frames} onChange={(e) => setFrames(e.target.checked)} /> Frames
+        <input type="checkbox" checked={shown.frames} onChange={(e) => onChange("frames", e.target.checked)} /> Frames
       </label>
       <label className="sh-check">
-        <input type="checkbox" checked={calls} onChange={(e) => setCalls(e.target.checked)} /> Calls
+        <input type="checkbox" checked={shown.calls} onChange={(e) => onChange("calls", e.target.checked)} /> Calls
+      </label>
+      <label className="sh-check">
+        <input type="checkbox" checked={shown.findings} onChange={(e) => onChange("findings", e.target.checked)} /> Findings
+        {findingCount !== undefined && <span className="sh-count-inline"> {findingCount}</span>}
       </label>
       <details className="sh-keys">
         <summary>? Keyboard and mouse</summary>

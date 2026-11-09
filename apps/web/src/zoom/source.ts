@@ -19,6 +19,8 @@ export interface MapNode {
   parent?: string;
   /** The entity the box draws, such as the function id whose chart the box holds. */
   ref?: string;
+  /** The source file a function is written in (a path, as the model names it). Used to group boxes into cards. */
+  file?: string;
   /**
    * The natural size of the control-flow chart the box's expansion draws. The box itself is always drawn at its compact
    * size, with its name only.
@@ -145,6 +147,34 @@ export function nearestBox(boxes: readonly Box[], depth: (id: string) => number,
   }
   return best?.id;
 }
+
+/**
+ * The runtime a drawn frame or box runs on, which sets its line type on the sheet: a process (thick ink), a thread (thin
+ * verdigris), a coroutine (dashed ochre) or none (dotted graphite, plain code with no runtime context).
+ */
+export type RuntimeLine = "process" | "thread" | "coroutine" | "none";
+
+/**
+ * The line type of a node of `kind`. A program is a process and a thread or coroutine is its own kind. A function takes
+ * the line of the container it sits in (`parentLine`), so a function in a thread is drawn as thread code.
+ */
+export function runtimeLine(kind: string, parentLine: RuntimeLine = "none"): RuntimeLine {
+  switch (kind) {
+    case "program":
+      return "process";
+    case "thread":
+      return "thread";
+    case "coroutine":
+      return "coroutine";
+    case "function":
+      return parentLine;
+    default:
+      return "none";
+  }
+}
+
+/** The class a node is drawn with for its line type, such as `zm-line-thread`. */
+export const lineClass = (line: RuntimeLine): string => `zm-line-${line}`;
 
 /** The edge's classes: stubs dashed, candidates dotted, spawns and dispatches marked by kind, sync edges by what is shared. */
 export function edgeClass(e: Pick<MapEdge, "stub" | "candidate" | "kind" | "how">): string {

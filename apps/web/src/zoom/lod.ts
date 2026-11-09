@@ -73,3 +73,16 @@ export function lodBucket(k: number): number {
 
 /** The scale a bucket stands for: the scale at the bucket's centre, 2^(bucket / 4). */
 export const bucketScale = (bucket: number): number => 2 ** (bucket / 4);
+
+/**
+ * A function tile smaller than this many screen pixels tall is too small to read: the map draws group cards instead
+ * (see cards.ts). The far tier starts where the median tile falls below it.
+ */
+export const FAR_TILE_PX = 22;
+/**
+ * Between the far tier and the near one, a function tile under this many screen pixels tall is drawn bare (no label)
+ * inside its card: the intermediate state, where the cards show their functions as tiles before any text.
+ */
+export const MID_TILE_PX = 44;
+/** The least distance on screen between two count badges (px): a three-digit badge is about 27 px wide. */
+export const BADGE_SPACE_PX = 34;

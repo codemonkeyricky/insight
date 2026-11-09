@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { api, type FileEntry, type FileFlowSummary } from "../../api";
+import { api, type FileEntry, type FileFlowSummary, type FindingRow } from "../../api";
 import { hrefFlow, hrefView, inScope } from "../../router";
 import { ExecStore } from "../../zoom/execStore";
+import { findingCounts } from "../../zoom/findingsLayer";
 import { ZoomStore } from "../../zoom/scene";
 import type { MapBuild } from "../../zoom/source";
+import { zoneOf } from "../../zoom/zones";
 import { scopeKind } from "../ScopeNote";
-import { LayersPanel, type LayerLink } from "../sheet/LayersPanel";
+import { LayersPanel, type LayerLink, type LayerState } from "../sheet/LayersPanel";
 import { SidePanel } from "../sheet/SidePanel";
 import { TitleBlock, type TitleFacts } from "../sheet/TitleBlock";
 import { ExecContainerPanel } from "../zoom/ExecContainerPanel";
@@ -63,17 +65,45 @@ interface Props {
  */
 /** The width the side panel takes over the map, with its gap on each side. */
 const SIDE_INSET = 380 + 2 * 16;
+/** The Layers panel (200 px at 16 px from the left edge) and a 16 px gap: the map's left inset while it is open. */
+const LAYERS_INSET = 200 + 16 + 16;
 
 export function FlowView({ id, files, scope, fn, roots, line, layers, facts, emphasis, fileSource }: Props) {
   const store = useMemo(() => new ZoomStore(id), [id]);
   const exec = useMemo(() => new ExecStore(id, roots), [id, roots]);
   const kind = scopeKind(scope, files);
+  /** What the map shows: frames and calls on by default, findings off until the reader turns the layer on. */
+  const [shown, setShown] = useState<LayerState>({ frames: true, calls: true, findings: false });
+  const findingsOn = shown.findings;
+  /** The findings of the project, loaded the first time the findings layer is on. */
+  const [found, setFound] = useState<{ id: string; rows: FindingRow[] } | undefined>();
+  useEffect(() => {
+    if (!findingsOn || found?.id === id) return;
+    let cancelled = false;
+    // A failed load shows no findings rather than breaking the map; the layer stays on and the count reads zero.
+    api.findings(id).then(
+      (rows) => {
+        if (!cancelled) setFound({ id, rows });
+      },
+      () => {
+        if (!cancelled) setFound({ id, rows: [] });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [id, findingsOn, found?.id]);
+  const findingRows = found?.id === id ? found.rows : undefined;
+  const counts = useMemo(() => (findingRows ? findingCounts(findingRows) : undefined), [findingRows]);
+  const mapLayers = useMemo(() => ({ frames: shown.frames, calls: shown.calls }), [shown.frames, shown.calls]);
   /** The function the map selects, with its construct. */
   const [sel, setSel] = useState<MapSelection>();
   /** The build the map is focused on. */
   const [focus, setFocus] = useState<MapBuild>();
   /** The build the reader closed the panel on, and the scope and function it was closed under. */
   const [closed, setClosed] = useState<{ build: MapBuild | undefined; at: string }>();
+  /** The title block's full table, when the reader opened it. It stays compact while a chart is open. */
+  const [titleFull, setTitleFull] = useState(false);
   // The Layers card covers the map on a phone, so it starts closed on narrow screens.
   const [layersOpen, setLayersOpen] = useState(() => typeof window === "undefined" || window.innerWidth > 720);
   /** The element the side panel hands the exec panel to. A portal draws the panel there from the map's detail hook. */
@@ -85,8 +115,13 @@ export function FlowView({ id, files, scope, fn, roots, line, layers, facts, emp
   const dismissed = closed !== undefined && closed.at === at && closed.build === focus;
   const open = (fileSource || focusNested) && !dismissed;
   const selectedName = fn ? fn.slice(fn.indexOf("#") + 1) : "none";
+  // The zone the focused node sits in, by the centre of its box (zones.ts). A focus with no box has no zone.
+  const focusRect = focus?.placed.rects.get(focus.nodeId);
+  const zone = focusRect ? zoneOf(focusRect).label : undefined;
   // The side panel (380px) sits 16px in from the right edge with a 16px gap: on a wide screen the map keeps clear of it.
   const inset = open && (typeof window === "undefined" || window.innerWidth > 720) ? SIDE_INSET : 0;
+  // The Layers card sits over the map's left edge on a desktop: the fit and the rulers keep clear of it.
+  const leftInset = layersOpen && (typeof window === "undefined" || window.innerWidth > 860) ? LAYERS_INSET : 0;
 
   return (
     <>
@@ -104,6 +139,9 @@ export function FlowView({ id, files, scope, fn, roots, line, layers, facts, emp
             onFocus={setFocus}
             hint={false}
             inset={inset}
+            leftInset={leftInset}
+            layers={mapLayers}
+            findings={findingsOn ? counts ?? new Map<string, number>() : undefined}
             detail={(build, openNode) => {
               const view = exec.viewOf(build);
               if (view === undefined || slot === null) return null;
@@ -120,13 +158,25 @@ export function FlowView({ id, files, scope, fn, roots, line, layers, facts, emp
           />
         </div>
         {layersOpen ? (
-          <LayersPanel links={layers} onClose={() => setLayersOpen(false)} />
+          <LayersPanel
+            links={layers}
+            shown={shown}
+            findingCount={findingRows?.length}
+            onChange={(key, on) => setShown((s) => ({ ...s, [key]: on }))}
+            onClose={() => setLayersOpen(false)}
+          />
         ) : (
           <button type="button" className="sh-card sh-layers-open" onClick={() => setLayersOpen(true)}>
             Layers
           </button>
         )}
-        <TitleBlock facts={{ ...facts, selected: selectedName }} emphasis={emphasis} />
+        <TitleBlock
+          facts={{ ...facts, selected: selectedName, zone: zone ?? "—" }}
+          emphasis={emphasis}
+          expanded={titleFull}
+          locked={open}
+          onToggle={() => setTitleFull((v) => !v)}
+        />
         <SidePanel
           open={open}
           label="Detail"
