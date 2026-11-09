@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildExecScene, NO_RUNTIME_GROUP, type ExecCoroutine, type ExecFunctionRef, type ExecModel, type ExecModelStats, type ExecThread, type Scene } from "@insight/flow";
+import { buildExecScene, EXEC_PROJECT_ROOT, type ExecCoroutine, type ExecFunctionRef, type ExecModel, type ExecModelStats, type ExecThread, type Scene } from "@insight/flow";
 import {
   CALL_LIST_MAX,
   CHIP_MAX,
@@ -48,6 +48,7 @@ const stats: ExecModelStats = {
 const thread = (id: string, roots: string[], reached: string[], extra: Partial<ExecThread> = {}): ExecThread => ({
   id,
   kind: id === "main" ? "main" : "thread",
+  grounded: true,
   roots,
   reach: reached.length,
   reached: [...reached].sort(),
@@ -164,7 +165,7 @@ describe("execIndex and the placement a link opens", () => {
     const { scene } = mainScene();
     expect(execThreadKeyOf(scene, "co:main:step>stepHelper")).toBe("thread:main");
     expect(execThreadKeyOf(scene, "thread:w")).toBe("thread:w");
-    expect(execThreadKeyOf(scene, `${NO_RUNTIME_GROUP}>lonely`)).toBe(NO_RUNTIME_GROUP);
+    expect(execThreadKeyOf(scene, `${EXEC_PROJECT_ROOT}>lonely`)).toBe(EXEC_PROJECT_ROOT);
     expect(execThreadKeyOf(scene, "missing")).toBeUndefined();
   });
 });
@@ -203,7 +204,7 @@ describe("calls and called by", () => {
     const { index } = mainScene();
     expect(execCallLists(index, "thread:main>target").calls.items).toEqual([]);
     expect(execCallLists(index, "thread:main>orphan").calledBy.items).toEqual([]);
-    expect(execCallLists(index, `${NO_RUNTIME_GROUP}>lonely`)).toEqual({ calls: { items: [], more: 0 }, calledBy: { items: [], more: 0 } });
+    expect(execCallLists(index, `${EXEC_PROJECT_ROOT}>lonely`)).toEqual({ calls: { items: [], more: 0 }, calledBy: { items: [], more: 0 } });
   });
 
   it("is empty for a node that is not a function", () => {
@@ -270,7 +271,7 @@ describe("trail", () => {
   it("is undefined when no path exists, for a function on no thread, and for a non-function", () => {
     const { index } = mainScene();
     expect(execTrail(index, "thread:main>orphan")).toBeUndefined();
-    expect(execTrail(index, `${NO_RUNTIME_GROUP}>lonely`)).toBeUndefined();
+    expect(execTrail(index, `${EXEC_PROJECT_ROOT}>lonely`)).toBeUndefined();
     expect(execTrail(index, "thread:main")).toBeUndefined();
   });
 
@@ -309,10 +310,10 @@ describe("chips and the table", () => {
 
   it("lists the functions of a no-runtime group, with their runtime and file", () => {
     const { scene, index } = mainScene();
-    expect(execChips(scene, NO_RUNTIME_GROUP).items).toEqual([{ nodeId: `${NO_RUNTIME_GROUP}>lonely`, id: "lonely", name: "lonely" }]);
-    expect(execRows(index, NO_RUNTIME_GROUP)).toEqual([
+    expect(execChips(scene, EXEC_PROJECT_ROOT).items).toEqual([{ nodeId: `${EXEC_PROJECT_ROOT}>lonely`, id: "lonely", name: "lonely" }]);
+    expect(execRows(index, EXEC_PROJECT_ROOT)).toEqual([
       {
-        nodeId: `${NO_RUNTIME_GROUP}>lonely`,
+        nodeId: `${EXEC_PROJECT_ROOT}>lonely`,
         id: "lonely",
         name: "lonely",
         file: "util.py",
@@ -337,16 +338,15 @@ describe("chips and the table", () => {
     expect(execRows(index, "thread:main").every((r) => !("steps" in r))).toBe(true);
   });
 
-  it("files the functions of a big container through its file groups, and caps the pills", () => {
+  it("lists a big container's functions directly under the thread, and caps the pills", () => {
     const wideFns = Array.from({ length: 30 }, (_, i) => fn(`f${String(i).padStart(2, "0")}`, i % 2 === 0 ? "a.py" : "b.py", i + 1));
     const wideModel = modelOf(wideFns, [thread("wide", ["f00"], wideFns.map((f) => f.id))]);
     const scene = buildExecScene(wideModel);
     const index = execIndex(scene, wideModel);
-    // Thread wide holds two file groups, each with 15 functions: the pills see them all.
-    expect(execChildFunctions(scene, "thread:wide").length).toBe(30);
-    expect(execChildFunctions(scene, "thread:wide>file:a.py")).toHaveLength(15);
+    // Thread wide holds all 30 functions directly, with no file node between them and the thread.
+    expect(execChildFunctions(scene, "thread:wide")).toHaveLength(30);
     expect(execRows(index, "thread:wide")).toHaveLength(30);
-    expect(execRows(index, "thread:wide>file:a.py").every((r) => r.file === "a.py")).toBe(true);
+    expect(execRows(index, "thread:wide").some((r) => r.file === "a.py") && execRows(index, "thread:wide").some((r) => r.file === "b.py")).toBe(true);
 
     const hubFns = [fn("hub", "hub.py", 1), ...Array.from({ length: 65 }, (_, i) => fn(`c${String(i).padStart(2, "0")}`, "hub.py", 10 + i))];
     const hubModel = modelOf(hubFns, [thread("main", ["hub"], hubFns.map((f) => f.id))]);

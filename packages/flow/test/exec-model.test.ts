@@ -239,7 +239,7 @@ describe("execModel: limits and ordering", () => {
   it("has only the main thread, with nothing in it, for an empty project", () => {
     const model = execModel([], [], "");
     expect(model).toMatchObject({ truncated: false, functions: [], dispatches: [] });
-    expect(model.threads).toEqual([{ id: "main", kind: "main", roots: [], reach: 0, reached: [], coroutines: [], coroutineOnly: [] }]);
+    expect(model.threads).toEqual([{ id: "main", kind: "main", grounded: false, roots: [], reach: 0, reached: [], coroutines: [], coroutineOnly: [] }]);
     expect(model).toMatchObject({ calls: [], unthreaded: [] });
     expect(model.stats).toMatchObject({ threads: 1, spawns: 0, functionsInScope: 0, functionsThreaded: 0 });
   });

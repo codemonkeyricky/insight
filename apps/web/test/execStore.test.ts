@@ -57,6 +57,7 @@ const model = (): ExecModel => {
   const main: ExecThread = {
     id: "main",
     kind: "main",
+    grounded: true,
     roots: ["main"],
     reach: 3,
     reached: ["helper", "leaf", "main"],
@@ -123,10 +124,10 @@ describe("ExecStore", () => {
     fixture.model = model();
     const store = new ExecStore("p1", true);
     // helper is not a root, so the roots-only scene has no node for it: a URL that names it resolves to the root.
-    expect(await store.resolve("", "helper")).toBe(execFocus("", "program"));
+    expect(await store.resolve("", "helper")).toBe(execFocus("", "project"));
     const build = await store.build(await store.resolve("", "main"));
     expect(store.url(build, build.focus)).toEqual({ scope: "", fn: "main", roots: true });
     await expect(store.ensureFocus(execFocus("", "thread:main>helper"))).rejects.toThrow("Nothing in the execution map");
-    expect([...build.placed.rects.keys()].sort()).toEqual(["program", "thread:main", "thread:main>main"]);
+    expect([...build.placed.rects.keys()].sort()).toEqual(["prog:main", "project", "thread:main", "thread:main>main"]);
   });
 });

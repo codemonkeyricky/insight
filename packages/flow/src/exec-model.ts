@@ -95,6 +95,13 @@ export interface ExecCoroutine {
 export interface ExecThread {
   id: string;
   kind: ExecThreadKind;
+  /**
+   * True when the thread's existence rests on evidence in the IR: every spawn, and a main thread whose roots include a
+   * real entry (a program's `main`, or a function named `main`). False for a main thread inferred only from the scope's
+   * unreferenced entry functions. A saved model without this field: a main thread is grounded only when a root is named
+   * `main`, and every other thread is grounded.
+   */
+  grounded: boolean;
   spawn?: ExecSpawn;
   /** The functions the thread starts in. */
   roots: string[];
@@ -677,9 +684,12 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       if (!take(co.target)) continue;
       coroutines.push({ ...co, callees: co.callees.filter(take) });
     }
+    // A main thread is grounded when a root is a program's main or a function named `main`; a spawn always is.
+    const grounded = p.kind !== "main" || p.roots.some((r) => programMains.has(r) || fns.get(r)?.name === "main");
     return {
       id: p.id,
       kind: p.kind,
+      grounded,
       ...(p.spawn !== undefined ? { spawn: p.spawn } : {}),
       roots,
       reach: p.reach.size,

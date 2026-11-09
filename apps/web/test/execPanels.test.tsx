@@ -42,6 +42,7 @@ const model = (): ExecModel => {
   const main: ExecThread = {
     id: "main",
     kind: "main",
+    grounded: true,
     roots: ["main"],
     reach: 3,
     reached: ["helper", "leaf", "main"],
@@ -171,7 +172,7 @@ describe("the panels", () => {
     const program = renderToStaticMarkup(
       <ExecContainerPanel id="p1" scope="src" roots={false} store={new ZoomStore("p1")} index={index} nodeId={scene.root} onOpen={() => {}} />,
     );
-    expect(program).toContain("Program");
+    expect(program).toContain("Project");
     expect(program).not.toContain("exec-table");
   });
 });

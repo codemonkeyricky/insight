@@ -1,5 +1,5 @@
 // Cuts a scene down to part of itself. The execution canvas's "roots only" view is the one cut the app makes: each
-// thread keeps the functions it starts in, with the thread and the file groups that hold them. Pure: the scene and
+// thread keeps the functions it starts in, with the thread and the process box that holds it. Pure: the scene and
 // the model are read, never changed.
 import { execFnId, execThreadId } from "./exec-scene.js";
 import type { ExecModel } from "./exec-model.js";
@@ -34,8 +34,8 @@ export function keepScene(scene: Scene, keep: ReadonlySet<string>): Scene {
 /**
  * The execution scene's roots-only view. For each thread of the model it keeps the thread node (even when the thread
  * starts no function that the scene holds) and the placement of each of its roots in that thread, when the scene has
- * one. Coroutines and the no-runtime group are cut, and so are the functions only called from the roots. A root's
- * file group stays, as an ancestor of the root.
+ * one. Coroutines and the plain code flow are cut, and so are the functions only called from the roots. A root's
+ * process box stays, as an ancestor of the thread.
  */
 export function execRootsOnly(scene: Scene, model: ExecModel): Scene {
   const keep = new Set<string>();

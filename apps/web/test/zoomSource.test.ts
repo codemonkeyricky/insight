@@ -4,7 +4,7 @@ import {
   CHART_PAD,
   EXEC_LEVELS,
   NO_RUNTIME_NOTE,
-  NO_RUNTIME_GROUP,
+  EXEC_PROJECT_ROOT,
   layoutScene,
   type ExecFunctionRef,
   type LayoutGraph,
@@ -200,20 +200,20 @@ describe("exec selected function", () => {
   });
   // The nodes are listed in the order the scene builds them, so the placements come out in that order.
   const list = [
-    n("program", "program", undefined),
-    n("thread:main", "thread", "program", { label: "Main thread" }),
+    n(EXEC_PROJECT_ROOT, "project", undefined, { label: "Project" }),
+    n("thread:main", "thread", EXEC_PROJECT_ROOT, { label: "Main thread" }),
     n("thread:main>a#help", "function", "thread:main", { label: "help", ref: "a#help" }),
     n("co:main:c", "coroutine", "thread:main", { label: "step loop" }),
     n("co:main:c>a#help", "function", "co:main:c", { label: "help", ref: "a#help" }),
     n("co:main:c>c#step", "function", "co:main:c", { label: "step", ref: "c#step", note: "A step." }),
-    n("thread:w", "thread", "program", { label: "Thread · work" }),
+    n("thread:w", "thread", EXEC_PROJECT_ROOT, { label: "Thread · work" }),
     n("thread:w>a#help", "function", "thread:w", { label: "help", ref: "a#help" }),
-    n(NO_RUNTIME_GROUP, "group", "program", { label: "No runtime context" }),
-    n(`${NO_RUNTIME_GROUP}>f#plain`, "function", NO_RUNTIME_GROUP, { label: "plain", ref: "f#plain", note: NO_RUNTIME_NOTE }),
+    // A plain function, with no runtime box: it sits on the project.
+    n(`${EXEC_PROJECT_ROOT}>f#plain`, "function", EXEC_PROJECT_ROOT, { label: "plain", ref: "f#plain", note: NO_RUNTIME_NOTE }),
   ];
   const nodes = new Map(list.map((x) => [x.id, x]));
   for (const x of list) if (x.parent !== undefined) nodes.get(x.parent)?.children.push(x.id);
-  const scene: Scene = { root: "program", nodes, edges: [], levels: EXEC_LEVELS };
+  const scene: Scene = { root: EXEC_PROJECT_ROOT, nodes, edges: [], levels: EXEC_LEVELS };
   const fns = new Map<string, ExecFunctionRef>([
     ["a#help", { id: "a#help", name: "help", file: "src/a.py", line: 7, inScope: true, runtime: "thread" }],
     ["c#step", { id: "c#step", name: "step", file: "src/c.py", line: 3, inScope: true, runtime: "coroutine" }],
@@ -250,8 +250,8 @@ describe("exec selected function", () => {
     });
   });
 
-  it("says a function in the no-runtime group runs nowhere, with the explanation", () => {
-    const sel = execSelected(scene, fns, `${NO_RUNTIME_GROUP}>f#plain`);
+  it("says a plain function on the project runs nowhere, with the explanation", () => {
+    const sel = execSelected(scene, fns, `${EXEC_PROJECT_ROOT}>f#plain`);
     expect(sel).toMatchObject({ runtime: "none", note: NO_RUNTIME_NOTE, placements: [] });
     expect(sel?.thread).toBeUndefined();
   });
@@ -266,8 +266,8 @@ describe("exec selected function", () => {
     const layout = await layoutScene(scene, column);
     const build = execBuild(scene, layout, "src", "co:main:c>c#step", fns);
     expect(build.selected).toMatchObject({ ref: "c#step", runtime: "coroutine", coroutine: "step loop" });
-    expect(build.crumbs.map((c) => c.label)).toEqual(["program", "Main thread", "step loop", "step"]);
-    expect(execBuild(scene, layout, "src", "program", fns).selected).toBeUndefined();
+    expect(build.crumbs.map((c) => c.label)).toEqual(["Project", "Main thread", "step loop", "step"]);
+    expect(execBuild(scene, layout, "src", EXEC_PROJECT_ROOT, fns).selected).toBeUndefined();
   });
 });
 

@@ -2,7 +2,7 @@
 // carry the scope, what a selected function is, and the map for a focus. ExecStore (execStore.ts) loads the models and
 // layouts and hands them here.
 import {
-  NO_RUNTIME_GROUP,
+  EXEC_PROJECT_ROOT,
   execThreadId,
   placeSceneEdges,
   placeSceneLayout,
@@ -91,7 +91,7 @@ function whereOf(scene: Scene, nodeId: string): Where {
   let coroutine: string | undefined;
   for (let cur = scene.nodes.get(nodeId)?.parent; cur !== undefined; cur = scene.nodes.get(cur)?.parent) {
     const n: SceneNode | undefined = scene.nodes.get(cur);
-    if (n === undefined || n.id === NO_RUNTIME_GROUP) break;
+    if (n === undefined || n.id === EXEC_PROJECT_ROOT) break;
     if (n.kind === "coroutine" && coroutine === undefined) coroutine = n.label;
     if (n.kind === "thread") {
       return coroutine === undefined ? { runtime: "thread", thread: n.label } : { runtime: "coroutine", thread: n.label, coroutine };
@@ -191,7 +191,7 @@ export interface ExecLinkList {
 /** One place a function is drawn: its scene node, the thread (or no-runtime group) above it, and how deep it sits. */
 export interface ExecPlacement {
   nodeId: string;
-  /** The thread's scene id, or NO_RUNTIME_GROUP. "" when no thread or group is above the node. */
+  /** The thread's scene id, or EXEC_PROJECT_ROOT for plain code flow. "" when no thread or project is above the node. */
   thread: string;
   /** Ancestors above the node. A placement directly in its thread is shallower than one in a coroutine or a file group. */
   depth: number;
@@ -216,7 +216,7 @@ export function execThreadKeyOf(scene: Scene, nodeId: string): string | undefine
   while (cur !== undefined) {
     const n: SceneNode | undefined = scene.nodes.get(cur);
     if (n === undefined) return undefined;
-    if (n.kind === "thread" || n.id === NO_RUNTIME_GROUP) return n.id;
+    if (n.kind === "thread" || n.id === EXEC_PROJECT_ROOT) return n.id;
     cur = n.parent;
   }
   return undefined;
@@ -335,7 +335,7 @@ export function execTrail(index: ExecIndex, nodeId: string): ExecLink[] | undefi
   const target = node?.ref;
   if (node === undefined || node.kind !== "function" || target === undefined) return undefined;
   const threadKey = execThreadKeyOf(index.scene, nodeId);
-  if (threadKey === undefined || threadKey === NO_RUNTIME_GROUP) return undefined;
+  if (threadKey === undefined || threadKey === EXEC_PROJECT_ROOT) return undefined;
   const thread = index.threads.get(threadKey);
   if (thread === undefined) return undefined;
 

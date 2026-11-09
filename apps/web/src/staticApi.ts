@@ -151,7 +151,7 @@ function emptyScopeExec(scope: string): ExecModel {
     scope: canonicalScope(scope),
     truncated: false,
     functions: [],
-    threads: [{ id: "main", kind: "main", roots: [], reach: 0, reached: [], coroutines: [], coroutineOnly: [] }],
+    threads: [{ id: "main", kind: "main", grounded: false, roots: [], reach: 0, reached: [], coroutines: [], coroutineOnly: [] }],
     dispatches: [],
     calls: [],
     unthreaded: [],

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ExecFunctionRef, ExecModel, ExecModelStats, ExecThread } from "../src/exec-model.js";
-import { buildExecScene, execFileId, execFnId, execThreadId, NO_RUNTIME_GROUP } from "../src/exec-scene.js";
+import { buildExecScene, execFnId, execThreadId } from "../src/exec-scene.js";
 import { execRootsOnly, keepScene } from "../src/scene-filter.js";
 import type { Scene, SceneNode } from "../src/scene.js";
 
@@ -60,6 +60,7 @@ function model(parts: {
 const mainThread = (t: Partial<ExecThread>): ExecThread => ({
   id: "main",
   kind: "main",
+  grounded: true,
   roots: [],
   reach: t.reached?.length ?? 0,
   reached: [],
@@ -92,6 +93,7 @@ const basic = (): ExecModel =>
       {
         id: "spawn:1",
         kind: "thread",
+        grounded: true,
         spawn: { node: "spawn:1", owner: "main", file: "src/app.ts", line: 5, how: "thread", status: "resolved", candidates: false },
         roots: ["work"],
         reach: 1,
@@ -171,12 +173,13 @@ describe("execRootsOnly", () => {
     const full = buildExecScene(m);
     // The full scene has the nodes the cut must remove.
     expect(full.nodes.has("co:main:co")).toBe(true);
-    expect(full.nodes.has(NO_RUNTIME_GROUP)).toBe(true);
+    expect(full.nodes.has("project>f")).toBe(true);
 
     const out = execRootsOnly(full, m);
     expect(keysOf(out)).toEqual(
       [
         full.root,
+        "prog:main",
         execThreadId("main"),
         execFnId(execThreadId("main"), "main"),
         execThreadId("spawn:1"),
@@ -198,7 +201,7 @@ describe("execRootsOnly", () => {
       functions: [fn("main", 1), fn("x", 2)],
       threads: [
         mainThread({ roots: ["main"], reached: ["main", "x"] }),
-        { id: "spawn:2", kind: "thread", roots: [], reach: 0, reached: [], coroutines: [], coroutineOnly: [] },
+        { id: "spawn:2", kind: "thread", grounded: true, roots: [], reach: 0, reached: [], coroutines: [], coroutineOnly: [] },
       ],
     });
     const out = execRootsOnly(buildExecScene(m), m);
@@ -221,11 +224,11 @@ describe("execRootsOnly", () => {
     });
     const full = buildExecScene(m);
     const out = execRootsOnly(full, m);
-    expect(keysOf(out)).toEqual([full.root, execThreadId("main"), execFnId(execThreadId("main"), "main")].sort());
+    expect(keysOf(out)).toEqual(["prog:main", full.root, execThreadId("main"), execFnId(execThreadId("main"), "main")].sort());
   });
 
-  describe("a thread with more than one file", () => {
-    // 26 functions over two files: past FILE_GROUP_MIN, so the thread groups them by file.
+  describe("a thread with many functions over two files", () => {
+    // 26 functions over two files. The cut keeps the roots' placements directly under the thread, with no file node.
     const names = (prefix: string) => Array.from({ length: 13 }, (_, i) => `${prefix}${i}`);
     const aNames = names("a");
     const bNames = names("b");
@@ -235,36 +238,21 @@ describe("execRootsOnly", () => {
     ];
     const reached = [...aNames, ...bNames].sort();
 
-    it("keeps the file node of a root, with only the root under it", () => {
+    it("keeps the placement of each root under its thread, and drops the others", () => {
       const m = model({
         functions,
-        threads: [mainThread({ roots: ["a0"], reached, reach: reached.length })],
+        threads: [mainThread({ roots: ["a0", "b0"], reached, reach: reached.length })],
         calls: [
           ["a0", "a1"],
           ["a1", "b0"],
         ],
       });
-      const full = buildExecScene(m);
-      const thread = execThreadId("main");
-      const aFile = execFileId(thread, "src/a.ts");
-      expect(full.nodes.get(aFile)?.kind).toBe("file");
-
-      const out = execRootsOnly(full, m);
-      expect(out.nodes.get(aFile)?.kind).toBe("file");
-      expect(out.nodes.get(aFile)?.parent).toBe(thread);
-      expect(out.nodes.get(aFile)?.children).toEqual([execFnId(thread, "a0")]);
-      expect(out.nodes.has(execFnId(thread, "a1"))).toBe(false);
-      expect(out.nodes.has(execFileId(thread, "src/b.ts"))).toBe(false);
-      expect(out.nodes.get(thread)?.children).toEqual([aFile]);
-    });
-
-    it("keeps a file node for each file with a root", () => {
-      const m = model({ functions, threads: [mainThread({ roots: ["a0", "b0"], reached, reach: reached.length })] });
       const thread = execThreadId("main");
       const out = execRootsOnly(buildExecScene(m), m);
-      expect(out.nodes.get(thread)?.children).toEqual([execFileId(thread, "src/a.ts"), execFileId(thread, "src/b.ts")]);
-      expect(out.nodes.has(execFnId(thread, "b0"))).toBe(true);
-      expect(out.nodes.has(execFnId(thread, "b1"))).toBe(false);
+      expect(keysOf(out)).toEqual(["prog:main", "project", thread, execFnId(thread, "a0"), execFnId(thread, "b0")].sort());
+      expect(out.nodes.get(thread)?.children).toEqual([execFnId(thread, "a0"), execFnId(thread, "b0")]);
+      expect(out.nodes.has(execFnId(thread, "a1"))).toBe(false);
+      expect([...out.nodes.values()].some((n) => n.kind === "file")).toBe(false);
     });
   });
 });
