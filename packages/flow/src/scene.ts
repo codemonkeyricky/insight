@@ -38,14 +38,11 @@ export interface SceneNode {
    */
   ref?: string;
   /**
-   * For a function that has a control-flow chart: the chart's natural size. The node's box is sized to hold it (see
-   * `sceneLeafSize`), and the renderer draws the chart inside the box once the box is large on screen.
+   * For a function that has a control-flow chart: the chart's natural size. The chart is drawn in an expansion beside the
+   * map (see apps/web/src/zoom/expand.ts), never in the box, so the box does not depend on it.
    */
   chart?: Size;
-  /**
-   * For a function with a chart: the box's size while the chart is collapsed, just its name. The box grows to `chart`
-   * when the node is expanded (see `sceneLeafSize`).
-   */
+  /** For a function with a chart: the box's size, just its name. This is the size the box is always laid out at. */
   compact?: Size;
 }
 

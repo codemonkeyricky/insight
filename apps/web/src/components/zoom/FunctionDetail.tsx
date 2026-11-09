@@ -4,7 +4,7 @@ import { hrefFile, hrefView } from "../../router";
 
 /**
  * The stats of a function's chart, the calls in it that leave the scope, and the chart's legend. The chart is drawn
- * inside the function's box on the map (BoxChart.tsx), and the function's name and source line are the heading of the
+ * in the function's expansion beside the map (Expansion.tsx), and the function's name and source line are the heading of the
  * panel that holds this.
  */
 export function FunctionDetail({ id, fn, scope }: { id: string; fn: FunctionFlow; scope: string }) {

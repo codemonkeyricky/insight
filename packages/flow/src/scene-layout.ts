@@ -2,7 +2,7 @@
 // drawn for an open set: frames, boxes and the edges between the visible boxes. See scene.ts for the model.
 import { PROJECT_ID, type Rect, type ScopeLink, type ScopeTree } from "./scope-map.js";
 import { LAYERED, ZOOM_SIZE, edgeCurve, frameSize, readLayout, type ContainerLayout, type LayoutGraph, type Placed, type PlacedEdge, type PlacedItem, type Size } from "./zoom-layout.js";
-import { CHART_HEAD, CHART_PAD, type Scene, type SceneEdge, SceneEdgeKind, SceneLayout, SceneNode } from "./scene.js";
+import { type Scene, type SceneEdge, SceneEdgeKind, SceneLayout, SceneNode } from "./scene.js";
 
 /** What a solver answers for one container graph: ELK's shape, reduced to what readLayout reads. */
 export interface SolvedGraph {
@@ -52,24 +52,22 @@ export function sceneLaidOut(scene: Scene, open?: ReadonlySet<string>): Set<stri
 
 /**
  * The box size of a node with no children: its level's box, or a function box when the scene has no such level. A node
- * with a chart is compact (just its name, see `compact`) unless it is in `expanded`; then it is at least large enough to
- * hold its chart, under a header for its name.
+ * with a chart is always compact (just its name, see `compact`): its chart is drawn in an expansion beside the map, never
+ * inside the box, so opening a function does not change the layout.
  */
-export function sceneLeafSize(scene: Scene, id: string, expanded?: ReadonlySet<string>): Size {
+export function sceneLeafSize(scene: Scene, id: string): Size {
   const node = scene.nodes.get(id);
   const box = (node === undefined ? undefined : scene.levels[node.kind]?.box) ?? ZOOM_SIZE.fn;
-  const chart = node?.chart;
-  if (chart === undefined) return box;
-  if (!expanded?.has(id)) return node?.compact ?? box;
-  return { w: Math.max(box.w, chart.w + 2 * CHART_PAD), h: Math.max(box.h, CHART_HEAD + chart.h + 2 * CHART_PAD) };
+  if (node?.chart === undefined) return box;
+  return node.compact ?? box;
 }
 
 /**
  * The size a child takes in its container's layout when the child is not laid out: a closed container is its compact box
  * (sceneClosedSize), anything else is a leaf (sceneLeafSize).
  */
-export function sceneSlotSize(scene: Scene, id: string, expanded?: ReadonlySet<string>): Size {
-  return (scene.nodes.get(id)?.children.length ?? 0) > 0 ? sceneClosedSize(scene, id) : sceneLeafSize(scene, id, expanded);
+export function sceneSlotSize(scene: Scene, id: string): Size {
+  return (scene.nodes.get(id)?.children.length ?? 0) > 0 ? sceneClosedSize(scene, id) : sceneLeafSize(scene, id);
 }
 
 /** The ELK options the container `id` lays its children out with: its level's layout, else LAYERED. */
@@ -178,10 +176,10 @@ export function sceneEdges(scene: Scene, open: ReadonlySet<string>): SceneMapEdg
 }
 
 /** The size a node takes in its parent: its level's box for a leaf, else the frame around its laid-out children. */
-export function sceneNodeSize(scene: Scene, id: string, layout: SceneLayout, expanded?: ReadonlySet<string>): Size {
+export function sceneNodeSize(scene: Scene, id: string, layout: SceneLayout): Size {
   const n = scene.nodes.get(id);
   const own = n !== undefined && n.children.length > 0 ? layout.containers[id] : undefined;
-  return own ? frameSize({ w: own.w, h: own.h }) : sceneSlotSize(scene, id, expanded);
+  return own ? frameSize({ w: own.w, h: own.h }) : sceneSlotSize(scene, id);
 }
 
 /**
@@ -213,16 +211,10 @@ export function sceneEdgeContainer(scene: Scene, edge: Pick<SceneEdge, "from" | 
 }
 
 /** The container graph from the edges already known to land in it (in scene order). */
-function graphOf(
-  scene: Scene,
-  container: string,
-  sizes: ReadonlyMap<string, Size>,
-  landed: readonly { a: string; b: string }[],
-  expanded?: ReadonlySet<string>,
-): LayoutGraph {
+function graphOf(scene: Scene, container: string, sizes: ReadonlyMap<string, Size>, landed: readonly { a: string; b: string }[]): LayoutGraph {
   const kids = scene.nodes.get(container)?.children ?? [];
   const children = kids.map((id) => {
-    const s = sizes.get(id) ?? sceneLeafSize(scene, id, expanded);
+    const s = sizes.get(id) ?? sceneLeafSize(scene, id);
     return { id, width: s.w, height: s.h };
   });
   const seen = new Set<string>();
@@ -237,13 +229,13 @@ function graphOf(
 }
 
 /** The ELK graph of one container. `sizes` gives each child's size; edges join children that scene edges climb to. */
-export function sceneLayoutGraph(scene: Scene, container: string, sizes: ReadonlyMap<string, Size>, expanded?: ReadonlySet<string>): LayoutGraph {
+export function sceneLayoutGraph(scene: Scene, container: string, sizes: ReadonlyMap<string, Size>): LayoutGraph {
   const landed: { a: string; b: string }[] = [];
   for (const e of scene.edges) {
     const at = sceneEdgeContainer(scene, e);
     if (at !== undefined && at.container === container) landed.push(at);
   }
-  return graphOf(scene, container, sizes, landed, expanded);
+  return graphOf(scene, container, sizes, landed);
 }
 
 /** Every node with children, children before their parent (post-order over the children's order), root last. */
@@ -415,29 +407,25 @@ export function callColumns(graph: LayoutGraph): SolvedGraph {
   return { width, height, children: placed };
 }
 
-/** Options for layoutScene. Without them the scene is laid out with no chart expanded, from scratch. */
+/** Options for layoutScene. Without them every container is open and the layout is solved from scratch. */
 export interface SceneLayoutOptions {
-  /** The function boxes drawn with their chart (see sceneLeafSize). */
-  expanded?: ReadonlySet<string>;
   /**
    * The open containers (see sceneLaidOut). Undefined means every container is open. A closed container is a compact box
    * of sceneClosedSize, and its children are not laid out.
    */
   open?: ReadonlySet<string>;
   /**
-   * A layout of this scene with no chart expanded, and the chart-holding functions that `expanded` opens. Only the
-   * containers above a changed function are laid out again; every other container is taken from `from` as it is.
-   * `changed` also lists containers whose open state differs from `from`: they and their ancestors are laid out again.
+   * A layout of this scene with the containers `changed` lists opened or closed differently. Only those containers and
+   * the ones above them are laid out again; every other container is taken from `from` as it is.
    */
   reuse?: { from: SceneLayout; changed: readonly string[] };
 }
 
 /**
  * Lays the whole scene out, deepest containers first. Deterministic for a deterministic solver. A container with a
- * reused layout is not solved, so a layout with one function expanded solves only the path above it.
+ * reused layout is not solved, so a layout with one container opened solves only the path above it.
  */
 export async function layoutScene(scene: Scene, solve: SceneSolver, options: SceneLayoutOptions = {}): Promise<SceneLayout> {
-  const expanded = options.expanded;
   const laidOut = sceneLaidOut(scene, options.open);
   // Each edge joins two children of exactly one container, so the edges are sorted out once, not once per container.
   const landed = new Map<string, { a: string; b: string }[]>();
@@ -469,7 +457,7 @@ export async function layoutScene(scene: Scene, solve: SceneSolver, options: Sce
       if (own) sizes.set(c, frameSize({ w: own.w, h: own.h }));
       else if ((scene.nodes.get(c)?.children.length ?? 0) > 0) sizes.set(c, sceneClosedSize(scene, c));
     }
-    const graph = graphOf(scene, id, sizes, landed.get(id) ?? [], expanded);
+    const graph = graphOf(scene, id, sizes, landed.get(id) ?? []);
     // The insight algorithms are ours: they are answered here, and only ELK's own algorithms reach the solver.
     const algorithm = graph.layoutOptions["elk.algorithm"];
     const solved = algorithm === "insight.columns" ? callColumns(graph) : algorithm === "rectpacking" ? packRows(graph) : await solve(graph);
@@ -482,7 +470,7 @@ export async function layoutScene(scene: Scene, solve: SceneSolver, options: Sce
  * True when `layout` has a container for every laid-out container of `open` (see sceneLaidOut) and a slot for every
  * child of each. A slot for a child that is not laid out (a leaf, or a closed container) must have that child's size.
  */
-export function layoutCovers(scene: Scene, layout: SceneLayout, expanded?: ReadonlySet<string>, open?: ReadonlySet<string>): boolean {
+export function layoutCovers(scene: Scene, layout: SceneLayout, open?: ReadonlySet<string>): boolean {
   const laidOut = sceneLaidOut(scene, open);
   for (const id of laidOut) {
     const n = scene.nodes.get(id);
@@ -496,7 +484,7 @@ export function layoutCovers(scene: Scene, layout: SceneLayout, expanded?: Reado
       // A slot without a layout of its own must still have the child's size: a layout saved before a chart changed would
       // overlap its neighbours.
       if (!laidOut.has(c)) {
-        const s = sceneSlotSize(scene, c, expanded);
+        const s = sceneSlotSize(scene, c);
         if (slot.w !== s.w || slot.h !== s.h) return false;
       }
     }

@@ -1,6 +1,6 @@
 // The panel under the execution map when the focus is a function: the call path to it (its trail), its name and source
 // line, where it runs, the other places it runs, the chart's stats and legend, and its Calls and Called by lists. The
-// chart itself is drawn in the function's box on the map (BoxChart.tsx). The stats come from the flow store; the rest
+// chart itself is drawn in the function's expansion beside the map (Expansion.tsx). The stats come from the flow store; the rest
 // from the map's build and the scope's index.
 import { useEffect, useMemo, useState } from "react";
 import type { FunctionFlow } from "@insight/flow";
