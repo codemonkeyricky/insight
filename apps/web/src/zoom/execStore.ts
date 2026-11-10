@@ -157,6 +157,12 @@ export class ExecStore implements MapSource {
     return execFocus(build.path, nodeId);
   }
 
+  /** Whether the build's model names `fnId`. A folded lambda is not named, so a call to one opens no box (see MapSource.isFunction). */
+  isFunction(build: MapBuild, fnId: string): boolean {
+    const view = this.viewOf(build);
+    return view === undefined || view.fns.has(fnId);
+  }
+
   /** The placement of a function in the build's scope: in the build's thread when it has one there (see execPlacementFor). */
   placeFunction(build: MapBuild, fnId: string): string | undefined {
     const view = this.viewOf(build);

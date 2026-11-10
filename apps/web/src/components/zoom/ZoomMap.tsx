@@ -453,10 +453,10 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   };
 
   /** The camera that shows an expansion from `from`, the least it can move (see revealCamera). */
-  const revealOf = (from: Camera, e: Expansion): Camera => {
+  const revealOf = (from: Camera, e: Expansion, minPx = CHART_MIN_PX): Camera => {
     // The reveal works in the stage's own coordinates (from the left inset), so the inset is taken off and put back.
     const left = leftRef.current;
-    const c = revealCamera({ ...from, x: from.x - left }, { x: e.x, y: e.y, w: e.w, h: e.h }, e.chart.width, roomOf(), CHART_MIN_PX);
+    const c = revealCamera({ ...from, x: from.x - left }, { x: e.x, y: e.y, w: e.w, h: e.h }, e.chart.width, roomOf(), minPx);
     return { ...c, x: c.x + left };
   };
 
@@ -536,6 +536,10 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     if (fit) {
       const target = fitDetails(b, list) ?? fitTarget(b);
       if (target !== undefined) moveTo(target, animate);
+    } else if (list.length > openBefore) {
+      // A detail opened off the stage's edge is panned into view; a camera that already shows it does not move.
+      const newest = list[list.length - 1];
+      if (newest !== undefined) moveTo(revealOf(cameraRef.current, newest, 0), true);
     }
   };
 
@@ -567,13 +571,20 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     if (!b || !expRef.current.some((e) => e.fnId === fnId)) return;
     const chart = await loadChart(callee);
     if (chart === undefined) return;
-    const list = placeAll(b, expRef.current);
+    // The step's callee replaces what is right of its function: the calls it had open are closed, except this one.
+    let list = placeAll(b, expRef.current);
+    for (const e of list) {
+      if (e.anchor.kind === "step" && e.anchor.fnId === fnId && e.fnId !== callee) list = closeExpansion(list, e.fnId);
+    }
     const anchor: ExpandAnchor = { kind: "step", fnId, rect: { x: node.x, y: node.y, w: node.w, h: node.h } };
     const next = openExpansion(list, callee, anchor, chart, visibleWorld(cameraRef.current, sizeOf()));
     if (next === list) return;
     setExp(next);
-    // The detail opens beside the step and the camera stays where it is: only the selection follows the chain.
-    if (next.some((e) => e.fnId === callee)) void selectFunction(callee);
+    // The new detail is panned into view when it is off the stage (the camera zooms only for a detail too narrow to read).
+    const opened = next.find((e) => e.fnId === callee);
+    if (opened !== undefined) moveTo(revealOf(cameraRef.current, opened, 0), true);
+    // The code pane follows the chain: the callee is the last function clicked.
+    if (opened !== undefined) void selectFunction(callee);
   };
 
   /**
@@ -612,13 +623,38 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
    */
   const chartStep = (fnId: string, node: FlowNode): boolean => {
     stageRef.current?.focus({ preventScroll: true });
+    const b = buildRef.current;
     const callee = node.target !== undefined && node.target !== fnId ? node.target : undefined;
-    if (callee !== undefined) void openStep(fnId, node, callee);
+    if (callee !== undefined && isLambdaCall(b, fnId, callee)) void highlightLambda(fnId, node, callee);
+    else if (callee !== undefined) void openStep(fnId, node, callee);
     else {
       setConstruct({ ref: fnId, nodeId: node.id, ...(node.span ? { span: node.span } : {}) });
       void selectFunction(fnId);
     }
     return true;
+  };
+
+  /**
+   * A call to a lambda: a closure written inside the calling function (`findMate.consider`), or a lambda the model folded
+   * into its owner (not a function of the model). Such a call opens no box.
+   */
+  const isLambdaCall = (b: MapBuild | undefined, fnId: string, callee: string): boolean =>
+    callee.startsWith(`${fnId}.`) || (b !== undefined && source.isFunction?.(b, callee) === false);
+
+  /**
+   * Highlights a lambda's block in the calling function's source: the lambda's own span when its chart is known, else the
+   * call. The code pane shows the calling function, with the block lit.
+   */
+  const highlightLambda = async (fnId: string, node: FlowNode, callee: string) => {
+    let span = node.span;
+    try {
+      const f = await charts?.store.chartOf(callee);
+      if (f?.span !== undefined) span = f.span;
+    } catch {
+      // The call's own span stays.
+    }
+    setConstruct({ ref: fnId, nodeId: node.id, ...(span ? { span } : {}) });
+    void selectFunction(fnId);
   };
 
   /** A key's zoom: about the middle of the stage, as d3's scaleBy does. */

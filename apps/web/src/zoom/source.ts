@@ -102,6 +102,12 @@ export interface MapSource {
    * chart's call to a function in scope opens this node in place. Undefined when the scope does not draw the function.
    */
   placeFunction?(build: MapBuild, fnId: string): string | undefined;
+  /**
+   * Whether the build's model names the function by its IR id. A call to a name the model does not hold is a call to a
+   * lambda folded into its owner: it has no box and no chart of its own, so the call highlights its block instead. Undefined
+   * (no method) means every callee is a function.
+   */
+  isFunction?(build: MapBuild, fnId: string): boolean;
 }
 
 export interface Box {
