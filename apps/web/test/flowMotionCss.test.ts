@@ -14,16 +14,16 @@ const ruleBody = (selector: string): string => {
 describe("flow march overlay CSS", () => {
   it("names the overlay as an edge's path, so it beats the edge's stroke", () => {
     const base = ruleBody(".flow-edge path");
-    expect(base).toContain("stroke: var(--muted)");
+    expect(base).toContain("stroke: color-mix(in srgb, var(--graphite) 70%, transparent)");
     const march = ruleBody(".flow-edge path.flow-march");
     expect(march).toContain("stroke: var(--accent)");
-    expect(march).toContain("stroke-dasharray: 4 8");
+    expect(march).toContain("stroke-dasharray: 3 9");
   });
 
   it("keeps the back-edge overlay in the loop colour and a little stronger", () => {
     const back = ruleBody(".flow-edge path.flow-march.back");
     expect(back).toContain("stroke: var(--coroutine)");
-    expect(back).toContain("stroke-width: 3");
+    expect(back).toContain("stroke-width: 1.75");
   });
 
   it("keeps branch edges in their own tones", () => {

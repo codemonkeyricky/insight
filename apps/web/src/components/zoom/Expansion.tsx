@@ -76,9 +76,9 @@ export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClic
   return (
     <g className="zm-expansion" role="group" aria-label={`Detail ${detailLetter(expansion.index)}: ${chart.name}`}>
       <title>{chart.name}</title>
-      <rect x={x} y={y} width={w} height={h} rx={18} className="zm-expansion-body" />
+      <rect x={x} y={y} width={w} height={h} rx={12} className="zm-expansion-body" />
       <g className="zm-expansion-title" onClick={onSelect}>
-        <rect x={x} y={y} width={w} height={CHART_HEAD} rx={18} className="zm-expansion-head" />
+        <rect x={x} y={y} width={w} height={CHART_HEAD} rx={12} className="zm-expansion-head" />
         {label !== null && (
           <text x={x + 14} y={y + CHART_HEAD / 2} dominantBaseline="central" className="zm-label">
             {label}

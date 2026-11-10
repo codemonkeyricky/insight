@@ -1431,9 +1431,9 @@ export function FrameShape({
   return (
     <g className={`zm-frame${node ? ` zm-${node.kind}` : ""} ${lineClass(line)}`} data-sx={rect.x} data-fid={item.id}>
       <title>{node?.title || (node ? (node.detail ? `${node.label} (${node.detail})` : node.label) : item.id)}</title>
-      <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={10} className="zm-frame-body" />
+      <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={12} className="zm-frame-body" />
       <g className="zm-hit" onClick={() => onOpen(item.id)}>
-        <rect x={rect.x} y={rect.y} width={rect.w} height={head} rx={10} className="zm-frame-head" />
+        <rect x={rect.x} y={rect.y} width={rect.w} height={head} rx={12} className="zm-frame-head" />
         {text.label !== null && (
           <text x={rect.x + 12} y={rect.y + head / 2} dominantBaseline="central" className="zm-label">
             {text.label}
@@ -1488,7 +1488,7 @@ function BoxShape({
     return (
       <g className={`zm-box zm-${node.kind} zm-card ${lineClass(line)}${holdsChart ? " zm-has-chart" : ""}${chartOpen ? " expanded" : ""}`} data-sx={rect.x} data-fid={item.id} onClick={() => onOpen(item.id)}>
         <title>{node.detail !== undefined ? `${node.label} (${node.detail})` : node.title || node.label}</title>
-        <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={8} className="zm-box-body" />
+        <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={10} className="zm-box-body" />
         {name !== null && (
           <text x={rect.x + 12} y={rect.y + (sub !== null ? 21 : rect.h / 2)} dominantBaseline="central" className="zm-label">
             {name}
@@ -1509,7 +1509,7 @@ function BoxShape({
       onClick={() => onOpen(item.id)}
     >
       <title>{node.title || node.label}</title>
-      <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={8} className="zm-box-body" />
+      <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={10} className="zm-box-body" />
       {label !== null && (
         <text
           x={rect.x + (small ? 8 : 12)}
