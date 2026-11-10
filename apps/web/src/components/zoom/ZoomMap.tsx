@@ -11,11 +11,11 @@ import { ZOOM_SIZE, fitCamera, fitChartCamera, visibleWorld, type Camera, type F
 import { nameOfId } from "../../flowTargets";
 import { hrefView } from "../../router";
 import { CHART_MIN_PX } from "../../zoom/chart";
-import { anchoredTo, closeExpansion, connectorOf, openExpansion, refresh, revealCamera, shiftAt, type Expansion, type ExpandAnchor } from "../../zoom/expand";
+import { anchoredTo, closeExpansion, connectorOf, footprintOf, openExpansion, refresh, revealCamera, rootBoxOf, sameFootprint, SLOT_PAD, shiftAt, type Expansion, type ExpandAnchor } from "../../zoom/expand";
 import { connectorD, headD } from "../../zoom/connector";
 import { releaseVelocity, type DragSample } from "../../zoom/spring";
 import { useCameraSpring } from "../../zoom/useCameraSpring";
-import { motionFor, progressAt } from "../../zoom/tween";
+import { motionFor, progressAt, TWEEN_MS } from "../../zoom/tween";
 import { pickBox } from "../../zoom/gesture";
 import { edgeClass, edgeKey, edgeTitle, edgeWidth, lineClass, runtimeLine, type MapBuild, type MapEdge, type MapNode, type MapSelected, type MapSource, type RuntimeLine } from "../../zoom/source";
 import { bucketScale, FAR_TILE_PX, fitLabel, headerLabels, labelChars, lodBucket, MID_TILE_PX } from "../../zoom/lod";
@@ -327,7 +327,21 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     if (sh.frame === undefined) sh.frame = requestAnimationFrame(shiftFrame);
   };
 
-  const setExp = (list: readonly Expansion[]) => {
+  const setExp = (next: readonly Expansion[]) => {
+    // A slotted build keeps room for its expansions in the layout: when the open ones need different room, the build is
+    // laid out again and the expansions are placed on its boxes (refresh), so an opened box never runs into another.
+    let list = next;
+    const b = buildRef.current;
+    if (b?.slotted && source.rebuild) {
+      const room = footprintOf(list);
+      if (!sameFootprint(room, b.footprint ?? new Map())) {
+        const nb = source.rebuild(b, room);
+        buildRef.current = nb;
+        setBuild(nb);
+        showView(nb);
+        list = refresh(list, (id) => nb.placed.rects.get(id), undefined);
+      }
+    }
     const gone = expRef.current.filter((e) => !list.some((x) => x.fnId === e.fnId));
     expRef.current = list;
     setExpansions(list);
@@ -503,7 +517,10 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   };
 
   /** The expansions as the build places them: the boxes they hang from, in the build's layout, placed on the current view. */
-  const placeAll = (b: MapBuild, list: readonly Expansion[]): Expansion[] => refresh(list, (nodeId) => b.placed.rects.get(nodeId), visibleWorld(cameraRef.current, sizeOf()));
+  const placeAll = (b: MapBuild, list: readonly Expansion[]): Expansion[] => refresh(list, (nodeId) => b.placed.rects.get(nodeId), placeView(b));
+
+  /** The view an expansion is placed on: the visible world, except on a slotted build, where the layout keeps the room. */
+  const placeView = (b: MapBuild) => (b.slotted ? undefined : visibleWorld(cameraRef.current, sizeOf()));
 
   /** A function's chart, or undefined when it has none to draw (no chart source, no such function, too large, empty). */
   const loadChart = async (fnId: string): Promise<FunctionFlow | undefined> => {
@@ -565,7 +582,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
         if (seq !== seqRef.current) return;
         if (chart !== undefined) {
           list = placeAll(b, expRef.current);
-          list = openExpansion(list, ref, { kind: "box", nodeId: b.nodeId, rect: boxRect }, chart, visibleWorld(cameraRef.current, sizeOf()));
+          list = openExpansion(list, ref, { kind: "box", nodeId: b.nodeId, rect: boxRect }, chart, placeView(b));
         }
       }
     }
@@ -619,7 +636,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
       if (e.anchor.kind === "step" && e.anchor.fnId === fnId && e.fnId !== callee) list = closeExpansion(list, e.fnId);
     }
     const anchor: ExpandAnchor = { kind: "step", fnId, rect: { x: node.x, y: node.y, w: node.w, h: node.h } };
-    const next = openExpansion(list, callee, anchor, chart, visibleWorld(cameraRef.current, sizeOf()));
+    const next = openExpansion(list, callee, anchor, chart, placeView(b));
     if (next === list) return;
     setExp(next);
     // The new detail is panned into view when it is off the stage (the camera zooms only for a detail too narrow to read).
@@ -956,6 +973,32 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   const lines = useMemo(() => (view ? lineMap(view) : new Map<string, RuntimeLine>()), [view]);
   // The items and edges drawn are only those of the current view, so a stale set never shows.
   const live = view !== undefined && shown.view === view ? shown : undefined;
+
+  // A box or frame that the layout moved (a reflow after an open or a close) slides from its old place: it is drawn back at
+  // the old place, then transitions to the new one on the map's curve. Reduced motion cuts it.
+  const flipRef = useRef(new Map<string, { x: number; y: number }>());
+  useLayoutEffect(() => {
+    const world = worldRef.current;
+    const prev = flipRef.current;
+    const next = new Map<string, { x: number; y: number }>();
+    for (const it of live?.items ?? []) {
+      if (it.kind !== "box" && it.kind !== "frame") continue;
+      next.set(it.id, { x: it.rect.x, y: it.rect.y });
+      const p = prev.get(it.id);
+      if (p === undefined || !world || reduceMotion()) continue;
+      const dx = p.x - it.rect.x;
+      const dy = p.y - it.rect.y;
+      if (dx === 0 && dy === 0) continue;
+      const el = world.querySelector<SVGGElement>(`[data-fid="${CSS.escape(it.id)}"]`);
+      if (!el) continue;
+      el.style.transition = "none";
+      el.style.transform = `translate(${dx}px, ${dy}px)`;
+      void el.getBoundingClientRect();
+      el.style.transition = `transform ${TWEEN_MS}ms ease`;
+      el.style.transform = "";
+    }
+    flipRef.current = next;
+  }, [live]);
   const drawn = (kind: PlacedItem["kind"]) => (live ? live.items.filter((i) => i.kind === kind) : []);
   /** The camera scale of the labels' bucket: labels are fitted to the boxes' width on screen at this scale. */
   const labelScale = bucketScale(shown.lod);
@@ -1054,6 +1097,15 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   };
   /** The functions with an expansion open, by id: their boxes are drawn as expanded. */
   const expandedFns = new Set(expansions.map((e) => e.fnId));
+  // A chain box whose function is a dispatch target of its thread is an async box: it gets a dashed frame.
+  const asyncFns = new Set(
+    view === undefined
+      ? []
+      : expansions.filter((e) => {
+          const root = rootBoxOf(expansions, e);
+          return root !== undefined && source.asyncOf?.(view, e.fnId, root) === true;
+        }).map((e) => e.fnId),
+  );
 
   return (
     <div className="zm zm-exec">
@@ -1174,6 +1226,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
                 <g key={`exp-${e.fnId}`} className="zm-expansion-group" data-sx={e.pivot}>
                   {/* The entrance plays on this wrapper, not the group: the group carries the side shift as its transform. */}
                   <g className="zm-expansion-motion">
+                    {asyncFns.has(e.fnId) && <AsyncFrame expansion={e} k={labelScale} />}
                     <ExpansionShape
                       id={id}
                       scope={charts?.scope ?? scope}
@@ -1265,6 +1318,25 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
 }
 
 /**
+ * The dashed frame around an async chain box: SLOT_PAD outside the expansion, labelled "Async · <name>" at its top-left, on
+ * the frame's top edge. It is drawn inside the expansion's group, so it moves with the expansion.
+ */
+function AsyncFrame({ expansion, k }: { expansion: Expansion; k: number }) {
+  const { x, y, w, h, chart } = expansion;
+  const label = fitLabel(`Async · ${chart.name}`, labelChars(w * k, 6.6, 12));
+  return (
+    <g className="zm-async" aria-hidden="true">
+      <rect x={x - SLOT_PAD} y={y - SLOT_PAD} width={w + 2 * SLOT_PAD} height={h + 2 * SLOT_PAD} rx={22} className="zm-async-frame" />
+      {label !== null && (
+        <text x={x + 10} y={y - SLOT_PAD} dominantBaseline="central" className="zm-async-label">
+          {label}
+        </text>
+      )}
+    </g>
+  );
+}
+
+/**
  * A frame's header and a box's label are cut to the room they have on screen at the label scale `k` (lod.ts). The full
  * text stays in the tooltip.
  */
@@ -1285,7 +1357,7 @@ export function FrameShape({
   const head = ZOOM_SIZE.head;
   const text = headerLabels(node?.label ?? nameOfId(item.id), node?.detail, rect.w * k);
   return (
-    <g className={`zm-frame${node ? ` zm-${node.kind}` : ""} ${lineClass(line)}`} data-sx={rect.x}>
+    <g className={`zm-frame${node ? ` zm-${node.kind}` : ""} ${lineClass(line)}`} data-sx={rect.x} data-fid={item.id}>
       <title>{node?.title || item.id}</title>
       <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={10} className="zm-frame-body" />
       <g className="zm-hit" onClick={() => onOpen(item.id)}>
@@ -1342,7 +1414,7 @@ function BoxShape({
     const sub = node.detail !== undefined && rect.h >= 48 ? fitLabel(node.detail, labelChars(rect.w * k, 6.8, 20)) : null;
     const name = fitLabel(node.label, labelChars(rect.w * k, 8, 20));
     return (
-      <g className={`zm-box zm-${node.kind} zm-card ${lineClass(line)}${holdsChart ? " zm-has-chart" : ""}${chartOpen ? " expanded" : ""}`} data-sx={rect.x} onClick={() => onOpen(item.id)}>
+      <g className={`zm-box zm-${node.kind} zm-card ${lineClass(line)}${holdsChart ? " zm-has-chart" : ""}${chartOpen ? " expanded" : ""}`} data-sx={rect.x} data-fid={item.id} onClick={() => onOpen(item.id)}>
         <title>{node.detail !== undefined ? `${node.label} (${node.detail})` : node.title || node.label}</title>
         <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={8} className="zm-box-body" />
         {name !== null && (

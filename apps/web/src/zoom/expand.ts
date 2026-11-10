@@ -10,6 +10,12 @@ import { zoneLetter } from "./zones";
 export const EXPAND_GAP = 40;
 /** The top of an expansion stays at least this far above the view's bottom edge: two header heights. */
 const HEAD_ROOM = 2 * CHART_HEAD;
+/**
+ * The room a slotted map keeps around an expansion: above it for an async frame's label, and past its right and bottom
+ * edges for the frame's padding. The frame is drawn SLOT_PAD outside the expansion.
+ */
+export const SLOT_TOP = 16;
+export const SLOT_PAD = 8;
 /** The room a reveal keeps between an expansion and the stage's edges. */
 const REVEAL_MARGIN = 16;
 
@@ -73,22 +79,22 @@ export function contentOrigin(e: { x: number; y: number }): { x: number; y: numb
 /**
  * The top of an expansion whose anchor is at `desired`, kept on the view: its header never starts below the view's bottom
  * edge less two header heights, so an expansion opened low on the map is pulled up into view. Clamped once, when it is
- * placed, so a later pan does not move it.
+ * placed, so a later pan does not move it. In a slotted map (`view` undefined) the room is the layout's, so no clamp.
  */
-export function clampTop(desired: number, view: Rect): number {
-  return Math.min(desired, view.y + view.h - HEAD_ROOM);
+export function clampTop(desired: number, view: Rect | undefined): number {
+  return view === undefined ? desired : Math.min(desired, view.y + view.h - HEAD_ROOM);
 }
 
 /** Where an expansion beside a function box goes: right of the box, top level with the box's top (see clampTop). */
-export function placeOnBox(rect: Rect, view: Rect): { x: number; y: number } {
-  return { x: rect.x + rect.w + EXPAND_GAP, y: clampTop(rect.y, view) };
+export function placeOnBox(rect: Rect, view: Rect | undefined): { x: number; y: number } {
+  return { x: rect.x + rect.w + EXPAND_GAP, y: view === undefined ? rect.y + SLOT_TOP : clampTop(rect.y, view) };
 }
 
 /**
  * Where a call step's expansion goes: right of the expansion the step is in, top level with the step (see clampTop).
  * `rect` is the step in its parent's chart units.
  */
-export function placeOnStep(parent: Expansion, rect: Rect, view: Rect): { x: number; y: number } {
+export function placeOnStep(parent: Expansion, rect: Rect, view: Rect | undefined): { x: number; y: number } {
   return { x: parent.x + parent.w + EXPAND_GAP, y: clampTop(contentOrigin(parent).y + rect.y, view) };
 }
 
@@ -97,7 +103,7 @@ export function placeOnStep(parent: Expansion, rect: Rect, view: Rect): { x: num
  * the list is dropped with its chain. The list's order is kept. A box's detail takes the box's right edge as its pivot; a
  * step's detail takes its parent's pivot.
  */
-export function reflow(list: readonly Expansion[], view: Rect): Expansion[] {
+export function reflow(list: readonly Expansion[], view: Rect | undefined): Expansion[] {
   const byFn = new Map(list.map((e) => [e.fnId, e] as const));
   const placed = new Map<string, Expansion>();
   const place = (e: Expansion, hops: number): Expansion | undefined => {
@@ -105,13 +111,15 @@ export function reflow(list: readonly Expansion[], view: Rect): Expansion[] {
     if (done !== undefined) return done;
     if (hops > list.length) return undefined;
     let at: { x: number; y: number; pivot: number };
+    // A slotted map's expansions never shift the columns: the layout keeps their room, so the pivot is past every box.
+    const pivotOf = (p: number) => (view === undefined ? Infinity : p);
     if (e.anchor.kind === "box") {
-      at = { ...placeOnBox(e.anchor.rect, view), pivot: e.anchor.rect.x + e.anchor.rect.w };
+      at = { ...placeOnBox(e.anchor.rect, view), pivot: pivotOf(e.anchor.rect.x + e.anchor.rect.w) };
     } else {
       const parent = byFn.get(e.anchor.fnId);
       const from = parent === undefined ? undefined : place(parent, hops + 1);
       if (from === undefined) return undefined;
-      at = { ...placeOnStep(from, e.anchor.rect, view), pivot: from.pivot };
+      at = { ...placeOnStep(from, e.anchor.rect, view), pivot: pivotOf(from.pivot) };
     }
     const out: Expansion = { ...e, ...at };
     placed.set(e.fnId, out);
@@ -127,7 +135,7 @@ export function reflow(list: readonly Expansion[], view: Rect): Expansion[] {
  * The list after the map is drawn for a new build. A box's anchor takes the box's rect in the new build (`rectOf`), and an
  * expansion whose box is no longer drawn is dropped, with the chain it holds. Everything is placed again on `view`.
  */
-export function refresh(list: readonly Expansion[], rectOf: (nodeId: string) => Rect | undefined, view: Rect): Expansion[] {
+export function refresh(list: readonly Expansion[], rectOf: (nodeId: string) => Rect | undefined, view: Rect | undefined): Expansion[] {
   const kept: Expansion[] = [];
   for (const e of list) {
     if (e.anchor.kind !== "box") {
@@ -156,7 +164,7 @@ function chainHas(list: readonly Expansion[], from: string, target: string): boo
  * its anchor moves and the chains from it follow, so a function never has two. The new one is last, so Escape closes it
  * first. Returns `list` itself when the anchor is inside `fnId`'s own chain, which would cycle.
  */
-export function openExpansion(list: readonly Expansion[], fnId: string, anchor: ExpandAnchor, chart: FunctionFlow, view: Rect): Expansion[] {
+export function openExpansion(list: readonly Expansion[], fnId: string, anchor: ExpandAnchor, chart: FunctionFlow, view: Rect | undefined): Expansion[] {
   if (anchor.kind === "step" && chainHas(list, anchor.fnId, fnId)) return list as Expansion[];
   const size = expansionSize(chart);
   const others = list.filter((e) => e.fnId !== fnId);
@@ -164,6 +172,63 @@ export function openExpansion(list: readonly Expansion[], fnId: string, anchor: 
   const kept = list.find((e) => e.fnId === fnId);
   const index = kept?.index ?? others.reduce((hi, e) => Math.max(hi, e.index + 1), 0);
   return reflow([...others, { fnId, anchor, chart, ...size, x: 0, y: 0, index, pivot: 0 }], view);
+}
+
+/**
+ * The room the open expansions take beside each box they hang from, from the box's right edge and top, in world units. It
+ * is computed from the charts' sizes and the step anchors alone, so it does not depend on where anything is placed. The
+ * layout keeps this room clear (see runtimeRootsLayout), so an opened box never overlaps its neighbours.
+ */
+export function footprintOf(list: readonly Expansion[]): Map<string, { w: number; h: number }> {
+  const byFn = new Map(list.map((e) => [e.fnId, e] as const));
+  const rel = new Map<string, { x: number; y: number; root: string }>();
+  const place = (e: Expansion, hops: number): { x: number; y: number; root: string } | undefined => {
+    const done = rel.get(e.fnId);
+    if (done !== undefined) return done;
+    if (hops > list.length) return undefined;
+    let out: { x: number; y: number; root: string };
+    if (e.anchor.kind === "box") {
+      out = { x: EXPAND_GAP, y: SLOT_TOP, root: e.anchor.nodeId };
+    } else {
+      const parent = byFn.get(e.anchor.fnId);
+      const from = parent === undefined ? undefined : place(parent, hops + 1);
+      if (parent === undefined || from === undefined) return undefined;
+      out = { x: from.x + parent.w + EXPAND_GAP, y: from.y + CHART_HEAD + CHART_PAD + e.anchor.rect.y, root: from.root };
+    }
+    rel.set(e.fnId, out);
+    return out;
+  };
+  const room = new Map<string, { w: number; h: number }>();
+  for (const e of list) {
+    const p = place(e, 0);
+    if (p === undefined) continue;
+    const cur = room.get(p.root) ?? { w: 0, h: 0 };
+    room.set(p.root, { w: Math.max(cur.w, p.x + e.w), h: Math.max(cur.h, p.y + e.h) });
+  }
+  for (const [root, r] of room) room.set(root, { w: r.w + SLOT_PAD, h: r.h + SLOT_PAD });
+  return room;
+}
+
+/** The box an expansion hangs from, through its step anchors: the card the chain opens beside. */
+export function rootBoxOf(list: readonly Expansion[], e: Expansion): string | undefined {
+  let cur: Expansion | undefined = e;
+  for (let hops = 0; cur !== undefined && hops <= list.length; hops++) {
+    if (cur.anchor.kind === "box") return cur.anchor.nodeId;
+    const parentId: string = cur.anchor.fnId;
+    cur = list.find((x) => x.fnId === parentId);
+  }
+  return undefined;
+}
+
+/** Whether two footprints keep the same room for every box. */
+export function sameFootprint(a: ReadonlyMap<string, { w: number; h: number }> | undefined, b: ReadonlyMap<string, { w: number; h: number }> | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  if (a.size !== b.size) return false;
+  for (const [k, v] of a) {
+    const o = b.get(k);
+    if (o === undefined || o.w !== v.w || o.h !== v.h) return false;
+  }
+  return true;
 }
 
 /** The list without `fnId`'s expansion and every expansion chained from it, at any depth. */

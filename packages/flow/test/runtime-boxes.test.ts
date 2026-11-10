@@ -191,3 +191,38 @@ describe("runtimeRootsLayout", () => {
     expect((group as { y: number }).y).toBeGreaterThanOrEqual((thread as { y: number; h: number }).y + (thread as { h: number }).h);
   });
 });
+
+describe("footprints", () => {
+  const overlap = (p: { x: number; y: number; w: number; h: number }, q: { x: number; y: number; w: number; h: number }) =>
+    p.x < q.x + q.w && q.x < p.x + p.w && p.y < q.y + q.h && q.y < p.y + p.h;
+
+  it("keeps the room beside an opened card clear, and grows its thread frame to hold it", () => {
+    const m = twoThreads();
+    const s = runtimeRootsScene(buildExecScene(m), m) as Scene;
+    const open = runtimeOpen(s);
+    const [first, ...rest] = cardsIn(s, execThreadId("main"));
+    expect(first && rest.length > 0).toBeTruthy();
+    const plain = placeSceneLayout(s, runtimeRootsLayout(s), open);
+    const room = { w: 500, h: 200 };
+    const withRoom = placeSceneLayout(s, runtimeRootsLayout(s, new Map([[first as string, room]])), open);
+    const frame = (p: typeof plain, id: string) => p.rects.get(id) as { x: number; y: number; w: number; h: number };
+    expect(frame(withRoom, execThreadId("main")).w).toBeGreaterThan(frame(plain, execThreadId("main")).w);
+    // The room is clear of every other card of the thread: nothing sits where the expansion goes.
+    const c = frame(withRoom, first as string);
+    const beside = { x: c.x + c.w, y: c.y, w: room.w, h: room.h };
+    for (const other of rest) expect(overlap(beside, frame(withRoom, other))).toBe(false);
+    // The card itself keeps its size.
+    expect(c.w).toBe(frame(plain, first as string).w);
+  });
+
+  it("keeps the room clear in the flat grid too", () => {
+    const flat = flattenRoots(execRootsOnly(buildExecScene(twoThreads()), twoThreads()), twoThreads());
+    const kids = [...(flat.nodes.get(flat.root)?.children ?? [])];
+    expect(kids.length).toBeGreaterThan(1);
+    const first = kids[0] as string;
+    const placed = placeSceneLayout(flat, gridRootsLayout(flat, new Map([[first, { w: 900, h: 100 }]])), new Set([flat.root]));
+    const c = placed.rects.get(first) as { x: number; y: number; w: number; h: number };
+    const beside = { x: c.x + c.w, y: c.y, w: 900, h: 100 };
+    for (const other of kids.slice(1)) expect(overlap(beside, placed.rects.get(other) as never)).toBe(false);
+  });
+});

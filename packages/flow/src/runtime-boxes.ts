@@ -6,7 +6,7 @@ import { isGroundedThread } from "./exec-scene.js";
 import { execRootsOnly, pathInScope } from "./scene-filter.js";
 import type { ExecModel } from "./exec-model.js";
 import type { Scene, SceneLayout, SceneNode } from "./scene.js";
-import { CARD_GAP, CARD_H, CARD_PAD_BOTTOM, CARD_PAD_SIDE, CARD_PAD_TOP, CARD_WRAP_W, cardWidth } from "./roots-grid.js";
+import { CARD_GAP, CARD_H, CARD_PAD_BOTTOM, CARD_PAD_SIDE, CARD_PAD_TOP, CARD_WRAP_W, cardWidth, type Footprint } from "./roots-grid.js";
 import { frameSize, type ContainerLayout, type Size, type Slot } from "./zoom-layout.js";
 
 /** The scene id of the group that holds the root functions no thread runs. */
@@ -94,6 +94,8 @@ interface Item extends Size {
   id: string;
   /** Starts a new row even when the row has room: the group sits under the threads and processes. */
   breakBefore?: boolean;
+  /** The room kept clear beside the box for its expansions (see Footprint). The box itself keeps its size. */
+  room?: Size;
 }
 
 /** Packs boxes in rows of at most `wrap` wide, top-left aligned, with CARD_GAP between them both ways. */
@@ -104,14 +106,16 @@ function pack(items: readonly Item[], wrap: number): { w: number; h: number; slo
   let rowH = 0;
   let width = 0;
   for (const it of items) {
-    if (x > 0 && (it.breakBefore === true || x + it.w > wrap)) {
+    const outerW = it.w + (it.room?.w ?? 0);
+    const outerH = Math.max(it.h, it.room?.h ?? 0);
+    if (x > 0 && (it.breakBefore === true || x + outerW > wrap)) {
       y += rowH + CARD_GAP;
       x = 0;
       rowH = 0;
     }
     slots.push({ id: it.id, x, y, w: it.w, h: it.h });
-    x += it.w + CARD_GAP;
-    rowH = Math.max(rowH, it.h);
+    x += outerW + CARD_GAP;
+    rowH = Math.max(rowH, outerH);
     width = Math.max(width, x - CARD_GAP);
   }
   return { w: width, h: items.length === 0 ? 0 : y + rowH, slots };
@@ -126,10 +130,11 @@ function wrapOf(kind: string): number {
 
 /**
  * The layout of a runtime roots scene (see runtimeRootsScene). Each container holds its children packed in rows; a
- * container takes the frame size of its content (frameSize), so its siblings move out of its way. The root's content
- * keeps the flat grid's padding, which leaves room for the map's controls. Deterministic.
+ * container takes the frame size of its content (frameSize), so its siblings move out of its way. A card with a footprint
+ * keeps the room beside it, so the expansions it opens sit inside its thread's frame. The root's content keeps the flat
+ * grid's padding, which leaves room for the map's controls. Deterministic.
  */
-export function runtimeRootsLayout(scene: Scene): SceneLayout {
+export function runtimeRootsLayout(scene: Scene, footprint?: Footprint): SceneLayout {
   const containers: Record<string, ContainerLayout> = {};
 
   // The size a node takes as a child: a card, or the frame of a container (laid out here, first).
@@ -142,6 +147,12 @@ export function runtimeRootsLayout(scene: Scene): SceneLayout {
     const content = contentOf(n.id, n.kind);
     return frameSize(content);
   };
+  const itemOf = (id: string): Item => {
+    const n = scene.nodes.get(id);
+    const size = sizeOf(id);
+    const leaf = n !== undefined && n.children.length === 0 && n.kind !== "program" && n.kind !== "thread" && n.kind !== "group";
+    return { id, ...size, breakBefore: id === UNTHREADED_ID, room: leaf ? footprint?.get(id) : undefined };
+  };
 
   const contentOf = (id: string, kind: string): Size => {
     const n = scene.nodes.get(id);
@@ -150,7 +161,7 @@ export function runtimeRootsLayout(scene: Scene): SceneLayout {
       containers[id] = { w: EMPTY_CONTENT.w, h: EMPTY_CONTENT.h, slots: [] };
       return EMPTY_CONTENT;
     }
-    const items: Item[] = kids.map((c) => ({ id: c, ...sizeOf(c), breakBefore: c === UNTHREADED_ID }));
+    const items: Item[] = kids.map(itemOf);
     const packed = pack(items, wrapOf(kind));
     const w = kind === "group" ? packed.w : Math.max(packed.w, MIN_CONTENT_W);
     containers[id] = { w, h: packed.h, slots: packed.slots };
@@ -160,7 +171,7 @@ export function runtimeRootsLayout(scene: Scene): SceneLayout {
   // The root: its children packed at the flat grid's padding, the group on its own row below.
   const rootNode = scene.nodes.get(scene.root);
   const kids = rootNode?.children ?? [];
-  const rootItems: Item[] = kids.map((c) => ({ id: c, ...sizeOf(c), breakBefore: c === UNTHREADED_ID }));
+  const rootItems: Item[] = kids.map(itemOf);
   const packed = pack(rootItems, PROCESS_WRAP_W);
   const slots = packed.slots.map((s) => ({ ...s, x: CARD_PAD_SIDE + s.x, y: CARD_PAD_TOP + s.y }));
   containers[scene.root] = {

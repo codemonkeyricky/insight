@@ -5,6 +5,7 @@
 import {
   buildExecScene,
   execDefaultOpen,
+  execThreadId,
   execRootsOnly,
   flattenRoots,
   gridRootsLayout,
@@ -37,6 +38,8 @@ export interface ExecView {
   layouts: Map<string, Promise<SceneLayout>>;
   /** Whether the scene has runtime containers (process and thread boxes). Its layout holds every container, so none is solved. */
   containers: boolean;
+  /** The dispatch targets (await or start) of each thread, by the thread's scene id: a chain box of one is an async box. */
+  asyncIn: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
 /** The most layouts with containers opened a view keeps. Each one reuses the base layout, so a few are cheap. */
@@ -102,7 +105,12 @@ export class ExecStore implements MapSource {
                 ? saved
                 : await layoutScene(scene, (g) => solve(g).then((s) => s.result), { open });
           const fns = new Map(model.functions.map((f): [string, ExecFunctionRef] => [f.id, f]));
-          const view: ExecView = { scene, layout, open, fns, index: execIndex(scene, model, callers, this.lambdas), layouts: new Map(), containers };
+          const asyncIn = new Map<string, Set<string>>();
+          for (const t of model.threads) {
+            const targets = new Set(t.coroutines.map((c) => c.target));
+            if (targets.size > 0) asyncIn.set(execThreadId(t.id), targets);
+          }
+          const view: ExecView = { scene, layout, open, fns, index: execIndex(scene, model, callers, this.lambdas), layouts: new Map(), containers, asyncIn };
           this.views.set(key, view);
           return view;
         })
@@ -131,7 +139,27 @@ export class ExecStore implements MapSource {
     const view = await this.load(scope);
     if (!view.scene.nodes.has(nodeId)) throw new Error(`Nothing in the execution map at ${nodeId}`);
     const layout = await this.layoutFor(view, execOpenSet(view.scene, nodeId));
-    return execBuild(view.scene, layout, scope, nodeId, view.fns);
+    // A roots-only build is slotted: its expansions sit in the room the layout keeps for them (see rebuild).
+    return { ...execBuild(view.scene, layout, scope, nodeId, view.fns), slotted: this.rootsOnly };
+  }
+
+  /**
+   * The build laid out with `footprint`: the room kept beside each opened card, so the expansions and the frames around
+   * them fit (runtimeRootsLayout and gridRootsLayout keep it). Only a slotted (roots-only) build is laid out again. The
+   * layout is arithmetic, so this is synchronous.
+   */
+  rebuild(b: MapBuild, footprint: ReadonlyMap<string, { w: number; h: number }>): MapBuild {
+    const view = this.viewOf(b);
+    if (view === undefined || !b.slotted) return b;
+    const layout = view.containers ? runtimeRootsLayout(view.scene, footprint) : gridRootsLayout(view.scene, footprint);
+    return { ...execBuild(view.scene, layout, b.path, b.nodeId, view.fns), slotted: true, footprint };
+  }
+
+  /** Whether `fnId` is a dispatch target of the thread that holds the box `boxId` (see ExecView.asyncIn). */
+  asyncOf(b: MapBuild, fnId: string, boxId: string): boolean {
+    const view = this.viewOf(b);
+    const thread = view?.scene.nodes.get(boxId)?.parent;
+    return thread !== undefined && view?.asyncIn.get(thread)?.has(fnId) === true;
   }
 
   /**
