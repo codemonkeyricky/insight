@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import type { IREdge, IRNode } from "@insight/ir";
+import { createCoreRegistry, validateIR, type IREdge, type IRNode } from "@insight/ir";
 import frontend from "../src/index.js";
 
 // A handler the top-level code installs (`ctx.onmessage = fn`, `addEventListener("message", fn)`) is a flow step
@@ -50,5 +50,26 @@ describe("handler steps", () => {
     const { nodes } = await extract();
     const post = nodes.find((n) => n.kind === "effects.message.post");
     expect(post?.parent).toMatch(/^src\/worker\.ts#λ/);
+  });
+});
+
+describe("emitted records validate against the IR schema", () => {
+  it("validates every node and edge the worker fixture produces, including handler references", async () => {
+    const { nodes, edges } = await extract();
+    // The host indexes each file as a structure.file node, and the frontend's records hang off them.
+    const fileNodes = files.map((path) => ({
+      id: path,
+      facet: "structure",
+      kind: "structure.file",
+      attrs: { path, language: "typescript", parseStatus: "ok" },
+      provenance: { frontend: "test", confidence: "exact" },
+    }));
+    const text = [...fileNodes.map((node) => ({ node })), ...nodes.map((node) => ({ node })), ...edges.map((edge) => ({ edge }))]
+      .map((r) => JSON.stringify(r))
+      .join("\n");
+    const report = validateIR(text, createCoreRegistry());
+    expect(report.errors.map((e) => e.message)).toEqual([]);
+    expect(report.ok).toBe(true);
+    expect(edges.some((e) => e.kind === "calls.reference" && (e.attrs as { how?: unknown }).how === "handler")).toBe(true);
   });
 });
