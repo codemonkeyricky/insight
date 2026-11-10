@@ -1,8 +1,9 @@
+import { readLambdas, writeLambdas } from "../../zoom/lambdaPref";
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { api, type FileEntry, type FileFlowSummary, type FindingRow } from "../../api";
+import { api, type FileEntry, type FindingRow } from "../../api";
 import { useCodeTarget } from "../../codeTarget";
-import { hrefFlow, hrefView, inScope } from "../../router";
+import { hrefFlow, hrefView } from "../../router";
 import { ExecStore } from "../../zoom/execStore";
 import { kindOf } from "../../findingGroups";
 import { findingCounts } from "../../zoom/findingsLayer";
@@ -14,30 +15,7 @@ import { LayersPanel, type LayerState } from "../sheet/LayersPanel";
 import { SHEET_MID, SHEET_MAX_WIDTH } from "../sheet/bottomSheet";
 import { TitleBlock, type TitleFacts } from "../sheet/TitleBlock";
 import { ExecFunctionPanel } from "../zoom/ExecFunctionPanel";
-import { Stat } from "../zoom/FunctionDetail";
 import { ZoomMap, type MapSelection } from "../zoom/ZoomMap";
-
-type Loaded<T> = { status: "loading" } | { status: "ready"; data: T } | { status: "error"; message: string };
-
-/** Runs `load` when `key` changes. An answer that arrives for a key no longer shown is dropped. */
-function useLoaded<T>(key: string, load: () => Promise<T>): Loaded<T> {
-  const [done, setDone] = useState<{ key: string; state: Loaded<T> } | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    load().then(
-      (data) => {
-        if (!cancelled) setDone({ key, state: { status: "ready", data } });
-      },
-      (e: unknown) => {
-        if (!cancelled) setDone({ key, state: { status: "error", message: e instanceof Error ? e.message : String(e) } });
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [key]);
-  return done?.key === key ? done.state : { status: "loading" };
-}
 
 interface Props {
   id: string;
@@ -69,11 +47,11 @@ const LAYERS_INSET = 200 + 16 + 16;
  * project lists its files with their flows.
  */
 export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emphasis, findingKind, codeOpen }: Props) {
-  const exec = useMemo(() => new ExecStore(id, roots), [id, roots]);
   const { showCode } = useCodeTarget();
   const kind = scopeKind(scope, files);
-  /** What the map shows: frames and calls on by default, findings off until the reader turns the layer on. */
-  const [shown, setShown] = useState<LayerState>(() => ({ frames: true, calls: true, findings: findingKind !== undefined }));
+  /** What the map shows: frames and calls on by default, findings off until the reader turns the layer on, lambdas off (folded). */
+  const [shown, setShown] = useState<LayerState>(() => ({ frames: true, calls: true, findings: findingKind !== undefined, lambdas: readLambdas() }));
+  const exec = useMemo(() => new ExecStore(id, roots, shown.lambdas), [id, roots, shown.lambdas]);
   // A "Show in Flow" link for a kind turns the findings layer on, even when the flow is already open.
   useEffect(() => {
     if (findingKind !== undefined) setShown((s) => (s.findings ? s : { ...s, findings: true }));
@@ -133,7 +111,7 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
         <div className="sh-canvas">
           <RootsOnly id={id} scope={scope} fn={fn} roots={roots} />
           <ZoomMap
-            key={roots ? "roots" : "all"}
+            key={`${roots ? "roots" : "all"}-${shown.lambdas ? "lambdas" : "folded"}`}
             id={id}
             source={exec}
             scope={scope}
@@ -142,6 +120,7 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
             onSelect={setSel}
             onFocus={setFocus}
             hint={false}
+            flat={roots}
             bottomInset={bottomInset}
             leftInset={leftInset}
             layers={mapLayers}
@@ -159,7 +138,10 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
           <LayersPanel
             shown={shown}
             findingCount={findingRows?.length}
-            onChange={(key, on) => setShown((s) => ({ ...s, [key]: on }))}
+            onChange={(key, on) => {
+              setShown((s) => ({ ...s, [key]: on }));
+              if (key === "lambdas") writeLambdas(on);
+            }}
             onClose={() => setLayersOpen(false)}
             roots={<RootsOnly id={id} scope={scope} fn={fn} roots={roots} className="sh-check" />}
           />
@@ -175,7 +157,6 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
           onToggle={() => setTitleFull((v) => !v)}
         />
       </div>
-      {kind !== "file" && <FlowFolders id={id} scope={scope} />}
     </>
   );
 }
@@ -193,78 +174,5 @@ function RootsOnly({ id, scope, fn, roots, className = "sh-roots" }: { id: strin
       />{" "}
       Roots only
     </label>
-  );
-}
-
-function FlowFolders({ id, scope }: { id: string; scope: string }) {
-  const rows = useLoaded(`${id}\0summary`, () => api.flowSummary(id));
-  if (rows.status === "error") return <p className="error" role="alert">{rows.message}</p>;
-  if (rows.status === "loading") return <p className="muted">Loading</p>;
-  const shown = rows.data.filter((r) => inScope(r.file, scope));
-  const sum = (k: "functions" | "decisions" | "loops" | "exits") => shown.reduce((n, r) => n + r[k], 0);
-  return (
-    <section className="sh-below">
-      <p className="muted small">Pick a file in the tree on the left, or a row below, to draw its control flow.</p>
-      {shown.length === 0 ? (
-        <p className="muted">No function in this scope has a flow to chart.</p>
-      ) : (
-        <>
-          <div className="stats">
-            <Stat label="Files with functions" value={shown.length} />
-            <Stat label="Functions" value={sum("functions")} />
-            <Stat label="Decisions" value={sum("decisions")} />
-            <Stat label="Loops" value={sum("loops")} />
-            <Stat label="Exits" value={sum("exits")} />
-          </div>
-          <div className="flow-table">
-            <FileTable id={id} rows={shown} />
-          </div>
-        </>
-      )}
-    </section>
-  );
-}
-
-function FileTable({ id, rows }: { id: string; rows: FileFlowSummary[] }) {
-  return (
-    <table className="grid">
-      <thead>
-        <tr>
-          <th>File</th>
-          <th>Functions</th>
-          <th>Steps</th>
-          <th>Decisions</th>
-          <th>Loops</th>
-          <th>Exits</th>
-          <th>Busiest function</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((r) => (
-          <tr key={r.file}>
-            <td>
-              <a className="mono small" href={hrefFlow(id, r.file)}>
-                {r.file}
-              </a>
-            </td>
-            <td>{r.functions}</td>
-            <td>{r.steps}</td>
-            <td>{r.decisions}</td>
-            <td>{r.loops}</td>
-            <td>{r.exits}</td>
-            <td>
-              {r.busiest ? (
-                <>
-                  <a href={hrefView(id, "flow", { scope: r.file, fn: r.busiest.id })}>{r.busiest.name}</a>{" "}
-                  <span className="muted small">{r.busiest.branches} branches</span>
-                </>
-              ) : (
-                <span className="muted">none</span>
-              )}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
   );
 }

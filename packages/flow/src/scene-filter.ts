@@ -2,7 +2,7 @@
 // thread keeps the functions it starts in, with the thread and the process box that holds it. Pure: the scene and
 // the model are read, never changed.
 import { execFnId, execThreadId } from "./exec-scene.js";
-import type { ExecModel } from "./exec-model.js";
+import type { ExecFunctionRef, ExecModel } from "./exec-model.js";
 import type { Scene, SceneNode } from "./scene.js";
 
 /**
@@ -61,4 +61,37 @@ export function execRootsOnly(scene: Scene, model: ExecModel): Scene {
   for (const id of flat) if (!called.has(id)) keep.add(id);
 
   return keepScene(scene, keep);
+}
+
+/** A file's path as the scope shows it: relative to the scope, or its base name when the scope is that file. */
+function pathInScope(file: string, scope: string): string {
+  if (file === scope) return file.split("/").pop() ?? file;
+  if (scope === "") return file;
+  return file.startsWith(`${scope}/`) ? file.slice(scope.length + 1) : file;
+}
+
+/**
+ * The roots-only cut, flat: every container (program, process, thread, coroutine) is dropped, and each root function is
+ * one box directly on the project. A function placed in several threads is drawn once, at its first placement by id.
+ * Its subtitle is its file relative to the scope and its line. Edges stay only between boxes that are both kept.
+ */
+export function flattenRoots(cut: Scene, model: ExecModel): Scene {
+  const byFn = new Map<string, ExecFunctionRef>();
+  for (const f of model.functions) byFn.set(f.id, f);
+  const kept = new Map<string, SceneNode>();
+  const seen = new Set<string>();
+  const fnNodes = [...cut.nodes.values()].filter((n) => n.kind === "function").sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  for (const n of fnNodes) {
+    const fnId = n.ref ?? n.id;
+    if (seen.has(fnId)) continue;
+    seen.add(fnId);
+    const ref = byFn.get(fnId);
+    const detail = ref !== undefined && ref.file !== "" ? `${pathInScope(ref.file, model.scope)}:${ref.line}` : n.detail;
+    kept.set(n.id, { ...n, parent: cut.root, children: [], ...(detail !== undefined ? { detail } : {}) });
+  }
+  const root = cut.nodes.get(cut.root);
+  if (root === undefined) return cut;
+  const nodes = new Map<string, SceneNode>([[cut.root, { ...root, children: [...kept.keys()].sort() }], ...kept]);
+  const edges = cut.edges.filter((e) => kept.has(e.from) && kept.has(e.to)).map((e) => ({ ...e }));
+  return { root: cut.root, nodes, edges, levels: cut.levels };
 }

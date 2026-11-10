@@ -20,6 +20,7 @@ describe("hash router", () => {
       name: "workspace",
       id: "ab12",
       tab: "flow",
+      roots: true,
       scope: "src/a.ts",
       fn: "src/a.ts#run",
       line: 7,
@@ -80,6 +81,7 @@ describe("hash router", () => {
       name: "workspace",
       id: "p1",
       tab: "flow",
+      roots: true,
       scope,
       fn,
       line: 7,
@@ -103,25 +105,27 @@ describe("hash router", () => {
       name: "workspace",
       id: "p1",
       tab: "flow",
+      roots: true,
       scope: "src/sample.ts",
       fn: "src/sample.ts#fetchIt",
     });
-    expect(parseRoute(hrefFlow("p1", "src/sample.ts"))).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "src/sample.ts" });
+    expect(parseRoute(hrefFlow("p1", "src/sample.ts"))).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "src/sample.ts", roots: true });
   });
 
   it("writes the roots-only flag as roots=1 only when it is on", () => {
     expect(hrefView("p1", "flow", { scope: "src", roots: true })).toBe("#/projects/p1/view/flow?scope=src&roots=1");
-    expect(hrefView("p1", "flow", { scope: "src", roots: false })).toBe("#/projects/p1/view/flow?scope=src");
+    expect(hrefView("p1", "flow", { scope: "src", roots: false })).toBe("#/projects/p1/view/flow?scope=src&roots=0");
     expect(hrefView("p1", "flow", { scope: "src/a.py", fn: "src/a.py#run", roots: true })).toBe(
       "#/projects/p1/view/flow?scope=src%2Fa.py&fn=src%2Fa.py%23run&roots=1",
     );
   });
 
-  it("parses roots=1 into roots, and leaves roots out of the route otherwise", () => {
+  it("parses roots=0 and roots=1, and defaults roots to on", () => {
     expect(parseRoute("#/projects/p1/view/flow?scope=src&roots=1")).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "src", roots: true });
-    expect(parseRoute("#/projects/p1/view/flow?scope=src&roots=0")).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "src" });
-    expect(parseRoute("#/projects/p1/view/flow?scope=src&roots=yes")).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "src" });
-    expect(parseRoute("#/projects/p1/view/flow?scope=src")).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "src" });
+    // Roots-only is the default on the flow tab: roots=0 turns it off, any other value leaves it on.
+    expect(parseRoute("#/projects/p1/view/flow?scope=src&roots=0")).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "src", roots: false });
+    expect(parseRoute("#/projects/p1/view/flow?scope=src&roots=yes")).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "src", roots: true });
+    expect(parseRoute("#/projects/p1/view/flow?scope=src")).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "src", roots: true });
   });
 
   it("round-trips the roots-only flag with its scope and function", () => {
@@ -138,14 +142,15 @@ describe("hash router", () => {
   });
 
   it("still opens the flow tab from the retired mode links, and ignores their mode", () => {
-    expect(parseRoute("#/projects/p1/view/flow?scope=src&mode=hierarchy")).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "src" });
-    expect(parseRoute("#/projects/p1/view/flow?scope=src&mode=exec")).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "src" });
+    expect(parseRoute("#/projects/p1/view/flow?scope=src&mode=hierarchy")).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "src", roots: true });
+    expect(parseRoute("#/projects/p1/view/flow?scope=src&mode=exec")).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "src", roots: true });
     expect(parseRoute("#/projects/p1/view/flow?scope=src&mode=entries&fn=src%23run")).toEqual({
       name: "workspace",
       id: "p1",
       tab: "flow",
       scope: "src",
       fn: "src#run",
+      roots: true,
     });
     expect(parseRoute("#/projects/p1/view/flow?scope=src&mode=hierarchy&roots=1")).toEqual({
       name: "workspace",
@@ -266,7 +271,7 @@ describe("the findings layer link", () => {
   it("carries the kind of finding to the flow tab and back", () => {
     const href = hrefView("p1", "flow", { scope: "src/a.ts", fn: "src/a.ts#run", kind: "unreachable" });
     expect(href).toBe("#/projects/p1/view/flow?scope=src%2Fa.ts&fn=src%2Fa.ts%23run&kind=unreachable");
-    expect(parseRoute(href)).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "src/a.ts", fn: "src/a.ts#run", kind: "unreachable" });
+    expect(parseRoute(href)).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "src/a.ts", fn: "src/a.ts#run", roots: true, kind: "unreachable" });
     expect(parseRoute(hrefView("p1", "flow"))).not.toHaveProperty("kind");
   });
 });

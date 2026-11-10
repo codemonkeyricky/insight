@@ -245,7 +245,12 @@ function depthIn(scene: Scene, nodeId: string): number {
  * scopeCallersFor in model/payloads.ts) adds each function's callers from anywhere in the project to the callers the
  * scope's own model gives, so the Called by lists and counts name them too.
  */
-export function execIndex(scene: Scene, model: ExecModel, projectCallers?: ReadonlyMap<string, readonly ExecFunctionRef[]>): ExecIndex {
+export function execIndex(
+  scene: Scene,
+  model: ExecModel,
+  projectCallers?: ReadonlyMap<string, readonly ExecFunctionRef[]>,
+  lambdas = false,
+): ExecIndex {
   const fns = new Map<string, ExecFunctionRef>();
   for (const f of model.functions) fns.set(f.id, f);
   const nameOf = (id: string): string => fns.get(id)?.name ?? id;
@@ -267,6 +272,8 @@ export function execIndex(scene: Scene, model: ExecModel, projectCallers?: Reado
   }
   for (const [fnId, callers] of projectCallers ?? []) {
     for (const c of callers) {
+      // With lambdas folded, an anonymous caller is a lambda the map does not show: its calls are the owner's, so it is dropped.
+      if (!lambdas && c.anonymous === true) continue;
       add(callerSets, fnId, c.id);
       if (!fns.has(c.id)) fns.set(c.id, c);
     }

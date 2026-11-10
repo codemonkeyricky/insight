@@ -63,7 +63,7 @@ const isEditable = (target: EventTarget | null) =>
  * stay put on every tab; the center holds the layers as tabs over the view. On a phone the two side panes are drawers, opened
  * from the top bar. Find opens as an overlay.
  */
-export function Workspace({ id, tab, scope, line, fn, roots = false, base, head, full = false, findingKind }: WorkspaceProps) {
+export function Workspace({ id, tab, scope, line, fn, roots = true, base, head, full = false, findingKind }: WorkspaceProps) {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [listing, setListing] = useState<ScopeLenses | null>(null);

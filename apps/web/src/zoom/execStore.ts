@@ -6,6 +6,8 @@ import {
   buildExecScene,
   execDefaultOpen,
   execRootsOnly,
+  flattenRoots,
+  gridRootsLayout,
   layoutCovers,
   layoutScene,
   type ExecFunctionRef,
@@ -38,23 +40,26 @@ const LAYOUTS_MAX = 32;
 export class ExecStore implements MapSource {
   private readonly id: string;
   private readonly rootsOnly: boolean;
+  /** Whether anonymous functions are their own boxes. Folded (false) is the server's model and its saved layout. */
+  private readonly lambdas: boolean;
   private readonly loads = new Map<string, Promise<ExecView>>();
   private readonly views = new Map<string, ExecView>();
 
-  /** `rootsOnly` makes the store's scenes the roots-only cut. Make one store per (project, flag). */
-  constructor(id: string, rootsOnly = false) {
+  /** `rootsOnly` makes the store's scenes the flat roots-only cut; `lambdas` shows anonymous functions. One store per (project, flags). */
+  constructor(id: string, rootsOnly = false, lambdas = false) {
     this.id = id;
     this.rootsOnly = rootsOnly;
+    this.lambdas = lambdas;
   }
 
   /** The cache key of a scope: its scene depends on the scope and on whether the store is roots-only. */
   private keyOf(scope: string): string {
-    return `${this.rootsOnly ? "roots" : "all"}\u0000${scope}`;
+    return `${this.rootsOnly ? "roots" : "all"}\u0000${this.lambdas ? "lambdas" : "folded"}\u0000${scope}`;
   }
 
   private sceneOf(model: ExecModel): Scene {
     const full = buildExecScene(model);
-    return this.rootsOnly ? execRootsOnly(full, model) : full;
+    return this.rootsOnly ? flattenRoots(execRootsOnly(full, model), model) : full;
   }
 
   /** Loads a scope's model and layout once. A failed load is dropped, so the next call tries again. */
@@ -62,18 +67,22 @@ export class ExecStore implements MapSource {
     const key = this.keyOf(scope);
     let load = this.loads.get(key);
     if (load === undefined) {
-      load = Promise.all([api.getScopeExec(this.id, scope), api.scopeExecLayout(this.id, scope), api.getScopeCallers(this.id, scope)])
+      // The server's saved layout is for the folded, full scene only.
+      const saved$ = this.rootsOnly || this.lambdas ? Promise.resolve(undefined) : api.scopeExecLayout(this.id, scope);
+      load = Promise.all([api.getScopeExec(this.id, scope, { lambdas: this.lambdas }), saved$, api.getScopeCallers(this.id, scope)])
         .then(async ([model, saved, callers]) => {
           const scene = this.sceneOf(model);
           const open = execDefaultOpen(scene);
           // The saved layout is the full scene's, with the default containers open. A roots-only scene is a different scene,
           // so it is always solved here.
-          const layout =
-            !this.rootsOnly && saved !== undefined && layoutCovers(scene, saved, open)
+          // A roots-only scene is flat and laid out as a grid of uniform cards (gridRootsLayout), with no solve.
+          const layout = this.rootsOnly
+            ? gridRootsLayout(scene)
+            : !this.lambdas && saved !== undefined && layoutCovers(scene, saved, open)
               ? saved
               : await layoutScene(scene, (g) => solve(g).then((s) => s.result), { open });
           const fns = new Map(model.functions.map((f): [string, ExecFunctionRef] => [f.id, f]));
-          const view: ExecView = { scene, layout, open, fns, index: execIndex(scene, model, callers), layouts: new Map() };
+          const view: ExecView = { scene, layout, open, fns, index: execIndex(scene, model, callers, this.lambdas), layouts: new Map() };
           this.views.set(key, view);
           return view;
         })
@@ -149,6 +158,12 @@ export class ExecStore implements MapSource {
   /** A node of a build is a node of the build's scope, so its focus carries that scope. */
   focusOf(build: MapBuild, nodeId: string): string {
     return execFocus(build.path, nodeId);
+  }
+
+  /** Whether the build's model names `fnId`. A folded lambda is not named, so a call to one opens no box (see MapSource.isFunction). */
+  isFunction(build: MapBuild, fnId: string): boolean {
+    const view = this.viewOf(build);
+    return view === undefined || view.fns.has(fnId);
   }
 
   /** The placement of a function in the build's scope: in the build's thread when it has one there (see execPlacementFor). */

@@ -12,8 +12,9 @@ import { nameOfId } from "../../flowTargets";
 import { hrefView } from "../../router";
 import { CHART_MIN_PX } from "../../zoom/chart";
 import { anchoredTo, calloutOf, closeExpansion, detailLetter, openExpansion, refresh, revealCamera, shiftAt, type Expansion, type ExpandAnchor } from "../../zoom/expand";
-import { advance, atRest, releaseVelocity, restingAt, type DragSample, type Spring } from "../../zoom/spring";
+import { releaseVelocity, type DragSample } from "../../zoom/spring";
 import { useCameraSpring } from "../../zoom/useCameraSpring";
+import { motionFor, progressAt } from "../../zoom/tween";
 import { pickBox } from "../../zoom/gesture";
 import { edgeClass, edgeKey, edgeTitle, edgeWidth, lineClass, runtimeLine, type MapBuild, type MapEdge, type MapNode, type MapSelected, type MapSource, type RuntimeLine } from "../../zoom/source";
 import { bucketScale, FAR_TILE_PX, fitLabel, headerLabels, labelChars, lodBucket, MID_TILE_PX } from "../../zoom/lod";
@@ -60,6 +61,8 @@ const union = (a: Rect, b: Rect): Rect => {
 
 const toCamera = (t: ZoomTransform): Camera => ({ k: t.k, x: t.x, y: t.y });
 const toTransform = (c: Camera): ZoomTransform => zoomIdentity.translate(c.x, c.y).scale(c.k);
+/** How long a closing detail stays drawn while it shrinks and fades: the exit's length (see styles.css). */
+const EXIT_CLOSE_MS = 200;
 const reduceMotion = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 /** A d3 event that came from the user's pointer (a drag), not from a programmatic move of the camera. */
@@ -67,20 +70,21 @@ const isPointerGesture = (e: unknown) => e instanceof Event && /^(pointer|mouse|
 
 /**
  * The side shift on screen: each open detail pushes the columns right of its pivot over by its width. `base` is the shift
- * being eased away from, `to` the expansions it eases toward, and `s` the spring from 0 (base) to 1 (to).
+ * being eased away from, `to` the expansions it eases toward, and `p` the eased progress from 0 (base) to 1 (to). `t0` is
+ * when the ease started (set on its first frame), so the ease runs on the map's shared 260 ms curve.
  */
 interface ShiftState {
   base: (x: number) => number;
   to: readonly Expansion[];
-  s: Spring;
+  p: number;
+  t0?: number;
   frame?: number;
-  last: number;
 }
 
 /** The shift an item at x shows now: the eased value between the base and the target expansions. */
 function displayShift(sh: ShiftState, x: number): number {
   const b = sh.base(x);
-  return b + (shiftAt(sh.to, x) - b) * sh.s.value;
+  return b + (shiftAt(sh.to, x) - b) * sh.p;
 }
 
 /**
@@ -142,6 +146,8 @@ interface Props {
   findings?: ReadonlyMap<string, number>;
   /** Which parts of the map are drawn: the frames (file and runtime frames) and the call edges. Both on by default. */
   layers?: { frames: boolean; calls: boolean };
+  /** The roots-only flat map: its boxes are cards with a file line, and the zone rulers and lines are off. */
+  flat?: boolean;
 }
 
 /** What an expansion needs to draw its chart: the project, the scope its links resolve in, and the flow store. */
@@ -168,7 +174,11 @@ interface OffMap {
  * The execution map: one camera over a scope's scene. Each node is a focus of the source; the map's items and edges
  * are named by node id, so a click or key that names a node is turned into a focus by the source first (`focusOf`).
  */
-export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFocus, hint = true, inset = 0, leftInset = 0, bottomInset = 0, findings, layers = { frames: true, calls: true } }: Props) {
+export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFocus, hint = true, inset = 0, leftInset = 0, bottomInset = 0, findings, layers = { frames: true, calls: true }, flat = false }: Props) {
+  /** The details that are closing: they stay drawn for EXIT_CLOSE_MS while they shrink and fade (see setExp). */
+  const [leaving, setLeaving] = useState<readonly Expansion[]>([]);
+  /** The key plan's open state. It is closed by default, so it does not cover the boxes. */
+  const [keyOpen, setKeyOpen] = useState(false);
   /** The selection: the focus the breadcrumb, the detail panel and the URL show. Only explicit actions change it. */
   const [build, setBuild] = useState<MapBuild>();
   /** The map as drawn: the selection's build. Only a click or a key changes it; gestures move the camera alone. */
@@ -211,7 +221,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   const seqRef = useRef(0);
   const miniDragRef = useRef(false);
   /** The side shift's state (see ShiftState). The spring starts at rest on the shift of the open details. */
-  const shiftRef = useRef<ShiftState>({ base: () => 0, to: [], s: restingAt(1), last: 0 });
+  const shiftRef = useRef<ShiftState>({ base: () => 0, to: [], p: 1 });
   const arrowId = `zm-arrow-${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
   const hintId = useId();
 
@@ -244,18 +254,17 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     },
   );
 
-  /** One frame of the side shift's spring: eases the columns, then writes them. Settles on the target and snaps to it. */
+  /** One frame of the side shift's ease: eases the columns on the shared curve, then writes them. Lands on the target. */
   const shiftFrame = (now: number) => {
     const sh = shiftRef.current;
     sh.frame = undefined;
-    const dt = sh.last === 0 ? 1 / 60 : Math.min(0.1, (now - sh.last) / 1000);
-    sh.last = now;
-    sh.s = advance(sh.s, 1, dt);
-    if (atRest(sh.s, 1, 1e-4)) {
+    sh.t0 ??= now;
+    sh.p = progressAt(sh.t0, now);
+    if (sh.p >= 1) {
       const to = sh.to;
-      sh.s = restingAt(1);
+      sh.p = 1;
+      sh.t0 = undefined;
       sh.base = (x) => shiftAt(to, x);
-      sh.last = 0;
     } else {
       sh.frame = requestAnimationFrame(shiftFrame);
     }
@@ -264,38 +273,47 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   };
 
   /**
-   * Starts the side shift easing toward `next`, from the shift on screen now, so an interrupted ease does not jump. Reduced
-   * motion cuts to it.
+   * Starts the side shift easing toward `next`, from the shift on screen now, so an interrupted ease does not jump (the
+   * ease restarts from there). Reduced motion, and a map crowded enough that sliding every box costs more than it shows,
+   * cut to it.
    */
   const retargetShift = (next: readonly Expansion[]) => {
     const sh = shiftRef.current;
     const from = sh.base;
     const toPrev = sh.to;
-    const sPrev = sh.s.value;
+    const pPrev = sh.p;
     sh.to = next;
-    if (reduceMotion()) {
+    const mode = motionFor({ reduced: reduceMotion(), boxes: boxesRef.current.length });
+    if (mode === "fade") {
       sh.base = (x) => shiftAt(next, x);
-      sh.s = restingAt(1);
+      sh.p = 1;
+      sh.t0 = undefined;
       if (sh.frame !== undefined) cancelAnimationFrame(sh.frame);
       sh.frame = undefined;
       const root = worldRef.current;
       if (root) writeShift(root, sh);
       return;
     }
-    // The shift on screen now becomes the base: the spring starts at 0, so nothing jumps.
+    // The shift on screen now becomes the base: the ease starts at 0, so nothing jumps.
     sh.base = (x) => {
       const b = from(x);
-      return b + (shiftAt(toPrev, x) - b) * sPrev;
+      return b + (shiftAt(toPrev, x) - b) * pPrev;
     };
-    sh.s = restingAt(0);
-    sh.last = 0;
+    sh.p = 0;
+    sh.t0 = undefined;
     if (sh.frame === undefined) sh.frame = requestAnimationFrame(shiftFrame);
   };
 
   const setExp = (list: readonly Expansion[]) => {
+    const gone = expRef.current.filter((e) => !list.some((x) => x.fnId === e.fnId));
     expRef.current = list;
     setExpansions(list);
     retargetShift(list);
+    if (gone.length > 0) {
+      // A closing detail is kept drawn for the exit's length, so it shrinks and fades instead of vanishing.
+      setLeaving((prev) => [...prev.filter((p) => !gone.some((g) => g.fnId === p.fnId)), ...gone]);
+      window.setTimeout(() => setLeaving((prev) => prev.filter((p) => !gone.includes(p))), EXIT_CLOSE_MS);
+    }
   };
 
   const setOffMap = (v: OffMap | undefined) => {
@@ -331,7 +349,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     const g = rulerRef.current;
     const sheetPlaced = viewRef.current?.placed;
     if (!g) return;
-    if (sheetPlaced === undefined) {
+    if (sheetPlaced === undefined || flat) {
       g.replaceChildren();
       return;
     }
@@ -428,7 +446,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     if (!rect || !svgRef.current || !zoomRef.current) return undefined;
     const room = roomOf();
     const opens = b.placed.items.some((i) => i.id === b.nodeId && i.kind === "frame");
-    const c = opens || b.node(b.nodeId)?.chart !== undefined ? fitChartCamera(rect, room, CHART_MIN_PX) : fitCamera(rect, room);
+    // A roots-only grid fits at 1x when it fits: the cards are never enlarged past their size.
+    const c = opens || b.node(b.nodeId)?.chart !== undefined ? fitChartCamera(rect, room, CHART_MIN_PX) : fitCamera(rect, room, flat ? { maxK: 1 } : {});
     return { ...c, x: c.x + leftRef.current };
   };
 
@@ -453,10 +472,10 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   };
 
   /** The camera that shows an expansion from `from`, the least it can move (see revealCamera). */
-  const revealOf = (from: Camera, e: Expansion): Camera => {
+  const revealOf = (from: Camera, e: Expansion, minPx = CHART_MIN_PX): Camera => {
     // The reveal works in the stage's own coordinates (from the left inset), so the inset is taken off and put back.
     const left = leftRef.current;
-    const c = revealCamera({ ...from, x: from.x - left }, { x: e.x, y: e.y, w: e.w, h: e.h }, e.chart.width, roomOf(), CHART_MIN_PX);
+    const c = revealCamera({ ...from, x: from.x - left }, { x: e.x, y: e.y, w: e.w, h: e.h }, e.chart.width, roomOf(), minPx);
     return { ...c, x: c.x + left };
   };
 
@@ -536,6 +555,10 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     if (fit) {
       const target = fitDetails(b, list) ?? fitTarget(b);
       if (target !== undefined) moveTo(target, animate);
+    } else if (list.length > openBefore) {
+      // A detail opened off the stage's edge is panned into view; a camera that already shows it does not move.
+      const newest = list[list.length - 1];
+      if (newest !== undefined) moveTo(revealOf(cameraRef.current, newest, 0), true);
     }
   };
 
@@ -567,13 +590,20 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     if (!b || !expRef.current.some((e) => e.fnId === fnId)) return;
     const chart = await loadChart(callee);
     if (chart === undefined) return;
-    const list = placeAll(b, expRef.current);
+    // The step's callee replaces what is right of its function: the calls it had open are closed, except this one.
+    let list = placeAll(b, expRef.current);
+    for (const e of list) {
+      if (e.anchor.kind === "step" && e.anchor.fnId === fnId && e.fnId !== callee) list = closeExpansion(list, e.fnId);
+    }
     const anchor: ExpandAnchor = { kind: "step", fnId, rect: { x: node.x, y: node.y, w: node.w, h: node.h } };
     const next = openExpansion(list, callee, anchor, chart, visibleWorld(cameraRef.current, sizeOf()));
     if (next === list) return;
     setExp(next);
-    // The detail opens beside the step and the camera stays where it is: only the selection follows the chain.
-    if (next.some((e) => e.fnId === callee)) void selectFunction(callee);
+    // The new detail is panned into view when it is off the stage (the camera zooms only for a detail too narrow to read).
+    const opened = next.find((e) => e.fnId === callee);
+    if (opened !== undefined) moveTo(revealOf(cameraRef.current, opened, 0), true);
+    // The code pane follows the chain: the callee is the last function clicked.
+    if (opened !== undefined) void selectFunction(callee);
   };
 
   /**
@@ -612,13 +642,38 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
    */
   const chartStep = (fnId: string, node: FlowNode): boolean => {
     stageRef.current?.focus({ preventScroll: true });
+    const b = buildRef.current;
     const callee = node.target !== undefined && node.target !== fnId ? node.target : undefined;
-    if (callee !== undefined) void openStep(fnId, node, callee);
+    if (callee !== undefined && isLambdaCall(b, fnId, callee)) void highlightLambda(fnId, node, callee);
+    else if (callee !== undefined) void openStep(fnId, node, callee);
     else {
       setConstruct({ ref: fnId, nodeId: node.id, ...(node.span ? { span: node.span } : {}) });
       void selectFunction(fnId);
     }
     return true;
+  };
+
+  /**
+   * A call to a lambda: a closure written inside the calling function (`findMate.consider`), or a lambda the model folded
+   * into its owner (not a function of the model). Such a call opens no box.
+   */
+  const isLambdaCall = (b: MapBuild | undefined, fnId: string, callee: string): boolean =>
+    callee.startsWith(`${fnId}.`) || (b !== undefined && source.isFunction?.(b, callee) === false);
+
+  /**
+   * Highlights a lambda's block in the calling function's source: the lambda's own span when its chart is known, else the
+   * call. The code pane shows the calling function, with the block lit.
+   */
+  const highlightLambda = async (fnId: string, node: FlowNode, callee: string) => {
+    let span = node.span;
+    try {
+      const f = await charts?.store.chartOf(callee);
+      if (f?.span !== undefined) span = f.span;
+    } catch {
+      // The call's own span stays.
+    }
+    setConstruct({ ref: fnId, nodeId: node.id, ...(span ? { span } : {}) });
+    void selectFunction(fnId);
   };
 
   /** A key's zoom: about the middle of the stage, as d3's scaleBy does. */
@@ -1038,7 +1093,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
             </marker>
           </defs>
           <g ref={worldRef} className={far ? "zm-world zm-far" : mid ? "zm-world zm-mid" : "zm-world"}>
-            <ZoneGrid path={zonePath} />
+            {!flat && <ZoneGrid path={zonePath} />}
             {layers.frames &&
               drawn("frame").map((it) => (
                 <FrameShape key={it.id} item={it} node={view?.node(it.id)} line={lines.get(it.id) ?? "none"} k={labelScale} onOpen={openNode} />
@@ -1070,6 +1125,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
                   chartOpen={node.ref !== undefined && expandedFns.has(node.ref)}
                   bare={mid && it.rect.h * labelScale < TILE_LABEL_PX}
                   small={mid}
+                  card={flat}
                 />
               );
             })}
@@ -1086,19 +1142,29 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
               return (
                 <g key={`exp-${e.fnId}`} className="zm-expansion-group" data-sx={e.pivot}>
                   {c !== undefined && <CalloutShape callout={c} letter={detailLetter(e.index)} k={labelScale} />}
-                  <ExpansionShape
-                    id={id}
-                    scope={charts?.scope ?? scope}
-                    expansion={e}
-                    k={labelScale}
-                    selectedId={construct !== undefined && construct.ref === e.fnId ? construct.nodeId : undefined}
-                    onNodeClick={(n) => chartStep(e.fnId, n)}
-                    onSelect={() => void selectFunction(e.fnId)}
-                    onClose={() => setExp(closeExpansion(expRef.current, e.fnId))}
-                  />
+                  {/* The entrance plays on this wrapper, not the group: the group carries the side shift as its transform. */}
+                  <g className="zm-expansion-motion">
+                    <ExpansionShape
+                      id={id}
+                      scope={charts?.scope ?? scope}
+                      expansion={e}
+                      k={labelScale}
+                      selectedId={construct !== undefined && construct.ref === e.fnId ? construct.nodeId : undefined}
+                      onNodeClick={(n) => chartStep(e.fnId, n)}
+                      onSelect={() => void selectFunction(e.fnId)}
+                      onClose={() => setExp(closeExpansion(expRef.current, e.fnId))}
+                    />
+                  </g>
                 </g>
               );
             })}
+            {leaving.map((e) => (
+              <g key={`leave-${e.fnId}`} className="zm-expansion-group is-leaving" data-sx={e.pivot} aria-hidden="true">
+                <g className="zm-expansion-motion">
+                  <ExpansionShape id={id} scope={charts?.scope ?? scope} expansion={e} k={labelScale} selectedId={undefined} onNodeClick={() => false} onSelect={() => undefined} onClose={() => undefined} />
+                </g>
+              </g>
+            ))}
           </g>
         </svg>
         {stageSize !== undefined && (
@@ -1115,8 +1181,10 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
         {!build && !error && <p className="zm-loading muted">Loading</p>}
         <svg ref={rulerRef} className={far ? "zm-rulers zm-rulers-off" : "zm-rulers"} width="100%" height="100%" aria-hidden="true" />
         {build && (
-          <figure className="zm-keyplan">
-          <figcaption>Key plan</figcaption>
+          <figure className={keyOpen ? "zm-keyplan" : "zm-keyplan is-closed"}>
+          <button type="button" className="zm-keyplan-toggle" aria-expanded={keyOpen} onClick={() => setKeyOpen((o) => !o)}>
+            Key plan
+          </button>
           <svg
             ref={miniRef}
             className="zm-mini"
@@ -1218,6 +1286,7 @@ function BoxShape({
   chartOpen,
   bare = false,
   small = false,
+  card = false,
 }: {
   item: PlacedItem;
   node: MapNode;
@@ -1229,12 +1298,35 @@ function BoxShape({
   bare?: boolean;
   /** A mid-tier tile: its name in a small font, sized to the tile's height on screen. */
   small?: boolean;
+  /** A roots-only card: its name, and its file line under it when the box is tall enough (see roots-grid.ts). */
+  card?: boolean;
 }) {
   const { rect } = item;
   // The mid tier's name is 10-13 px on screen (the zoom's inverse scales it): its characters are measured at that size.
   const fontPx = small ? Math.min(13, Math.max(10, Math.round(rect.h * k * 0.42))) : 0;
   const label = bare ? null : small ? fitLabel(node.label, labelChars(rect.w * k, fontPx * 0.6, 10)) : fitLabel(node.label, labelChars(rect.w * k));
   const holdsChart = node.chart !== undefined;
+  if (card && !small && !bare) {
+    // A card: the name in the first line, the file line under it, both fitted to the card's width on screen.
+    const sub = node.detail !== undefined && rect.h >= 48 ? fitLabel(node.detail, labelChars(rect.w * k, 6.8, 20)) : null;
+    const name = fitLabel(node.label, labelChars(rect.w * k, 8, 20));
+    return (
+      <g className={`zm-box zm-${node.kind} zm-card ${lineClass(line)}${holdsChart ? " zm-has-chart" : ""}${chartOpen ? " expanded" : ""}`} data-sx={rect.x} onClick={() => onOpen(item.id)}>
+        <title>{node.detail !== undefined ? `${node.label} (${node.detail})` : node.title || node.label}</title>
+        <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={8} className="zm-box-body" />
+        {name !== null && (
+          <text x={rect.x + 12} y={rect.y + (sub !== null ? 21 : rect.h / 2)} dominantBaseline="central" className="zm-label">
+            {name}
+          </text>
+        )}
+        {sub !== null && (
+          <text x={rect.x + 12} y={rect.y + 40} dominantBaseline="central" className="zm-card-sub">
+            {sub}
+          </text>
+        )}
+      </g>
+    );
+  }
   return (
     <g
       className={`zm-box zm-${node.kind} ${lineClass(line)}${holdsChart ? " zm-has-chart" : ""}${chartOpen ? " expanded" : ""}${bare ? " zm-tile" : ""}`}

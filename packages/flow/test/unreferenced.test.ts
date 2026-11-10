@@ -221,7 +221,15 @@ describe("anonymous functions in the unreferenced rows", () => {
     // lambda's body, which is the lambda's own function, so outer's steps no longer count it.
     const identity = (f: UnreferencedFunction) => ({ id: f.id, name: f.name, file: f.file, line: f.line, reach: f.reach, calledFromOutside: f.calledFromOutside });
     expect(viaLambda.unreferenced.map(identity)).toEqual(direct.unreferenced.map(identity));
-    expect(viaLambda.functions.find((f) => f.id === lam.id)).toMatchObject({ anonymous: true });
+    // Folded by default: the lambda is no function. With lambdas: true it is a row of its own.
+    expect(viaLambda.functions.find((f) => f.id === lam.id)).toBeUndefined();
+    const kept = summarizeScope(
+      [...named, lam],
+      [closureEdge(`${file}#outer`, lam.id, file, 4), callEdge(lam.id, `${file}#inner`, file, 5)],
+      [file],
+      { lambdas: true },
+    );
+    expect(kept.functions.find((f) => f.id === lam.id)).toMatchObject({ anonymous: true });
   });
 
   it("never lists an anonymous function as unreferenced or as an entry, even one nothing creates", () => {
@@ -231,8 +239,14 @@ describe("anonymous functions in the unreferenced rows", () => {
     const flow = summarizeScope(nodes, [], [file]);
     expect(flow.unreferenced.map((f) => f.name)).toEqual(["f"]);
     expect(flow.entries).toEqual([`${file}#f`]);
-    expect(flow.functions.filter((f) => f.anonymous)).toHaveLength(2);
-    expect(flow.stats.functions).toBe(3);
+    expect(flow.functions.filter((f) => f.anonymous)).toHaveLength(0);
+    expect(flow.stats.functions).toBe(1);
+    // With lambdas: true both lambdas are rows, and still never unreferenced or entries.
+    const kept = summarizeScope(nodes, [], [file], { lambdas: true });
+    expect(kept.unreferenced.map((f) => f.name)).toEqual(["f"]);
+    expect(kept.entries).toEqual([`${file}#f`]);
+    expect(kept.functions.filter((f) => f.anonymous)).toHaveLength(2);
+    expect(kept.stats.functions).toBe(3);
   });
 });
 

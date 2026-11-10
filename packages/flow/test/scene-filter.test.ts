@@ -278,3 +278,25 @@ describe("execRootsOnly", () => {
     });
   });
 });
+
+describe("flattenRoots", () => {
+  it("drops every container: the roots are boxes directly on the project, once each", async () => {
+    const { flattenRoots } = await import("../src/scene-filter.js");
+    const m = basic();
+    const cut = execRootsOnly(buildExecScene(m), m);
+    const flat = flattenRoots(cut, m);
+    const kinds = [...flat.nodes.values()].map((n) => n.kind);
+    expect(kinds.every((k) => k === "function" || k === "project")).toBe(true);
+    expect(flat.nodes.get(flat.root)?.children.every((c) => flat.nodes.get(c)?.parent === flat.root)).toBe(true);
+    const refs = [...flat.nodes.values()].filter((n) => n.kind === "function").map((n) => n.ref);
+    expect(new Set(refs).size).toBe(refs.length);
+  });
+
+  it("gives each box its file relative to the scope as the subtitle", async () => {
+    const { flattenRoots } = await import("../src/scene-filter.js");
+    const m = { ...basic(), scope: "src" };
+    const flat = flattenRoots(execRootsOnly(buildExecScene(m), m), m);
+    const box = [...flat.nodes.values()].find((n) => n.kind === "function");
+    expect(box?.detail).toMatch(/^app\.ts:\d+$/);
+  });
+});

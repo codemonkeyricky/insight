@@ -2,6 +2,7 @@
 // whole project. Each list groups its rows into the functions in this scope and the ones outside it. A function row links
 // to that function: in this scope the link keeps the scope, outside it the link switches the scope to the function's file.
 // The side panel pins these lists above the scrolling source, so they stay in view while the source scrolls.
+import { readLambdas } from "../../zoom/lambdaPref";
 import { useEffect, useState } from "react";
 import type { RefRow, Refs } from "@insight/model";
 import { api } from "../../api";
@@ -51,7 +52,10 @@ export function RefLists({ id, scope, roots, refs }: Base & { refs: Refs }) {
   );
 }
 
-function RefList({ id, scope, roots, title, rows, empty }: Base & { title: string; rows: RefRow[]; empty: string }) {
+function RefList({ id, scope, roots, title, rows: all, empty }: Base & { title: string; rows: RefRow[]; empty: string }) {
+  // With lambdas folded, an anonymous function is not a row: its calls belong to its owner, so its rows are dropped.
+  const lambdas = readLambdas();
+  const rows = lambdas ? all : all.filter((r) => !r.name.startsWith("λ"));
   const inside = rows.filter((r) => r.inScope);
   const outside = rows.filter((r) => !r.inScope);
   return (
@@ -91,7 +95,7 @@ function RefGroup({ id, scope, roots, label, rows }: Base & { label: string; row
 function RefItem({ id, scope, roots, row }: Base & { row: RefRow }) {
   // A function opens in its scope, or in its file's scope when it lies outside this one. Module-level code (a file row) opens the file's flow.
   const href = row.isFunction
-    ? hrefView(id, "flow", { scope: row.inScope ? scope : row.file, fn: row.id, ...(roots ? { roots } : {}) })
+    ? hrefView(id, "flow", { scope: row.inScope ? scope : row.file, fn: row.id, roots })
     : hrefFlow(id, row.file);
   // The whole row is the link: a click or Enter on any part of it opens the function.
   return (

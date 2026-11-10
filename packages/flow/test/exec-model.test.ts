@@ -396,6 +396,7 @@ describe("execModel across nested scopes", () => {
   });
 });
 
+const LAMBDAS = { lambdas: true } as const;
 describe("execModel: anonymous functions and runtime", () => {
   it("runs a spawned lambda on its own thread, and its creator does not reach the lambda", () => {
     const file = "src/app.ts";
@@ -403,7 +404,7 @@ describe("execModel: anonymous functions and runtime", () => {
     const lam = anonId(file, 2);
     const nodes = [fnNode(file, "main", 0), anonNode(file, 2, main), spawnNode(file, 2, main), fnNode("src/w.ts", "work", 0), fnNode("src/w.ts", "helper", 4)];
     const edges = [closureEdge(main, lam, file, 2), spawnEdge(file, 2, lam), callEdge(lam, "src/w.ts#work", file, 3), callEdge("src/w.ts#work", "src/w.ts#helper", "src/w.ts", 1)];
-    const model = execModel(nodes, edges, "");
+    const model = execModel(nodes, edges, "", LAMBDAS);
     expect(model.threads).toHaveLength(2);
     // The closure is the spawn's target, so the main thread stops at its creator.
     expect(model.threads[0]).toMatchObject({ roots: [main], reach: 1, reached: [main] });
@@ -428,7 +429,7 @@ describe("execModel: anonymous functions and runtime", () => {
     const helper = `${file}#helper`;
     const nodes = [fnNode(file, "main", 0), anonNode(file, 2, main), fnNode(file, "helper", 4)];
     const edges = [closureEdge(main, lam, file, 2), dispatchEdge(main, lam, "await", file, 2), callEdge(lam, helper, file, 3)];
-    const model = execModel(nodes, edges, "");
+    const model = execModel(nodes, edges, "", LAMBDAS);
     expect(model.threads[0]).toMatchObject({ roots: [main], reach: 3 });
     expect(model.threads[0]?.coroutines).toEqual([{ target: lam, how: "await", dispatchedBy: [main], callees: [helper] }]);
     expect(runtimes(model)).toEqual({ [main]: "thread", [lam]: "coroutine", [helper]: "coroutine" });
@@ -443,7 +444,7 @@ describe("execModel: anonymous functions and runtime", () => {
     const after = `${file}#after`;
     const nodes = [fnNode(file, "main", 0), anonNode(file, 2, main), fnNode(file, "after", 4)];
     const edges = [closureEdge(main, lam, file, 2), dispatchEdge(main, lam, how, file, 2), callEdge(lam, after, file, 3)];
-    const model = execModel(nodes, edges, "");
+    const model = execModel(nodes, edges, "", LAMBDAS);
     expect(model.threads[0]).toMatchObject({ roots: [main], reach: 3, coroutines: [] });
     expect(runtimes(model)).toEqual({ [main]: "thread", [lam]: "thread", [after]: "thread" });
   });
@@ -455,7 +456,7 @@ describe("execModel: anonymous functions and runtime", () => {
     const helper = `${file}#helper`;
     const nodes = [fnNode(file, "main", 0), anonNode(file, 2, main), fnNode(file, "helper", 4)];
     const edges = [closureEdge(main, lam, file, 2), callEdge(lam, helper, file, 3)];
-    const model = execModel(nodes, edges, "");
+    const model = execModel(nodes, edges, "", LAMBDAS);
     expect(model.threads[0]).toMatchObject({ roots: [main], reach: 3, coroutines: [] });
     expect(runtimes(model)).toEqual({ [main]: "thread", [lam]: "thread", [helper]: "thread" });
   });
@@ -465,12 +466,12 @@ describe("execModel: anonymous functions and runtime", () => {
     const nodes = [fnNode(file, "main", 0), anonNode(file, 6, file)];
     // With no edges, a named function nothing calls would be a root. The lambda is not, and no thread runs it,
     // so it is listed as unthreaded.
-    const model = execModel(nodes, [], "");
+    const model = execModel(nodes, [], "", LAMBDAS);
     expect(model.threads[0]).toMatchObject({ roots: [`${file}#main`], reach: 1 });
     expect(model.functions.find((f) => f.id === anonId(file, 6))).toMatchObject({ anonymous: true, runtime: "none" });
     expect(model.unthreaded).toEqual([anonId(file, 6)]);
     // Module-level code that hands it to a timer lists it, and it runs on no thread.
-    const timed = execModel(nodes, [dispatchEdge(file, anonId(file, 6), "timer", file, 7)], "");
+    const timed = execModel(nodes, [dispatchEdge(file, anonId(file, 6), "timer", file, 7)], "", LAMBDAS);
     expect(timed.threads[0]?.roots).toEqual([`${file}#main`]);
     expect(timed.functions.find((f) => f.id === anonId(file, 6))).toMatchObject({ anonymous: true, parent: file, runtime: "none" });
     expect(timed.stats).toMatchObject({ functionsInScope: 2, functionsThreaded: 1, functionsUnthreaded: 1 });
@@ -484,7 +485,7 @@ describe("execModel: anonymous functions and runtime", () => {
     const helper = "src/h.ts#helper";
     const nodes = [fnNode(file, "main", 0), anonNode(file, 2, main), anonNode(file, 4, outer), spawnNode(file, 2, main), fnNode("src/h.ts", "helper", 0)];
     const edges = [closureEdge(main, outer, file, 2), spawnEdge(file, 2, outer), closureEdge(outer, inner, file, 4), callEdge(inner, helper, file, 5)];
-    const model = execModel(nodes, edges, "");
+    const model = execModel(nodes, edges, "", LAMBDAS);
     expect(model.threads[0]).toMatchObject({ roots: [main], reach: 1 });
     expect(model.threads[1]).toMatchObject({ roots: [outer], reach: 3, reached: [helper, outer, inner] });
     expect(model.functions.find((f) => f.id === inner)).toMatchObject({ anonymous: true, parent: outer, runtime: "thread" });
@@ -503,7 +504,7 @@ describe("execModel: anonymous functions and runtime", () => {
       callEdge(at("q"), at("p"), file, 17),
       dispatchEdge(at("p"), at("r"), "timer", file, 14),
     ];
-    const model = execModel(nodes, edges, "");
+    const model = execModel(nodes, edges, "", LAMBDAS);
     expect(runtimes(model)).toEqual({
       [at("main")]: "thread",
       [at("y")]: "thread",
@@ -626,7 +627,7 @@ describe("execModel: canvas fields", () => {
       closureEdge(main, spawned, file, 3),
       spawnEdge(file, 3, spawned),
     ];
-    const model = execModel(nodes, edges, "src");
+    const model = execModel(nodes, edges, "src", LAMBDAS);
     expect(model.functions.map((f) => f.id)).toEqual(expect.arrayContaining([main, at("a"), at("b"), lam, spawned]));
     const idx = (id: string) => model.functions.findIndex((f) => f.id === id);
     const expected: [string, string][] = [

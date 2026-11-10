@@ -278,12 +278,12 @@ export const staticApi = {
     return scopeFlowFor(snapshot, model, scope);
   },
   /** A scope's execution model, computed from the demo's model the way the live server computes it. */
-  getScopeExec: async (id: string, scope: string): Promise<ExecModel> => {
+  getScopeExec: async (id: string, scope: string, opts: { lambdas?: boolean } = {}): Promise<ExecModel> => {
     await checkProject(id);
     const problem = scopeProblem(scope);
     if (problem) throw new ApiError(400, problem);
     const { snapshot, model } = await demoModel();
-    return scopeExecFor(snapshot, model, scope);
+    return scopeExecFor(snapshot, model, scope, opts);
   },
   /** The reverse references of a node, computed from the demo's model the way the live server computes them. */
   getRefs: async (id: string, scope: string, fnId: string): Promise<ScopeRefsPayload> => {

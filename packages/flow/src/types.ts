@@ -89,6 +89,11 @@ export interface FileFlow {
 /** `functions` lists each function; `files` aggregates per file once the scope has too many to list. */
 export type ScopeGranularity = "functions" | "files";
 
+/** Options for summarizeScope. `lambdas: true` keeps anonymous functions as their own rows; the default folds them into their owner. */
+export interface ScopeFlowOptions {
+  lambdas?: boolean;
+}
+
 /** A function defined in the scope, with the flow counts the charts show for it. */
 export interface ScopeFunction {
   id: string;

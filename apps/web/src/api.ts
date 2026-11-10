@@ -406,7 +406,8 @@ const liveApi = {
   // The payload equals the route's (snapshot, scope and kind included); the route stays for other clients.
   scopeFlow: (id: string, scope: string): Promise<ScopeFlow> => liveModel(id).then(({ snapshot, model }) => scopeFlowFor(snapshot, model, scope)),
   // Computed in the page from the project model, as /scope/exec answers it (see scopeFlow above).
-  getScopeExec: (id: string, scope: string): Promise<ExecModel> => liveModel(id).then(({ snapshot, model }) => scopeExecFor(snapshot, model, scope)),
+  getScopeExec: (id: string, scope: string, opts: { lambdas?: boolean } = {}): Promise<ExecModel> =>
+    liveModel(id).then(({ snapshot, model }) => scopeExecFor(snapshot, model, scope, opts)),
   // The reverse references of a node, computed from the project model (no request). The lists cover the whole project.
   getRefs: (id: string, scope: string, fnId: string): Promise<ScopeRefsPayload> => liveModel(id).then(({ snapshot, model }) => refsFor(snapshot, model, scope, fnId)),
   // The project-wide callers of each function of a scope, for the exec index (see zoom/execStore.ts). Computed from the model.

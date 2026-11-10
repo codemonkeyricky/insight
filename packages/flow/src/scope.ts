@@ -9,6 +9,7 @@ import type {
   ScopeExternal,
   ScopeFile,
   ScopeFlow,
+  ScopeFlowOptions,
   ScopeFlowStats,
   ScopeFunction,
   ScopeGranularity,
@@ -116,7 +117,14 @@ function countRoles(items: Item[], into: { awaits: number; spawns: number; effec
  *
  * `scopeFiles` is the scope's file list when the caller has it. It only adds to `stats.files`.
  */
-export function summarizeScope(nodes: Iterable<IRNode>, edges: Iterable<IREdge>, scopeFiles: Iterable<string> = []): ScopeFlow {
+export function summarizeScope(
+  nodes: Iterable<IRNode>,
+  edges: Iterable<IREdge>,
+  scopeFiles: Iterable<string> = [],
+  opts: ScopeFlowOptions = {},
+): ScopeFlow {
+  // Folded by default: an anonymous function's calls and boxes belong to its owner (see `ownerOf`), so no lambda is listed.
+  const fold = opts.lambdas !== true;
   const stubs = new Set<string>();
   const fnNodes = new Map<string, IRNode>();
   const nodesByFile = new Map<string, IRNode[]>();
@@ -183,17 +191,23 @@ export function summarizeScope(nodes: Iterable<IRNode>, edges: Iterable<IREdge>,
     if (targets.some((t) => fnNodes.has(t))) totals.resolved++;
     else totals.external++;
     const caller = ownerOf(e.from);
-    for (const t of targets) {
+    for (const raw of targets) {
+      // A call into a lambda is a call into its owner. A lambda's owner that is not a function (module-level code) gets no row.
+      const t = fold ? ownerOf(raw) : raw;
+      if (fold && t !== raw && !fnNodes.has(t)) continue;
       const local = fnNodes.has(t);
       if (local && t !== caller) {
         const set = calledInScope.get(t) ?? new Set<string>();
         set.add(caller);
         calledInScope.set(t, set);
       }
-      const key = `${e.from}\0${t}\0${candidate}`;
+      const from = fold ? caller : e.from;
+      // Folding can turn a lambda's call into its owner's self-call: that is not a row.
+      if (fold && from === t) continue;
+      const key = `${from}\0${t}\0${candidate}`;
       const row = rows.get(key);
       if (row) row.count++;
-      else rows.set(key, { from: e.from, to: t, count: 1, external: !local, ...(candidate ? { candidate: true as const } : {}) });
+      else rows.set(key, { from, to: t, count: 1, external: !local, ...(candidate ? { candidate: true as const } : {}) });
     }
   }
 
@@ -231,8 +245,9 @@ export function summarizeScope(nodes: Iterable<IRNode>, edges: Iterable<IREdge>,
       fileRows.set(file, fr);
       // Module-level code is not a function: it counts toward its file and appears as a caller.
       if (fn.id === file) continue;
-      fr.functions++;
       const anonymous = fnNodes.get(fn.id)?.attrs?.anonymous === true;
+      if (fold && anonymous) continue;
+      fr.functions++;
       functions.push(functionRow(fn, file, s, calledFromOutside.has(fn.id), anonymous));
     }
   }

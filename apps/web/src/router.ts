@@ -30,7 +30,7 @@ export interface ViewOptions {
   scope?: string;
   line?: number;
   fn?: string;
-  /** The flow tab's roots-only canvas. Written as `roots=1`, and only when true. */
+  /** The flow tab's roots-only canvas, on by default. Written as `roots=0` when false, and left out when true. */
   roots?: boolean;
   /** The overview tab's full page. Written as `full=1`, and only when true. */
   full?: boolean;
@@ -71,7 +71,8 @@ export function parseRoute(hash: string): Route {
       scope: query.get("scope") ?? "",
       ...(line ? { line } : {}),
       ...opt("fn", query.get("fn")),
-      ...(query.get("roots") === "1" ? { roots: true } : {}),
+      // The flow tab's map is roots-only unless the link says roots=0.
+      ...(parts[3] === "flow" ? { roots: query.get("roots") !== "0" } : {}),
       ...(query.get("full") === "1" ? { full: true } : {}),
       ...opt("kind", query.get("kind")),
       ...opt("base", query.get("base")),
@@ -99,7 +100,8 @@ export function hrefView(id: string, tab: string, opts: ViewOptions = {}): strin
   if (opts.scope) params.set("scope", opts.scope);
   if (opts.line) params.set("line", String(opts.line));
   if (opts.fn) params.set("fn", opts.fn);
-  if (opts.roots) params.set("roots", "1");
+  if (opts.roots === true) params.set("roots", "1");
+  if (opts.roots === false) params.set("roots", "0");
   if (opts.full) params.set("full", "1");
   if (opts.kind) params.set("kind", opts.kind);
   if (opts.base) params.set("base", opts.base);
