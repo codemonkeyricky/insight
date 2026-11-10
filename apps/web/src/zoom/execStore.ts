@@ -22,7 +22,7 @@ import {
 } from "@insight/flow";
 import { api } from "../api";
 import { solve } from "./elk";
-import { execBuild, execFocus, execIndex, execOpenSet, execPlacementFor, execResolve, execThreadKeyOf, execUrl, splitExecFocus, type ExecIndex } from "./execMap";
+import { execBuild, execCallChain, execFocus, execIndex, execOpenSet, execPlacementFor, execResolve, execThreadKeyOf, execUrl, splitExecFocus, type ExecIndex } from "./execMap";
 import type { MapBuild, MapSource, MapUrl } from "./source";
 
 /** One scope's loaded canvas: its scene and layout, the model's functions, and the index the panels read. */
@@ -144,6 +144,19 @@ export class ExecStore implements MapSource {
   async resolve(scope: string, fn?: string): Promise<string> {
     const view = await this.load(scope);
     return execFocus(scope, execResolve(view.scene, fn));
+  }
+
+  /**
+   * The chain of calls that reaches a function the scope draws no box for (see execCallChain): the focus of the chain's
+   * first function, which has a box, and the chain. Undefined when the function has a box, or no box reaches it.
+   */
+  async chainTo(scope: string, fnId: string): Promise<{ focus: string; chain: readonly string[] } | undefined> {
+    const view = await this.load(scope);
+    const chain = execCallChain(view.index, fnId);
+    const first = chain?.[0];
+    const nodeId = first === undefined ? undefined : execPlacementFor(view.index, first);
+    if (chain === undefined || nodeId === undefined) return undefined;
+    return { focus: execFocus(scope, nodeId), chain };
   }
 
   async ensureFocus(focus: string): Promise<void> {

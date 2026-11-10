@@ -324,6 +324,37 @@ export function execPlacementFor(index: ExecIndex, fnId: string, threadKey?: str
   return (best ?? list[0])?.nodeId;
 }
 
+/**
+ * The calls that reach a function with no box in the scene, from the nearest function that has one: the chain's first
+ * function is drawn, and each function in it is called by the one before, ending at `fnId`. Breadth first through the
+ * callers, so the shortest chain wins. Undefined when `fnId` has a box already, or no drawn function reaches it.
+ */
+export function execCallChain(index: ExecIndex, fnId: string): string[] | undefined {
+  if (execPlacementFor(index, fnId) !== undefined) return undefined;
+  // Each function reached so far maps to the callee it was reached from, on the way to fnId.
+  const towards = new Map<string, string>();
+  const seen = new Set<string>([fnId]);
+  let frontier = [fnId];
+  while (frontier.length > 0) {
+    const grown: string[] = [];
+    for (const f of frontier) {
+      for (const c of index.callers.get(f) ?? []) {
+        if (seen.has(c)) continue;
+        seen.add(c);
+        towards.set(c, f);
+        if (execPlacementFor(index, c) !== undefined) {
+          const chain = [c];
+          for (let cur = towards.get(c); cur !== undefined; cur = towards.get(cur)) chain.push(cur);
+          return chain;
+        }
+        grown.push(c);
+      }
+    }
+    frontier = grown;
+  }
+  return undefined;
+}
+
 function linkOf(index: ExecIndex, fnId: string, threadKey?: string, label?: string): ExecLink {
   const f = index.fns.get(fnId);
   const link: ExecLink = { id: fnId, name: label ?? f?.name ?? fnId, file: f?.file ?? "", line: f?.line ?? 0 };

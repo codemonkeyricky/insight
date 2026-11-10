@@ -439,7 +439,8 @@ which has no spawns, and `functions` is in the order the threads list them.
   per thread. Its `callees` are the functions it reaches by calls, without the coroutines it awaits,
   which are nested through `parent`. A cycle of awaits is cut where it repeats. `dispatchedBy` lists
   every function or file that starts the coroutine. `callback`, `timer` and `microtask` dispatches run on
-  the dispatching thread, so they are not coroutines. The TypeScript frontend emits `.then` as `callback`.
+  the dispatching thread, so they are not coroutines. A `message` dispatch (a Web Worker postMessage) runs its
+  handler on the other side's thread, so it is not a coroutine either. The TypeScript frontend emits `.then` as `callback`.
 - **Dispatches.** The flat list holds each dispatch whose source is in scope, in a fixed order. `from` is
   the function, or the file for module-level code, that dispatches. `file` and `line` are the site.
 - **Stats.** `functionsInScope` counts the functions whose file lies in scope, anonymous ones included.

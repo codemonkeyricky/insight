@@ -110,6 +110,12 @@ export interface MapSource {
    */
   placeFunction?(build: MapBuild, fnId: string): string | undefined;
   /**
+   * The chain of calls that reaches a function the scope draws no box for, from a drawn function down to `fnId`: the focus
+   * of the chain's first function and the chain itself, so the map opens each call's chart in turn. Undefined when the
+   * function has a box, or no box reaches it (see ExecStore.chainTo).
+   */
+  chainTo?(scope: string, fnId: string): Promise<{ focus: string; chain: readonly string[] } | undefined>;
+  /**
    * Whether the build's model names the function by its IR id. A call to a name the model does not hold is a call to a
    * lambda folded into its owner: it has no box and no chart of its own, so the call highlights its block instead. Undefined
    * (no method) means every callee is a function.

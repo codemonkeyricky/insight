@@ -307,7 +307,7 @@
     "kind": "concurrency.dispatches",
     "facet": "concurrency",
     "on": "edge",
-    "description": "A function to a coroutine, async function or callback it hands work to: awaited, started, or scheduled on an event loop. The caller is the enclosing function. Separate from calls.call, so call queries do not change.",
+    "description": "A function to a coroutine, async function or callback it hands work to: awaited, started, or scheduled on an event loop. The caller is the enclosing function. With how \"message\", a postMessage to the handler on the other side of a Web Worker boundary. Separate from calls.call, so call queries do not change.",
     "attrs": {
       "$ref": "https://insight.dev/ir/facets/concurrency.json#/$defs/ConcurrencyDispatches"
     }
