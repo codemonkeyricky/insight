@@ -39,11 +39,12 @@ interface Frag {
 
 class Maker {
   private n = 0;
-  node(role: FlowRole, shape: FlowShape, label: string, w: number, h: number, extra: { title?: string; span?: FlowSpan; target?: string } = {}): FlowNode {
+  node(role: FlowRole, shape: FlowShape, label: string, w: number, h: number, extra: { title?: string; span?: FlowSpan; target?: string; handler?: true } = {}): FlowNode {
     const out: FlowNode = { id: `n${++this.n}`, role, shape, label, w, h, x: 0, y: 0 };
     if (extra.title !== undefined && extra.title !== label) out.title = extra.title;
     if (extra.span) out.span = extra.span;
     if (extra.target) out.target = extra.target;
+    if (extra.handler) out.handler = true;
     return out;
   }
 }
@@ -197,7 +198,7 @@ function piece(mk: Maker, item: Item): Frag {
   switch (item.t) {
     case "step":
       if (item.role === "marker") return single(mk.node("marker", "label", item.label, MARK_W, MARK_H, item.span ? { span: item.span } : {}));
-      return single(mk.node(item.role, "step", item.label, STEP_W, STEP_H, { ...(item.title ? { title: item.title } : {}), ...(item.span ? { span: item.span } : {}), ...(item.target ? { target: item.target } : {}) }));
+      return single(mk.node(item.role, "step", item.label, STEP_W, STEP_H, { ...(item.title ? { title: item.title } : {}), ...(item.span ? { span: item.span } : {}), ...(item.target ? { target: item.target } : {}), ...(item.handler ? { handler: true as const } : {}) }));
     case "term":
       return single(mk.node(item.role, "exit", item.label, TERM_W, TERM_H, item.span ? { span: item.span } : {}), true);
     case "fork":

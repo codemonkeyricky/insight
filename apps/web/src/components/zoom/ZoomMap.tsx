@@ -709,7 +709,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     stageRef.current?.focus({ preventScroll: true });
     const b = buildRef.current;
     const callee = node.target !== undefined && node.target !== fnId ? node.target : undefined;
-    if (callee !== undefined && isLambdaCall(b, fnId, callee)) void highlightLambda(fnId, node, callee);
+    // A handler (`ctx.onmessage = (e) => …`) is how a worker processes its messages: it opens, even as a folded lambda.
+    if (callee !== undefined && node.handler !== true && isLambdaCall(b, fnId, callee)) void highlightLambda(fnId, node, callee);
     else if (callee !== undefined) void openStep(fnId, node, callee);
     else {
       setConstruct({ ref: fnId, nodeId: node.id, ...(node.span ? { span: node.span } : {}) });
