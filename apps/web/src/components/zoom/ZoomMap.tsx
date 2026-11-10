@@ -742,6 +742,44 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     void selectFunction(fnId);
   };
 
+  /**
+   * Shows a call chain's first function (its box, with its chart open), then the chain's charts. When every call of the
+   * chain is a step in its caller's chart, each call opens in turn, to the right of its step (openStep). Otherwise the
+   * chain is reached through references, which have no step: the chain's last function opens beside the box the chain
+   * starts at, in place of the box's own chart, and it is selected.
+   */
+  const showChain = async (focus: string, chain: readonly string[]) => {
+    await show(focus, false, false);
+    const b = buildRef.current;
+    const root = chain[0];
+    const last = chain[chain.length - 1];
+    if (!b || root === undefined || last === undefined || chain.length < 2) return;
+    const steps: { parent: string; callee: string; node: FlowNode }[] = [];
+    for (let i = 0; i + 1 < chain.length; i++) {
+      const parent = chain[i];
+      const callee = chain[i + 1];
+      if (parent === undefined || callee === undefined) break;
+      const node = (await loadChart(parent))?.nodes.find((n) => n.target === callee);
+      if (node === undefined) break;
+      steps.push({ parent, callee, node });
+    }
+    if (steps.length === chain.length - 1) {
+      for (const s of steps) await openStep(s.parent, s.node, s.callee);
+      return;
+    }
+    const rect = b.placed.rects.get(b.nodeId);
+    const chart = await loadChart(last);
+    if (rect === undefined || chart === undefined) {
+      void selectFunction(last);
+      return;
+    }
+    const list = openExpansion(closeExpansion(placeAll(b, expRef.current), root), last, { kind: "box", nodeId: b.nodeId, rect }, chart, placeView(b));
+    setExp(list);
+    const opened = list.find((e) => e.fnId === last);
+    if (opened !== undefined) moveTo(revealOf(cameraRef.current, opened, 0), true);
+    void selectFunction(last);
+  };
+
   /** A key's zoom: about the middle of the stage, as d3's scaleBy does. */
   const zoomStep = (factor: number) => {
     const svg = svgRef.current;
@@ -881,6 +919,13 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
       const b = buildRef.current;
       const here = b && focusRef.current !== undefined ? source.url(b, focusRef.current) : undefined;
       if (here !== undefined && here.scope === scope && here.fn === fn) return;
+      // A function the scope draws no box for (a callee hidden by the roots-only view) opens the chain of calls that reaches it.
+      const chained = fn === undefined ? undefined : await source.chainTo?.(scope, fn);
+      if (cancelled) return;
+      if (chained !== undefined && fn !== undefined) {
+        await showChain(chained.focus, chained.chain);
+        return;
+      }
       const next = await source.resolve(scope, fn);
       if (cancelled) return;
       if (next === focusRef.current && buildRef.current !== undefined) return;
@@ -891,7 +936,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     return () => {
       cancelled = true;
     };
-    // show reads only the source and refs, so it needs no dependency of its own.
+    // show and showChain read only the source, refs and the expansions, so they need no dependency of their own.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source, scope, fn]);
 
