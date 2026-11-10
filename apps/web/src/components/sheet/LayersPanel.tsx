@@ -9,6 +9,8 @@ export interface LayerState {
   lambdas: boolean;
   /** The charts' motion: edges march in their direction, and a loop's back-edge carries a pulse. On by default. */
   motion: boolean;
+  /** The roots-only view's runtime boxes: process and thread frames around the roots. On by default. */
+  runtime: boolean;
 }
 
 interface Props {
@@ -48,6 +50,9 @@ export function LayersPanel({ shown, findingCount, onChange, onClose, roots }: P
       </label>
       <label className="sh-check">
         <input type="checkbox" checked={shown.motion} onChange={(e) => onChange("motion", e.target.checked)} /> Flow motion
+      </label>
+      <label className="sh-check">
+        <input type="checkbox" checked={shown.runtime} onChange={(e) => onChange("runtime", e.target.checked)} /> Runtime boxes
       </label>
       {roots !== undefined && <div className="sh-layers-roots">{roots}</div>}
       <details className="sh-keys">

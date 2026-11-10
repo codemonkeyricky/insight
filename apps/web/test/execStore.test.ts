@@ -123,7 +123,7 @@ describe("ExecStore", () => {
 
   it("cuts the scene to the roots when it is roots-only, and says so in its URLs", async () => {
     fixture.model = model();
-    const store = new ExecStore("p1", true);
+    const store = new ExecStore("p1", true, false, false);
     // helper is not a root, so the roots-only scene has no node for it: a URL that names it resolves to the root.
     expect(await store.resolve("", "helper")).toBe(execFocus("", "project"));
     const build = await store.build(await store.resolve("", "main"));
@@ -132,4 +132,20 @@ describe("ExecStore", () => {
     // Flat: the containers are gone, and the root is one box on the project.
     expect([...build.placed.rects.keys()].sort()).toEqual(["project", "thread:main>main"]);
   });
+
+  it("draws the runtime boxes around the roots when the store is roots-only with runtime on", async () => {
+    fixture.model = model();
+    const store = new ExecStore("p1", true, false, true);
+    const build = await store.build(await store.resolve("", "main"));
+    // The main thread is a frame that holds its root's card, and the card sits inside the frame.
+    const frames = build.placed.items.filter((i) => i.kind === "frame").map((i) => i.id);
+    expect(frames).toContain("thread:main");
+    const frame = build.placed.rects.get("thread:main");
+    const card = build.placed.rects.get("thread:main>main");
+    expect(frame && card).toBeTruthy();
+    expect(card!.y).toBeGreaterThanOrEqual(frame!.y);
+    expect(card!.x + card!.w).toBeLessThanOrEqual(frame!.x + frame!.w);
+    expect(store.url(build, build.focus)).toEqual({ scope: "", fn: "main", roots: true });
+  });
 });
+

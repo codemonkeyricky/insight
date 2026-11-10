@@ -1268,7 +1268,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
  * A frame's header and a box's label are cut to the room they have on screen at the label scale `k` (lod.ts). The full
  * text stays in the tooltip.
  */
-function FrameShape({
+export function FrameShape({
   item,
   node,
   line,

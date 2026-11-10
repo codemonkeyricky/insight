@@ -64,7 +64,7 @@ export function execRootsOnly(scene: Scene, model: ExecModel): Scene {
 }
 
 /** A file's path as the scope shows it: relative to the scope, or its base name when the scope is that file. */
-function pathInScope(file: string, scope: string): string {
+export function pathInScope(file: string, scope: string): string {
   if (file === scope) return file.split("/").pop() ?? file;
   if (scope === "") return file;
   return file.startsWith(`${scope}/`) ? file.slice(scope.length + 1) : file;

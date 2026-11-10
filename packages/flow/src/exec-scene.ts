@@ -31,6 +31,15 @@ export const EXEC_LEVELS: Record<string, SceneLevel> = {
   function: { box: { w: ZOOM_SIZE.fn.w, h: ZOOM_SIZE.fn.h } },
 };
 
+/**
+ * Whether a thread has a box in the scene: the IR grounds it. A model saved before the grounded field existed grounds a
+ * main thread only when a root is named `main`, and every other thread.
+ */
+export function isGroundedThread(t: ExecThread, nameOf: (fnId: string) => string | undefined): boolean {
+  const flag = (t as { grounded?: boolean }).grounded;
+  return flag ?? (t.kind !== "main" || t.roots.some((r) => nameOf(r) === "main"));
+}
+
 export function execThreadId(threadId: string): string {
   return `thread:${threadId}`;
 }
@@ -147,12 +156,7 @@ export function buildExecScene(model: ExecModel): Scene {
   };
   addNode(root);
 
-  // A model saved before the grounded field existed: a main thread is grounded only when a root is named `main`, and
-  // every other thread is grounded.
-  const isGrounded = (t: ExecThread): boolean => {
-    const flag = (t as { grounded?: boolean }).grounded;
-    return flag ?? (t.kind !== "main" || t.roots.some((r) => fns.get(r)?.name === "main"));
-  };
+  const isGrounded = (t: ExecThread): boolean => isGroundedThread(t, (id) => fns.get(id)?.name);
   const grounded = model.threads.filter(isGrounded);
   // The grounded threads that reach each function, in thread order: a spawn's spawner is the first one of them.
   const reachers = new Map<string, ExecThread[]>();

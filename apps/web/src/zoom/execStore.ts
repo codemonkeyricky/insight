@@ -10,6 +10,9 @@ import {
   gridRootsLayout,
   layoutCovers,
   layoutScene,
+  runtimeOpen,
+  runtimeRootsLayout,
+  runtimeRootsScene,
   type ExecFunctionRef,
   type ExecModel,
   type Scene,
@@ -32,6 +35,8 @@ export interface ExecView {
   index: ExecIndex;
   /** The layouts with more containers open, by the sorted ids that differ from `layout`. Bounded (see LAYOUTS_MAX). */
   layouts: Map<string, Promise<SceneLayout>>;
+  /** Whether the scene has runtime containers (process and thread boxes). Its layout holds every container, so none is solved. */
+  containers: boolean;
 }
 
 /** The most layouts with containers opened a view keeps. Each one reuses the base layout, so a few are cheap. */
@@ -42,24 +47,37 @@ export class ExecStore implements MapSource {
   private readonly rootsOnly: boolean;
   /** Whether anonymous functions are their own boxes. Folded (false) is the server's model and its saved layout. */
   private readonly lambdas: boolean;
+  /** Whether a roots-only store draws the runtime containers (process and thread boxes) when the model has them. */
+  private readonly runtime: boolean;
   private readonly loads = new Map<string, Promise<ExecView>>();
   private readonly views = new Map<string, ExecView>();
 
-  /** `rootsOnly` makes the store's scenes the flat roots-only cut; `lambdas` shows anonymous functions. One store per (project, flags). */
-  constructor(id: string, rootsOnly = false, lambdas = false) {
+  /**
+   * `rootsOnly` makes the store's scenes the roots-only cut; `lambdas` shows anonymous functions; `runtime` draws the process
+   * and thread boxes around the roots (roots-only only, and only when the model has runtime context). One store per flags.
+   */
+  constructor(id: string, rootsOnly = false, lambdas = false, runtime = true) {
     this.id = id;
     this.rootsOnly = rootsOnly;
     this.lambdas = lambdas;
+    this.runtime = runtime;
   }
 
   /** The cache key of a scope: its scene depends on the scope and on whether the store is roots-only. */
   private keyOf(scope: string): string {
-    return `${this.rootsOnly ? "roots" : "all"}\u0000${this.lambdas ? "lambdas" : "folded"}\u0000${scope}`;
+    return `${this.rootsOnly ? "roots" : "all"}\u0000${this.lambdas ? "lambdas" : "folded"}\u0000${this.runtime ? "runtime" : "flat"}\u0000${scope}`;
   }
 
-  private sceneOf(model: ExecModel): Scene {
+  /**
+   * The scene a model draws here, and whether it has runtime containers. A roots-only store with runtime boxes draws the
+   * containers when the model has runtime context; otherwise it draws the flat roots-only cut.
+   */
+  private sceneOf(model: ExecModel): { scene: Scene; containers: boolean } {
     const full = buildExecScene(model);
-    return this.rootsOnly ? flattenRoots(execRootsOnly(full, model), model) : full;
+    if (!this.rootsOnly) return { scene: full, containers: false };
+    const runtime = this.runtime ? runtimeRootsScene(full, model) : undefined;
+    if (runtime !== undefined) return { scene: runtime, containers: true };
+    return { scene: flattenRoots(execRootsOnly(full, model), model), containers: false };
   }
 
   /** Loads a scope's model and layout once. A failed load is dropped, so the next call tries again. */
@@ -71,18 +89,20 @@ export class ExecStore implements MapSource {
       const saved$ = this.rootsOnly || this.lambdas ? Promise.resolve(undefined) : api.scopeExecLayout(this.id, scope);
       load = Promise.all([api.getScopeExec(this.id, scope, { lambdas: this.lambdas }), saved$, api.getScopeCallers(this.id, scope)])
         .then(async ([model, saved, callers]) => {
-          const scene = this.sceneOf(model);
-          const open = execDefaultOpen(scene);
+          const { scene, containers } = this.sceneOf(model);
           // The saved layout is the full scene's, with the default containers open. A roots-only scene is a different scene,
-          // so it is always solved here.
-          // A roots-only scene is flat and laid out as a grid of uniform cards (gridRootsLayout), with no solve.
-          const layout = this.rootsOnly
-            ? gridRootsLayout(scene)
-            : !this.lambdas && saved !== undefined && layoutCovers(scene, saved, open)
-              ? saved
-              : await layoutScene(scene, (g) => solve(g).then((s) => s.result), { open });
+          // so it is never the saved one. A flat roots-only scene is a grid of uniform cards (gridRootsLayout), with no solve.
+          // A roots-only scene with runtime containers is laid out here too, every container open (runtimeRootsLayout).
+          const open = containers ? runtimeOpen(scene) : execDefaultOpen(scene);
+          const layout = containers
+            ? runtimeRootsLayout(scene)
+            : this.rootsOnly
+              ? gridRootsLayout(scene)
+              : !this.lambdas && saved !== undefined && layoutCovers(scene, saved, open)
+                ? saved
+                : await layoutScene(scene, (g) => solve(g).then((s) => s.result), { open });
           const fns = new Map(model.functions.map((f): [string, ExecFunctionRef] => [f.id, f]));
-          const view: ExecView = { scene, layout, open, fns, index: execIndex(scene, model, callers, this.lambdas), layouts: new Map() };
+          const view: ExecView = { scene, layout, open, fns, index: execIndex(scene, model, callers, this.lambdas), layouts: new Map(), containers };
           this.views.set(key, view);
           return view;
         })
@@ -121,7 +141,8 @@ export class ExecStore implements MapSource {
    */
   private layoutFor(view: ExecView, opened: ReadonlySet<string>): Promise<SceneLayout> {
     const changed = [...opened].filter((id) => !view.open.has(id)).sort();
-    if (changed.length === 0) return Promise.resolve(view.layout);
+    // A scene with runtime containers lays out every container already, so no set of open containers needs a solve.
+    if (view.containers || changed.length === 0) return Promise.resolve(view.layout);
     const key = changed.join("\u0000");
     let layout = view.layouts.get(key);
     if (layout === undefined) {
