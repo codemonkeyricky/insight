@@ -77,7 +77,7 @@ describe("the trail", () => {
     const html = renderToStaticMarkup(<ExecTrail base={base} steps={steps} />);
     expect(html).toContain('aria-label="Call path"');
     expect(html).toContain("<strong>leaf</strong>");
-    expect(html).toContain('href="#/projects/p1/view/flow?scope=src&amp;fn=main"');
+    expect(html).toContain('href="#/projects/p1/view/flow?scope=src&amp;fn=main&amp;roots=0"');
     expect(html).toContain("›");
   });
 });

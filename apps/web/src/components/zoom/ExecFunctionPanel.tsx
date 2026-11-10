@@ -84,7 +84,7 @@ export function ExecFunctionPanel({ id, scope, roots, store, index, nodeId, sele
             {selected.placements.map((p) => (
               <li key={p.nodeId}>
                 <a
-                  href={hrefView(id, "flow", { scope, fn: ref, ...(roots ? { roots } : {}) })}
+                  href={hrefView(id, "flow", { scope, fn: ref, roots })}
                   onClick={(e) => {
                     e.preventDefault();
                     onOpen(p.nodeId);

@@ -129,6 +129,7 @@ describe("ExecStore", () => {
     const build = await store.build(await store.resolve("", "main"));
     expect(store.url(build, build.focus)).toEqual({ scope: "", fn: "main", roots: true });
     await expect(store.ensureFocus(execFocus("", "thread:main>helper"))).rejects.toThrow("Nothing in the execution map");
-    expect([...build.placed.rects.keys()].sort()).toEqual(["prog:main", "project", "thread:main", "thread:main>main"]);
+    // Flat: the containers are gone, and the root is one box on the project.
+    expect([...build.placed.rects.keys()].sort()).toEqual(["project", "thread:main>main"]);
   });
 });

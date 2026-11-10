@@ -5,6 +5,8 @@ export interface LayerState {
   frames: boolean;
   calls: boolean;
   findings: boolean;
+  /** Anonymous functions as boxes of their own. Off, they are folded into the function they are written in. */
+  lambdas: boolean;
 }
 
 interface Props {
@@ -38,6 +40,9 @@ export function LayersPanel({ shown, findingCount, onChange, onClose, roots }: P
       <label className="sh-check">
         <input type="checkbox" checked={shown.findings} onChange={(e) => onChange("findings", e.target.checked)} /> Findings
         {findingCount !== undefined && <span className="sh-count-inline"> {findingCount}</span>}
+      </label>
+      <label className="sh-check">
+        <input type="checkbox" checked={shown.lambdas} onChange={(e) => onChange("lambdas", e.target.checked)} /> Lambdas
       </label>
       {roots !== undefined && <div className="sh-layers-roots">{roots}</div>}
       <details className="sh-keys">

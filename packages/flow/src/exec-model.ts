@@ -245,6 +245,12 @@ export interface ExecModel {
 export interface ExecModelOptions {
   /** Overrides MAX_EXEC_FUNCTIONS. Tests use small values to exercise truncation. */
   maxFunctions?: number;
+  /**
+   * `lambdas: true` keeps anonymous functions as functions of their own. The default folds each one into the function
+   * (or, for module-level code, the file) it is written in: its calls, closures, spawns and dispatches belong to the owner,
+   * and it is never listed.
+   */
+  lambdas?: boolean;
 }
 
 interface Fn {
@@ -343,6 +349,22 @@ function reachBy(roots: readonly string[], next: (id: string) => readonly string
 
 export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], scope: string, opts: ExecModelOptions = {}): ExecModel {
   const max = opts.maxFunctions ?? MAX_EXEC_FUNCTIONS;
+  const fold = opts.lambdas !== true;
+  // The parent of each anonymous function, so a lambda folds to its owner: a function, or the file for module-level code.
+  const lambdaParent = new Map<string, string>();
+  if (fold) {
+    for (const n of nodes) if (n.kind === "structure.function" && n.attrs?.anonymous === true && n.parent !== undefined) lambdaParent.set(n.id, n.parent);
+  }
+  const foldId = (id: string): string => {
+    if (!fold) return id;
+    let cur = id;
+    for (let hops = 0; hops <= lambdaParent.size; hops++) {
+      const up = lambdaParent.get(cur);
+      if (up === undefined) break;
+      cur = up;
+    }
+    return cur;
+  };
   // A scope inside a test, fixture or sample folder shows its test code as roots. isNoisePath reads folders
   // from a path's parents, so a folder needs a trailing slash to count its own name, and a file needs its base name.
   const scopeNoise = isNoisePath(scope) || isNoisePath(`${scope}/`);
@@ -354,6 +376,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     if (n.kind !== "structure.function") continue;
     const file = n.span?.file;
     const anonymous = n.attrs?.anonymous === true;
+    if (fold && anonymous) continue;
     fns.set(n.id, {
       id: n.id,
       name: strAttr(n.attrs, "name") ?? (n.id.split("#")[1] ?? n.id),
@@ -394,7 +417,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     .sort((a, b) => byText(a.k, b.k))
     .map(({ e }) => {
       const t = edgeTargets(e);
-      return { e, ids: [...t.nodes, ...t.candidates], candidates: t.candidates.length > 0 };
+      return { e, ids: [...t.nodes, ...t.candidates].map(foldId), candidates: t.candidates.length > 0 };
     });
 
   // Adjacency covers the whole IR, so a thread's reach does not depend on the scope it is seen from.
@@ -416,7 +439,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
   const referenced = new Set<string>();
 
   for (const { e, ids, candidates } of keyed) {
-    const from = e.from;
+    const from = foldId(e.from);
     const local = inScopeId(from);
     const counted = local && (scopeNoise || !noiseId(from));
     if (e.kind === "calls.call" || e.kind === "calls.reference") {
@@ -601,7 +624,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       how,
       status,
       candidates: s?.candidates ?? false,
-      ...(n.parent !== undefined ? { owner: n.parent } : {}),
+      ...(n.parent !== undefined ? { owner: foldId(n.parent) } : {}),
       ...(script !== undefined ? { script } : {}),
     };
     plans.push(planOf(how, n.id, rootList, spawn));
@@ -738,7 +761,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
   for (const n of nodes) {
     const spec = RESOURCE_SITES[n.kind];
     if (spec === undefined) continue;
-    const fn = n.parent;
+    const fn = n.parent === undefined ? undefined : foldId(n.parent);
     if (fn === undefined || !fns.has(fn) || !table.has(fn)) continue;
     const name = strAttr(n.attrs, spec.attr);
     if (name === undefined || name === "") continue;

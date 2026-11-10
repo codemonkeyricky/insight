@@ -91,7 +91,7 @@ function RefGroup({ id, scope, roots, label, rows }: Base & { label: string; row
 function RefItem({ id, scope, roots, row }: Base & { row: RefRow }) {
   // A function opens in its scope, or in its file's scope when it lies outside this one. Module-level code (a file row) opens the file's flow.
   const href = row.isFunction
-    ? hrefView(id, "flow", { scope: row.inScope ? scope : row.file, fn: row.id, ...(roots ? { roots } : {}) })
+    ? hrefView(id, "flow", { scope: row.inScope ? scope : row.file, fn: row.id, roots })
     : hrefFlow(id, row.file);
   // The whole row is the link: a click or Enter on any part of it opens the function.
   return (

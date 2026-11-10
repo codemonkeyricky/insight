@@ -69,11 +69,11 @@ const LAYERS_INSET = 200 + 16 + 16;
  * project lists its files with their flows.
  */
 export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emphasis, findingKind, codeOpen }: Props) {
-  const exec = useMemo(() => new ExecStore(id, roots), [id, roots]);
   const { showCode } = useCodeTarget();
   const kind = scopeKind(scope, files);
-  /** What the map shows: frames and calls on by default, findings off until the reader turns the layer on. */
-  const [shown, setShown] = useState<LayerState>(() => ({ frames: true, calls: true, findings: findingKind !== undefined }));
+  /** What the map shows: frames and calls on by default, findings off until the reader turns the layer on, lambdas off (folded). */
+  const [shown, setShown] = useState<LayerState>(() => ({ frames: true, calls: true, findings: findingKind !== undefined, lambdas: readLambdas() }));
+  const exec = useMemo(() => new ExecStore(id, roots, shown.lambdas), [id, roots, shown.lambdas]);
   // A "Show in Flow" link for a kind turns the findings layer on, even when the flow is already open.
   useEffect(() => {
     if (findingKind !== undefined) setShown((s) => (s.findings ? s : { ...s, findings: true }));
@@ -133,7 +133,7 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
         <div className="sh-canvas">
           <RootsOnly id={id} scope={scope} fn={fn} roots={roots} />
           <ZoomMap
-            key={roots ? "roots" : "all"}
+            key={`${roots ? "roots" : "all"}-${shown.lambdas ? "lambdas" : "folded"}`}
             id={id}
             source={exec}
             scope={scope}
@@ -159,7 +159,10 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
           <LayersPanel
             shown={shown}
             findingCount={findingRows?.length}
-            onChange={(key, on) => setShown((s) => ({ ...s, [key]: on }))}
+            onChange={(key, on) => {
+              setShown((s) => ({ ...s, [key]: on }));
+              if (key === "lambdas") writeLambdas(on);
+            }}
             onClose={() => setLayersOpen(false)}
             roots={<RootsOnly id={id} scope={scope} fn={fn} roots={roots} className="sh-check" />}
           />
@@ -178,6 +181,23 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
       {kind !== "file" && <FlowFolders id={id} scope={scope} />}
     </>
   );
+}
+
+/** The Lambdas choice is per reader, so it lives in localStorage. Storage can be blocked, so every access is guarded. */
+const LAMBDAS_KEY = "insight.flow.lambdas";
+function readLambdas(): boolean {
+  try {
+    return globalThis.localStorage?.getItem(LAMBDAS_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+function writeLambdas(on: boolean): void {
+  try {
+    globalThis.localStorage?.setItem(LAMBDAS_KEY, on ? "1" : "0");
+  } catch {
+    // Storage is blocked: the choice lasts for this view only.
+  }
 }
 
 /** The roots-only switch on the canvas. Turning it on or off changes the URL, and the canvas follows the URL. */

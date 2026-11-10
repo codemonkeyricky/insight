@@ -63,12 +63,16 @@ export function scopeFlowFor(snapshot: string, model: ProjectModel, path: string
   }) as ScopeFlowPayload;
 }
 
-/** The execution model of a scope, as GET /scope/exec answers it. It reads the whole snapshot, not the cut. */
-export function scopeExecFor(snapshot: string, model: ProjectModel, path: string): ScopeExecPayload {
+/**
+ * The execution model of a scope, as GET /scope/exec answers it. It reads the whole snapshot, not the cut. Lambdas are
+ * folded into their owner unless `lambdas` is true (see execModel). The server answers the folded model only.
+ */
+export function scopeExecFor(snapshot: string, model: ProjectModel, path: string, opts: { lambdas?: boolean } = {}): ScopeExecPayload {
   const scope = canonical(model, path);
-  return remember(model, `exec\0${scope}`, () => {
+  const lambdas = opts.lambdas === true;
+  return remember(model, `exec\0${scope}\0${lambdas ? "lambdas" : "folded"}`, () => {
     const kind = kindOf(model, scope);
-    return { snapshot, kind, ...execModel(model.doc.nodes, model.doc.edges, scope) };
+    return { snapshot, kind, ...execModel(model.doc.nodes, model.doc.edges, scope, { lambdas }) };
   }) as ScopeExecPayload;
 }
 
