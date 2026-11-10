@@ -206,7 +206,8 @@ export function buildExecScene(model: ExecModel): Scene {
       parts.push(main !== undefined ? `Main function: ${main}.` : "No main function in the IR.");
     }
     if (shared > 0) parts.push(`Shares ${plural(shared, "thread")} with other programs.`);
-    const label = p.kind === "browser" ? `Browser · ${p.name}` : p.kind === "node" ? `Node · ${basename(p.name)}` : p.name;
+    // A frame header names its kind, not its file: "Browser — 2 threads", "Node — 1 thread".
+    const label = p.kind === "browser" ? "Browser" : p.kind === "node" ? "Node" : p.name;
     const named = p.kind === undefined ? label : `${label} — ${plural(p.threads.length, "thread")}`;
     return addProcess(execProgramId(p.id), named, p.kind === undefined ? p.targetKind : "", parts.join(" "));
   };
@@ -214,14 +215,13 @@ export function buildExecScene(model: ExecModel): Scene {
   const threadName = (t: ExecThread): string => {
     const first = t.roots[0];
     if (first !== undefined && fns.has(first)) return nameOf(first);
-    if (t.spawn?.script !== undefined && t.spawn.script !== "") return basename(t.spawn.script);
-    // No target is known: name the spawn by its API and call site, so the box says what starts the thread.
+    // A frame header names what runs, not a file: a script's base name without its extension.
+    if (t.spawn?.script !== undefined && t.spawn.script !== "") return basename(t.spawn.script).replace(/\.[^.]+$/, "");
+    // No target is known: name the spawn by its API, so the box says what starts the thread.
     const s = t.spawn;
     if (s === undefined) return "unresolved";
     const api = s.api !== undefined && s.api !== "" ? (s.api.split(".").pop() ?? s.api) : undefined;
-    const site = s.file !== "" && s.line > 0 ? `${basename(s.file)}:${s.line}` : undefined;
-    if (api === undefined) return site ?? "unresolved";
-    return site !== undefined ? `${api} (${site})` : api;
+    return api ?? "unresolved";
   };
 
   // The process box a grounded thread's box sits in, made when first asked. Undefined when the box sits on the project.
@@ -466,7 +466,7 @@ export function buildExecScene(model: ExecModel): Scene {
       t.kind === "main" || t.kind === "process"
         ? "Main thread"
         : workerFile !== undefined && workerFile !== ""
-          ? `Worker · ${basename(workerFile)}`
+          ? "Worker"
           : `${KIND_LABEL[t.kind] ?? t.kind} · ${threadName(t)}`;
     const node: SceneNode = {
       id,

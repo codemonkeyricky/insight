@@ -1,7 +1,7 @@
 // The travelling token of a control-flow chart: one dot that walks the chart's control flow from its start, round any loop
 // (once or twice) and branch (alternating yes and no on successive runs), to its exit, then starts again. The route is pure
 // (buildTokenRoute, unit tested). runFlowToken drives the dot on the page with one animation frame loop per chart and writes
-// only transforms and a node's class, so no React state changes per frame. useTokenSlot caps how many charts animate.
+// only its transform and visibility, so no React state changes per frame. useTokenSlot caps how many charts animate.
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import type { FlowEdge, FlowNode, FunctionFlow } from "@insight/flow";
 import { backEdgeFlags } from "./flowMotion";
@@ -114,12 +114,11 @@ type Seg = { pause: true; node: string; x: number; y: number; ms: number } | { p
 
 /**
  * Starts the token on a rendered chart: it walks the route run after run, moving along each edge's path at TOKEN_SPEED and
- * resting TOKEN_PAUSE_MS on each node, whose element gets the `flow-lit` class while the token is there. Returns the stop.
+ * resting TOKEN_PAUSE_MS on each node. The token is hidden while it rests and shown while it moves along an edge, so it reads
+ * as travelling along the lines and never lights a box. Returns the stop.
  * A chart with no edge to walk gets no token.
  */
 export function runFlowToken(svg: SVGSVGElement, tok: SVGGElement, fn: FunctionFlow): () => void {
-  const nodeEl = new Map<string, Element>();
-  svg.querySelectorAll("[data-node]").forEach((el) => nodeEl.set(el.getAttribute("data-node") ?? "", el));
   const pathEl = new Map<number, SVGPathElement>();
   svg.querySelectorAll("[data-edge]").forEach((el) => {
     const p = el.firstElementChild;
@@ -150,20 +149,18 @@ export function runFlowToken(svg: SVGSVGElement, tok: SVGGElement, fn: FunctionF
   let i = 0;
   let segStart = -1;
   let raf = 0;
-  const light = (s: Seg | undefined, on: boolean) => {
-    if (s?.pause) nodeEl.get(s.node)?.classList.toggle("flow-lit", on);
-  };
+  // The token shows only while it moves along an edge: a rest on a node hides it.
+  const show = (s: Seg | undefined) => tok.setAttribute("visibility", s !== undefined && !s.pause ? "visible" : "hidden");
   const first = segs[0];
   if (first?.pause) tok.setAttribute("transform", `translate(${first.x} ${first.y})`);
 
   const frame = (now: number) => {
     if (segStart < 0) {
       segStart = now;
-      light(segs[0], true);
+      show(segs[0]);
     }
     let seg = segs[i];
     while (seg !== undefined && now - segStart >= seg.ms) {
-      light(seg, false);
       segStart += seg.ms;
       i += 1;
       if (i >= segs.length) {
@@ -172,7 +169,7 @@ export function runFlowToken(svg: SVGSVGElement, tok: SVGGElement, fn: FunctionF
         if (segs.length === 0) return;
       }
       seg = segs[i];
-      light(seg, true);
+      show(seg);
     }
     if (seg === undefined) return;
     const p = seg.ms > 0 ? Math.min(1, (now - segStart) / seg.ms) : 0;
@@ -187,7 +184,6 @@ export function runFlowToken(svg: SVGSVGElement, tok: SVGGElement, fn: FunctionF
   raf = requestAnimationFrame(frame);
   return () => {
     cancelAnimationFrame(raf);
-    light(segs[i], false);
   };
 }
 

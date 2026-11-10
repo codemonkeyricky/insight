@@ -252,20 +252,37 @@ export function anchoredTo(list: readonly Expansion[], nodeId: string): Expansio
   return list.find((e) => e.anchor.kind === "box" && e.anchor.nodeId === nodeId);
 }
 
-/** The line from an expansion's anchor (the box's or the step's right edge, middle) to the expansion's left edge, header high. */
-export function connectorOf(e: Expansion, list: readonly Expansion[]): { x1: number; y1: number; x2: number; y2: number } | undefined {
-  const x2 = e.x;
-  const y2 = e.y + CHART_HEAD / 2;
+/** The inset of a callout's expansion-side edge from the expansion's top and bottom: it meets the box inside its rounded corners. */
+export const CALLOUT_INSET = 12;
+
+/** A callout's edges in world units, before the side shift: the anchor's right edge with its top and bottom, and the expansion's left edge. */
+export interface CalloutGeometry {
+  ax: number;
+  ayT: number;
+  ayB: number;
+  ex: number;
+  eyT: number;
+  eyB: number;
+}
+
+/**
+ * The callout of an expansion: from its anchor's right edge (a box's rect, or a step's rect in its parent's chart) to the
+ * expansion's left edge. Undefined when a step's parent expansion is not open.
+ */
+export function calloutOf(e: Expansion, list: readonly Expansion[]): CalloutGeometry | undefined {
+  const ex = e.x;
+  const eyT = e.y + CALLOUT_INSET;
+  const eyB = e.y + e.h - CALLOUT_INSET;
   if (e.anchor.kind === "box") {
     const r = e.anchor.rect;
-    return { x1: r.x + r.w, y1: r.y + r.h / 2, x2, y2 };
+    return { ax: r.x + r.w, ayT: r.y, ayB: r.y + r.h, ex, eyT, eyB };
   }
   const parentId = e.anchor.fnId;
   const parent = list.find((p) => p.fnId === parentId);
   if (parent === undefined) return undefined;
   const o = contentOrigin(parent);
   const r = e.anchor.rect;
-  return { x1: o.x + r.x + r.w, y1: o.y + r.y + r.h / 2, x2, y2 };
+  return { ax: o.x + r.x + r.w, ayT: o.y + r.y, ayB: o.y + r.y + r.h, ex, eyT, eyB };
 }
 
 /** Moves a span of `size` that starts at `start` inside a room of `room`, the least that keeps it in the room. */

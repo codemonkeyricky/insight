@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { CHART_HEAD, CHART_PAD, type FunctionFlow, type Rect } from "@insight/flow";
 import {
+  CALLOUT_INSET,
   EXPAND_GAP,
   anchoredTo,
   clampTop,
   closeExpansion,
-  connectorOf,
+  calloutOf,
   contentOrigin,
   expansionSize,
   openExpansion,
@@ -119,10 +120,11 @@ describe("refresh", () => {
   });
 });
 
-describe("connector", () => {
-  it("runs from a box's right edge to the expansion's header", () => {
+describe("callout", () => {
+  it("runs from a box's right edge, spanning its top and bottom, to the expansion's inset left edge", () => {
     const a = openExpansion([], "A", { kind: "box", nodeId: "n", rect: box }, chart("A", 300, 200), view);
-    expect(connectorOf(a[0] as Expansion, a)).toEqual({ x1: box.x + box.w, y1: box.y + box.h / 2, x2: a[0]?.x, y2: box.y + CHART_HEAD / 2 });
+    const e = a[0] as Expansion;
+    expect(calloutOf(e, a)).toEqual({ ax: box.x + box.w, ayT: box.y, ayB: box.y + box.h, ex: e.x, eyT: e.y + CALLOUT_INSET, eyB: e.y + e.h - CALLOUT_INSET });
   });
 });
 

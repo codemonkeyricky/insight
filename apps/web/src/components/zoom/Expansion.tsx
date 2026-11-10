@@ -1,12 +1,14 @@
 // A function's control-flow chart drawn in an expansion box beside the zoom map (see zoom/expand.ts). The box has the
 // function's name in a header with a close button, and the chart at its natural size under the header once the box is
 // wide enough on screen. The box's position and size are the expansion's; the chart is drawn once, unscaled, so it grows
-// and shrinks with the camera like the rest of the map. A solid connector runs from the step (or box) it hangs from.
+// and shrinks with the camera like the rest of the map. A filled callout wedge runs from the step (or box) it hangs from
+// to the box, behind it, and a 3px accent bar on the box's left edge says it opened from there.
 import { CHART_HEAD, CHART_PAD, type FlowNode } from "@insight/flow";
 import { chartShown } from "../../zoom/chart";
-import { CONNECTOR_HEAD, CONNECTOR_WIDTH, connectorD, headD } from "../../zoom/connector";
+import { calloutD } from "../../zoom/connector";
 import { connectorClass } from "../../zoom/flowMotion";
-import { detailLetter, type Expansion } from "../../zoom/expand";
+import { CALLOUT_INSET, detailLetter, type CalloutGeometry, type Expansion } from "../../zoom/expand";
+import { displayName } from "../../zoom/names";
 import { fitLabel, labelChars } from "../../zoom/lod";
 import { FlowChart } from "../FlowChart";
 
@@ -29,54 +31,48 @@ interface Props {
   motion?: boolean;
 }
 
-/** The ends of a connector, in world units before the side shift, and the x each end moves with (see ZoomMap's writeShift). */
-export interface ConnectorEnds {
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
-  /** The unshifted x whose shift the start moves with: the box's own x, or the detail's pivot for a step. */
+/** The ends of a callout: its geometry in world units before the side shift, and the x each edge moves with (see ZoomMap's writeShift). */
+export interface CalloutEnds extends CalloutGeometry {
+  /** The unshifted x whose shift the anchor edge moves with: the box's own x, or the detail's pivot for a step. */
   s1: number;
-  /** The unshifted x whose shift the end moves with: the detail's pivot (its group moves by it). */
+  /** The unshifted x whose shift the expansion edge moves with: the detail's pivot (its group moves by it). */
   s2: number;
 }
 
 /**
- * The solid connector from an expansion's anchor to its title, drawn outside the expansion's group so the side shift
- * writes its ends directly. Opening it draws the line in; closing it retracts the line (see styles.css).
+ * The callout from an expansion's anchor to its box: a filled wedge drawn outside the expansion's group, so the side shift
+ * writes its edges directly. Opening it fades it in; closing it fades it out (see styles.css).
  */
-export function ConnectorShape({ ends, k, closing = false, reduced = false }: { ends: ConnectorEnds; k: number; closing?: boolean; reduced?: boolean }) {
-  const { x1, y1, x2, y2, s1, s2 } = ends;
-  // The line keeps its width on screen: it is drawn at the inverse of the camera's scale. Its head is the same.
-  const width = CONNECTOR_WIDTH / k;
-  const head = CONNECTOR_HEAD / k;
+export function CalloutShape({ ends, closing = false, reduced = false }: { ends: CalloutEnds; closing?: boolean; reduced?: boolean }) {
+  const { ax, ayT, ayB, ex, eyT, eyB, s1, s2 } = ends;
   return (
     <g className={connectorClass(closing, reduced)}>
       <path
-        className="zm-connector"
-        d={connectorD(x1, y1, x2, y2)}
-        pathLength={1}
-        style={{ strokeWidth: width }}
-        data-x1={x1}
-        data-y1={y1}
-        data-x2={x2}
-        data-y2={y2}
+        className="zm-callout"
+        d={calloutD(ax, ayT, ayB, ex, eyT, eyB)}
+        data-ax={ax}
+        data-ayt={ayT}
+        data-ayb={ayB}
+        data-ex={ex}
+        data-eyt={eyT}
+        data-eyb={eyB}
         data-s1={s1}
         data-s2={s2}
       />
-      <path className="zm-connector-head" d={headD(x2, y2, head)} data-hx={x2} data-hy={y2} data-hs={head} data-s2={s2} />
     </g>
   );
 }
 
 export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClick, onSelect, onClose, motion = true }: Props) {
   const { chart, x, y, w, h } = expansion;
-  // The title is the function's name. The detail's letter stays in the accessible name only.
-  const label = fitLabel(chart.name, labelChars(w * k));
+  // The title is the function's display name; the tooltip and the accessible name keep the full name. The detail's letter
+  // stays in the accessible name only.
+  const label = fitLabel(displayName(chart.name, chart.id), labelChars(w * k));
   return (
     <g className="zm-expansion" role="group" aria-label={`Detail ${detailLetter(expansion.index)}: ${chart.name}`}>
       <title>{chart.name}</title>
       <rect x={x} y={y} width={w} height={h} rx={12} className="zm-expansion-body" />
+      <rect x={x} y={y + CALLOUT_INSET} width={3} height={Math.max(0, h - 2 * CALLOUT_INSET)} className="zm-expansion-accent" />
       <g className="zm-expansion-title" onClick={onSelect}>
         <rect x={x} y={y} width={w} height={CHART_HEAD} rx={12} className="zm-expansion-head" />
         {label !== null && (
