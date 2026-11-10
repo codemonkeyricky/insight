@@ -4,6 +4,7 @@ import { outsideScope, outsideText } from "../flowTargets";
 import { hrefFile, hrefView } from "../router";
 import { backEdgeFlags, edgeMotions, prefersReducedMotion, PULSE_S, useMarchBudget, useOnScreen, usePageVisible, type EdgeMotion } from "../zoom/flowMotion";
 import { runFlowToken, useTokenSlot } from "../zoom/flowToken";
+import { popDelay } from "../zoom/pop";
 
 /** A step's click, when a caller takes it over. Return true to handle it: the link (if any) is then not followed. */
 export type FlowNodeClick = (node: FlowNode) => boolean;
@@ -32,6 +33,11 @@ export function FlowChart({ id, fn, scope, onNodeClick, selectedId, motion = tru
   const budget = useMarchBudget(uid, fn.edges.length, on);
   const motions = useMemo(() => edgeMotions(back, { on, reduced, budget }), [back, on, reduced, budget]);
   const tokenActive = useTokenSlot(uid, on && fn.edges.length > 0);
+  // The cascade when a chart opens: nodes rise in reading order (y, then x), each edge draws on after its source node.
+  const nodeDelay = useMemo(() => {
+    const order = fn.nodes.slice().sort((a, b) => a.y - b.y || a.x - b.x);
+    return new Map(order.map((n, i) => [n.id, 140 + popDelay(i, 240, 10)] as const));
+  }, [fn]);
   useEffect(() => {
     const svg = ref.current;
     const tok = tokenRef.current;
@@ -47,12 +53,12 @@ export function FlowChart({ id, fn, scope, onNodeClick, selectedId, motion = tru
       </defs>
       <g>
         {fn.edges.map((e, i) => (
-          <Edge key={`${e.from}>${e.to}>${i}`} edge={e} index={i} marker={arrow} motion={motions[i] ?? NO_MOTION} back={back[i] === true} />
+          <Edge key={`${e.from}>${e.to}>${i}`} edge={e} index={i} marker={arrow} motion={motions[i] ?? NO_MOTION} back={back[i] === true} delay={(nodeDelay.get(e.from) ?? 140) + 80} />
         ))}
       </g>
       <g>
         {fn.nodes.map((n) => (
-          <Node key={n.id} id={id} node={n} fnId={fn.id} scope={scope} onNodeClick={onNodeClick} selected={n.id === selectedId} />
+          <Node key={n.id} id={id} node={n} fnId={fn.id} scope={scope} onNodeClick={onNodeClick} selected={n.id === selectedId} delay={nodeDelay.get(n.id) ?? 140} />
         ))}
       </g>
       {tokenActive && (
@@ -75,11 +81,11 @@ const NO_MOTION: EdgeMotion = { march: false, pulse: false };
  * One edge: its solid path with the arrow, then (when it moves) a dashed overlay that marches along the same path in its
  * direction, and on a back-edge a dot that travels the path every PULSE_S. The overlay sits on top of the solid line.
  */
-function Edge({ edge, index, marker, motion, back }: { edge: FlowEdge; index: number; marker: string; motion: EdgeMotion; back: boolean }) {
+function Edge({ edge, index, marker, motion, back, delay }: { edge: FlowEdge; index: number; marker: string; motion: EdgeMotion; back: boolean; delay: number }) {
   const d = edge.points.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x} ${y}`).join(" ");
   return (
-    <g className={`flow-edge ${edge.kind}${back ? " back-edge" : ""}`} data-edge={index}>
-      <path d={d} markerEnd={`url(#${marker})`} />
+    <g className={`flow-edge ${edge.kind}${back ? " back-edge" : ""}`} data-edge={index} style={{ ["--d" as string]: `${delay}ms` }}>
+      <path d={d} markerEnd={`url(#${marker})`} pathLength={edge.kind === "exception" ? undefined : 1} />
       {motion.march && <path d={d} className={`flow-march${back ? " back" : ""}`} />}
       {motion.pulse && (
         <circle r={2.6} className="flow-pulse">
@@ -95,7 +101,7 @@ function Edge({ edge, index, marker, motion, back }: { edge: FlowEdge; index: nu
   );
 }
 
-function Node({ id, node, fnId, scope, onNodeClick, selected }: { id: string; node: FlowNode; fnId: string; scope: string; onNodeClick?: FlowNodeClick; selected: boolean }) {
+function Node({ id, node, fnId, scope, onNodeClick, selected, delay }: { id: string; node: FlowNode; fnId: string; scope: string; onNodeClick?: FlowNodeClick; selected: boolean; delay: number }) {
   const { x, y, w, h, shape } = node;
   const cx = x + w / 2;
   const cy = y + h / 2;
@@ -151,6 +157,7 @@ function Node({ id, node, fnId, scope, onNodeClick, selected }: { id: string; no
     </>
   );
   const cls = `flow-node ${shape} role-${node.role}${outside ? " unresolved" : ""}${inside ? " resolves" : ""}${selected ? " selected" : ""}`;
+  const style = { ["--d" as string]: `${delay}ms` };
   // A call into this scope opens the callee's chart; every other step with a span opens its source line.
   const link = inside && target !== undefined ? hrefView(id, "flow", { scope, fn: target }) : node.span ? hrefFile(id, node.span.file, node.span.start[0] + 1) : undefined;
   const onClick = onNodeClick
@@ -159,11 +166,11 @@ function Node({ id, node, fnId, scope, onNodeClick, selected }: { id: string; no
       }
     : undefined;
   return link ? (
-    <a href={link} className={cls} onClick={onClick} data-node={node.id}>
+    <a href={link} className={cls} style={style} onClick={onClick} data-node={node.id}>
       {body}
     </a>
   ) : (
-    <g className={cls} onClick={onClick} data-node={node.id}>
+    <g className={cls} style={style} onClick={onClick} data-node={node.id}>
       {body}
     </g>
   );

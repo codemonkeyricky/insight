@@ -13,6 +13,7 @@ import { hrefView } from "../../router";
 import { CHART_MIN_PX } from "../../zoom/chart";
 import { anchoredTo, calloutOf, closeExpansion, footprintOf, openExpansion, refresh, revealCamera, rootBoxOf, sameFootprint, SLOT_PAD, shiftAt, type Expansion, type ExpandAnchor } from "../../zoom/expand";
 import { calloutD } from "../../zoom/connector";
+import { popDelay } from "../../zoom/pop";
 import { displayName } from "../../zoom/names";
 import { releaseVelocity, type DragSample } from "../../zoom/spring";
 import { useCameraSpring } from "../../zoom/useCameraSpring";
@@ -1067,6 +1068,11 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     flipRef.current = next;
   }, [live]);
   const drawn = (kind: PlacedItem["kind"]) => (live ? live.items.filter((i) => i.kind === kind) : []);
+  /** A root card's entrance rank: its place in reading order (rect y, then x), so the first cards on the map pop first. */
+  const cardRank = useMemo(() => {
+    const boxes = (live?.items ?? []).filter((i) => i.kind === "box").slice().sort((a, b) => a.rect.y - b.rect.y || a.rect.x - b.rect.x);
+    return new Map(boxes.map((it, i) => [it.id, i] as const));
+  }, [live]);
   /** The camera scale of the labels' bucket: labels are fitted to the boxes' width on screen at this scale. */
   const labelScale = bucketScale(shown.lod);
   /**
@@ -1282,6 +1288,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
                   bare={mid && it.rect.h * labelScale < TILE_LABEL_PX}
                   small={mid}
                   card={flat}
+                  rank={cardRank.get(it.id) ?? 0}
                 />
               );
             })}
@@ -1472,6 +1479,7 @@ function BoxShape({
   bare = false,
   small = false,
   card = false,
+  rank = 0,
 }: {
   item: PlacedItem;
   node: MapNode;
@@ -1485,6 +1493,8 @@ function BoxShape({
   small?: boolean;
   /** A roots-only card: its name, and its file line under it when the box is tall enough (see roots-grid.ts). */
   card?: boolean;
+  /** The card's place in reading order, which sets its pop-in delay (see zoom/pop.ts). */
+  rank?: number;
 }) {
   const { rect } = item;
   // The function's display name on the map (the full name stays in the tooltip).
@@ -1500,12 +1510,15 @@ function BoxShape({
     return (
       <g className={`zm-box zm-${node.kind} zm-card ${lineClass(line)}${holdsChart ? " zm-has-chart" : ""}${chartOpen ? " expanded" : ""}`} data-sx={rect.x} data-fid={item.id} onClick={() => onOpen(item.id)}>
         <title>{node.detail !== undefined ? `${node.label} (${node.detail})` : node.title || node.label}</title>
-        <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={12} className="zm-box-body" />
-        {name !== null && (
-          <text x={rect.x + 12} y={rect.y + rect.h / 2} dominantBaseline="central" className="zm-label">
-            <tspan className="zm-card-glyph">ƒ</tspan>{" "}{name}
-          </text>
-        )}
+        {/* The pop-in sits on this inner group: the outer one carries the slide transform (writeShift and the FLIP). */}
+        <g className="zm-pop" style={{ ["--d" as string]: `${popDelay(rank)}ms` }}>
+          <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={12} className="zm-box-body" />
+          {name !== null && (
+            <text x={rect.x + 12} y={rect.y + rect.h / 2} dominantBaseline="central" className="zm-label">
+              <tspan className="zm-card-glyph">ƒ</tspan>{" "}{name}
+            </text>
+          )}
+        </g>
       </g>
     );
   }
