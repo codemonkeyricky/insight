@@ -925,6 +925,39 @@ export function emitFile(project: Project, rel: string): IRBatch {
       }
     };
 
+    /**
+     * A handler the enclosing code installs: `x.onmessage = fn` or `x.addEventListener("message", fn)` with a project
+     * function. The step opens the handler, and the reference lets reachability reach it from the installing code.
+     */
+    const emitHandler = (node: ts.Node) => {
+      let event: string | undefined;
+      let at: ts.Expression | undefined;
+      if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isPropertyAccessExpression(node.left) && /^on[a-z]+$/.test(node.left.name.text)) {
+        event = node.left.name.text.slice(2);
+        at = node.right;
+      } else if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "addEventListener") {
+        const first = node.arguments[0];
+        if (first && ts.isStringLiteralLike(first)) {
+          event = first.text;
+          at = node.arguments[1];
+        }
+      }
+      if (event === undefined || at === undefined) return;
+      const target = callbackTarget(at);
+      if (target === undefined) return;
+      push({
+        id: uniqueId(`handler:${pos(sf, node.getStart(sf)).join(":")}`),
+        facet: "flow",
+        kind: "flow.handler",
+        parent: owner,
+        attrs: { label: `on ${event} ▸`, event, target: target.id },
+        span: spanOf(rel, sf, node),
+        provenance: PROV,
+      });
+      pushEdge({ from: fn, to: target.id, facet: "calls", kind: "calls.reference", attrs: { how: "handler" }, span: spanOf(rel, sf, node), provenance: PROV });
+      dependOn(target.rel);
+    };
+
     const emitCall = (call: ts.CallExpression) => {
       const callee = call.expression;
       const sym = project.checker.getSymbolAtLocation(nameOf(callee));
@@ -962,6 +995,18 @@ export function emitFile(project: Project, rel: string): IRBatch {
         }
       }
       const effect = matchCall(call, imports);
+      // A message a worker or page posts to its peer: a step of its own, since the runtime has no call the project declares.
+      if (!effect && target === undefined && ts.isPropertyAccessExpression(callee) && callee.name.text === "postMessage") {
+        push({
+          id: uniqueId(`effect:${pos(sf, call.getStart(sf)).join(":")}`),
+          facet: "effects",
+          kind: "effects.message.post",
+          parent: owner,
+          attrs: { api: "postMessage" },
+          span: spanOf(rel, sf, call),
+          provenance: PROV,
+        });
+      }
       if (effect) {
         push({
           id: uniqueId(`effect:${pos(sf, call.getStart(sf)).join(":")}`),
@@ -1097,6 +1142,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
       if (target?.entity.type === "function") reference(target, "value", node);
     }
 
+    emitHandler(node);
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
       emitModule(rel, node.moduleSpecifier.text, node.moduleSpecifier, node.importClause?.isTypeOnly ?? false, false, "packaging.import");
     } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {

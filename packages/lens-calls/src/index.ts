@@ -57,7 +57,20 @@ export const lensCalls: Lens = {
         else if (!partial || idInScope(id, scope)) findings.push({ lens: "lens-calls", id: `entry:${id}`, severity: "warning", message: `Configured entry ${id} is not a function in the index` });
       }
     } else {
-      entries = functions.filter((f) => f.attrs.exported === true).map((f) => f.id);
+      // A program starts at its page or Node script entry, a module's exports are callable by anyone, and a
+      // spawned thread (a worker module) starts at its own top level. These run without any project caller.
+      const roots = new Set<NodeId>(functions.filter((f) => f.attrs.exported === true || f.attrs.htmlEntry === true || f.attrs.nodeEntry === true).map((f) => f.id));
+      for (const e of view.edges({ kind: "concurrency.spawns" })) {
+        for (const id of edgeTargets(e).nodes) if (known.has(id)) roots.add(id);
+      }
+      // A file no project file imports runs on its own (a script), so its top level is a root.
+      const imported = new Set<string>();
+      for (const e of view.edges({ kind: "packaging.import" })) for (const id of edgeTargets(e).nodes) imported.add(id);
+      for (const e of view.edges({ kind: "packaging.re-export" })) for (const id of edgeTargets(e).nodes) imported.add(id);
+      for (const f of functions) {
+        if (f.attrs.module === true && !imported.has(f.span?.file ?? "")) roots.add(f.id);
+      }
+      entries = [...roots];
     }
 
     let reach = view.trace(entries, { follow: ["calls.call"], direction: "out", uncertain: "may" });
@@ -66,7 +79,7 @@ export const lensCalls: Lens = {
     // closures, so repeat until none is added.
     const closures = view
       .edges({ facet: "calls", kind: "calls.reference" })
-      .filter((e) => e.attrs?.how === "closure")
+      .filter((e) => e.attrs?.how === "closure" || e.attrs?.how === "handler")
       .map((e) => ({ from: e.from, to: edgeTargets(e).nodes[0] }))
       .filter((c): c is { from: NodeId; to: NodeId } => c.to !== undefined && known.has(c.to));
     const starts = new Set<NodeId>(entries);

@@ -154,8 +154,8 @@ describe("summarizeScope on the sample project", () => {
     const folder = scoped(["src/app/main.ts", "src/lib/math.ts"]);
     const names = folder.entries.map((id) => folder.functions.find((f) => f.id === id)?.name).sort();
     // run is called by start, so start, double and the method have no caller. main.ts's top-level `answer = add(...)`
-    // runs on load with no caller either, so its (module) entity is an entry too.
-    expect(names).toEqual(["(module)", "Counter.increment", "double", "start"]);
+    // runs on load with no caller either, so its top-level entity is an entry too, named by its file.
+    expect(names).toEqual(["Counter.increment", "double", "main.ts · top level", "start"]);
     expect(folder.functions.some((f) => f.calledFromOutside)).toBe(false);
   });
 

@@ -220,6 +220,8 @@ export interface ExecIndex {
   callers: ReadonlyMap<string, readonly string[]>;
   /** Each function's placements in the scene, by node id. */
   placements: ReadonlyMap<string, readonly ExecPlacement[]>;
+  /** A caller's shown name where it differs from the function's, such as "VerifyClient.ensureWorker · spawns Worker", by callee then caller. */
+  callerLabels?: ReadonlyMap<string, ReadonlyMap<string, string>>;
 }
 
 /** The thread (its scene id) a node runs on, or the project for plain code flow. Undefined for a node with no project above it. */
@@ -270,11 +272,18 @@ export function execIndex(
     add(calleeSets, a.id, b.id);
     add(callerSets, b.id, a.id);
   }
+  const callerLabels = new Map<string, Map<string, string>>();
   for (const [fnId, callers] of projectCallers ?? []) {
     for (const c of callers) {
       // With lambdas folded, an anonymous caller is a lambda the map does not show: its calls are the owner's, so it is dropped.
       if (!lambdas && c.anonymous === true) continue;
       add(callerSets, fnId, c.id);
+      // A spawn caller is its owner, shown with what it spawns. The owner's own name stays for its other callers.
+      if (c.name !== (fns.get(c.id)?.name ?? c.name)) {
+        const labels = callerLabels.get(fnId) ?? new Map<string, string>();
+        labels.set(c.id, c.name);
+        callerLabels.set(fnId, labels);
+      }
       if (!fns.has(c.id)) fns.set(c.id, c);
     }
   }
@@ -297,6 +306,7 @@ export function execIndex(
     callees: sorted(calleeSets),
     callers: sorted(callerSets),
     placements,
+    callerLabels,
   };
 }
 
@@ -314,16 +324,16 @@ export function execPlacementFor(index: ExecIndex, fnId: string, threadKey?: str
   return (best ?? list[0])?.nodeId;
 }
 
-function linkOf(index: ExecIndex, fnId: string, threadKey?: string): ExecLink {
+function linkOf(index: ExecIndex, fnId: string, threadKey?: string, label?: string): ExecLink {
   const f = index.fns.get(fnId);
-  const link: ExecLink = { id: fnId, name: f?.name ?? fnId, file: f?.file ?? "", line: f?.line ?? 0 };
+  const link: ExecLink = { id: fnId, name: label ?? f?.name ?? fnId, file: f?.file ?? "", line: f?.line ?? 0 };
   const nodeId = execPlacementFor(index, fnId, threadKey);
   if (nodeId !== undefined) link.nodeId = nodeId;
   return link;
 }
 
-function capped(index: ExecIndex, ids: readonly string[], threadKey: string | undefined, cap: number): ExecLinkList {
-  return { items: ids.slice(0, cap).map((id) => linkOf(index, id, threadKey)), more: Math.max(0, ids.length - cap) };
+function capped(index: ExecIndex, ids: readonly string[], threadKey: string | undefined, cap: number, labels?: ReadonlyMap<string, string>): ExecLinkList {
+  return { items: ids.slice(0, cap).map((id) => linkOf(index, id, threadKey, labels?.get(id))), more: Math.max(0, ids.length - cap) };
 }
 
 export interface ExecCallLists {
@@ -343,7 +353,7 @@ export function execCallLists(index: ExecIndex, nodeId: string, cap = CALL_LIST_
   const threadKey = execThreadKeyOf(index.scene, nodeId);
   return {
     calls: capped(index, index.callees.get(fnId) ?? [], threadKey, cap),
-    calledBy: capped(index, index.callers.get(fnId) ?? [], threadKey, cap),
+    calledBy: capped(index, index.callers.get(fnId) ?? [], threadKey, cap, index.callerLabels?.get(fnId)),
   };
 }
 
