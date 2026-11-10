@@ -37,6 +37,8 @@ export interface FlowNode {
   span?: FlowSpan;
   /** The IR node of the function this step calls, when the call resolved to code in the project. */
   target?: string;
+  /** The step is a handler the code installs (`onmessage = …`): it opens its target, even a folded lambda. */
+  handler?: true;
   x: number;
   y: number;
   w: number;

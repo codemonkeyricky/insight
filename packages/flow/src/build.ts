@@ -25,12 +25,14 @@ interface Ev {
   detail?: string;
   span?: FlowSpan;
   target?: string;
+  /** A handler the code installs (`onmessage = …`): its step opens the handler even when it is a folded lambda. */
+  handler?: true;
   children: Ev[];
 }
 
 /** The chart before layout: a tree of what runs in order. */
 export type Item =
-  | { t: "step"; role: FlowRole; label: string; title?: string; span?: FlowSpan; target?: string }
+  | { t: "step"; role: FlowRole; label: string; title?: string; span?: FlowSpan; target?: string; handler?: true }
   | { t: "term"; role: "return" | "throw" | "break" | "continue"; label: string; span?: FlowSpan }
   | { t: "fork"; role: "branch" | "switch" | "try"; label: string; title?: string; span?: FlowSpan; arms: Arm[]; complete: boolean }
   | { t: "loop"; label: string; title?: string; span?: FlowSpan; body: Item[] };
@@ -100,7 +102,7 @@ function toEvent(n: IRNode): Ev | undefined {
       return { ...base, type: "return", rank: RANK.return, label: "return" };
     case "flow.handler":
       // A handler the code installs: a call step that opens the handler's chart.
-      return { ...base, type: "call", rank: RANK.call, label: str(a.label) || "on ▸", ...(str(a.target) ? { target: str(a.target) } : {}) };
+      return { ...base, type: "call", rank: RANK.call, label: str(a.label) || "on ▸", ...(str(a.target) ? { target: str(a.target), handler: true as const } : {}) };
     case "flow.throw":
       return { ...base, type: "throw", rank: RANK.throw, label: "throw" };
     case "flow.jump":
@@ -144,7 +146,7 @@ function convertAll(evs: Ev[]): Item[] {
 }
 
 function step(role: FlowRole, ev: Ev, label: string): Item {
-  return { t: "step", role, label: clip(label, 30), title: label, ...(ev.span ? { span: ev.span } : {}), ...(ev.target ? { target: ev.target } : {}) };
+  return { t: "step", role, label: clip(label, 30), title: label, ...(ev.span ? { span: ev.span } : {}), ...(ev.target ? { target: ev.target } : {}), ...(ev.handler ? { handler: true as const } : {}) };
 }
 
 function convert(ev: Ev): Item[] {
@@ -253,6 +255,13 @@ export function factsForFile(file: string, nodes: Iterable<IRNode>, edges: Itera
       const name = n.attrs.module === true ? topLevelName(file) : String(n.attrs.qualifiedName ?? n.attrs.name ?? n.id);
       functions.set(n.id, { id: n.id, name, async: n.attrs.async === true, span: spanOf(n), items: [] });
     }
+  }
+  // An anonymous handler is named by what it handles, "<basename> · on message", not by its "λ16:17".
+  for (const n of allNodes) {
+    if (n.kind !== "flow.handler" || n.span?.file !== file) continue;
+    const f = functions.get(String(n.attrs.target ?? ""));
+    const event = String(n.attrs.event ?? "");
+    if (f !== undefined && event !== "" && /(^|\.)λ[^.]*$/.test(f.name)) f.name = `${file.slice(file.lastIndexOf("/") + 1)} · on ${event}`;
   }
   const add = (parent: string, ev: Ev) => {
     const list = events.get(parent);

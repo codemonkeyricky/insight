@@ -66,6 +66,8 @@ describe("module chart", () => {
     const step = topLevel().nodes.find((n) => n.label === "on message ▸");
     expect(step).toBeDefined();
     expect(step?.target).toMatch(/^src\/worker\.ts#λ/);
+    // Marked as a handler, so the map opens it even when lambdas are folded into their owner.
+    expect(step?.handler).toBe(true);
     // The step opens the handler's own chart, which is in the file's charts.
     expect(flow.functions.some((f) => f.id === step?.target)).toBe(true);
   });
@@ -76,5 +78,7 @@ describe("module chart", () => {
     const labels = (handler as FunctionFlow).nodes.map((n) => n.label);
     expect(labels).toContain("verify()");
     expect(labels.some((l) => l.includes("postMessage"))).toBe(true);
+    // Named by what it handles, not by its position.
+    expect((handler as FunctionFlow).name).toBe("worker.ts · on message");
   });
 });
