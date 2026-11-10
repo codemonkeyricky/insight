@@ -37,7 +37,15 @@ export const frontend: Frontend = {
     const rels = ctx.listFiles().filter((f) => SOURCE_RE.test(f));
     const texts = new Map<string, string>();
     for (const rel of rels) texts.set(join(ctx.root.path, rel), await ctx.readFile(rel));
-    const project = buildProject(ctx.root.path, rels, texts);
+    // The pages whose script tags load a module's entry: the project's index.html and public/index.html.
+    const html = new Map<string, string>();
+    for (const page of ["index.html", "public/index.html"]) {
+      if (existsSync(join(ctx.root.path, page))) html.set(page, await ctx.readFile(page));
+    }
+    // The root package.json names the Node scripts of "bin" and "scripts" (see nodeEntryFiles).
+    const manifests = new Map<string, string>();
+    if (existsSync(join(ctx.root.path, "package.json"))) manifests.set("package.json", await ctx.readFile("package.json"));
+    const project = buildProject(ctx.root.path, rels, texts, html, manifests);
     for (const rel of ctx.files) {
       yield emitFile(project, rel);
     }

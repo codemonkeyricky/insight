@@ -50,9 +50,9 @@ const fileOf = (id: string): string => id.split(/[#@]/)[0] ?? id;
 describe("concurrency.spawns", () => {
   it("links each worker or fork script that resolves to a project file, and nothing else", async () => {
     expect(labelled((await extract()).edges, "concurrency.spawns")).toEqual([
-      "src/spawns.ts@spawn:10:9 -> src/crunch.ts (thread)",
-      "src/spawns.ts@spawn:19:2 -> src/child.ts (process)",
-      "src/spawns.ts@spawn:5:9 -> src/crunch.ts (thread)",
+      "src/spawns.ts@spawn:10:9 -> src/crunch.ts#(module) (thread)",
+      "src/spawns.ts@spawn:19:2 -> src/child.ts#(module) (process)",
+      "src/spawns.ts@spawn:5:9 -> src/crunch.ts#(module) (thread)",
     ]);
   });
 
@@ -93,7 +93,7 @@ describe("concurrency.dispatches", () => {
   it("records awaited, started, timer, microtask and promise-callback dispatches, inline callbacks included, and nothing else", async () => {
     // An inline callback dispatches to its own anonymous function; a module-level call has the file as its source.
     expect(labelled((await extract()).edges, "concurrency.dispatches")).toEqual([
-      "src/dispatch.ts -> src/tasks.ts#onDone (timer)",
+      "src/dispatch.ts#(module) -> src/tasks.ts#onDone (timer)",
       "src/dispatch.ts#Job.run -> src/dispatch.ts#Job.finish (callback)",
       "src/dispatch.ts#Job.run -> src/tasks.ts#fetchUser (start)",
       "src/dispatch.ts#chain -> src/tasks.ts#fetchUser (start)",
@@ -127,7 +127,7 @@ describe("concurrency.dispatches", () => {
 
   it("keeps calls.reference to a callback passed by name, and adds a closure edge from each creator to the inline function it makes", async () => {
     expect(labelled((await extract()).edges, "calls.reference")).toEqual([
-      "src/dispatch.ts -> src/tasks.ts#onDone (value)",
+      "src/dispatch.ts#(module) -> src/tasks.ts#onDone (value)",
       "src/dispatch.ts#Job.run -> src/dispatch.ts#Job.finish (value)",
       "src/dispatch.ts#chain -> src/tasks.ts#onDone (value)",
       "src/dispatch.ts#chain -> src/tasks.ts#onError (value)",
@@ -156,7 +156,7 @@ describe("concurrency.dispatches", () => {
     const { edges } = await extract();
     const awaited = edges.find((e) => e.kind === "concurrency.dispatches" && e.from === "src/dispatch.ts#load");
     expect(awaited?.span).toEqual({ file: "src/dispatch.ts", start: [4, 15], end: [4, 30] });
-    const moduleTimer = edges.find((e) => e.kind === "concurrency.dispatches" && e.from === "src/dispatch.ts");
+    const moduleTimer = edges.find((e) => e.kind === "concurrency.dispatches" && e.from === "src/dispatch.ts#(module)");
     expect(moduleTimer?.span).toEqual({ file: "src/dispatch.ts", start: [47, 0], end: [47, 21] });
   });
 });

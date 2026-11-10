@@ -42,7 +42,15 @@ export function refsOf(view: ScopeView, id: NodeId): Refs {
   if (!model.byId.has(id)) return { calledBy: [], calls: [] };
   const owned = anonymousOwned(model);
 
-  const callers = (model.in.get(id) ?? []).map((rel) => ({ rel, other: ownerOf(model.byId, rel.from) }));
+  const callers = (model.in.get(id) ?? []).map((rel): { rel: Rel; other: NodeId; label?: string } => {
+    // A spawn is not a function: its caller is the function (or file) that starts the thread, labelled with the API.
+    const src = model.byId.get(rel.from);
+    if (src !== undefined && (src.kind === "concurrency.spawn-thread" || src.kind === "concurrency.spawn-process") && src.parent !== undefined) {
+      const api = typeof src.attrs.api === "string" ? src.attrs.api : "thread";
+      return { rel, other: ownerOf(model.byId, src.parent), label: `spawns ${api}` };
+    }
+    return { rel, other: ownerOf(model.byId, rel.from) };
+  });
   const callees = [id, ...(owned.get(id) ?? [])].flatMap((src) => (model.out.get(src) ?? []).map((rel) => ({ rel, other: rel.to })));
 
   return {
@@ -52,10 +60,10 @@ export function refsOf(view: ScopeView, id: NodeId): Refs {
 }
 
 /** Collapses the relations into one row per (function, kind), with the count and the first site. */
-function rowsOf(view: ScopeView, items: Array<{ rel: Rel; other: NodeId }>): RefRow[] {
+function rowsOf(view: ScopeView, items: Array<{ rel: Rel; other: NodeId; label?: string }>): RefRow[] {
   const groups = new Map<string, { row: RefRow; site?: { file: string; line: number } }>();
-  for (const { rel, other } of items) {
-    const key = `${other}\0${rel.kind}`;
+  for (const { rel, other, label } of items) {
+    const key = `${other}\0${rel.kind}\0${label ?? ""}`;
     const site = rel.edge.span ? { file: rel.edge.span.file, line: rel.edge.span.start[0] + 1 } : undefined;
     const group = groups.get(key);
     if (group) {
@@ -65,6 +73,7 @@ function rowsOf(view: ScopeView, items: Array<{ rel: Rel; other: NodeId }>): Ref
       continue;
     }
     const row = describe(view, other, rel.kind);
+    if (label !== undefined) row.name = `${row.name} · ${label}`;
     row.count = 1;
     row.candidate = rel.candidate;
     if (rel.how !== undefined) row.how = rel.how;

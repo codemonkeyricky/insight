@@ -69,6 +69,13 @@ export interface MapBuild {
   crumbs: MapNode[];
   /** For a function focus: what the function is and where it runs. */
   selected?: MapSelected;
+  /**
+   * A slotted build keeps room beside each opened box for its expansions (the layout reserves it, see rebuild), so the
+   * expansions sit in the layout and never shift the columns.
+   */
+  slotted?: boolean;
+  /** The room the build keeps beside each box (the footprint it was laid out with). */
+  footprint?: ReadonlyMap<string, { w: number; h: number }>;
 }
 
 /** The URL that shows a focus: the scope, the function, and whether the map is the roots-only view. */
@@ -108,6 +115,18 @@ export interface MapSource {
    * (no method) means every callee is a function.
    */
   isFunction?(build: MapBuild, fnId: string): boolean;
+  /**
+   * The build again, laid out with `footprint`: the room kept beside each box (see MapBuild.slotted). Synchronous, since the
+   * layout is arithmetic. Only a slotted build is laid out again.
+   */
+  rebuild?(build: MapBuild, footprint: ReadonlyMap<string, { w: number; h: number }>): MapBuild;
+  /**
+   * Shows every root card of the thread that the "+N more" card `nodeId` stands for, and loads the scope again. The map
+   * builds the focus again afterwards. Undefined (no method) means the source has no such cards.
+   */
+  expandMore?(build: MapBuild, nodeId: string): Promise<void>;
+  /** Whether a chain box's function is a dispatch target (an await or a start) of the thread that holds the box `boxId`. */
+  asyncOf?(build: MapBuild, fnId: string, boxId: string): boolean;
 }
 
 export interface Box {

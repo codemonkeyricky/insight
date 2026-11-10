@@ -3,13 +3,18 @@
 // The layout serves every focus in the scope, so a zoom never solves again. A roots-only store cuts the scene down to
 // the functions each thread starts in (execRootsOnly), and always solves that cut itself.
 import {
+  MORE_SUFFIX,
   buildExecScene,
   execDefaultOpen,
+  execThreadId,
   execRootsOnly,
   flattenRoots,
   gridRootsLayout,
   layoutCovers,
   layoutScene,
+  runtimeOpen,
+  runtimeRootsLayout,
+  runtimeRootsScene,
   type ExecFunctionRef,
   type ExecModel,
   type Scene,
@@ -32,6 +37,10 @@ export interface ExecView {
   index: ExecIndex;
   /** The layouts with more containers open, by the sorted ids that differ from `layout`. Bounded (see LAYOUTS_MAX). */
   layouts: Map<string, Promise<SceneLayout>>;
+  /** Whether the scene has runtime containers (process and thread boxes). Its layout holds every container, so none is solved. */
+  containers: boolean;
+  /** The dispatch targets (await or start) of each thread, by the thread's scene id: a chain box of one is an async box. */
+  asyncIn: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
 /** The most layouts with containers opened a view keeps. Each one reuses the base layout, so a few are cheap. */
@@ -42,24 +51,54 @@ export class ExecStore implements MapSource {
   private readonly rootsOnly: boolean;
   /** Whether anonymous functions are their own boxes. Folded (false) is the server's model and its saved layout. */
   private readonly lambdas: boolean;
+  /** Whether a roots-only store draws the runtime containers (process and thread boxes) when the model has them. */
+  private readonly runtime: boolean;
   private readonly loads = new Map<string, Promise<ExecView>>();
   private readonly views = new Map<string, ExecView>();
+  /** The threads whose "+N more" card was clicked, as `scope NUL thread id`. Kept across loads of the scope. */
+  private readonly more = new Set<string>();
 
-  /** `rootsOnly` makes the store's scenes the flat roots-only cut; `lambdas` shows anonymous functions. One store per (project, flags). */
-  constructor(id: string, rootsOnly = false, lambdas = false) {
+  /**
+   * `rootsOnly` makes the store's scenes the roots-only cut; `lambdas` shows anonymous functions; `runtime` draws the process
+   * and thread boxes around the roots (roots-only only, and only when the model has runtime context). One store per flags.
+   */
+  constructor(id: string, rootsOnly = false, lambdas = false, runtime = true) {
     this.id = id;
     this.rootsOnly = rootsOnly;
     this.lambdas = lambdas;
+    this.runtime = runtime;
   }
 
   /** The cache key of a scope: its scene depends on the scope and on whether the store is roots-only. */
   private keyOf(scope: string): string {
-    return `${this.rootsOnly ? "roots" : "all"}\u0000${this.lambdas ? "lambdas" : "folded"}\u0000${scope}`;
+    return `${this.rootsOnly ? "roots" : "all"}\u0000${this.lambdas ? "lambdas" : "folded"}\u0000${this.runtime ? "runtime" : "flat"}\u0000${scope}`;
   }
 
-  private sceneOf(model: ExecModel): Scene {
+  /**
+   * The scene a model draws here, and whether it has runtime containers. A roots-only store with runtime boxes draws the
+   * containers when the model has runtime context; otherwise it draws the flat roots-only cut.
+   */
+  private sceneOf(model: ExecModel, scope: string): { scene: Scene; containers: boolean } {
     const full = buildExecScene(model);
-    return this.rootsOnly ? flattenRoots(execRootsOnly(full, model), model) : full;
+    if (!this.rootsOnly) return { scene: full, containers: false };
+    const prefix = `${scope}\u0000`;
+    const expanded = new Set([...this.more].filter((k) => k.startsWith(prefix)).map((k) => k.slice(prefix.length)));
+    const runtime = this.runtime ? runtimeRootsScene(full, model, expanded) : undefined;
+    if (runtime !== undefined) return { scene: runtime, containers: true };
+    return { scene: flattenRoots(execRootsOnly(full, model), model), containers: false };
+  }
+
+  /**
+   * Shows every root card of the thread that the "+N more" card `nodeId` stands for. The scope is loaded again, so the
+   * next build lays out the thread with all its cards.
+   */
+  async expandMore(build: MapBuild, nodeId: string): Promise<void> {
+    const threadId = nodeId.slice(0, -MORE_SUFFIX.length);
+    this.more.add(`${build.path}\u0000${threadId}`);
+    const key = this.keyOf(build.path);
+    this.loads.delete(key);
+    this.views.delete(key);
+    await this.load(build.path);
   }
 
   /** Loads a scope's model and layout once. A failed load is dropped, so the next call tries again. */
@@ -71,18 +110,25 @@ export class ExecStore implements MapSource {
       const saved$ = this.rootsOnly || this.lambdas ? Promise.resolve(undefined) : api.scopeExecLayout(this.id, scope);
       load = Promise.all([api.getScopeExec(this.id, scope, { lambdas: this.lambdas }), saved$, api.getScopeCallers(this.id, scope)])
         .then(async ([model, saved, callers]) => {
-          const scene = this.sceneOf(model);
-          const open = execDefaultOpen(scene);
+          const { scene, containers } = this.sceneOf(model, scope);
           // The saved layout is the full scene's, with the default containers open. A roots-only scene is a different scene,
-          // so it is always solved here.
-          // A roots-only scene is flat and laid out as a grid of uniform cards (gridRootsLayout), with no solve.
-          const layout = this.rootsOnly
-            ? gridRootsLayout(scene)
-            : !this.lambdas && saved !== undefined && layoutCovers(scene, saved, open)
-              ? saved
-              : await layoutScene(scene, (g) => solve(g).then((s) => s.result), { open });
+          // so it is never the saved one. A flat roots-only scene is a grid of uniform cards (gridRootsLayout), with no solve.
+          // A roots-only scene with runtime containers is laid out here too, every container open (runtimeRootsLayout).
+          const open = containers ? runtimeOpen(scene) : execDefaultOpen(scene);
+          const layout = containers
+            ? runtimeRootsLayout(scene)
+            : this.rootsOnly
+              ? gridRootsLayout(scene)
+              : !this.lambdas && saved !== undefined && layoutCovers(scene, saved, open)
+                ? saved
+                : await layoutScene(scene, (g) => solve(g).then((s) => s.result), { open });
           const fns = new Map(model.functions.map((f): [string, ExecFunctionRef] => [f.id, f]));
-          const view: ExecView = { scene, layout, open, fns, index: execIndex(scene, model, callers, this.lambdas), layouts: new Map() };
+          const asyncIn = new Map<string, Set<string>>();
+          for (const t of model.threads) {
+            const targets = new Set(t.coroutines.map((c) => c.target));
+            if (targets.size > 0) asyncIn.set(execThreadId(t.id), targets);
+          }
+          const view: ExecView = { scene, layout, open, fns, index: execIndex(scene, model, callers, this.lambdas), layouts: new Map(), containers, asyncIn };
           this.views.set(key, view);
           return view;
         })
@@ -111,7 +157,27 @@ export class ExecStore implements MapSource {
     const view = await this.load(scope);
     if (!view.scene.nodes.has(nodeId)) throw new Error(`Nothing in the execution map at ${nodeId}`);
     const layout = await this.layoutFor(view, execOpenSet(view.scene, nodeId));
-    return execBuild(view.scene, layout, scope, nodeId, view.fns);
+    // A roots-only build is slotted: its expansions sit in the room the layout keeps for them (see rebuild).
+    return { ...execBuild(view.scene, layout, scope, nodeId, view.fns), slotted: this.rootsOnly };
+  }
+
+  /**
+   * The build laid out with `footprint`: the room kept beside each opened card, so the expansions and the frames around
+   * them fit (runtimeRootsLayout and gridRootsLayout keep it). Only a slotted (roots-only) build is laid out again. The
+   * layout is arithmetic, so this is synchronous.
+   */
+  rebuild(b: MapBuild, footprint: ReadonlyMap<string, { w: number; h: number }>): MapBuild {
+    const view = this.viewOf(b);
+    if (view === undefined || !b.slotted) return b;
+    const layout = view.containers ? runtimeRootsLayout(view.scene, footprint) : gridRootsLayout(view.scene, footprint);
+    return { ...execBuild(view.scene, layout, b.path, b.nodeId, view.fns), slotted: true, footprint };
+  }
+
+  /** Whether `fnId` is a dispatch target of the thread that holds the box `boxId` (see ExecView.asyncIn). */
+  asyncOf(b: MapBuild, fnId: string, boxId: string): boolean {
+    const view = this.viewOf(b);
+    const thread = view?.scene.nodes.get(boxId)?.parent;
+    return thread !== undefined && view?.asyncIn.get(thread)?.has(fnId) === true;
   }
 
   /**
@@ -121,7 +187,8 @@ export class ExecStore implements MapSource {
    */
   private layoutFor(view: ExecView, opened: ReadonlySet<string>): Promise<SceneLayout> {
     const changed = [...opened].filter((id) => !view.open.has(id)).sort();
-    if (changed.length === 0) return Promise.resolve(view.layout);
+    // A scene with runtime containers lays out every container already, so no set of open containers needs a solve.
+    if (view.containers || changed.length === 0) return Promise.resolve(view.layout);
     const key = changed.join("\u0000");
     let layout = view.layouts.get(key);
     if (layout === undefined) {

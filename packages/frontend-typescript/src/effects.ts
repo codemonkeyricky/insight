@@ -194,8 +194,20 @@ export function scriptPath(arg: ts.Expression | undefined, imports: Map<string, 
   return path === undefined ? undefined : { base: "file", path };
 }
 
-/** `new Worker(file)` from worker_threads, as a named or namespace import. Returns the script it runs. */
-export function matchWorker(node: ts.NewExpression, imports: Map<string, ImportBinding>): WorkerMatch | undefined {
+/**
+ * What a worker call site needs beyond its own syntax: the initializer of a `const` an identifier names, and whether the
+ * project itself declares an identifier (so it is not the browser's global of that name).
+ */
+export interface WorkerEnv {
+  constOf?: (id: ts.Identifier) => ts.Expression | undefined;
+  declared?: (id: ts.Identifier) => boolean;
+}
+
+/**
+ * `new Worker(file)` from worker_threads, as a named or namespace import, or the browser's `new Worker(url)` and
+ * `new SharedWorker(url)` globals. Returns the script the worker runs.
+ */
+export function matchWorker(node: ts.NewExpression, imports: Map<string, ImportBinding>, env: WorkerEnv = {}): WorkerMatch | undefined {
   const callee = node.expression;
   let isWorker = false;
   if (ts.isIdentifier(callee)) {
@@ -205,12 +217,39 @@ export function matchWorker(node: ts.NewExpression, imports: Map<string, ImportB
     const b = imports.get(callee.expression.text);
     isWorker = b !== undefined && b.module === "worker_threads" && b.name === undefined;
   }
-  if (!isWorker) return undefined;
+  if (!isWorker) return matchBrowserWorker(node, imports, env);
   const first = node.arguments?.[0];
   return {
     api: "worker_threads.Worker",
     target: first && ts.isStringLiteralLike(first) ? first.text : DYNAMIC,
     script: scriptPath(first, imports),
+  };
+}
+
+/**
+ * The script a browser worker's argument names: a relative string, or `new URL(p, import.meta.url)`. Both are relative to
+ * the file that makes the call, as bundlers read them.
+ */
+function browserScriptPath(arg: ts.Expression | undefined, imports: Map<string, ImportBinding>): ScriptPath | undefined {
+  if (!arg) return undefined;
+  if (ts.isStringLiteralLike(arg)) return isRelativePath(arg.text) ? { base: "file", path: arg.text } : undefined;
+  const path = fileRelativePath(arg, imports);
+  return path === undefined ? undefined : { base: "file", path };
+}
+
+/** `new Worker(...)` or `new SharedWorker(...)` as the browser global: a name the file neither imports nor declares. */
+function matchBrowserWorker(node: ts.NewExpression, imports: Map<string, ImportBinding>, env: WorkerEnv): WorkerMatch | undefined {
+  const callee = node.expression;
+  if (!ts.isIdentifier(callee) || (callee.text !== "Worker" && callee.text !== "SharedWorker")) return undefined;
+  if (imports.has(callee.text) || env.declared?.(callee)) return undefined;
+  const first = node.arguments?.[0];
+  // A const that holds the argument is followed once: `const url = new URL(...); new Worker(url)`.
+  const arg = first !== undefined && ts.isIdentifier(first) ? (env.constOf?.(first) ?? first) : first;
+  const script = browserScriptPath(arg, imports);
+  return {
+    api: callee.text,
+    target: arg !== undefined && ts.isStringLiteralLike(arg) ? arg.text : (script?.path ?? DYNAMIC),
+    script,
   };
 }
 

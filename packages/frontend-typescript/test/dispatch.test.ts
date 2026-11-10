@@ -78,8 +78,8 @@ describe("object-literal functions bound to a name", () => {
   it("keeps an arrow in an object literal passed inline as a lambda parented by the file, with no closure name", async () => {
     const { nodes, edges } = await extract();
     const anon = nodes.filter((n) => n.attrs?.anonymous === true);
-    expect(anon.map((n) => [n.id, n.parent])).toEqual([["src/props.ts#λ28:33", "src/props.ts"]]);
-    expect(pairs(edges, "calls.reference")).toContain("src/props.ts -> src/props.ts#λ28:33");
+    expect(anon.map((n) => [n.id, n.parent])).toEqual([["src/props.ts#λ28:33", "src/props.ts#(module)"]]);
+    expect(pairs(edges, "calls.reference")).toContain("src/props.ts#(module) -> src/props.ts#λ28:33");
   });
 
   it("resolves calls to those properties to the named function, and calls inside a named property to it", async () => {
@@ -102,7 +102,7 @@ describe("object-literal functions bound to a name", () => {
 
   it("makes no reference edges to named properties, so only the inline lambda has a closure edge", async () => {
     const { edges } = await extract();
-    expect(pairs(edges, "calls.reference")).toEqual(["src/props.ts -> src/props.ts#λ28:33"]);
+    expect(pairs(edges, "calls.reference")).toEqual(["src/props.ts#(module) -> src/props.ts#λ28:33"]);
   });
 });
 

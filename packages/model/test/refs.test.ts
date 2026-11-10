@@ -112,3 +112,23 @@ describe("refsOf: order and unknown ids", () => {
     expect(refsOf(scopeView(model, ""), "nope#missing")).toEqual({ calledBy: [], calls: [] });
   });
 });
+
+describe("refsOf: a spawn caller", () => {
+  it("lists the function that starts a worker as its owner, labelled with what it spawns", () => {
+    const worker = "lib/w.ts";
+    const doc: IRDocument = {
+      nodes: [
+        fileNode(A),
+        fileNode(worker),
+        fnNode(A, "main", 1),
+        fx.node(`${worker}#(module)`, "structure", "structure.function", { attrs: { name: "(module)", module: true }, parent: worker, span: fx.span(worker, 0, 0, 2, 1) }),
+        fx.node(`${A}@spawn:2:0`, "concurrency", "concurrency.spawn-thread", { parent: `${A}#main`, attrs: { api: "Worker" }, span: fx.span(A, 2, 0, 2, 9) }),
+      ],
+      edges: [fx.edge(`${A}@spawn:2:0`, `${worker}#(module)`, "concurrency", "concurrency.spawns", { attrs: { how: "thread" }, span: fx.span(A, 2, 0, 2, 9) })],
+      findings: [],
+    };
+    const m = buildProjectModel(doc);
+    const refs = refsOf(scopeView(m, "src"), `${worker}#(module)`);
+    expect(refs.calledBy.map((r) => [r.id, r.name, r.isFunction])).toEqual([[`${A}#main`, "main · spawns Worker", true]]);
+  });
+});

@@ -344,7 +344,7 @@ describe("buildExecScene", () => {
           id: "spawn:2",
           kind: "thread",
           grounded: true,
-          spawn: { node: "spawn:2", owner: "main", file: "src/app.ts", line: 7, how: "thread", status: "unresolved", candidates: false },
+          spawn: { node: "spawn:2", owner: "main", file: "src/app.ts", line: 7, how: "thread", status: "unresolved", candidates: false, api: "child_process.execFileSync" },
           roots: [],
           reach: 0,
           reached: [],
@@ -375,7 +375,7 @@ describe("buildExecScene", () => {
     });
     const s = buildExecScene(m);
     const stub = node(s, "thread:spawn:2");
-    expect(stub.label).toBe("Thread · unresolved");
+    expect(stub.label).toBe("Thread · execFileSync (app.ts:7)");
     expect(stub.children).toEqual([]);
     expect(stub.detail).toBe("0 functions");
     expect(stub.note).toBe("Spawned at src/app.ts:7. The spawn target could not be resolved.");
@@ -383,9 +383,34 @@ describe("buildExecScene", () => {
     const outside = node(s, "thread:spawn:3");
     expect(outside.note).toContain("outside this scope");
     expect(outside.note).toContain("several possible targets");
+    // An unresolved spawn has no target to connect to, so only the resolved-outside spawn draws a connector.
     expect(s.edges).toEqual([
-      { from: "thread:main>main", to: "thread:spawn:2", kind: "spawn", count: 1, how: "thread" },
       { from: "thread:main>main", to: "thread:spawn:3", kind: "spawn", count: 1, how: "process", candidate: true },
+    ]);
+  });
+
+  it("names a script-backed thread as a worker and draws its connector from the spawning thread", () => {
+    const m = model({
+      functions: [fn("main")],
+      threads: [
+        mainThread({ roots: ["main"], reached: ["main"], reach: 1 }),
+        {
+          id: "spawn:4",
+          kind: "thread",
+          grounded: true,
+          spawn: { node: "spawn:4", owner: "main", file: "src/app.ts", line: 9, how: "thread", status: "resolved", candidates: false, script: "src/worker.ts" },
+          roots: [],
+          reach: 0,
+          reached: [],
+          coroutines: [],
+          coroutineOnly: [],
+        },
+      ],
+    });
+    const s = buildExecScene(m);
+    expect(node(s, "thread:spawn:4").label).toBe("Worker · worker.ts");
+    expect(s.edges.filter((e) => e.kind === "spawn")).toEqual([
+      { from: "thread:main>main", to: "thread:spawn:4", kind: "spawn", count: 1, how: "thread" },
     ]);
   });
 

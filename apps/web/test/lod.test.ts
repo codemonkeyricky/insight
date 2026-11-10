@@ -42,10 +42,11 @@ describe("fitLabel", () => {
     expect(fitLabel("abcdefgh", 5)).toBe("abcd…");
   });
 
-  it("cuts a file-like label from the front, so the file name stays visible", () => {
-    expect(fitLabel("src/lib/ap.ts", 6)).toBe("…ap.ts");
-    expect(fitLabel("foo.bar.baz", 6)).toBe("…r.baz");
-    expect(fitLabel("packages/core/src/diff.ts", 10)).toBe("…c/diff.ts");
+  it("cuts a file-like label from the end too, so its start stays readable", () => {
+    expect(fitLabel("Worker · verify.worker.ts", 16)).toBe("Worker · verify…");
+    expect(fitLabel("src/lib/ap.ts", 6)).toBe("src/l…");
+    expect(fitLabel("foo.bar.baz", 6)).toBe("foo.b…");
+    expect(fitLabel("main.tsx", 8)).toBe("main.tsx");
   });
 
   it("returns null when fewer than 5 characters fit", () => {

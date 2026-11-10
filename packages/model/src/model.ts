@@ -96,7 +96,16 @@ export function buildProjectModel(doc: IRDocument): ProjectModel {
     if (n.kind !== "structure.function") continue;
     const file = fileOf(n.id);
     if (file === undefined) continue;
-    const name = typeof n.attrs.name === "string" ? n.attrs.name : (n.id.split("#")[1] ?? n.id);
+    // A module entry is named by its file ("verify.worker.ts · top level"), not the IR's "(module)". A method keeps its class.
+    const base = file.slice(file.lastIndexOf("/") + 1);
+    const name =
+      n.attrs.module === true
+        ? `${base} · top level`
+        : typeof n.attrs.qualifiedName === "string"
+          ? n.attrs.qualifiedName
+          : typeof n.attrs.name === "string"
+            ? n.attrs.name
+            : (n.id.split("#")[1] ?? n.id);
     const fn: FunctionEntity = {
       id: n.id,
       name,

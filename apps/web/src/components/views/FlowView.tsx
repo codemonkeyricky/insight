@@ -1,5 +1,6 @@
 import { readLambdas, writeLambdas } from "../../zoom/lambdaPref";
 import { readFlowMotion, writeFlowMotion } from "../../zoom/flowMotionPref";
+import { readRuntimeBoxes, writeRuntimeBoxes } from "../../zoom/runtimePref";
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { api, type FileEntry, type FindingRow } from "../../api";
@@ -51,8 +52,8 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
   const { showCode } = useCodeTarget();
   const kind = scopeKind(scope, files);
   /** What the map shows: frames and calls on by default, findings off until the reader turns the layer on, lambdas off (folded). */
-  const [shown, setShown] = useState<LayerState>(() => ({ frames: true, calls: true, findings: findingKind !== undefined, lambdas: readLambdas(), motion: readFlowMotion() }));
-  const exec = useMemo(() => new ExecStore(id, roots, shown.lambdas), [id, roots, shown.lambdas]);
+  const [shown, setShown] = useState<LayerState>(() => ({ frames: true, calls: true, findings: findingKind !== undefined, lambdas: readLambdas(), motion: readFlowMotion(), runtime: readRuntimeBoxes() }));
+  const exec = useMemo(() => new ExecStore(id, roots, shown.lambdas, shown.runtime), [id, roots, shown.lambdas, shown.runtime]);
   // A "Show in Flow" link for a kind turns the findings layer on, even when the flow is already open.
   useEffect(() => {
     if (findingKind !== undefined) setShown((s) => (s.findings ? s : { ...s, findings: true }));
@@ -110,9 +111,8 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
     <>
       <div className="sh-sheet">
         <div className="sh-canvas">
-          <RootsOnly id={id} scope={scope} fn={fn} roots={roots} />
           <ZoomMap
-            key={`${roots ? "roots" : "all"}-${shown.lambdas ? "lambdas" : "folded"}`}
+            key={`${roots ? "roots" : "all"}-${shown.lambdas ? "lambdas" : "folded"}-${shown.runtime ? "runtime" : "flat"}`}
             id={id}
             source={exec}
             scope={scope}
@@ -144,9 +144,10 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
               setShown((s) => ({ ...s, [key]: on }));
               if (key === "lambdas") writeLambdas(on);
               if (key === "motion") writeFlowMotion(on);
+              if (key === "runtime") writeRuntimeBoxes(on);
             }}
             onClose={() => setLayersOpen(false)}
-            roots={<RootsOnly id={id} scope={scope} fn={fn} roots={roots} className="sh-check" />}
+            roots={<RootsOnly id={id} scope={scope} fn={fn} roots={roots} />}
           />
         ) : (
           <button type="button" className="sh-card sh-layers-open" onClick={() => setLayersOpen(true)}>
@@ -164,10 +165,10 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
   );
 }
 
-/** The roots-only switch on the canvas. Turning it on or off changes the URL, and the canvas follows the URL. */
-function RootsOnly({ id, scope, fn, roots, className = "sh-roots" }: { id: string; scope: string; fn?: string; roots: boolean; className?: string }) {
+/** The roots-only switch in the Show menu. Turning it on or off changes the URL, and the canvas follows the URL. */
+function RootsOnly({ id, scope, fn, roots }: { id: string; scope: string; fn?: string; roots: boolean }) {
   return (
-    <label className={className}>
+    <label className="sh-check">
       <input
         type="checkbox"
         checked={roots}

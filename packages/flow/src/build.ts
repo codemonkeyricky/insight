@@ -5,6 +5,15 @@ import type { FlowRole, FlowSpan } from "./types.js";
 type Pos = readonly [number, number];
 const cmp = (a: Pos, b: Pos) => a[0] - b[0] || a[1] - b[1];
 
+/**
+ * The name a file's top-level code shows under: "<file basename> · top level", e.g. "main.tsx · top level". The IR names the
+ * module entry "(module)", which says nothing about which file runs.
+ */
+export function topLevelName(file: string): string {
+  const base = file.slice(file.lastIndexOf("/") + 1);
+  return `${base} · top level`;
+}
+
 /** One fact inside a function that takes part in the flow, reduced to what the chart needs. */
 interface Ev {
   type: "call" | "await" | "spawn" | "effect" | "branch" | "switch" | "arm" | "loop" | "block" | "try" | "return" | "throw" | "break" | "continue";
@@ -89,6 +98,9 @@ function toEvent(n: IRNode): Ev | undefined {
       return { ...base, type: "try", rank: RANK.try, label: "try" };
     case "flow.return":
       return { ...base, type: "return", rank: RANK.return, label: "return" };
+    case "flow.handler":
+      // A handler the code installs: a call step that opens the handler's chart.
+      return { ...base, type: "call", rank: RANK.call, label: str(a.label) || "on ▸", ...(str(a.target) ? { target: str(a.target) } : {}) };
     case "flow.throw":
       return { ...base, type: "throw", rank: RANK.throw, label: "throw" };
     case "flow.jump":
@@ -237,7 +249,9 @@ export function factsForFile(file: string, nodes: Iterable<IRNode>, edges: Itera
 
   for (const n of allNodes) {
     if (n.kind === "structure.function" && n.span?.file === file) {
-      functions.set(n.id, { id: n.id, name: String(n.attrs.qualifiedName ?? n.attrs.name ?? n.id), async: n.attrs.async === true, span: spanOf(n), items: [] });
+      // A module entry is named by its file, "<basename> · top level", not by the IR's "(module)".
+      const name = n.attrs.module === true ? topLevelName(file) : String(n.attrs.qualifiedName ?? n.attrs.name ?? n.id);
+      functions.set(n.id, { id: n.id, name, async: n.attrs.async === true, span: spanOf(n), items: [] });
     }
   }
   const add = (parent: string, ev: Ev) => {
@@ -275,7 +289,7 @@ export function factsForFile(file: string, nodes: Iterable<IRNode>, edges: Itera
   // Statements outside every function run when the module loads.
   const top = events.get(file);
   if (top && top.length > 0) {
-    out.push({ id: file, name: "(module)", async: false, items: convertAll(nest(top)) });
+    out.push({ id: file, name: topLevelName(file), async: false, items: convertAll(nest(top)) });
   }
   return out.sort((a, b) => (a.span ? a.span.start[0] : 0) - (b.span ? b.span.start[0] : 0) || a.name.localeCompare(b.name));
 }

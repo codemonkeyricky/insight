@@ -31,6 +31,15 @@ export const EXEC_LEVELS: Record<string, SceneLevel> = {
   function: { box: { w: ZOOM_SIZE.fn.w, h: ZOOM_SIZE.fn.h } },
 };
 
+/**
+ * Whether a thread has a box in the scene: the IR grounds it. A model saved before the grounded field existed grounds a
+ * main thread only when a root is named `main`, and every other thread.
+ */
+export function isGroundedThread(t: ExecThread, nameOf: (fnId: string) => string | undefined): boolean {
+  const flag = (t as { grounded?: boolean }).grounded;
+  return flag ?? (t.kind !== "main" || t.roots.some((r) => nameOf(r) === "main"));
+}
+
 export function execThreadId(threadId: string): string {
   return `thread:${threadId}`;
 }
@@ -117,7 +126,8 @@ export function buildExecScene(model: ExecModel): Scene {
       node.chart = { w: f.chart[0], h: f.chart[1] };
       node.compact = { w: Math.max(90, 8 * f.name.length + 24), h: 36 };
     }
-    if (f.file !== "") node.detail = `${f.file}:${f.line}`;
+    // A module entry is named by its file, so its subtitle says it is the file's top-level code.
+    if (f.file !== "") node.detail = f.module ? `top level · ${f.file}:${f.line}` : `${f.file}:${f.line}`;
     const n = note ?? (f.anonymous ? anonymousNote(f) : undefined);
     if (n !== undefined) node.note = n;
     addNode(node);
@@ -147,12 +157,7 @@ export function buildExecScene(model: ExecModel): Scene {
   };
   addNode(root);
 
-  // A model saved before the grounded field existed: a main thread is grounded only when a root is named `main`, and
-  // every other thread is grounded.
-  const isGrounded = (t: ExecThread): boolean => {
-    const flag = (t as { grounded?: boolean }).grounded;
-    return flag ?? (t.kind !== "main" || t.roots.some((r) => fns.get(r)?.name === "main"));
-  };
+  const isGrounded = (t: ExecThread): boolean => isGroundedThread(t, (id) => fns.get(id)?.name);
   const grounded = model.threads.filter(isGrounded);
   // The grounded threads that reach each function, in thread order: a spawn's spawner is the first one of them.
   const reachers = new Map<string, ExecThread[]>();
@@ -190,17 +195,33 @@ export function buildExecScene(model: ExecModel): Scene {
     return id;
   };
   const programBox = (p: ExecProgram): string => {
-    const main = p.main !== undefined ? nameOf(p.main) : undefined;
     const shared = p.threads.filter((t) => (listedBy.get(t) ?? 0) > 1).length;
-    const parts = [`Built from ${plural(p.files.length, "file")}.`, main !== undefined ? `Main function: ${main}.` : "No main function in the IR."];
+    const parts = [`Built from ${plural(p.files.length, "file")}.`];
+    if (p.kind !== undefined) {
+      // An entry program: its name says what runs, and its threads are its page script and its workers.
+      const entries = (p.entries ?? []).map((id) => basename(fns.get(id)?.file ?? id));
+      parts.push(`${p.kind === "browser" ? "Page scripts" : "Entry script"}: ${entries.join(", ")}.`);
+    } else {
+      const main = p.main !== undefined ? nameOf(p.main) : undefined;
+      parts.push(main !== undefined ? `Main function: ${main}.` : "No main function in the IR.");
+    }
     if (shared > 0) parts.push(`Shares ${plural(shared, "thread")} with other programs.`);
-    return addProcess(execProgramId(p.id), p.name, p.targetKind, parts.join(" "));
+    const label = p.kind === "browser" ? `Browser · ${p.name}` : p.kind === "node" ? `Node · ${basename(p.name)}` : p.name;
+    const named = p.kind === undefined ? label : `${label} — ${plural(p.threads.length, "thread")}`;
+    return addProcess(execProgramId(p.id), named, p.kind === undefined ? p.targetKind : "", parts.join(" "));
   };
 
   const threadName = (t: ExecThread): string => {
     const first = t.roots[0];
     if (first !== undefined && fns.has(first)) return nameOf(first);
-    return t.spawn?.script !== undefined && t.spawn.script !== "" ? basename(t.spawn.script) : "unresolved";
+    if (t.spawn?.script !== undefined && t.spawn.script !== "") return basename(t.spawn.script);
+    // No target is known: name the spawn by its API and call site, so the box says what starts the thread.
+    const s = t.spawn;
+    if (s === undefined) return "unresolved";
+    const api = s.api !== undefined && s.api !== "" ? (s.api.split(".").pop() ?? s.api) : undefined;
+    const site = s.file !== "" && s.line > 0 ? `${basename(s.file)}:${s.line}` : undefined;
+    if (api === undefined) return site ?? "unresolved";
+    return site !== undefined ? `${api} (${site})` : api;
   };
 
   // The process box a grounded thread's box sits in, made when first asked. Undefined when the box sits on the project.
@@ -363,25 +384,20 @@ export function buildExecScene(model: ExecModel): Scene {
     }
   }
 
+  // A spawn draws from the spawning site to the thread it creates. The site is the owner's card in the thread that runs
+  // the owner (the spawner), else the owner's card on the project. An unresolved spawn has no target, so it draws nothing.
   for (const t of model.threads) {
-    const owner = t.spawn?.owner;
-    if (t.spawn === undefined || owner === undefined) continue;
+    const spawn = t.spawn;
+    const owner = spawn?.owner;
+    if (spawn === undefined || owner === undefined || spawn.status === "unresolved") continue;
     const byThread = placements.get(owner);
     if (byThread === undefined) continue;
-    let from: string | undefined;
-    for (const other of model.threads) {
-      const k = execThreadId(other.id);
-      const p = byThread.get(k);
-      if (p !== undefined) {
-        from = pick(p, k, k);
-        break;
-      }
-    }
-    if (from === undefined) {
-      const p = byThread.get(rootId);
-      if (p !== undefined) from = pick(p, rootId, rootId);
-    }
-    if (from !== undefined) addEdge(from, execThreadId(t.id), "spawn", t.spawn.how, t.spawn.candidates);
+    const spawner = spawnerOf(t);
+    const p = spawner !== undefined ? byThread.get(execThreadId(spawner.id)) : undefined;
+    const from = p !== undefined ? pick(p, execThreadId(spawner?.id ?? ""), execThreadId(spawner?.id ?? "")) : undefined;
+    const onProject = byThread.get(rootId);
+    const fromRoot = from ?? (onProject !== undefined ? pick(onProject, rootId, rootId) : undefined);
+    if (fromRoot !== undefined && nodes.has(execThreadId(t.id))) addEdge(fromRoot, execThreadId(t.id), "spawn", spawn.how, spawn.candidates);
   }
 
   // Sync edges, one per resource and thread pair. The site is the first one of the right op that a thread runs; a
@@ -441,7 +457,17 @@ export function buildExecScene(model: ExecModel): Scene {
   return { root: rootId, nodes, edges: edgeList, levels: EXEC_LEVELS };
 
   function threadNode(t: ExecThread, id: string, parent: string): SceneNode {
-    const label = t.kind === "main" || t.kind === "process" ? "Main thread" : `${KIND_LABEL[t.kind] ?? t.kind} · ${threadName(t)}`;
+    const script = t.spawn?.script;
+    // A thread that runs a script file is a worker: named by its file, the way a worker is named in the IR. A browser Worker
+    // runs its file's module entry, so its file is the module root's file.
+    const moduleFile = t.roots.map((r) => fns.get(r)).find((f) => f?.module === true)?.file;
+    const workerFile = script !== undefined && script !== "" ? script : t.spawn?.api === "Worker" ? moduleFile : undefined;
+    const label =
+      t.kind === "main" || t.kind === "process"
+        ? "Main thread"
+        : workerFile !== undefined && workerFile !== ""
+          ? `Worker · ${basename(workerFile)}`
+          : `${KIND_LABEL[t.kind] ?? t.kind} · ${threadName(t)}`;
     const node: SceneNode = {
       id,
       kind: "thread",

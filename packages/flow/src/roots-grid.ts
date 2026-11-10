@@ -2,7 +2,7 @@
 // grid leaves room the map's own controls take (the title chip and the key plan at the bottom right, the Show button at the
 // top left, the roots switch at the bottom left), so no card sits under them at the default fit. Pure, so it is unit tested.
 import type { Scene, SceneLayout } from "./scene.js";
-import type { ContainerLayout, Slot } from "./zoom-layout.js";
+import type { ContainerLayout, Size, Slot } from "./zoom-layout.js";
 
 /** A card's height: one name line and one file line. */
 export const CARD_H = 56;
@@ -28,10 +28,18 @@ export function cardWidth(label: string): number {
 }
 
 /**
- * The roots-only layout of a flat scene: the root's children are the cards, wrapped in rows of at most CARD_WRAP_W, in
- * the order the scene lists them. The root's container is the grid plus the padding above. Deterministic.
+ * The room an opened card takes beyond its own box, for the expansions drawn beside it: the width from the card's right
+ * edge and the height from its top. A card with no entry takes only its own box. The web computes these from the open
+ * expansions (footprintOf in apps/web/src/zoom/expand.ts).
  */
-export function gridRootsLayout(scene: Scene): SceneLayout {
+export type Footprint = ReadonlyMap<string, Size>;
+
+/**
+ * The roots-only layout of a flat scene: the root's children are the cards, wrapped in rows of at most CARD_WRAP_W, in
+ * the order the scene lists them. The root's container is the grid plus the padding above. A card's slot is its own box;
+ * the room in `footprint` is kept clear beside it, so the next card starts past it. Deterministic.
+ */
+export function gridRootsLayout(scene: Scene, footprint?: Footprint): SceneLayout {
   const rootNode = scene.nodes.get(scene.root);
   const kids = rootNode?.children ?? [];
   const slots: Slot[] = [];
@@ -42,17 +50,20 @@ export function gridRootsLayout(scene: Scene): SceneLayout {
   for (const id of kids) {
     const n = scene.nodes.get(id);
     const w = cardWidth(n?.label ?? id);
-    if (x > 0 && x + w > CARD_WRAP_W) {
+    const room = footprint?.get(id);
+    const outerW = w + (room?.w ?? 0);
+    const outerH = Math.max(CARD_H, room?.h ?? 0);
+    if (x > 0 && x + outerW > CARD_WRAP_W) {
       y += rowH + CARD_GAP;
       x = 0;
       rowH = 0;
     }
     slots.push({ id, x: CARD_PAD_SIDE + x, y: CARD_PAD_TOP + y, w, h: CARD_H });
-    x += w + CARD_GAP;
-    rowH = CARD_H;
+    x += outerW + CARD_GAP;
+    rowH = Math.max(rowH, outerH);
     width = Math.max(width, x - CARD_GAP);
   }
-  const height = kids.length === 0 ? 0 : y + CARD_H;
+  const height = kids.length === 0 ? 0 : y + rowH;
   const container: ContainerLayout = {
     w: CARD_PAD_SIDE + Math.max(width, 0) + CARD_PAD_SIDE,
     h: CARD_PAD_TOP + height + CARD_PAD_BOTTOM,

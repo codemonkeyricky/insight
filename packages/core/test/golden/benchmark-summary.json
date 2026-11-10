@@ -100,7 +100,7 @@
     {
       "id": "lens-calls",
       "status": "ok",
-      "findings": 365
+      "findings": 364
     },
     {
       "id": "lens-concurrency-map",

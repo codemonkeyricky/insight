@@ -51,6 +51,11 @@ export interface ExecFunctionRef {
   noise?: true;
   /** Set for an anonymous function: a function expression, arrow function or lambda with no declaration of its own. */
   anonymous?: true;
+  /**
+   * Set for a file's module entry, `<file>#(module)`: the code the file runs when it loads. An entry module of an HTML page
+   * or of a file no project file imports is a main root (see `execModel`).
+   */
+  module?: true;
   /** For an anonymous function, the function, or the file for module-level code, it is written in. */
   parent?: string;
   /** How the function runs. See ExecRuntime. */
@@ -76,6 +81,8 @@ export interface ExecSpawn {
   candidates: boolean;
   /** The script file a worker runs. Its top-level code starts the thread, so its roots are the functions that code calls. */
   script?: string;
+  /** The API the spawn calls, as the IR names it (for example "Worker" or "child_process.execFileSync"). */
+  api?: string;
 }
 
 /** A function that a thread awaits or starts. */
@@ -134,15 +141,28 @@ export interface ExecDispatch {
  * libraries are not programs. Only targets with a file inside the scope are listed.
  */
 export interface ExecProgram {
-  /** The build target's node id. */
+  /** The build target's node id, or `entry:browser` and `entry:node:<file>` for a program an entry makes. */
   id: string;
   name: string;
-  /** The rule or command, such as `cc_binary`, `py_binary` or `add_executable`. */
+  /**
+   * The rule or command, such as `cc_binary`, `py_binary` or `add_executable`. An entry program says `html-entry` (a
+   * browser page) or `node-entry` (a Node script).
+   */
   targetKind: string;
-  /** The files the target contains, sorted. Not limited to the scope. */
+  /** The files the target contains, sorted. Not limited to the scope. For an entry program, the files it imports, transitively. */
   files: string[];
   /** The id of a function named `main` defined in one of the program's files (first by id), when the IR has one. */
   main?: string;
+  /**
+   * Set for a program an entry makes (see `entries`): "browser" for the page scripts of index.html, "node" for one Node
+   * script. Absent for a build target.
+   */
+  kind?: "browser" | "node";
+  /**
+   * The module entries that start the program's main thread. A browser program holds every page script of index.html;
+   * a Node program holds its one script. Absent for a build target, whose main is `main`.
+   */
+  entries?: string[];
   /**
    * The threads that belong to the program: its own main thread (`main:<id>`) when it has `main`, then every spawn thread
    * whose spawn lies in one of its files or in a function its main thread reaches. A thread can belong to several programs.
@@ -262,6 +282,12 @@ interface Fn {
   noise: boolean;
   anonymous: boolean;
   parent: string | undefined;
+  /** A file's module entry. See ExecFunctionRef.module. */
+  module: boolean;
+  /** A module entry an HTML page loads with a script tag. */
+  htmlEntry: boolean;
+  /** A module entry of a Node script (see the frontend's nodeEntry). Only an entry when no project file imports it. */
+  nodeEntry: boolean;
 }
 
 interface Dispatch {
@@ -304,6 +330,9 @@ const RESOURCE_SITES: Readonly<Record<string, { kind: ExecResource["kind"]; op: 
   "concurrency.channel-send": { kind: "channel", op: "send", attr: "channel" },
   "concurrency.channel-recv": { kind: "channel", op: "recv", attr: "channel" },
 };
+
+/** The last path segment of a file: the name a module entry's card shows, with its "top level" tag beside it. */
+const basenameOf = (file: string): string => file.slice(file.lastIndexOf("/") + 1);
 
 /** Code-unit order, so sorts do not depend on the locale. */
 const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -379,13 +408,16 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     if (fold && anonymous) continue;
     fns.set(n.id, {
       id: n.id,
-      name: strAttr(n.attrs, "name") ?? (n.id.split("#")[1] ?? n.id),
+      name: n.attrs?.module === true && file !== undefined ? basenameOf(file) : (strAttr(n.attrs, "name") ?? (n.id.split("#")[1] ?? n.id)),
       file,
       line: n.span ? n.span.start[0] + 1 : 0,
       inScope: file !== undefined && insideScope(file, scope),
       noise: file !== undefined && isNoisePath(file),
       anonymous,
       parent: anonymous ? n.parent : undefined,
+      module: n.attrs?.module === true,
+      htmlEntry: n.attrs?.htmlEntry === true,
+      nodeEntry: n.attrs?.nodeEntry === true,
     });
   }
 
@@ -568,14 +600,76 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       threads: [],
     });
   }
+  // Entry programs. A TS project has no build targets, so its programs come from its entries. Every index.html script is
+  // a page script of ONE browser program, and each Node script that no project file imports is a program of its own. A
+  // program's files are what its entries import, transitively. Test, fixture and sample files are never entries.
+  const scriptFiles = new Set<string>();
+  for (const { e, ids } of keyed) {
+    if (e.kind === "concurrency.spawns") for (const id of ids) scriptFiles.add(fileOf(id) ?? id);
+  }
+  const importedFiles = new Set<string>();
+  const importsOf = new Map<string, string[]>();
+  for (const e of edges) {
+    if (e.kind !== "packaging.import" && e.kind !== "packaging.re-export") continue;
+    for (const to of edgeTargets(e).nodes) {
+      if (to === e.from) continue;
+      importedFiles.add(to);
+      push(importsOf, e.from, to);
+    }
+  }
+  const entryFns = [...fns.values()].filter(
+    (f) => f.module && f.inScope && f.file !== undefined && !isNoisePath(f.file) && !f.file.endsWith(".d.ts") && !scriptFiles.has(f.file),
+  );
+  const browserFns = entryFns.filter((f) => f.htmlEntry);
+  const nodeFns = entryFns
+    .filter((f) => !f.htmlEntry && f.nodeEntry && !importedFiles.has(f.file ?? ""))
+    .sort((a, b) => byText(a.file ?? "", b.file ?? ""));
+  const entryMode = browserFns.length > 0 || nodeFns.length > 0;
+  const closureOf = (start: readonly string[]): string[] => [...reachBy(start, (f) => importsOf.get(f) ?? [])].sort(byText);
+  if (browserFns.length > 0) {
+    programs.push({
+      id: "entry:browser",
+      name: "index.html",
+      targetKind: "html-entry",
+      files: closureOf(browserFns.map((f) => f.file ?? "")),
+      kind: "browser",
+      entries: browserFns.map((f) => f.id).sort(byText),
+      threads: [],
+    });
+  }
+  for (const f of nodeFns) {
+    const file = f.file ?? "";
+    programs.push({ id: `entry:node:${file}`, name: file, targetKind: "node-entry", files: closureOf([file]), kind: "node", entries: [f.id], threads: [] });
+  }
   programs.sort((a, b) => byText(a.id, b.id));
   const programMains = new Set(programs.flatMap((p) => (p.main !== undefined ? [p.main] : [])));
 
+  // Without any entry, the fallback roots stand: every unreferenced function, and a module entry that no project file
+  // imports (or an HTML page loads). With entries, only the entries are roots: an unreferenced function runs on no thread.
+  const fallbackEntryModules = entryMode
+    ? []
+    : [...fns.values()]
+        .filter(
+          (f) =>
+            f.module &&
+            f.inScope &&
+            (scopeNoise || !f.noise) &&
+            f.file !== undefined &&
+            !f.file.endsWith(".d.ts") &&
+            !scriptFiles.has(f.file) &&
+            (f.htmlEntry || !importedFiles.has(f.file)),
+        )
+        .map((f) => f.id);
+
   // An anonymous function is never a main root: whatever runs it is its creator, a spawn or a dispatch.
-  const mainRoots = [...fns.values()]
-    .filter((f) => f.inScope && !f.anonymous && !referenced.has(f.id) && (scopeNoise || !f.noise) && !programMains.has(f.id))
-    .map((f) => f.id)
-    .sort(byText);
+  const mainRoots = entryMode
+    ? []
+    : [
+        ...[...fns.values()]
+          .filter((f) => f.inScope && !f.anonymous && !f.module && !referenced.has(f.id) && (scopeNoise || !f.noise) && !programMains.has(f.id))
+          .map((f) => f.id),
+        ...fallbackEntryModules,
+      ].sort(byText);
   const planOf = (kind: ExecThreadKind, id: string, roots: string[], spawn?: ExecSpawn): Plan => ({
     kind,
     id,
@@ -585,11 +679,14 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     plain: reachBy(roots, plainNeighbours),
     coroutines: coroutinesOf(roots),
   });
-  const plans: Plan[] = [planOf("main", "main", mainRoots)];
+  // The general main thread exists only without entries. Each program has its own main thread: from its `main` function,
+  // or from its entry modules.
+  const plans: Plan[] = entryMode ? [] : [planOf("main", "main", mainRoots)];
   const programPlans = new Map<string, Plan>();
   for (const p of programs) {
-    if (p.main === undefined) continue;
-    const plan = planOf("main", `main:${p.id}`, [p.main]);
+    const roots = p.main !== undefined ? [p.main] : (p.entries ?? []);
+    if (roots.length === 0) continue;
+    const plan = planOf("main", `main:${p.id}`, roots);
     programPlans.set(p.id, plan);
     plans.push(plan);
   }
@@ -626,6 +723,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       candidates: s?.candidates ?? false,
       ...(n.parent !== undefined ? { owner: foldId(n.parent) } : {}),
       ...(script !== undefined ? { script } : {}),
+      ...(strAttr(n.attrs, "api") !== undefined ? { api: strAttr(n.attrs, "api") } : {}),
     };
     plans.push(planOf(how, n.id, rootList, spawn));
   }
@@ -688,6 +786,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       inScope: fn.inScope,
       ...(fn.noise ? { noise: true as const } : {}),
       ...(fn.anonymous ? { anonymous: true as const, ...(fn.parent !== undefined ? { parent: fn.parent } : {}) } : {}),
+      ...(fn.module ? { module: true as const } : {}),
       runtime: runtimeOf(id),
       ...(chart !== undefined ? { chart } : {}),
     });
@@ -707,8 +806,8 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       if (!take(co.target)) continue;
       coroutines.push({ ...co, callees: co.callees.filter(take) });
     }
-    // A main thread is grounded when a root is a program's main or a function named `main`; a spawn always is.
-    const grounded = p.kind !== "main" || p.roots.some((r) => programMains.has(r) || fns.get(r)?.name === "main");
+    // A main thread is grounded when a root is a program's main, a function named `main`, or a module entry; a spawn always is.
+    const grounded = p.kind !== "main" || p.roots.some((r) => programMains.has(r) || fns.get(r)?.name === "main" || fns.get(r)?.module === true);
     return {
       id: p.id,
       kind: p.kind,
