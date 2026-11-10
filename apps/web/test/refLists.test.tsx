@@ -54,3 +54,12 @@ describe("reverse reference lists", () => {
     });
   });
 });
+
+describe("reverse reference lists: message edges", () => {
+  it("labels a dispatch row with how message as message", () => {
+    const msg = renderToStaticMarkup(
+      <RefLists id="p1" scope="packages/model" roots={false} refs={{ calledBy: [], calls: [row({ kind: "dispatch", how: "message", name: "onPageMsg" })] }} />,
+    );
+    expect(msg).toContain('<span class="kind dispatch">message</span>');
+  });
+});

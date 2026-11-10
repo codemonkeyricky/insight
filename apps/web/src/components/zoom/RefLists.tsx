@@ -105,7 +105,7 @@ function RefItem({ id, scope, roots, row }: Base & { row: RefRow }) {
       {row.kind !== "call" && (
         <>
           {" "}
-          <span className={`kind ${row.kind}`}>{row.kind}</span>
+          <span className={`kind ${row.kind}`}>{row.kind === "dispatch" && row.how === "message" ? "message" : row.kind}</span>
         </>
       )}
       {row.count > 1 && <span className="muted small"> ×{row.count}</span>}

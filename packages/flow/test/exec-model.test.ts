@@ -985,3 +985,45 @@ describe("execModel: locks and channels", () => {
     expect(model.stats).toMatchObject({ locks: 0, channels: 0 });
   });
 });
+
+describe("execModel: message dispatches cross threads", () => {
+  // The page runs `main`, which posts to a worker it spawns from src/worker.ts, and listens for the worker's reply.
+  // The worker's module code installs `onWorkerMsg` and the page's `main` installs `onPageMsg`. Each handler belongs
+  // to its own side's thread, and a message edge in either direction must not move it to the other thread.
+  const nodes = [
+    fnNode("src/page.ts", "main", 0),
+    fnNode("src/page.ts", "send", 4),
+    fnNode("src/page.ts", "onPageMsg", 8),
+    spawnNode("src/page.ts", 3, "src/page.ts#main"),
+    fnNode("src/worker.ts", "onWorkerMsg", 0),
+    fnNode("src/worker.ts", "reply", 4),
+  ];
+  const edges = [
+    callEdge("src/page.ts#main", "src/page.ts#send", "src/page.ts", 1),
+    callEdge("src/page.ts#main", "src/page.ts#onPageMsg", "src/page.ts", 2),
+    spawnEdge("src/page.ts", 3, "src/worker.ts"),
+    callEdge("src/worker.ts", "src/worker.ts#onWorkerMsg", "src/worker.ts", 0),
+    callEdge("src/worker.ts#onWorkerMsg", "src/worker.ts#reply", "src/worker.ts", 5),
+    dispatchEdge("src/page.ts#send", "src/worker.ts#onWorkerMsg", "message", "src/page.ts", 5),
+    dispatchEdge("src/worker.ts#reply", "src/page.ts#onPageMsg", "message", "src/worker.ts", 6),
+  ];
+  const model = execModel(nodes, edges, "src");
+  const workerThread = spawnId("src/page.ts", 3);
+  const reachedBy = (thread: string) => model.threads.find((t) => t.id === thread)?.reached ?? [];
+
+  it("keeps each handler in its own side's thread", () => {
+    expect(reachedBy("main")).toContain("src/page.ts#onPageMsg");
+    expect(reachedBy("main")).not.toContain("src/worker.ts#onWorkerMsg");
+    expect(reachedBy("main")).not.toContain("src/worker.ts#reply");
+    expect(reachedBy(workerThread)).toContain("src/worker.ts#onWorkerMsg");
+    expect(reachedBy(workerThread)).toContain("src/worker.ts#reply");
+    expect(reachedBy(workerThread)).not.toContain("src/page.ts#onPageMsg");
+    expect(reachedBy(workerThread)).not.toContain("src/page.ts#send");
+  });
+
+  it("still lists the message edges as dispatches, with how message", () => {
+    expect(model.dispatches.filter((d) => d.how === "message")).toHaveLength(2);
+    expect(runtimeIn(model, "src/worker.ts#onWorkerMsg")).toBe("thread");
+    expect(runtimeIn(model, "src/page.ts#onPageMsg")).toBe("thread");
+  });
+});

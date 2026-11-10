@@ -352,6 +352,9 @@ function strAttr(attrs: Readonly<Record<string, unknown>> | undefined, key: stri
 /** Await and start make a coroutine. The other dispatches run on the dispatching thread. */
 const isCoroutine = (how: ExecDispatchHow): boolean => how === "await" || how === "start";
 
+/** A message crosses to another thread, so the thread that posts it does not run its handler. */
+const crossesThread = (how: ExecDispatchHow): boolean => how === "message";
+
 /** A sort key that covers everything the model reads from an edge, so the order is fixed by content alone. */
 function edgeKey(e: IREdge): string {
   return [e.kind, e.from, JSON.stringify(e.to), e.span?.file ?? "", e.span?.start.join(":") ?? "", JSON.stringify(e.attrs ?? {})].join("\0");
@@ -511,12 +514,16 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     for (const to of closureOut.get(id) ?? []) if (!boundary.has(to)) out.push(to);
     return out;
   };
-  /** Full reach: calls, closures and every dispatch. Spawns start other threads, so they are not followed. */
-  const neighbours = (id: string): string[] => [...callsOf(id), ...(dispatchOut.get(id) ?? []).flatMap((d) => d.targets)];
+  /**
+   * Full reach: calls, closures and every same-thread dispatch. Spawns start other threads, so they are not followed,
+   * and a message is not followed either: its handler runs on the other side of a Web Worker boundary, in the thread
+   * that its own spawn or program root gives it.
+   */
+  const neighbours = (id: string): string[] => [...callsOf(id), ...(dispatchOut.get(id) ?? []).filter((d) => !crossesThread(d.how)).flatMap((d) => d.targets)];
   /** Plain reach: the same, except that awaited and started coroutines are left out, since they are not run on the thread's own. */
   const plainNeighbours = (id: string): string[] => [
     ...callsOf(id),
-    ...(dispatchOut.get(id) ?? []).filter((d) => !isCoroutine(d.how)).flatMap((d) => d.targets),
+    ...(dispatchOut.get(id) ?? []).filter((d) => !isCoroutine(d.how) && !crossesThread(d.how)).flatMap((d) => d.targets),
   ];
 
   /**
@@ -539,6 +546,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
           }
         }
         for (const d of dispatchOut.get(cur) ?? []) {
+          if (crossesThread(d.how)) continue;
           for (const target of d.targets) {
             if (isCoroutine(d.how)) {
               const known = byTarget.get(target);

@@ -2,7 +2,7 @@
 // execution canvas's layout and focus live in execStore.ts; the function panel asks this store for a function's chart.
 import { type FunctionFlow, type ScopeFlow } from "@insight/flow";
 import { api } from "../api";
-import { fileOfId } from "../flowTargets";
+import { fileOfId, isPostStep, messageReceivers, withMessageTargets, type MessageReceiver } from "../flowTargets";
 
 export class ZoomStore {
   private readonly id: string;
@@ -10,6 +10,7 @@ export class ZoomStore {
   private scopeLoads = new Map<string, Promise<void>>();
   private fns = new Map<string, FunctionFlow>();
   private fileLoads = new Map<string, Promise<void>>();
+  private messages = new Map<string, Promise<FunctionFlow>>();
 
   constructor(id: string) {
     this.id = id;
@@ -20,10 +21,46 @@ export class ZoomStore {
     return this.flows.get(scope);
   }
 
-  /** A function's chart, loading its file's charts if needed. Undefined when the snapshot has no such function. */
+  /**
+   * A function's chart, loading its file's charts if needed. Undefined when the snapshot has no such function. A chart with
+   * a postMessage step names the handler the message reaches (see withMessageTargets).
+   */
   async chartOf(fnId: string): Promise<FunctionFlow | undefined> {
     await this.ensureFunction(fnId);
-    return this.fns.get(fnId);
+    const fn = this.fns.get(fnId);
+    if (fn === undefined || !fn.nodes.some(isPostStep)) return fn;
+    return this.messaged(fnId, fn);
+  }
+
+  /** The chart with its message steps pointed at their receivers, loaded once per function. */
+  private messaged(fnId: string, fn: FunctionFlow): Promise<FunctionFlow> {
+    let load = this.messages.get(fnId);
+    if (load === undefined) {
+      load = this.receiversOf(fnId).then(
+        (receivers) => withMessageTargets(fn, receivers),
+        () => {
+          this.messages.delete(fnId);
+          return fn;
+        },
+      );
+      this.messages.set(fnId, load);
+    }
+    return load;
+  }
+
+  /** The functions a function posts messages to, named as their own charts name them. Reads the project's references. */
+  private async receiversOf(fnId: string): Promise<MessageReceiver[]> {
+    const refs = await api.getRefs(this.id, "", fnId);
+    return Promise.all(
+      messageReceivers(refs.calls).map(async (r) => {
+        try {
+          await this.ensureFunction(r.id);
+        } catch {
+          return r;
+        }
+        return { id: r.id, name: this.fns.get(r.id)?.name ?? r.name };
+      }),
+    );
   }
 
   ensureScope(path: string): Promise<void> {
