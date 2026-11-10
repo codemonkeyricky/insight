@@ -367,25 +367,20 @@ export function buildExecScene(model: ExecModel): Scene {
     }
   }
 
+  // A spawn draws from the spawning site to the thread it creates. The site is the owner's card in the thread that runs
+  // the owner (the spawner), else the owner's card on the project. An unresolved spawn has no target, so it draws nothing.
   for (const t of model.threads) {
-    const owner = t.spawn?.owner;
-    if (t.spawn === undefined || owner === undefined) continue;
+    const spawn = t.spawn;
+    const owner = spawn?.owner;
+    if (spawn === undefined || owner === undefined || spawn.status === "unresolved") continue;
     const byThread = placements.get(owner);
     if (byThread === undefined) continue;
-    let from: string | undefined;
-    for (const other of model.threads) {
-      const k = execThreadId(other.id);
-      const p = byThread.get(k);
-      if (p !== undefined) {
-        from = pick(p, k, k);
-        break;
-      }
-    }
-    if (from === undefined) {
-      const p = byThread.get(rootId);
-      if (p !== undefined) from = pick(p, rootId, rootId);
-    }
-    if (from !== undefined) addEdge(from, execThreadId(t.id), "spawn", t.spawn.how, t.spawn.candidates);
+    const spawner = spawnerOf(t);
+    const p = spawner !== undefined ? byThread.get(execThreadId(spawner.id)) : undefined;
+    const from = p !== undefined ? pick(p, execThreadId(spawner?.id ?? ""), execThreadId(spawner?.id ?? "")) : undefined;
+    const onProject = byThread.get(rootId);
+    const fromRoot = from ?? (onProject !== undefined ? pick(onProject, rootId, rootId) : undefined);
+    if (fromRoot !== undefined && nodes.has(execThreadId(t.id))) addEdge(fromRoot, execThreadId(t.id), "spawn", spawn.how, spawn.candidates);
   }
 
   // Sync edges, one per resource and thread pair. The site is the first one of the right op that a thread runs; a
@@ -445,7 +440,14 @@ export function buildExecScene(model: ExecModel): Scene {
   return { root: rootId, nodes, edges: edgeList, levels: EXEC_LEVELS };
 
   function threadNode(t: ExecThread, id: string, parent: string): SceneNode {
-    const label = t.kind === "main" || t.kind === "process" ? "Main thread" : `${KIND_LABEL[t.kind] ?? t.kind} · ${threadName(t)}`;
+    const script = t.spawn?.script;
+    // A thread that runs a script file is a worker: named by its file, the way a worker is named in the IR.
+    const label =
+      t.kind === "main" || t.kind === "process"
+        ? "Main thread"
+        : script !== undefined && script !== ""
+          ? `Worker · ${basename(script)}`
+          : `${KIND_LABEL[t.kind] ?? t.kind} · ${threadName(t)}`;
     const node: SceneNode = {
       id,
       kind: "thread",
