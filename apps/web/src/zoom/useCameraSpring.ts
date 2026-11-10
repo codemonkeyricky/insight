@@ -1,10 +1,13 @@
-// The zoom map's camera motion: a critically damped spring on each camera axis (x, y and log scale), stepped every frame and
-// written through `apply`. A move starts from where the camera is and carries its velocity, so a move in flight can be
-// retargeted or stopped without a jump. Reduced motion cuts instead. Nothing here reads a gesture: the map decides when to
-// move, and calls `stop` when the user takes the camera back.
+// The zoom map's camera motion. A move the map makes (`to`) is a 260 ms eased tween from where the camera is, on the map's
+// one curve (see tween.ts), so it reads with the boxes and details that move with it. A fling keeps the critically damped
+// spring on each camera axis (x, y and log scale): it carries its release velocity and settles on the projected distance.
+// Either move is written through `apply` every frame. A move in flight can be retargeted or stopped without a jump, and
+// reduced motion cuts instead. Nothing here reads a gesture: the map decides when to move, and calls `stop` when the user
+// takes the camera back.
 import { useEffect, useMemo, useRef } from "react";
 import type { Camera } from "@insight/flow";
 import { advance, atRest, momentumOffset, type Spring } from "./spring";
+import { cameraBetween, progressAt } from "./tween";
 
 /** Where a spring counts as settled: a camera translation under this many px, a scale under this in log terms. */
 const REST_PX = 0.05;
@@ -31,6 +34,8 @@ interface Axes {
 interface State {
   axes?: Axes;
   target?: Camera;
+  /** A tween in flight: it starts at `from` (where the camera was when it was asked for) and reaches `to` after TWEEN_MS. */
+  tween?: { from: Camera; to: Camera; start?: number };
   frame?: number;
   last: number;
 }
@@ -58,12 +63,26 @@ export function useCameraSpring(getCamera: () => Camera, apply: (c: Camera) => v
       s.frame = undefined;
       s.axes = undefined;
       s.target = undefined;
+      s.tween = undefined;
       s.last = 0;
     };
 
     const frame = (now: number) => {
       const s = st.current;
       s.frame = undefined;
+      if (s.tween !== undefined) {
+        const tw = s.tween;
+        if (tw.start === undefined) tw.start = now;
+        const p = progressAt(tw.start, now);
+        if (p >= 1) {
+          s.tween = undefined;
+          applyRef.current(tw.to);
+          return;
+        }
+        applyRef.current(cameraBetween(tw.from, tw.to, p));
+        s.frame = requestAnimationFrame(frame);
+        return;
+      }
       const { axes, target } = s;
       if (axes === undefined || target === undefined) return;
       const dt = s.last === 0 ? 1 / 60 : Math.min(MAX_FRAME_S, (now - s.last) / 1000);
@@ -95,6 +114,8 @@ export function useCameraSpring(getCamera: () => Camera, apply: (c: Camera) => v
         k: { value: Math.log(cur.k), velocity: prev?.k.velocity ?? 0, carry: prev?.k.carry ?? 0 },
       };
       s.target = target;
+      // A fling takes over from a tween in flight: the spring carries the camera from where it is now.
+      s.tween = undefined;
       if (s.frame === undefined) {
         s.last = 0;
         s.frame = requestAnimationFrame(frame);
@@ -108,9 +129,13 @@ export function useCameraSpring(getCamera: () => Camera, apply: (c: Camera) => v
           applyRef.current(target);
           return;
         }
-        // A retarget keeps the velocity it had in flight, so the camera turns without a jerk.
-        const v = st.current.axes;
-        run(target, { x: v?.x.velocity ?? 0, y: v?.y.velocity ?? 0 });
+        // A retarget starts from the camera as it is drawn now, so an interrupted move does not jump; the clock restarts.
+        const s = st.current;
+        s.axes = undefined;
+        s.target = undefined;
+        s.tween = { from: getRef.current(), to: target };
+        if (s.frame !== undefined) cancelAnimationFrame(s.frame);
+        s.frame = requestAnimationFrame(frame);
       },
       fling(vx, vy) {
         if (reduced() || (Math.abs(vx) < 1 && Math.abs(vy) < 1)) return;

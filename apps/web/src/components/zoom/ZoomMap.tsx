@@ -12,8 +12,9 @@ import { nameOfId } from "../../flowTargets";
 import { hrefView } from "../../router";
 import { CHART_MIN_PX } from "../../zoom/chart";
 import { anchoredTo, calloutOf, closeExpansion, detailLetter, openExpansion, refresh, revealCamera, shiftAt, type Expansion, type ExpandAnchor } from "../../zoom/expand";
-import { advance, atRest, releaseVelocity, restingAt, type DragSample, type Spring } from "../../zoom/spring";
+import { releaseVelocity, type DragSample } from "../../zoom/spring";
 import { useCameraSpring } from "../../zoom/useCameraSpring";
+import { motionFor, progressAt } from "../../zoom/tween";
 import { pickBox } from "../../zoom/gesture";
 import { edgeClass, edgeKey, edgeTitle, edgeWidth, lineClass, runtimeLine, type MapBuild, type MapEdge, type MapNode, type MapSelected, type MapSource, type RuntimeLine } from "../../zoom/source";
 import { bucketScale, FAR_TILE_PX, fitLabel, headerLabels, labelChars, lodBucket, MID_TILE_PX } from "../../zoom/lod";
@@ -67,20 +68,21 @@ const isPointerGesture = (e: unknown) => e instanceof Event && /^(pointer|mouse|
 
 /**
  * The side shift on screen: each open detail pushes the columns right of its pivot over by its width. `base` is the shift
- * being eased away from, `to` the expansions it eases toward, and `s` the spring from 0 (base) to 1 (to).
+ * being eased away from, `to` the expansions it eases toward, and `p` the eased progress from 0 (base) to 1 (to). `t0` is
+ * when the ease started (set on its first frame), so the ease runs on the map's shared 260 ms curve.
  */
 interface ShiftState {
   base: (x: number) => number;
   to: readonly Expansion[];
-  s: Spring;
+  p: number;
+  t0?: number;
   frame?: number;
-  last: number;
 }
 
 /** The shift an item at x shows now: the eased value between the base and the target expansions. */
 function displayShift(sh: ShiftState, x: number): number {
   const b = sh.base(x);
-  return b + (shiftAt(sh.to, x) - b) * sh.s.value;
+  return b + (shiftAt(sh.to, x) - b) * sh.p;
 }
 
 /**
@@ -211,7 +213,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   const seqRef = useRef(0);
   const miniDragRef = useRef(false);
   /** The side shift's state (see ShiftState). The spring starts at rest on the shift of the open details. */
-  const shiftRef = useRef<ShiftState>({ base: () => 0, to: [], s: restingAt(1), last: 0 });
+  const shiftRef = useRef<ShiftState>({ base: () => 0, to: [], p: 1 });
   const arrowId = `zm-arrow-${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
   const hintId = useId();
 
@@ -244,18 +246,17 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     },
   );
 
-  /** One frame of the side shift's spring: eases the columns, then writes them. Settles on the target and snaps to it. */
+  /** One frame of the side shift's ease: eases the columns on the shared curve, then writes them. Lands on the target. */
   const shiftFrame = (now: number) => {
     const sh = shiftRef.current;
     sh.frame = undefined;
-    const dt = sh.last === 0 ? 1 / 60 : Math.min(0.1, (now - sh.last) / 1000);
-    sh.last = now;
-    sh.s = advance(sh.s, 1, dt);
-    if (atRest(sh.s, 1, 1e-4)) {
+    sh.t0 ??= now;
+    sh.p = progressAt(sh.t0, now);
+    if (sh.p >= 1) {
       const to = sh.to;
-      sh.s = restingAt(1);
+      sh.p = 1;
+      sh.t0 = undefined;
       sh.base = (x) => shiftAt(to, x);
-      sh.last = 0;
     } else {
       sh.frame = requestAnimationFrame(shiftFrame);
     }
@@ -264,31 +265,34 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   };
 
   /**
-   * Starts the side shift easing toward `next`, from the shift on screen now, so an interrupted ease does not jump. Reduced
-   * motion cuts to it.
+   * Starts the side shift easing toward `next`, from the shift on screen now, so an interrupted ease does not jump (the
+   * ease restarts from there). Reduced motion, and a map crowded enough that sliding every box costs more than it shows,
+   * cut to it.
    */
   const retargetShift = (next: readonly Expansion[]) => {
     const sh = shiftRef.current;
     const from = sh.base;
     const toPrev = sh.to;
-    const sPrev = sh.s.value;
+    const pPrev = sh.p;
     sh.to = next;
-    if (reduceMotion()) {
+    const mode = motionFor({ reduced: reduceMotion(), boxes: boxesRef.current.length });
+    if (mode === "fade") {
       sh.base = (x) => shiftAt(next, x);
-      sh.s = restingAt(1);
+      sh.p = 1;
+      sh.t0 = undefined;
       if (sh.frame !== undefined) cancelAnimationFrame(sh.frame);
       sh.frame = undefined;
       const root = worldRef.current;
       if (root) writeShift(root, sh);
       return;
     }
-    // The shift on screen now becomes the base: the spring starts at 0, so nothing jumps.
+    // The shift on screen now becomes the base: the ease starts at 0, so nothing jumps.
     sh.base = (x) => {
       const b = from(x);
-      return b + (shiftAt(toPrev, x) - b) * sPrev;
+      return b + (shiftAt(toPrev, x) - b) * pPrev;
     };
-    sh.s = restingAt(0);
-    sh.last = 0;
+    sh.p = 0;
+    sh.t0 = undefined;
     if (sh.frame === undefined) sh.frame = requestAnimationFrame(shiftFrame);
   };
 
@@ -1122,16 +1126,19 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
               return (
                 <g key={`exp-${e.fnId}`} className="zm-expansion-group" data-sx={e.pivot}>
                   {c !== undefined && <CalloutShape callout={c} letter={detailLetter(e.index)} k={labelScale} />}
-                  <ExpansionShape
-                    id={id}
-                    scope={charts?.scope ?? scope}
-                    expansion={e}
-                    k={labelScale}
-                    selectedId={construct !== undefined && construct.ref === e.fnId ? construct.nodeId : undefined}
-                    onNodeClick={(n) => chartStep(e.fnId, n)}
-                    onSelect={() => void selectFunction(e.fnId)}
-                    onClose={() => setExp(closeExpansion(expRef.current, e.fnId))}
-                  />
+                  {/* The entrance plays on this wrapper, not the group: the group carries the side shift as its transform. */}
+                  <g className="zm-expansion-motion">
+                    <ExpansionShape
+                      id={id}
+                      scope={charts?.scope ?? scope}
+                      expansion={e}
+                      k={labelScale}
+                      selectedId={construct !== undefined && construct.ref === e.fnId ? construct.nodeId : undefined}
+                      onNodeClick={(n) => chartStep(e.fnId, n)}
+                      onSelect={() => void selectFunction(e.fnId)}
+                      onClose={() => setExp(closeExpansion(expRef.current, e.fnId))}
+                    />
+                  </g>
                 </g>
               );
             })}
