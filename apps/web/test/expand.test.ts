@@ -3,7 +3,6 @@ import { CHART_HEAD, CHART_PAD, type FunctionFlow, type Rect } from "@insight/fl
 import {
   EXPAND_GAP,
   anchoredTo,
-  calloutOf,
   clampTop,
   closeExpansion,
   connectorOf,
@@ -189,25 +188,5 @@ describe("the side shift", () => {
     const moved = openExpansion(both, "A", { kind: "box", nodeId: "n", rect: { ...box, x: 400 } }, chart("A", 300, 200), view);
     expect(moved.find((e) => e.fnId === "A")?.index).toBe(0);
     expect(detailLetter(26)).toBe("AA");
-  });
-});
-
-describe("callouts", () => {
-  it("circles a box's tile and puts its bubble on a leader to the detail's header, inside the gap", () => {
-    const a = openExpansion([], "A", { kind: "box", nodeId: "n", rect: box }, chart("A", 300, 200), view);
-    const c = calloutOf(a[0] as Expansion, a);
-    expect(c?.cx).toBe(box.x + box.w / 2);
-    expect(c?.rx).toBeCloseTo(box.w / 2 + 12, 9);
-    expect(c?.leader.x2).toBe(box.x + box.w + EXPAND_GAP);
-    expect(c?.bubble.x).toBeGreaterThan(box.x + box.w);
-    expect(c?.bubble.x).toBeLessThan(box.x + box.w + EXPAND_GAP);
-  });
-
-  it("circles a call step inside its parent's chart", () => {
-    const a = openExpansion([], "A", { kind: "box", nodeId: "n", rect: box }, chart("A", 300, 200), view);
-    const both = openExpansion(a, "B", { kind: "step", fnId: "A", rect: { x: 10, y: 20, w: 50, h: 20 } }, chart("B", 200, 100), view);
-    const c = calloutOf(both[1] as Expansion, both);
-    expect(c?.cx).toBe((both[0]?.x ?? 0) + CHART_PAD + 10 + 25);
-    expect(c?.cy).toBe((both[0]?.y ?? 0) + CHART_HEAD + CHART_PAD + 20 + 10);
   });
 });

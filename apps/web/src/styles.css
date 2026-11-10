@@ -240,8 +240,16 @@ a.flow-node:hover :is(rect, polygon, circle) { stroke: var(--accent); stroke-wid
 .flow-edge path { fill: none; stroke: var(--muted); stroke-width: 1.3; }
 .flow-edge.true path { stroke: var(--ok); }
 .flow-edge.false path { stroke: var(--warn); }
-.flow-edge.back path { stroke-dasharray: 5 4; }
 .flow-edge.exception path { stroke: var(--error); stroke-dasharray: 2 3; }
+/* Flow motion: a dashed overlay marches along each edge in its direction (40 px a second: the 8-unit dash period at 0.2 s).
+ * It is low contrast, the panel's colour over the solid line, so it reads as flow rather than as dashes. A back-edge (a
+ * loop's return) marches in the loop's colour, a little stronger, and a dot travels it (see FlowChart's Edge). */
+.flow-march { fill: none; stroke: var(--panel); stroke-width: 1.4; stroke-dasharray: 2 6; stroke-linecap: butt; opacity: 0.55; pointer-events: none; animation: flow-march 0.2s linear infinite; }
+.flow-march.back { stroke: var(--coroutine); stroke-width: 1.6; opacity: 0.85; }
+.flow-pulse { fill: var(--coroutine); pointer-events: none; }
+@keyframes flow-march { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -8; } }
+/* A call step whose chart is open is selected by its own outline: an accent stroke and a slightly brighter fill. */
+.flow-node.selected :is(rect, polygon, circle) { stroke: var(--accent); stroke-width: 2; fill: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
 .flow-arrow { fill: var(--muted); }
 .legend { margin: 10px 0 0; }
 /* A call from the chart to a function outside the scope: dashed, with a marker. */
@@ -408,7 +416,6 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 .zm-expansion-head { fill: color-mix(in srgb, var(--accent) 12%, transparent); stroke: none; }
 /* Motion on the map: a detail opens on the shared curve (see zoom/tween.ts) and its callout follows once the edge reads. */
 .zm-expansion-motion { transform-box: fill-box; transform-origin: 0% 50%; animation: zm-expansion-in 260ms cubic-bezier(0.2, 0, 0, 1) both; }
-.zm-expansion-group .zm-callout { animation: zm-fade-in 260ms cubic-bezier(0.2, 0, 0, 1) 120ms both; }
 /* A closing detail shrinks and fades over 200 ms, the reverse of its entrance; it takes no pointer while it leaves. */
 .zm-expansion-group.is-leaving { pointer-events: none; }
 .zm-expansion-group.is-leaving .zm-expansion-motion { animation: zm-expansion-out 200ms cubic-bezier(0.4, 0, 1, 1) both; }
@@ -419,14 +426,28 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 .zm-expansion-close-hit { fill: transparent; }
 .zm-expansion-close text { fill: var(--muted); font-size: calc(16px * var(--zinv, 1)); pointer-events: none; }
 .zm-expansion-close:hover text { fill: var(--fg); }
-.zm-connector { fill: none; stroke: var(--accent); stroke-width: 1.2; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; }
-/* The callout of a detail: a dashed ring round the tile it hangs from, a leader to the detail, and a lettered bubble. */
-.zm-callout-ring { fill: none; stroke: var(--accent); stroke-width: 1.2; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; }
-.zm-leader { fill: none; stroke: var(--accent); stroke-width: 1; stroke-dasharray: 1 4; stroke-linecap: round; vector-effect: non-scaling-stroke; pointer-events: none; }
-.zm-bubble { fill: var(--accent); stroke: var(--rim-stroke, #fff); stroke-width: 1.5; pointer-events: none; }
-.zm-bubble-text { fill: #fff; font-family: var(--font-ui); font-weight: 700; font-size: 12px; pointer-events: none; }
+/* The connector from a call step (or box) to the detail it opened: a solid accent line, drawn in on open (240 ms) and
+ * retracted on close (160 ms). Its width is set inline, in map units, so it stays 1.5 px on screen. The head fades in last. */
+.zm-connector { fill: none; stroke: var(--accent); stroke-dasharray: 1 1; stroke-linecap: butt; pointer-events: none; }
+.zm-connector-head { fill: var(--accent); pointer-events: none; }
+.zm-connector-group.is-opening .zm-connector { animation: zm-connector-draw 240ms cubic-bezier(0.2, 0, 0, 1) both; }
+.zm-connector-group.is-opening .zm-connector-head { animation: zm-fade-in 120ms linear 180ms both; }
+.zm-connector-group.is-closing .zm-connector { animation: zm-connector-retract 160ms cubic-bezier(0.4, 0, 1, 1) both; }
+.zm-connector-group.is-closing .zm-connector-head { animation: zm-fade-out 80ms linear both; }
+.zm-connector-group.is-fade { animation: zm-fade-in 240ms linear both; }
+@keyframes zm-connector-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+@keyframes zm-connector-retract { from { stroke-dashoffset: 0; } to { stroke-dashoffset: 1; } }
+@keyframes zm-fade-out { from { opacity: 1; } to { opacity: 0; } }
 .flow-call-bar { stroke: currentColor; stroke-width: 1.2; fill: none; }
-.zm-box.expanded .zm-box-body { stroke: var(--accent); stroke-width: 2; }
+.zm-box.expanded .zm-box-body { stroke: var(--accent); stroke-width: 2; fill: color-mix(in srgb, var(--accent) 8%, var(--raised)); }
+/* A root card has a solid 1 px border (the line token), not the dashed or dotted line of its runtime. Open, it takes the accent. */
+.zm-box.zm-card .zm-box-body { stroke-dasharray: none; }
+.zm-box.zm-card.zm-line-none .zm-box-body { stroke: var(--line); stroke-width: 1; stroke-linecap: butt; }
+.zm-box.zm-card.expanded .zm-box-body { stroke: var(--accent); stroke-width: 2; }
+@media (prefers-reduced-motion: reduce) {
+  .flow-march, .flow-pulse { display: none; }
+  .zm-connector-group.is-opening .zm-connector, .zm-connector-group.is-closing .zm-connector { animation: none; }
+}
 .zm-loading { position: absolute; inset: 0; margin: 0; display: flex; align-items: center; justify-content: center; }
 /* The key plan sits bottom right, above the title chip, and is small and collapsible (closed by default). */
 .zm-keyplan { position: absolute; right: var(--sh-gap, 10px); bottom: 130px; z-index: 4; width: 140px; margin: 0; padding: 6px; border-radius: 10px; background: var(--glass); box-shadow: var(--float); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }

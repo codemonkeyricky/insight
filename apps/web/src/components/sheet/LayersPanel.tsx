@@ -7,6 +7,8 @@ export interface LayerState {
   findings: boolean;
   /** Anonymous functions as boxes of their own. Off, they are folded into the function they are written in. */
   lambdas: boolean;
+  /** The charts' motion: edges march in their direction, and a loop's back-edge carries a pulse. On by default. */
+  motion: boolean;
 }
 
 interface Props {
@@ -43,6 +45,9 @@ export function LayersPanel({ shown, findingCount, onChange, onClose, roots }: P
       </label>
       <label className="sh-check">
         <input type="checkbox" checked={shown.lambdas} onChange={(e) => onChange("lambdas", e.target.checked)} /> Lambdas
+      </label>
+      <label className="sh-check">
+        <input type="checkbox" checked={shown.motion} onChange={(e) => onChange("motion", e.target.checked)} /> Flow motion
       </label>
       {roots !== undefined && <div className="sh-layers-roots">{roots}</div>}
       <details className="sh-keys">

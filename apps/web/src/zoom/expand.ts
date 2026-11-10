@@ -203,50 +203,6 @@ export function connectorOf(e: Expansion, list: readonly Expansion[]): { x1: num
   return { x1: o.x + r.x + r.w, y1: o.y + r.y + r.h / 2, x2, y2 };
 }
 
-/** The room the callout ellipse leaves around the tile it circles: its half-width and half-height beyond the tile. */
-export const CALLOUT_PAD_X = 12;
-export const CALLOUT_PAD_Y = 10;
-
-/**
- * The callout of an expansion: an ellipse round the tile it hangs from, and a leader from the ellipse's right side to the
- * detail's header. The letter bubble sits on the middle of the leader. All in world units, before the side shift.
- */
-export interface Callout {
-  cx: number;
-  cy: number;
-  rx: number;
-  ry: number;
-  leader: { x1: number; y1: number; x2: number; y2: number };
-  bubble: { x: number; y: number };
-}
-
-/** The world rect of the tile an expansion hangs from (a box, or a call step inside its parent's chart), before the shift. */
-export function anchorRectOf(e: Expansion, list: readonly Expansion[]): Rect | undefined {
-  const anchor = e.anchor;
-  if (anchor.kind === "box") return anchor.rect;
-  const parentId = anchor.fnId;
-  const parent = list.find((p) => p.fnId === parentId);
-  if (parent === undefined) return undefined;
-  const o = contentOrigin(parent);
-  const r = anchor.rect;
-  return { x: o.x + r.x, y: o.y + r.y, w: r.w, h: r.h };
-}
-
-/** The callout of an expansion, or undefined when its anchor is no longer in the list. */
-export function calloutOf(e: Expansion, list: readonly Expansion[]): Callout | undefined {
-  const r = anchorRectOf(e, list);
-  if (r === undefined) return undefined;
-  const cx = r.x + r.w / 2;
-  const cy = r.y + r.h / 2;
-  const rx = r.w / 2 + CALLOUT_PAD_X;
-  const ry = r.h / 2 + CALLOUT_PAD_Y;
-  const x1 = cx + rx;
-  const y1 = cy;
-  const x2 = e.x;
-  const y2 = e.y + CHART_HEAD / 2;
-  return { cx, cy, rx, ry, leader: { x1, y1, x2, y2 }, bubble: { x: (x1 + x2) / 2, y: (y1 + y2) / 2 } };
-}
-
 /** Moves a span of `size` that starts at `start` inside a room of `room`, the least that keeps it in the room. */
 function shift(start: number, size: number, room: number): number {
   if (size > room - 2 * REVEAL_MARGIN || start < REVEAL_MARGIN) return REVEAL_MARGIN - start;
