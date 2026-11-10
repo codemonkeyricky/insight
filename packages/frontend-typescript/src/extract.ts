@@ -713,7 +713,7 @@ function isAwaited(call: ts.CallExpression): boolean {
 }
 
 /** How a function hands work to another: awaited, started without waiting, or scheduled to run later. */
-type Dispatch = "await" | "start" | "callback" | "timer" | "microtask";
+type Dispatch = "await" | "start" | "callback" | "timer" | "microtask" | "message";
 
 /** Compiled output names its source, which TypeScript resolves to: `./w.js` is `w.ts` in the project. */
 const SOURCE_FOR_OUTPUT: [string, string][] = [
@@ -723,18 +723,18 @@ const SOURCE_FOR_OUTPUT: [string, string][] = [
   [".cjs", ".cts"],
 ];
 
-/** Records and dependencies for one file. */
-export function emitFile(project: Project, rel: string): IRBatch {
-  const sf = project.sourceFor(rel);
-  if (!sf) return { file: rel, records: [] };
-  const records: IRRecord[] = [];
-  const deps = new Set<string>();
-  const imports = importBindings(sf);
-  const moduleId = project.moduleOf(rel);
-  // A spawn runs a script's module entry when the script has one, and the file otherwise.
-  const spawnTarget = (to: string): string => project.moduleOf(to) ?? to;
-  // The browser's Worker and SharedWorker are globals. A name the file or project declares is not one of them.
-  const workerEnv: WorkerEnv = {
+/** The expression with every wrapper removed: parentheses, `as`, `<T>` and `!`. */
+function unwrapAll(e: ts.Expression): ts.Expression {
+  let inner = e;
+  while (ts.isParenthesizedExpression(inner) || ts.isAsExpression(inner) || ts.isTypeAssertionExpression(inner) || ts.isNonNullExpression(inner)) {
+    inner = inner.expression;
+  }
+  return inner;
+}
+
+/** The browser's Worker and SharedWorker are globals. A name the file or project declares is not one of them. */
+function workerEnvFor(project: Project, sf: ts.SourceFile): WorkerEnv {
+  return {
     constOf: (id) => {
       const d = project.checker.getSymbolAtLocation(id)?.valueDeclaration;
       if (d === undefined || !ts.isVariableDeclaration(d) || !ts.isIdentifier(d.name) || d.initializer === undefined) return undefined;
@@ -747,6 +747,199 @@ export function emitFile(project: Project, rel: string): IRBatch {
       return d !== undefined && !d.getSourceFile().isDeclarationFile;
     },
   };
+}
+
+/** The project function a callback names: an inline function, or an identifier or property reference to one. */
+function callbackDecl(project: Project, arg: ts.Expression | undefined): Decl | undefined {
+  if (!arg) return undefined;
+  const e = unwrapAll(arg);
+  if (ts.isArrowFunction(e) || ts.isFunctionExpression(e)) {
+    const inline = project.decls.get(e);
+    return inline?.entity.type === "function" ? inline : undefined;
+  }
+  if (!(ts.isIdentifier(e) || ts.isPropertyAccessExpression(e))) return undefined;
+  const target = declOf(project, project.checker.getSymbolAtLocation(nameOf(e)));
+  return target?.entity.type === "function" ? target : undefined;
+}
+
+/** `self` or `globalThis`, the global object of a worker or page, possibly behind a cast or a const that holds it. */
+function isGlobalSelf(project: Project, e: ts.Expression, depth = 0): boolean {
+  const x = unwrapAll(e);
+  if (!ts.isIdentifier(x) || depth > 6) return false;
+  const sym = project.checker.getSymbolAtLocation(x);
+  const d = sym?.valueDeclaration;
+  if (d !== undefined && ts.isVariableDeclaration(d) && d.initializer !== undefined) return isGlobalSelf(project, d.initializer, depth + 1);
+  if (x.text !== "self" && x.text !== "globalThis") return false;
+  // A name the project declares is not the global object. The library's declarations of it are.
+  return (sym?.declarations ?? []).every((decl) => decl.getSourceFile().isDeclarationFile);
+}
+
+/** A handler an expression installs on an object: `r.onmessage = fn`, a bare `onmessage = fn`, or `r.addEventListener("message", fn)`. */
+interface Registration {
+  event: string;
+  at: ts.Expression;
+  /** The object the handler is installed on. Undefined for a bare name, which is the global object. */
+  receiver: ts.Expression | undefined;
+}
+
+function registrationOf(node: ts.Node): Registration | undefined {
+  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+    const left = node.left;
+    if (ts.isPropertyAccessExpression(left) && /^on[a-z]+$/.test(left.name.text)) {
+      return { event: left.name.text.slice(2), at: node.right, receiver: left.expression };
+    }
+    if (ts.isIdentifier(left) && /^on[a-z]+$/.test(left.text)) return { event: left.text.slice(2), at: node.right, receiver: undefined };
+  }
+  if (ts.isCallExpression(node)) {
+    const callee = node.expression;
+    const isAdd = ts.isPropertyAccessExpression(callee)
+      ? callee.name.text === "addEventListener"
+      : ts.isIdentifier(callee) && callee.text === "addEventListener";
+    const first = node.arguments[0];
+    const at = node.arguments[1];
+    if (isAdd && first !== undefined && ts.isStringLiteralLike(first) && at !== undefined) {
+      return { event: first.text, at, receiver: ts.isPropertyAccessExpression(callee) ? callee.expression : undefined };
+    }
+  }
+  return undefined;
+}
+
+/** The `message` handlers a worker file registers at its top level, on its own global object or an alias of it. */
+function workerHandlers(project: Project, rel: string): Decl[] {
+  const sf = project.sourceFor(rel);
+  if (!sf) return [];
+  const out: Decl[] = [];
+  for (const stmt of sf.statements) {
+    if (!ts.isExpressionStatement(stmt)) continue;
+    const reg = registrationOf(stmt.expression);
+    if (reg?.event !== "message") continue;
+    if (reg.receiver !== undefined && !isGlobalSelf(project, reg.receiver)) continue;
+    const target = callbackDecl(project, reg.at);
+    if (target !== undefined) out.push(target);
+  }
+  return out;
+}
+
+/** The nearest class that holds a node, or undefined outside any class. */
+function enclosingClass(node: ts.Node): ts.ClassLikeDeclaration | undefined {
+  for (let n: ts.Node | undefined = node.parent; n !== undefined; n = n.parent) {
+    if (ts.isClassLike(n)) return n;
+  }
+  return undefined;
+}
+
+/**
+ * The `new Worker(...)` constructors (browser Workers) an expression may hold. Follows a const's initializer, a class
+ * field assigned from anywhere in its class, and the return values of a function it calls. A parameter holds none.
+ */
+function workerCtors(project: Project, expr: ts.Expression, depth = 0): ts.NewExpression[] {
+  if (depth > 6) return [];
+  const e = unwrapAll(expr);
+  if (ts.isNewExpression(e)) {
+    const sf = e.getSourceFile();
+    return matchWorker(e, importBindings(sf), workerEnvFor(project, sf))?.api === "Worker" ? [e] : [];
+  }
+  if (ts.isIdentifier(e)) {
+    const d = project.checker.getSymbolAtLocation(e)?.valueDeclaration;
+    return d !== undefined && ts.isVariableDeclaration(d) && d.initializer !== undefined ? workerCtors(project, d.initializer, depth + 1) : [];
+  }
+  if (ts.isPropertyAccessExpression(e) && e.expression.kind === ts.SyntaxKind.ThisKeyword) {
+    const cls = enclosingClass(e);
+    const out: ts.NewExpression[] = [];
+    if (cls === undefined) return out;
+    const name = e.name.text;
+    const scan = (n: ts.Node): void => {
+      if (
+        ts.isBinaryExpression(n) &&
+        n.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+        ts.isPropertyAccessExpression(n.left) &&
+        n.left.expression.kind === ts.SyntaxKind.ThisKeyword &&
+        n.left.name.text === name
+      ) {
+        out.push(...workerCtors(project, n.right, depth + 1));
+      } else if (ts.isPropertyDeclaration(n) && n.initializer !== undefined && ts.isIdentifier(n.name) && n.name.text === name) {
+        out.push(...workerCtors(project, n.initializer, depth + 1));
+      }
+      ts.forEachChild(n, scan);
+    };
+    scan(cls);
+    return out;
+  }
+  if (ts.isCallExpression(e)) {
+    const node = declOf(project, project.checker.getSymbolAtLocation(nameOf(e.expression)))?.node;
+    if (node === undefined || !(ts.isMethodDeclaration(node) || ts.isFunctionDeclaration(node)) || node.body === undefined) return [];
+    const body = node.body;
+    const out: ts.NewExpression[] = [];
+    const scan = (n: ts.Node): void => {
+      if (ts.isReturnStatement(n) && n.expression !== undefined) out.push(...workerCtors(project, n.expression, depth + 1));
+      if (n !== body && ts.isFunctionLike(n)) return;
+      ts.forEachChild(n, scan);
+    };
+    scan(body);
+    return out;
+  }
+  return [];
+}
+
+/** Every browser worker a project constructs, with the file that constructs it and the handlers on its object. */
+interface WorkerIndex {
+  /** Each Worker constructor that names a project script: the file that holds it, and the worker file it runs. */
+  ctors: Map<ts.NewExpression, { rel: string; to: string }>;
+  /** The Worker constructors that run each worker file. */
+  byTarget: Map<string, ts.NewExpression[]>;
+  /** The `message` handlers installed on each Worker's object, anywhere in the project. */
+  handlers: Map<ts.NewExpression, Decl[]>;
+}
+
+const workerIndexes = new WeakMap<Project, WorkerIndex>();
+
+/** Built once per project, on the first postMessage that needs it. */
+function workerIndex(project: Project): WorkerIndex {
+  const cached = workerIndexes.get(project);
+  if (cached !== undefined) return cached;
+  const index: WorkerIndex = { ctors: new Map(), byTarget: new Map(), handlers: new Map() };
+  for (const rel of project.rels) {
+    const sf = project.sourceFor(rel);
+    if (!sf || !sf.text.includes("Worker")) continue;
+    const imports = importBindings(sf);
+    const env = workerEnvFor(project, sf);
+    const visit = (n: ts.Node): void => {
+      if (ts.isNewExpression(n)) {
+        const m = matchWorker(n, imports, env);
+        const to = m?.api === "Worker" && m.script !== undefined ? resolveScript(project, rel, m.script).to : undefined;
+        if (to !== undefined) {
+          index.ctors.set(n, { rel, to });
+          index.byTarget.set(to, [...(index.byTarget.get(to) ?? []), n]);
+        }
+      }
+      const reg = registrationOf(n);
+      if (reg?.event === "message" && reg.receiver !== undefined) {
+        const handler = callbackDecl(project, reg.at);
+        if (handler !== undefined) {
+          for (const ctor of workerCtors(project, reg.receiver)) {
+            index.handlers.set(ctor, [...(index.handlers.get(ctor) ?? []), handler]);
+          }
+        }
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+  }
+  workerIndexes.set(project, index);
+  return index;
+}
+
+/** Records and dependencies for one file. */
+export function emitFile(project: Project, rel: string): IRBatch {
+  const sf = project.sourceFor(rel);
+  if (!sf) return { file: rel, records: [] };
+  const records: IRRecord[] = [];
+  const deps = new Set<string>();
+  const imports = importBindings(sf);
+  const moduleId = project.moduleOf(rel);
+  // A spawn runs a script's module entry when the script has one, and the file otherwise.
+  const spawnTarget = (to: string): string => project.moduleOf(to) ?? to;
+  const workerEnv = workerEnvFor(project, sf);
   const usedIds = new Set<string>();
   const uniqueId = (base: string): string => {
     let id = `${rel}@${base}`;
@@ -888,18 +1081,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
       dependOn(target.rel);
     };
 
-    /** The project function a callback names: an inline function, or an identifier or property reference to one. */
-    const callbackTarget = (arg: ts.Expression | undefined): Decl | undefined => {
-      if (!arg) return undefined;
-      const e = unwrap(arg);
-      if (ts.isArrowFunction(e) || ts.isFunctionExpression(e)) {
-        const inline = project.decls.get(e);
-        return inline?.entity.type === "function" ? inline : undefined;
-      }
-      if (!(ts.isIdentifier(e) || ts.isPropertyAccessExpression(e))) return undefined;
-      const target = declOf(project, project.checker.getSymbolAtLocation(nameOf(e)));
-      return target?.entity.type === "function" ? target : undefined;
-    };
+    const callbackTarget = (arg: ts.Expression | undefined): Decl | undefined => callbackDecl(project, arg);
 
     /** The hand-offs one call makes: an async callee, awaited or started, and the callbacks it schedules. */
     const emitDispatches = (call: ts.CallExpression) => {
@@ -922,6 +1104,55 @@ export function emitFile(project: Project, rel: string): IRBatch {
           if (cb) callbacks.add(cb);
         }
         for (const cb of callbacks) dispatch(cb, sched.how, call);
+      }
+    };
+
+    /**
+     * A message across a worker boundary, as a dispatch with how "message". A page's postMessage to a Worker it constructs
+     * reaches the handlers the worker file registers at its top level. A worker's postMessage reaches the handlers installed
+     * on each Worker that runs its file. Both ends must resolve, or nothing is emitted.
+     */
+    const emitMessages = (call: ts.CallExpression) => {
+      const callee = call.expression;
+      const named = ts.isPropertyAccessExpression(callee)
+        ? callee.name.text === "postMessage"
+        : ts.isIdentifier(callee) && callee.text === "postMessage" && !workerEnv.declared?.(callee);
+      if (!named) return;
+      const index = workerIndex(project);
+      const sent = new Set<string>();
+      const message = (target: Decl) => {
+        if (sent.has(target.id)) return;
+        sent.add(target.id);
+        pushEdge({
+          from: fn,
+          to: target.id,
+          facet: "concurrency",
+          kind: "concurrency.dispatches",
+          attrs: { how: "message" },
+          span: spanOf(rel, sf, call),
+          provenance: { frontend: FRONTEND_ID, confidence: "inferred" },
+        });
+        dependOn(target.rel);
+      };
+      if (ts.isPropertyAccessExpression(callee)) {
+        // Page to worker: the Worker this posts to, and the handlers its worker file registers at the top level.
+        for (const ctor of workerCtors(project, callee.expression)) {
+          const worker = index.ctors.get(ctor);
+          if (worker === undefined) continue;
+          dependOn(worker.rel);
+          dependOn(worker.to);
+          for (const handler of workerHandlers(project, worker.to)) message(handler);
+        }
+      }
+      // Worker to page: a postMessage in a worker file, reaching the handlers on each Worker that runs the file.
+      const fromWorker = ts.isPropertyAccessExpression(callee) ? isGlobalSelf(project, callee.expression) : true;
+      if (fromWorker) {
+        for (const ctor of index.byTarget.get(rel) ?? []) {
+          const worker = index.ctors.get(ctor);
+          if (worker === undefined) continue;
+          dependOn(worker.rel);
+          for (const handler of index.handlers.get(ctor) ?? []) message(handler);
+        }
       }
     };
 
@@ -1153,6 +1384,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
       }
       emitCall(node);
       emitDispatches(node);
+      emitMessages(node);
     } else if (ts.isPropertyAccessExpression(node)) {
       const name = matchEnvRead(node, imports);
       if (name !== undefined) {

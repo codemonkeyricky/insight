@@ -22,8 +22,11 @@ export const MAX_EXEC_FUNCTIONS = 2000;
 
 /** How a spawn starts its thread, as the spawns edge says. */
 export type ExecSpawnHow = "thread" | "process" | "async";
-/** How a dispatch starts its target. Only await and start make a coroutine; the others run on the same thread. */
-export type ExecDispatchHow = "await" | "start" | "callback" | "timer" | "microtask";
+/**
+ * How a dispatch starts its target. Only await and start make a coroutine; the others run on the same thread, except
+ * message, which hands a postMessage to a handler on the other side of a Web Worker boundary.
+ */
+export type ExecDispatchHow = "await" | "start" | "callback" | "timer" | "microtask" | "message";
 export type ExecHow = ExecSpawnHow | ExecDispatchHow;
 /** "main" is the thread the program starts on. The others are the spawns of the scope. */
 export type ExecThreadKind = "main" | ExecSpawnHow;
@@ -317,7 +320,7 @@ interface Plan {
 }
 
 const SPAWN_KINDS: ReadonlySet<string> = new Set(["concurrency.spawn-thread", "concurrency.spawn-process"]);
-const DISPATCH_HOWS: readonly ExecDispatchHow[] = ["await", "start", "callback", "timer", "microtask"];
+const DISPATCH_HOWS: readonly ExecDispatchHow[] = ["await", "start", "callback", "timer", "microtask", "message"];
 const SPAWN_HOWS: readonly ExecSpawnHow[] = ["thread", "process", "async"];
 
 /** The sync and channel nodes that are resource sites: the node kind, what it does, and the attribute naming the resource. */

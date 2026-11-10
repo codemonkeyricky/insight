@@ -95,7 +95,7 @@ Base kinds shipped by the core:
 | `concurrency.channel-send` | concurrency | node | – | A send on a channel. `attrs.channel` names the channel; the execution model groups sends and receives by it. |
 | `concurrency.channel-recv` | concurrency | node | – | A receive on a channel. `attrs.channel` names the channel, as for a send. |
 | `concurrency.spawns` | concurrency | edge | – | Spawn node to the function (or script file) it runs. `attrs.how` is `thread`, `process` or `async`. The spawning function is the spawn node's owner. Only emitted when the target resolves. |
-| `concurrency.dispatches` | concurrency | edge | – | Function to the coroutine, async function or callback it hands work to. `attrs.how` is `await`, `start`, `callback`, `timer` or `microtask`. |
+| `concurrency.dispatches` | concurrency | edge | – | Function to the coroutine, async function or callback it hands work to. `attrs.how` is `await`, `start`, `callback`, `timer`, `microtask` or `message`. `message` is a Web Worker `postMessage` (page to worker, or worker to page) to the `onmessage` or `addEventListener("message")` handler the other side registers at its top level or on the Worker object; the TypeScript frontend emits it only when both ends resolve, with confidence `inferred`. |
 | `sync.lock-acquire` | sync | node | – | Takes a lock. `attrs.lock` names the lock; the execution model and the lock-order lens group acquires by it. |
 | `sync.lock-release` | sync | node | – |  |
 | `sync.rwlock-acquire` | sync | node | `sync.lock-acquire` |  |
