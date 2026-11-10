@@ -505,9 +505,9 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     }
     const placed = { ...c, x: c.x + leftRef.current, y: c.y + TOP_RESERVE };
     // No empty band above the scene: the scene's top edge lands at the reserve, unless that would push the focus's bottom
-    // above the room's top edge.
+    // above the room's top edge. The scene is what is drawn (the items); the rects also hold the undrawn project node at the top.
     let sceneTop = Infinity;
-    for (const r of b.placed.rects.values()) sceneTop = Math.min(sceneTop, r.y);
+    for (const i of b.placed.items) sceneTop = Math.min(sceneTop, i.rect.y);
     if (!Number.isFinite(sceneTop)) return placed;
     const clamped = clampTop(placed, sceneTop, TOP_RESERVE + 8);
     return clamped.y + (focus.y + focus.h) * clamped.k >= TOP_RESERVE ? clamped : placed;
