@@ -126,7 +126,8 @@ export function buildExecScene(model: ExecModel): Scene {
       node.chart = { w: f.chart[0], h: f.chart[1] };
       node.compact = { w: Math.max(90, 8 * f.name.length + 24), h: 36 };
     }
-    if (f.file !== "") node.detail = `${f.file}:${f.line}`;
+    // A module entry is named by its file, so its subtitle says it is the file's top-level code.
+    if (f.file !== "") node.detail = f.module ? `top level · ${f.file}:${f.line}` : `${f.file}:${f.line}`;
     const n = note ?? (f.anonymous ? anonymousNote(f) : undefined);
     if (n !== undefined) node.note = n;
     addNode(node);
@@ -194,11 +195,20 @@ export function buildExecScene(model: ExecModel): Scene {
     return id;
   };
   const programBox = (p: ExecProgram): string => {
-    const main = p.main !== undefined ? nameOf(p.main) : undefined;
     const shared = p.threads.filter((t) => (listedBy.get(t) ?? 0) > 1).length;
-    const parts = [`Built from ${plural(p.files.length, "file")}.`, main !== undefined ? `Main function: ${main}.` : "No main function in the IR."];
+    const parts = [`Built from ${plural(p.files.length, "file")}.`];
+    if (p.kind !== undefined) {
+      // An entry program: its name says what runs, and its threads are its page script and its workers.
+      const entries = (p.entries ?? []).map((id) => basename(fns.get(id)?.file ?? id));
+      parts.push(`${p.kind === "browser" ? "Page scripts" : "Entry script"}: ${entries.join(", ")}.`);
+    } else {
+      const main = p.main !== undefined ? nameOf(p.main) : undefined;
+      parts.push(main !== undefined ? `Main function: ${main}.` : "No main function in the IR.");
+    }
     if (shared > 0) parts.push(`Shares ${plural(shared, "thread")} with other programs.`);
-    return addProcess(execProgramId(p.id), p.name, p.targetKind, parts.join(" "));
+    const label = p.kind === "browser" ? `Browser · ${p.name}` : p.kind === "node" ? `Node · ${basename(p.name)}` : p.name;
+    const named = p.kind === undefined ? label : `${label} — ${plural(p.threads.length, "thread")}`;
+    return addProcess(execProgramId(p.id), named, p.kind === undefined ? p.targetKind : "", parts.join(" "));
   };
 
   const threadName = (t: ExecThread): string => {

@@ -2,7 +2,7 @@
 // root-function cards that thread runs. The root functions that no thread runs sit in a trailing "Not on a thread" group,
 // laid out as the flat grid. Containers are drawn only when the model has runtime context (a grounded thread or a
 // coroutine); otherwise the caller keeps the flat grid (gridRootsLayout). Pure arithmetic: no solver runs here.
-import { isGroundedThread } from "./exec-scene.js";
+import { execProgramId, isGroundedThread } from "./exec-scene.js";
 import { execRootsOnly, pathInScope } from "./scene-filter.js";
 import type { ExecModel } from "./exec-model.js";
 import type { Scene, SceneLayout, SceneNode } from "./scene.js";
@@ -12,13 +12,14 @@ import { frameSize, type ContainerLayout, type Size, type Slot } from "./zoom-la
 /** The scene id of the group that holds the root functions no thread runs. */
 export const UNTHREADED_ID = "unthreaded";
 export const UNTHREADED_LABEL = "Not on a thread";
-/** The widths a container's children wrap at: threads side by side in a process, cards in a thread. */
+/** The width a process's children wrap at: its threads side by side. A thread's cards wrap in a grid (gridPack). */
 export const PROCESS_WRAP_W = 1000;
-export const THREAD_WRAP_W = 340;
 /** The content of a container with no children: the width of a small card, and no height. */
 const EMPTY_CONTENT: Size = { w: 200, h: 0 };
-/** The narrowest content of a thread or process box, so its header label ("Thread · worker.ts") is not cut short. */
-const MIN_CONTENT_W = 260;
+/** The narrowest content of a thread or process box, so its header label ("Worker · verify.worker.ts") is not cut short. */
+const MIN_CONTENT_W = 300;
+/** The aspect (width over height) a thread's grid of cards aims for: a 16:10 block. */
+const GRID_ASPECT = 1.6;
 
 /** Whether the model has runtime context to draw containers for: a grounded thread, or a coroutine. */
 export function hasRuntimeContext(model: ExecModel): boolean {
@@ -62,6 +63,14 @@ export function runtimeRootsScene(full: Scene, model: ExecModel): Scene | undefi
     root.children.push(UNTHREADED_ID);
   }
 
+  // The entry programs lead the processes: the Browser program first, then the Node programs by name. The others keep their order.
+  const BROWSER_ID = execProgramId("entry:browser");
+  const NODE_PREFIX = execProgramId("entry:node:");
+  const rank = (id: string): number => (id === BROWSER_ID ? 0 : id.startsWith(NODE_PREFIX) ? 1 : 2);
+  const label = (id: string): string => nodes.get(id)?.label ?? "";
+  const byLabel = (a: string, b: string): number => (label(a) < label(b) ? -1 : label(a) > label(b) ? 1 : 0);
+  root.children = [...root.children].sort((a, b) => rank(a) - rank(b) || (rank(a) === 1 ? byLabel(a, b) : 0));
+
   // Each card's subtitle is its file and line. A function on several threads names its thread, so its cards read apart.
   const byFn = new Map(model.functions.map((f) => [f.id, f]));
   const cardsOf = new Map<string, number>();
@@ -69,7 +78,8 @@ export function runtimeRootsScene(full: Scene, model: ExecModel): Scene | undefi
   for (const n of nodes.values()) {
     if (n.kind !== "function" || n.ref === undefined) continue;
     const f = byFn.get(n.ref);
-    const place = f !== undefined && f.file !== "" ? `${pathInScope(f.file, model.scope)}:${f.line}` : n.detail;
+    const tag = f?.module === true ? "top level · " : "";
+    const place = f !== undefined && f.file !== "" ? `${tag}${pathInScope(f.file, model.scope)}:${f.line}` : n.detail;
     const parent = n.parent !== undefined ? nodes.get(n.parent) : undefined;
     const several = (cardsOf.get(n.ref) ?? 0) > 1 && parent?.kind === "thread";
     if (place !== undefined) n.detail = several ? `${place} · ${parent?.label ?? ""}` : place;
@@ -121,9 +131,32 @@ function pack(items: readonly Item[], wrap: number): { w: number; h: number; slo
   return { w: width, h: items.length === 0 ? 0 : y + rowH, slots };
 }
 
+/**
+ * Packs boxes in a grid of uniform cells, `cols` to a row, with the column count chosen so the grid's aspect is nearest
+ * GRID_ASPECT. Every cell is as wide as the widest box, so the columns line up. Deterministic.
+ */
+function gridPack(items: readonly Item[]): { w: number; h: number; slots: Slot[] } {
+  if (items.length === 0) return { w: 0, h: 0, slots: [] };
+  const cellW = Math.max(...items.map((it) => it.w));
+  let cols = 1;
+  let best = Number.POSITIVE_INFINITY;
+  for (let c = 1; c <= items.length; c++) {
+    const rows = Math.ceil(items.length / c);
+    const w = c * cellW + (c - 1) * CARD_GAP;
+    const h = rows * CARD_H + (rows - 1) * CARD_GAP;
+    const miss = Math.abs(w / h - GRID_ASPECT);
+    if (miss < best) {
+      best = miss;
+      cols = c;
+    }
+  }
+  const sized = items.map((it) => ({ ...it, w: cellW }));
+  // Half a unit of slack, so a row of `cols` cells fits and the next cell starts a new row.
+  return pack(sized, cols * cellW + (cols - 1) * CARD_GAP + 0.5);
+}
+
 /** How wide a container's children wrap, by the container's kind. */
 function wrapOf(kind: string): number {
-  if (kind === "thread") return THREAD_WRAP_W;
   if (kind === "program" || kind === "process" || kind === "project") return PROCESS_WRAP_W;
   return CARD_WRAP_W;
 }
@@ -162,7 +195,7 @@ export function runtimeRootsLayout(scene: Scene, footprint?: Footprint): SceneLa
       return EMPTY_CONTENT;
     }
     const items: Item[] = kids.map(itemOf);
-    const packed = pack(items, wrapOf(kind));
+    const packed = kind === "thread" ? gridPack(items) : pack(items, wrapOf(kind));
     const w = kind === "group" ? packed.w : Math.max(packed.w, MIN_CONTENT_W);
     containers[id] = { w, h: packed.h, slots: packed.slots };
     return { w, h: packed.h };

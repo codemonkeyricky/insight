@@ -20,6 +20,7 @@
   --shadow: rgba(0, 0, 0, 0.10);
   --glass: rgba(255, 255, 255, 0.46);          /* small floating cards */
   --glass-strong: rgba(255, 255, 255, 0.60);   /* big panels read thicker */
+  --chip-solid: #f4f4f6;                        /* opaque backing for floating chips over the map */
   --sheen: rgba(255, 255, 255, 0.65);          /* light catching the top of the material */
   --gloss: rgba(255, 255, 255, 0.34);          /* highlight across a glossy button */
   --rim: inset 0 1px 0 rgba(255, 255, 255, 0.95), inset 0 0 0 1px rgba(255, 255, 255, 0.45);
@@ -61,7 +62,7 @@
     --film: #0E0E10; --sheet: #1C1C1E; --box: #2C2C2E; --raised: #2C2C2E; --raised-box: #3A3A3C; --ink: #F5F5F7; --graphite: #98989D; --rule: #3A3A3C;
     --faint: rgba(118, 118, 128, 0.24); --hair: rgba(255, 255, 255, 0.10);
     --accent: #2997FF; --thread: #8B89FF; --coroutine: #FF9F0A; --red: #FF453A; --switch-on: #30D158; --thumb: #636366;
-    --shadow: rgba(0, 0, 0, 0.5); --glass: rgba(30, 30, 34, 0.48); --glass-strong: rgba(30, 30, 34, 0.62);
+    --shadow: rgba(0, 0, 0, 0.5); --glass: rgba(30, 30, 34, 0.48); --glass-strong: rgba(30, 30, 34, 0.62); --chip-solid: #1f1f23;
     --sheen: rgba(255, 255, 255, 0.09); --gloss: rgba(255, 255, 255, 0.16);
     --rim: inset 0 1px 0 rgba(255, 255, 255, 0.20), inset 0 0 0 1px rgba(255, 255, 255, 0.06);
     --btn-glass: linear-gradient(180deg, rgba(255, 255, 255, 0.20), rgba(255, 255, 255, 0.06));
@@ -80,7 +81,7 @@
   --film: #0E0E10; --sheet: #1C1C1E; --box: #2C2C2E; --raised: #2C2C2E; --raised-box: #3A3A3C; --ink: #F5F5F7; --graphite: #98989D; --rule: #3A3A3C;
   --faint: rgba(118, 118, 128, 0.24); --hair: rgba(255, 255, 255, 0.10);
   --accent: #2997FF; --thread: #8B89FF; --coroutine: #FF9F0A; --red: #FF453A; --switch-on: #30D158; --thumb: #636366;
-  --shadow: rgba(0, 0, 0, 0.5); --glass: rgba(30, 30, 34, 0.48); --glass-strong: rgba(30, 30, 34, 0.62);
+  --shadow: rgba(0, 0, 0, 0.5); --glass: rgba(30, 30, 34, 0.48); --glass-strong: rgba(30, 30, 34, 0.62); --chip-solid: #1f1f23;
   --sheen: rgba(255, 255, 255, 0.09); --gloss: rgba(255, 255, 255, 0.16);
   --rim: inset 0 1px 0 rgba(255, 255, 255, 0.20), inset 0 0 0 1px rgba(255, 255, 255, 0.06);
   --btn-glass: linear-gradient(180deg, rgba(255, 255, 255, 0.20), rgba(255, 255, 255, 0.06));
@@ -464,7 +465,7 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 }
 .zm-loading { position: absolute; inset: 0; margin: 0; display: flex; align-items: center; justify-content: center; }
 /* The key plan sits bottom right, above the title chip, and is small and collapsible (closed by default). */
-.zm-keyplan { position: absolute; right: var(--sh-gap, 10px); bottom: 130px; z-index: 4; width: 140px; margin: 0; padding: 6px; border-radius: 10px; background: var(--glass); box-shadow: var(--float); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
+.zm-keyplan { position: absolute; right: var(--sh-gap, 10px); bottom: 130px; z-index: 4; width: 140px; margin: 0; padding: 6px; border-radius: 10px; background: var(--chip-solid); box-shadow: var(--float); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
 .zm-keyplan.is-closed { width: auto; }
 .zm-keyplan-toggle { display: block; width: 100%; padding: 4px 8px; border: 0; background: transparent; font: inherit; font-size: 11px; color: var(--muted); text-align: left; cursor: pointer; }
 .zm-keyplan.is-closed .zm-mini { display: none; }
@@ -546,6 +547,7 @@ pre.code > div.hit-range { background: color-mix(in srgb, var(--accent) 14%, tra
 .zm-chart .flow-node { cursor: pointer; }
 .flow-node.selected :is(rect, polygon, circle) { stroke: var(--accent); stroke-width: 3px; fill: color-mix(in srgb, var(--accent) 22%, var(--panel)); }
 
+/* Floating chips over the map (the Project chip, the key plan) take an opaque backing, so cards under them do not show through. */
 /* Liquid glass on the existing elements: header, tab bar, cards, side panels, buttons, inputs and code. */
 button { background: var(--btn-glass); color: var(--ink); border: 0; box-shadow: var(--btn-rim); -webkit-backdrop-filter: blur(12px) saturate(180%); backdrop-filter: blur(12px) saturate(180%); transition: background-image 120ms ease-out, transform 100ms ease-out; }
 button:hover:not(:disabled) { background: var(--btn-glass-hover); }
@@ -689,7 +691,7 @@ table.grid th { background: var(--faint); }
 .sh-keys { margin-top: 12px; font-size: var(--t-sm); }
 .sh-keys summary { cursor: pointer; color: var(--muted); }
 .sh-keys ul { margin: 6px 0 0; padding-left: 16px; display: grid; gap: 4px; color: var(--muted); }
-.sh-canvas .zm-crumbs { position: absolute; left: calc(var(--sh-gap) + 212px); top: var(--sh-gap); z-index: 6; padding: 6px 10px; border-radius: 10px; background: var(--glass-strong); box-shadow: var(--rim); }
+.sh-canvas .zm-crumbs { position: absolute; left: calc(var(--sh-gap) + 212px); top: var(--sh-gap); z-index: 6; padding: 6px 10px; border-radius: 10px; background: var(--chip-solid); box-shadow: var(--rim); }
 .sh-canvas .zm-crumbs ol { margin: 0; }
 .sh-slot { margin-top: 10px; }
 /* The three panes: the file tree, the center and the code pane, from the top bar to the bottom of the window. */

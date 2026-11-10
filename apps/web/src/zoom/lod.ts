@@ -24,19 +24,16 @@ export function labelChars(boxScreenWidth: number, charPx = LABEL_CHAR_PX, padPx
  * The label as it fits in `maxChars` characters, or null when fewer than MIN_LABEL_CHARS fit (draw no label).
  *
  * - A label that fits is returned whole.
- * - Otherwise it is cut to `maxChars` characters in all, the last one an ellipsis ("…"), so at least
- *   MIN_LABEL_CHARS - 1 characters of the text remain.
- * - A file-like label (one containing "/" or ".", such as "src/lib/ap.ts") keeps its END: the cut is taken from the
- *   front, giving "…ap.ts", because the file name is what a reader looks for. Other labels keep their start.
+ * - Otherwise it is cut from the END to `maxChars` characters in all, the last one an ellipsis ("…"), so at least
+ *   MIN_LABEL_CHARS - 1 characters of the text remain. The start is what a reader reads first ("Worker · verify.worker.ts"
+ *   keeps "Worker · verify"), so no label is cut from its front.
  *
- * The result is never longer than `maxChars`.
+ * The result is never longer than `maxChars`. The full label goes in the element's `title` when it is cut.
  */
 export function fitLabel(label: string, maxChars: number): string | null {
   if (!(maxChars >= MIN_LABEL_CHARS)) return null;
   if (label.length <= maxChars) return label;
-  const keep = maxChars - 1;
-  if (/[/.]/.test(label)) return ELLIPSIS + label.slice(label.length - keep);
-  return label.slice(0, keep) + ELLIPSIS;
+  return label.slice(0, maxChars - 1) + ELLIPSIS;
 }
 
 /** The space between a frame header's label and its detail, in characters. */

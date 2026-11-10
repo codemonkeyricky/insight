@@ -42,7 +42,10 @@ export const frontend: Frontend = {
     for (const page of ["index.html", "public/index.html"]) {
       if (existsSync(join(ctx.root.path, page))) html.set(page, await ctx.readFile(page));
     }
-    const project = buildProject(ctx.root.path, rels, texts, html);
+    // The root package.json names the Node scripts of "bin" and "scripts" (see nodeEntryFiles).
+    const manifests = new Map<string, string>();
+    if (existsSync(join(ctx.root.path, "package.json"))) manifests.set("package.json", await ctx.readFile("package.json"));
+    const project = buildProject(ctx.root.path, rels, texts, html, manifests);
     for (const rel of ctx.files) {
       yield emitFile(project, rel);
     }

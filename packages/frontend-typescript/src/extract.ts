@@ -28,6 +28,8 @@ type Entity =
       module?: true;
       /** Set for a module that an index.html loads with a script tag. */
       htmlEntry?: true;
+      /** Set for a module that is a Node script: under scripts/ or bin/ with a shebang or process.argv, or named by package.json. */
+      nodeEntry?: true;
     };
 
 export interface Decl {
@@ -193,7 +195,7 @@ function moduleSpan(rel: string, sf: ts.SourceFile): Span {
 }
 
 /** Assigns IDs to every declaration in a file: <file>#<qualified name>, with ~N for repeats. */
-function assignDecls(rel: string, sf: ts.SourceFile, out: Map<ts.Node, Decl>, htmlEntry: boolean): void {
+function assignDecls(rel: string, sf: ts.SourceFile, out: Map<ts.Node, Decl>, htmlEntry: boolean, nodeEntry: boolean): void {
   // The module entry is keyed by the source file itself. Its name is not a container, so declarations keep their ids.
   if (runsAtLoad(sf)) {
     const entity: Entity = {
@@ -205,6 +207,7 @@ function assignDecls(rel: string, sf: ts.SourceFile, out: Map<ts.Node, Decl>, ht
       anonymous: false,
       module: true,
       ...(htmlEntry ? { htmlEntry: true as const } : {}),
+      ...(nodeEntry ? { nodeEntry: true as const } : {}),
     };
     out.set(sf, { id: `${rel}#${MODULE_NAME}`, rel, qname: MODULE_NAME, entity, node: sf });
   }
@@ -257,6 +260,55 @@ function compilerOptions(root: string): ts.CompilerOptions {
   return { ...base, allowJs: true, checkJs: false, noEmit: true, skipLibCheck: true };
 }
 
+/** A test, spec or fixture file: never a program's entry. */
+const TEST_PATH = /(^|\/)(__tests__|tests?)\/|\.(test|spec)\.[^/]*$/;
+/** A path-like token in a package.json script or bin command, such as `tsx scripts/gen.ts`. */
+const SCRIPT_TOKEN = /(?:\.{0,2}\/)?[\w@.-]+(?:\/[\w@.-]+)*\.[cm]?[jt]sx?\b/g;
+
+/** The script files a package.json names in its "bin" and "scripts" entries, relative to the project root. */
+function manifestScripts(text: string): Set<string> {
+  const out = new Set<string>();
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    return out;
+  }
+  if (typeof json !== "object" || json === null) return out;
+  const pkg = json as { bin?: unknown; scripts?: unknown };
+  const commands: string[] = [];
+  if (typeof pkg.bin === "string") commands.push(pkg.bin);
+  else if (typeof pkg.bin === "object" && pkg.bin !== null) commands.push(...Object.values(pkg.bin).filter((v): v is string => typeof v === "string"));
+  if (typeof pkg.scripts === "object" && pkg.scripts !== null) commands.push(...Object.values(pkg.scripts).filter((v): v is string => typeof v === "string"));
+  for (const c of commands) {
+    for (const m of c.matchAll(SCRIPT_TOKEN)) out.add(m[0].replace(/^\.\//, ""));
+  }
+  return out;
+}
+
+/**
+ * The Node script entries: a module file, not a test, that is under scripts/ or bin/ with a shebang or a read of
+ * process.argv, or that a package.json "bin" or "scripts" entry names. `texts` is keyed by absolute path.
+ */
+function nodeEntryFiles(root: string, rels: string[], texts: Map<string, string>, manifests: Map<string, string>): Set<string> {
+  const named = new Set<string>();
+  for (const text of manifests.values()) for (const f of manifestScripts(text)) named.add(f);
+  const out = new Set<string>();
+  for (const rel of rels) {
+    if (TEST_PATH.test(rel) || rel.endsWith(".d.ts")) continue;
+    if (named.has(rel)) {
+      out.add(rel);
+      continue;
+    }
+    const first = rel.split("/")[0] ?? "";
+    if (rel.includes("/") && (first === "scripts" || first === "bin")) {
+      const text = texts.get(join(root, rel)) ?? "";
+      if (text.startsWith("#!") || /\bprocess\.argv\b/.test(text)) out.add(rel);
+    }
+  }
+  return out;
+}
+
 const SCRIPT_SRC = /<script\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/gi;
 
 /**
@@ -281,7 +333,13 @@ function htmlScriptEntries(html: Map<string, string>, rels: Set<string>): Set<st
  * Parses every project source file into one program, so calls and imports resolve across files.
  * `texts` maps absolute paths to contents. Files are read once per extraction run.
  */
-export function buildProject(root: string, rels: string[], texts: Map<string, string>, html: Map<string, string> = new Map()): Project {
+export function buildProject(
+  root: string,
+  rels: string[],
+  texts: Map<string, string>,
+  html: Map<string, string> = new Map(),
+  manifests: Map<string, string> = new Map(),
+): Project {
   const options = compilerOptions(root);
   const abs = (rel: string) => join(root, rel);
   const relOf = (file: string) => relative(root, file).split(sep).join("/");
@@ -308,9 +366,10 @@ export function buildProject(root: string, rels: string[], texts: Map<string, st
   const decls = new Map<ts.Node, Decl>();
   const relSet = new Set(rels);
   const htmlEntries = htmlScriptEntries(html, relSet);
+  const nodeEntries = nodeEntryFiles(root, rels, texts, manifests);
   for (const rel of rels) {
     const sf = program.getSourceFile(abs(rel));
-    if (sf) assignDecls(rel, sf, decls, htmlEntries.has(rel));
+    if (sf) assignDecls(rel, sf, decls, htmlEntries.has(rel), nodeEntries.has(rel));
   }
   const moduleIds = new Map<string, NodeId>();
   for (const d of decls.values()) {
@@ -763,6 +822,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
             ...(decl.entity.anonymous ? { anonymous: true } : {}),
             ...(decl.entity.module ? { module: true } : {}),
             ...(decl.entity.htmlEntry ? { htmlEntry: true } : {}),
+            ...(decl.entity.nodeEntry ? { nodeEntry: true } : {}),
           },
           span,
           provenance: PROV,
