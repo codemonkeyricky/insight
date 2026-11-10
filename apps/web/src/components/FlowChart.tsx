@@ -1,8 +1,9 @@
-import { useId, useMemo, useRef, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, type MouseEvent, type ReactNode } from "react";
 import type { FlowEdge, FlowNode, FunctionFlow } from "../api";
 import { outsideScope, outsideText } from "../flowTargets";
 import { hrefFile, hrefView } from "../router";
 import { backEdgeFlags, edgeMotions, prefersReducedMotion, PULSE_S, useMarchBudget, useOnScreen, usePageVisible, type EdgeMotion } from "../zoom/flowMotion";
+import { runFlowToken, useTokenSlot } from "../zoom/flowToken";
 
 /** A step's click, when a caller takes it over. Return true to handle it: the link (if any) is then not followed. */
 export type FlowNodeClick = (node: FlowNode) => boolean;
@@ -12,13 +13,17 @@ export type FlowNodeClick = (node: FlowNode) => boolean;
  * @insight/flow; this only draws them. A call into a function in scope links to that function's chart.
  * A call outside the scope is drawn unresolved. Any other step with a source span links to its line.
  * `onNodeClick` takes over the clicks (the zoom map does, so a click selects in place); `selectedId` marks one step.
- * `motion` (default on) makes each edge march in its direction, and a back-edge (a loop's return) also carries a pulse. It
- * is off under reduced motion, while the page is hidden, and while the chart is off screen (see zoom/flowMotion.ts).
+ * `motion` (default on) makes each edge march in its direction, a back-edge (a loop's return) also carries a pulse, and a
+ * token walks the chart's control flow (see zoom/flowToken.ts). Motion is off under reduced motion, while the page is
+ * hidden, and while the chart is off screen (see zoom/flowMotion.ts). The token runs on the most recently opened charts only.
  */
 export function FlowChart({ id, fn, scope, onNodeClick, selectedId, motion = true }: { id: string; fn: FunctionFlow; scope: string; onNodeClick?: FlowNodeClick; selectedId?: string; motion?: boolean }) {
   const uid = useId();
-  const arrow = `arrow-${uid.replace(/[^a-zA-Z0-9]/g, "")}`;
+  const key = uid.replace(/[^a-zA-Z0-9]/g, "");
+  const arrow = `arrow-${key}`;
+  const glow = `glow-${key}`;
   const ref = useRef<SVGSVGElement>(null);
+  const tokenRef = useRef<SVGGElement>(null);
   const onScreen = useOnScreen(ref);
   const visible = usePageVisible();
   const reduced = prefersReducedMotion();
@@ -26,6 +31,13 @@ export function FlowChart({ id, fn, scope, onNodeClick, selectedId, motion = tru
   const back = useMemo(() => backEdgeFlags(fn.nodes, fn.edges), [fn]);
   const budget = useMarchBudget(uid, fn.edges.length, on);
   const motions = useMemo(() => edgeMotions(back, { on, reduced, budget }), [back, on, reduced, budget]);
+  const tokenActive = useTokenSlot(uid, on && fn.edges.length > 0);
+  useEffect(() => {
+    const svg = ref.current;
+    const tok = tokenRef.current;
+    if (!tokenActive || !svg || !tok) return;
+    return runFlowToken(svg, tok, fn);
+  }, [tokenActive, fn]);
   return (
     <svg ref={ref} className="flow" width={fn.width} height={fn.height} viewBox={`0 0 ${fn.width} ${fn.height}`} role="img" aria-label={`Control flow of ${fn.name}`}>
       <defs>
@@ -35,7 +47,7 @@ export function FlowChart({ id, fn, scope, onNodeClick, selectedId, motion = tru
       </defs>
       <g>
         {fn.edges.map((e, i) => (
-          <Edge key={`${e.from}>${e.to}>${i}`} edge={e} marker={arrow} motion={motions[i] ?? NO_MOTION} back={back[i] === true} />
+          <Edge key={`${e.from}>${e.to}>${i}`} edge={e} index={i} marker={arrow} motion={motions[i] ?? NO_MOTION} back={back[i] === true} />
         ))}
       </g>
       <g>
@@ -43,6 +55,16 @@ export function FlowChart({ id, fn, scope, onNodeClick, selectedId, motion = tru
           <Node key={n.id} id={id} node={n} fnId={fn.id} scope={scope} onNodeClick={onNodeClick} selected={n.id === selectedId} />
         ))}
       </g>
+      {tokenActive && (
+        <g ref={tokenRef} className="flow-token" aria-hidden="true">
+          <radialGradient id={glow}>
+            <stop className="flow-glow-in" offset="0" />
+            <stop className="flow-glow-out" offset="1" />
+          </radialGradient>
+          <circle r={8} fill={`url(#${glow})`} />
+          <circle r={3.5} className="flow-token-dot" />
+        </g>
+      )}
     </svg>
   );
 }
@@ -53,10 +75,10 @@ const NO_MOTION: EdgeMotion = { march: false, pulse: false };
  * One edge: its solid path with the arrow, then (when it moves) a dashed overlay that marches along the same path in its
  * direction, and on a back-edge a dot that travels the path every PULSE_S. The overlay sits on top of the solid line.
  */
-function Edge({ edge, marker, motion, back }: { edge: FlowEdge; marker: string; motion: EdgeMotion; back: boolean }) {
+function Edge({ edge, index, marker, motion, back }: { edge: FlowEdge; index: number; marker: string; motion: EdgeMotion; back: boolean }) {
   const d = edge.points.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x} ${y}`).join(" ");
   return (
-    <g className={`flow-edge ${edge.kind}${back ? " back-edge" : ""}`}>
+    <g className={`flow-edge ${edge.kind}${back ? " back-edge" : ""}`} data-edge={index}>
       <path d={d} markerEnd={`url(#${marker})`} />
       {motion.march && <path d={d} className={`flow-march${back ? " back" : ""}`} />}
       {motion.pulse && (
@@ -137,11 +159,11 @@ function Node({ id, node, fnId, scope, onNodeClick, selected }: { id: string; no
       }
     : undefined;
   return link ? (
-    <a href={link} className={cls} onClick={onClick}>
+    <a href={link} className={cls} onClick={onClick} data-node={node.id}>
       {body}
     </a>
   ) : (
-    <g className={cls} onClick={onClick}>
+    <g className={cls} onClick={onClick} data-node={node.id}>
       {body}
     </g>
   );
