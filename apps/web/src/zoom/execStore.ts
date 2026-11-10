@@ -7,6 +7,7 @@ import {
   execDefaultOpen,
   execRootsOnly,
   flattenRoots,
+  gridRootsLayout,
   layoutCovers,
   layoutScene,
   type ExecFunctionRef,
@@ -74,12 +75,14 @@ export class ExecStore implements MapSource {
           const open = execDefaultOpen(scene);
           // The saved layout is the full scene's, with the default containers open. A roots-only scene is a different scene,
           // so it is always solved here.
-          const layout =
-            !this.rootsOnly && !this.lambdas && saved !== undefined && layoutCovers(scene, saved, open)
+          // A roots-only scene is flat and laid out as a grid of uniform cards (gridRootsLayout), with no solve.
+          const layout = this.rootsOnly
+            ? gridRootsLayout(scene)
+            : !this.lambdas && saved !== undefined && layoutCovers(scene, saved, open)
               ? saved
               : await layoutScene(scene, (g) => solve(g).then((s) => s.result), { open });
           const fns = new Map(model.functions.map((f): [string, ExecFunctionRef] => [f.id, f]));
-          const view: ExecView = { scene, layout, open, fns, index: execIndex(scene, model, callers), layouts: new Map() };
+          const view: ExecView = { scene, layout, open, fns, index: execIndex(scene, model, callers, this.lambdas), layouts: new Map() };
           this.views.set(key, view);
           return view;
         })

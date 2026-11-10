@@ -369,6 +369,9 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 .zm-box.zm-function .zm-label { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 500; font-size: calc(12px * var(--zinv, 1)); }
 .zm-box:hover .zm-box-body { stroke: var(--accent); stroke-width: 2; }
 .zm-stub-body { fill: none; stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 6 4; }
+/* A roots-only card: a name line over a muted file line (see ZoomMap BoxShape). */
+.zm-card-sub { fill: var(--muted); font-family: system-ui, sans-serif; font-size: calc(12px * var(--zinv, 1)); pointer-events: none; }
+.zm-box.zm-card .zm-label { font-size: calc(13px * var(--zinv, 1)); }
 .zm-label-stub { fill: var(--muted); font-weight: 400; font-style: italic; }
 .zm-edge { fill: none; stroke: var(--muted); opacity: 0.85; vector-effect: non-scaling-stroke; }
 .zm-edge.stub { stroke-dasharray: 6 4; }
@@ -406,6 +409,10 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 /* Motion on the map: a detail opens on the shared curve (see zoom/tween.ts) and its callout follows once the edge reads. */
 .zm-expansion-motion { transform-box: fill-box; transform-origin: 0% 50%; animation: zm-expansion-in 260ms cubic-bezier(0.2, 0, 0, 1) both; }
 .zm-expansion-group .zm-callout { animation: zm-fade-in 260ms cubic-bezier(0.2, 0, 0, 1) 120ms both; }
+/* A closing detail shrinks and fades over 200 ms, the reverse of its entrance; it takes no pointer while it leaves. */
+.zm-expansion-group.is-leaving { pointer-events: none; }
+.zm-expansion-group.is-leaving .zm-expansion-motion { animation: zm-expansion-out 200ms cubic-bezier(0.4, 0, 1, 1) both; }
+@keyframes zm-expansion-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: scale(0.94); } }
 @keyframes zm-expansion-in { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: none; } }
 @keyframes zm-fade-in { from { opacity: 0; } to { opacity: 1; } }
 .zm-expansion-close { cursor: pointer; }
@@ -421,8 +428,12 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 .flow-call-bar { stroke: currentColor; stroke-width: 1.2; fill: none; }
 .zm-box.expanded .zm-box-body { stroke: var(--accent); stroke-width: 2; }
 .zm-loading { position: absolute; inset: 0; margin: 0; display: flex; align-items: center; justify-content: center; }
-.zm-keyplan { position: absolute; left: var(--sh-gap, 10px); bottom: calc(var(--sh-gap, 10px) + 44px); z-index: 4; margin: 0; padding: 6px; border-radius: 10px; background: var(--glass); box-shadow: var(--float); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
-.zm-keyplan figcaption { margin: 0 0 4px 2px; font-size: 11px; color: var(--muted); }
+/* The key plan sits bottom right, above the title chip, and is small and collapsible (closed by default). */
+.zm-keyplan { position: absolute; right: var(--sh-gap, 10px); bottom: 130px; z-index: 4; width: 140px; margin: 0; padding: 6px; border-radius: 10px; background: var(--glass); box-shadow: var(--float); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
+.zm-keyplan.is-closed { width: auto; }
+.zm-keyplan-toggle { display: block; width: 100%; padding: 4px 8px; border: 0; background: transparent; font: inherit; font-size: 11px; color: var(--muted); text-align: left; cursor: pointer; }
+.zm-keyplan.is-closed .zm-mini { display: none; }
+.zm-keyplan .zm-mini { width: 100%; height: auto; aspect-ratio: 16 / 11; }
 .zm-mini { display: block; width: 160px; height: 110px; background: var(--raised-box); border: 0; border-radius: 6px; cursor: crosshair; touch-action: none; }
 .zm-mini-frame { fill: none; stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .zm-mini-box { fill: var(--muted); opacity: 0.45; }
@@ -588,7 +599,7 @@ table.grid th { background: var(--faint); }
 .sh-page-head h1 { margin: 0; font-size: var(--t-xl); }
 
 /* The sheet: the map fills the stage at the height of the window under the bar. */
-.sh-sheet { position: relative; flex: 1 0 auto; min-height: 420px; margin: 0; overflow: hidden; background: var(--film); background-image: var(--ambient); }
+.sh-sheet { position: relative; flex: 1 1 auto; min-height: 360px; margin: 0; overflow: hidden; background: var(--film); background-image: var(--ambient); }
 .sh-canvas { position: absolute; inset: 0; }
 .sh-canvas .zm-stage { position: absolute; inset: 0; height: auto; border: 0; border-radius: 0; background: transparent; }
 .sh-slot:empty { display: none; }

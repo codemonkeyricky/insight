@@ -13,6 +13,7 @@ export * from "./scene.js";
 export * from "./scene-layout.js";
 export * from "./exec-scene.js";
 export * from "./scene-filter.js";
+export * from "./roots-grid.js";
 
 /**
  * The control-flow chart of every function in one source file, rebuilt from the IR.
