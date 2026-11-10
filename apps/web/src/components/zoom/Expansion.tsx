@@ -1,7 +1,7 @@
 // A function's control-flow chart drawn in an expansion box beside the zoom map (see zoom/expand.ts). The box has the
 // function's name in a header with a close button, and the chart at its natural size under the header once the box is
 // wide enough on screen. The box's position and size are the expansion's; the chart is drawn once, unscaled, so it grows
-// and shrinks with the camera like the rest of the map. A filled callout wedge runs from the step (or box) it hangs from
+// and shrinks with the camera like the rest of the map. A filled callout beam runs from the step (or box) it hangs from
 // to the box, behind it, and a 3px accent bar on the box's left edge says it opened from there.
 import { CHART_HEAD, CHART_PAD, type FlowNode } from "@insight/flow";
 import { chartShown } from "../../zoom/chart";
@@ -40,7 +40,7 @@ export interface CalloutEnds extends CalloutGeometry {
 }
 
 /**
- * The callout from an expansion's anchor to its box: a filled wedge drawn outside the expansion's group, so the side shift
+ * The callout from an expansion's anchor to its box: a filled beam drawn outside the expansion's group, so the side shift
  * writes its edges directly. Opening it fades it in; closing it fades it out (see styles.css).
  */
 export function CalloutShape({ ends, closing = false, reduced = false }: { ends: CalloutEnds; closing?: boolean; reduced?: boolean }) {
@@ -71,13 +71,14 @@ export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClic
   return (
     <g className="zm-expansion" role="group" aria-label={`Detail ${detailLetter(expansion.index)}: ${chart.name}`}>
       <title>{chart.name}</title>
-      <rect x={x} y={y} width={w} height={h} rx={12} className="zm-expansion-body" />
-      <rect x={x} y={y + CALLOUT_INSET} width={3} height={Math.max(0, h - 2 * CALLOUT_INSET)} className="zm-expansion-accent" />
+      <rect x={x} y={y} width={w} height={h} rx={14} className="zm-expansion-body" />
+      <rect x={x} y={y + CALLOUT_INSET} width={3} height={Math.max(0, h - 2 * CALLOUT_INSET)} rx={1.5} className="zm-expansion-accent" />
       <g className="zm-expansion-title" onClick={onSelect}>
-        <rect x={x} y={y} width={w} height={CHART_HEAD} rx={12} className="zm-expansion-head" />
+        <rect x={x} y={y} width={w} height={CHART_HEAD} rx={14} className="zm-expansion-head" />
+        <line x1={x + 12} x2={x + w - 12} y1={y + CHART_HEAD} y2={y + CHART_HEAD} className="zm-expansion-rule" />
         {label !== null && (
           <text x={x + 14} y={y + CHART_HEAD / 2} dominantBaseline="central" className="zm-label">
-            {label}
+            <tspan className="zm-card-glyph">ƒ</tspan>{" "}{label}
           </text>
         )}
       </g>
@@ -91,6 +92,7 @@ export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClic
         }}
       >
         <rect x={x + w - CHART_HEAD} y={y} width={CHART_HEAD} height={CHART_HEAD} className="zm-expansion-close-hit" />
+        <circle cx={x + w - CHART_HEAD / 2} cy={y + CHART_HEAD / 2} r={9} className="zm-expansion-close-bg" />
         <text x={x + w - CHART_HEAD / 2} y={y + CHART_HEAD / 2} dominantBaseline="central" textAnchor="middle">
           ×
         </text>

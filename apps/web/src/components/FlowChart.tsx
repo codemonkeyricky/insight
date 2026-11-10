@@ -41,8 +41,8 @@ export function FlowChart({ id, fn, scope, onNodeClick, selectedId, motion = tru
   return (
     <svg ref={ref} className="flow" width={fn.width} height={fn.height} viewBox={`0 0 ${fn.width} ${fn.height}`} role="img" aria-label={`Control flow of ${fn.name}`}>
       <defs>
-        <marker id={arrow} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto">
-          <path d="M0,0 L10,5 L0,10 z" className="flow-arrow" />
+        <marker id={arrow} viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+          <path d="M2,1.5 L8.5,5 L2,8.5" className="flow-arrow" />
         </marker>
       </defs>
       <g>
@@ -119,7 +119,7 @@ function Node({ id, node, fnId, scope, onNodeClick, selected }: { id: string; no
       mark = null;
       break;
     default:
-      mark = <rect x={x} y={y} width={w} height={h} rx={8} />;
+      mark = <rect x={x} y={y} width={w} height={h} rx={9} />;
   }
   const target = node.target;
   const outside = target !== undefined && outsideScope(target, scope);

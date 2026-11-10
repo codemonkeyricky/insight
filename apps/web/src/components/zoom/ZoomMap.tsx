@@ -1219,7 +1219,13 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
         aria-describedby={hint ? hintId : undefined}
         onKeyDown={onKey}
       >
-        <svg ref={svgRef} className="zm-svg" width="100%" height="100%">
+        <svg
+          ref={svgRef}
+          className="zm-svg"
+          width="100%"
+          height="100%"
+          style={{ ["--card-fill" as string]: `url(#${arrowId}-card)`, ["--beam-fill" as string]: `url(#${arrowId}-beam)` }}
+        >
           <defs>
             <marker
               id={arrowId}
@@ -1233,6 +1239,14 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
             >
               <path d="M0,0 L10,5 L0,10 z" className="zm-arrow" />
             </marker>
+            <linearGradient id={`${arrowId}-card`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" className="zm-card-g0" />
+              <stop offset="1" className="zm-card-g1" />
+            </linearGradient>
+            <linearGradient id={`${arrowId}-beam`} x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0" className="zm-beam-g0" />
+              <stop offset="1" className="zm-beam-g1" />
+            </linearGradient>
           </defs>
           <g ref={worldRef} className={far ? "zm-world zm-far" : mid ? "zm-world zm-mid" : "zm-world"}>
             {!flat && <ZoneGrid path={zonePath} />}
@@ -1427,12 +1441,12 @@ export function FrameShape({
   return (
     <g className={`zm-frame${node ? ` zm-${node.kind}` : ""} ${lineClass(line)}`} data-sx={rect.x} data-fid={item.id}>
       <title>{node?.title || (node ? (node.detail ? `${node.label} (${node.detail})` : node.label) : item.id)}</title>
-      <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={12} className="zm-frame-body" />
+      <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={16} className="zm-frame-body" />
       <g className="zm-hit" onClick={() => onOpen(item.id)}>
-        <rect x={rect.x} y={rect.y} width={rect.w} height={head} rx={12} className="zm-frame-head" />
+        <rect x={rect.x} y={rect.y} width={rect.w} height={head} rx={16} className="zm-frame-head" />
         {text.label !== null && (
           <text x={rect.x + 12} y={rect.y + head / 2} dominantBaseline="central" className="zm-label">
-            {text.label}
+            <tspan className="zm-frame-dot">●</tspan>{" "}{text.label}
           </text>
         )}
         {text.detail !== null && (
@@ -1481,14 +1495,15 @@ function BoxShape({
   const holdsChart = node.chart !== undefined;
   if (card && !small && !bare) {
     // A card: its name alone, centred vertically, fitted to the card's width on screen.
-    const name = fitLabel(shown, labelChars(rect.w * k, 8, 20));
+    // Two characters of the budget go to the leading function glyph (ƒ), so the name stays inside the card.
+    const name = fitLabel(shown, Math.max(1, labelChars(rect.w * k, 8, 20) - 2));
     return (
       <g className={`zm-box zm-${node.kind} zm-card ${lineClass(line)}${holdsChart ? " zm-has-chart" : ""}${chartOpen ? " expanded" : ""}`} data-sx={rect.x} data-fid={item.id} onClick={() => onOpen(item.id)}>
         <title>{node.detail !== undefined ? `${node.label} (${node.detail})` : node.title || node.label}</title>
-        <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={10} className="zm-box-body" />
+        <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={12} className="zm-box-body" />
         {name !== null && (
           <text x={rect.x + 12} y={rect.y + rect.h / 2} dominantBaseline="central" className="zm-label">
-            {name}
+            <tspan className="zm-card-glyph">ƒ</tspan>{" "}{name}
           </text>
         )}
       </g>

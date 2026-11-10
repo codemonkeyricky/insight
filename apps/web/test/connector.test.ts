@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { calloutD } from "../src/zoom/connector.js";
 
 describe("callout geometry", () => {
-  it("is a four-cornered wedge: the anchor's top and bottom, then the expansion's bottom and top", () => {
-    expect(calloutD(100, 40, 80, 300, 52, 200)).toBe("M100 40 L300 52 L300 200 L100 80 Z");
+  it("is a curved ribbon: the anchor's top, a cubic to the expansion's top, down its left edge, a cubic back to the anchor's bottom", () => {
+    expect(calloutD(100, 40, 80, 300, 52, 200)).toBe("M100 40 C200 40 200 52 300 52 L300 200 C200 200 200 80 100 80 Z");
   });
 
   it("starts at the anchor's top edge and closes back to it", () => {
