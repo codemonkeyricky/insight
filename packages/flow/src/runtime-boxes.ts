@@ -20,6 +20,13 @@ const EMPTY_CONTENT: Size = { w: 200, h: 0 };
 const MIN_CONTENT_W = 300;
 /** The aspect (width over height) a thread's grid of cards aims for: a 16:10 block. */
 const GRID_ASPECT = 1.6;
+/** A thread (or the "Not on a thread" group) with more root cards than this shows its first MORE_KEEP and one "+N more" card. */
+export const MORE_AFTER = 24;
+const MORE_KEEP = 23;
+/** The suffix of the id of a thread's "+N more" card. */
+export const MORE_SUFFIX = "#more";
+/** The id of the "+N more" card of a thread. */
+export const moreIdOf = (threadId: string): string => `${threadId}${MORE_SUFFIX}`;
 
 /** Whether the model has runtime context to draw containers for: a grounded thread, or a coroutine. */
 export function hasRuntimeContext(model: ExecModel): boolean {
@@ -30,10 +37,11 @@ export function hasRuntimeContext(model: ExecModel): boolean {
 /**
  * The roots-only scene with containers: the processes and threads of execRootsOnly, the root cards in each thread, and
  * the plain code flow moved into the "Not on a thread" group. A function that several threads run has a card in each,
- * and each card's detail names its thread. Undefined when the model has no runtime context: the caller keeps the flat
- * roots-only scene. The input is not changed.
+ * and each card's detail names its thread. A thread with more than MORE_AFTER root cards shows its first MORE_KEEP and a
+ * "+N more" card, unless its id is in `expanded`. Undefined when the model has no runtime context: the caller keeps the
+ * flat roots-only scene. The input is not changed.
  */
-export function runtimeRootsScene(full: Scene, model: ExecModel): Scene | undefined {
+export function runtimeRootsScene(full: Scene, model: ExecModel, expanded: ReadonlySet<string> = new Set()): Scene | undefined {
   if (!hasRuntimeContext(model)) return undefined;
   const cut = execRootsOnly(full, model);
   const nodes = new Map<string, SceneNode>();
@@ -71,6 +79,30 @@ export function runtimeRootsScene(full: Scene, model: ExecModel): Scene | undefi
   const byLabel = (a: string, b: string): number => (label(a) < label(b) ? -1 : label(a) > label(b) ? 1 : 0);
   root.children = [...root.children].sort((a, b) => rank(a) - rank(b) || (rank(a) === 1 ? byLabel(a, b) : 0));
 
+  // A long thread shows its first cards and a "+N more" card: the rest are left out of the scene until it is expanded.
+  const hidden = new Set<string>();
+  for (const n of [...nodes.values()]) {
+    if ((n.kind !== "thread" && n.kind !== "group") || expanded.has(n.id)) continue;
+    const fns = n.children.filter((id) => nodes.get(id)?.kind === "function");
+    if (fns.length <= MORE_AFTER) continue;
+    const rest = fns.slice(MORE_KEEP);
+    const restSet = new Set(rest);
+    for (const id of rest) {
+      hidden.add(id);
+      nodes.delete(id);
+    }
+    const more = moreIdOf(n.id);
+    n.children = [...n.children.filter((id) => !restSet.has(id)), more];
+    nodes.set(more, {
+      id: more,
+      kind: "more",
+      label: `+${rest.length} more`,
+      parent: n.id,
+      children: [],
+      detail: "Click to show every root card of this thread",
+    });
+  }
+
   // Each card's subtitle is its file and line. A function on several threads names its thread, so its cards read apart.
   const byFn = new Map(model.functions.map((f) => [f.id, f]));
   const cardsOf = new Map<string, number>();
@@ -88,8 +120,8 @@ export function runtimeRootsScene(full: Scene, model: ExecModel): Scene | undefi
   return {
     root: cut.root,
     nodes,
-    edges: cut.edges.map((e) => ({ ...e })),
-    levels: { ...cut.levels, group: { box: { w: 300, h: 64 } } },
+    edges: cut.edges.filter((e) => !hidden.has(e.from) && !hidden.has(e.to)).map((e) => ({ ...e })),
+    levels: { ...cut.levels, group: { box: { w: 300, h: 64 } }, more: { box: { w: 160, h: 56 } } },
   };
 }
 

@@ -120,6 +120,11 @@ export interface MapSource {
    * layout is arithmetic. Only a slotted build is laid out again.
    */
   rebuild?(build: MapBuild, footprint: ReadonlyMap<string, { w: number; h: number }>): MapBuild;
+  /**
+   * Shows every root card of the thread that the "+N more" card `nodeId` stands for, and loads the scope again. The map
+   * builds the focus again afterwards. Undefined (no method) means the source has no such cards.
+   */
+  expandMore?(build: MapBuild, nodeId: string): Promise<void>;
   /** Whether a chain box's function is a dispatch target (an await or a start) of the thread that holds the box `boxId`. */
   asyncOf?(build: MapBuild, fnId: string, boxId: string): boolean;
 }

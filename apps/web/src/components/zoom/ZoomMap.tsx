@@ -7,7 +7,7 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as KeyEvent, type PointerEvent as PointerEv, type ReactNode } from "react";
 import { select } from "d3-selection";
 import { zoom, zoomIdentity, type D3ZoomEvent, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
-import { ZOOM_SIZE, fitCamera, fitChartCamera, visibleWorld, type Camera, type FlowNode, type FlowSpan, type FunctionFlow, type PlacedItem, type Rect } from "@insight/flow";
+import { MORE_SUFFIX, ZOOM_SIZE, fitCamera, fitChartCamera, visibleWorld, type Camera, type FlowNode, type FlowSpan, type FunctionFlow, type PlacedItem, type Rect } from "@insight/flow";
 import { nameOfId } from "../../flowTargets";
 import { hrefView } from "../../router";
 import { CHART_MIN_PX } from "../../zoom/chart";
@@ -202,6 +202,9 @@ interface OffMap {
  * The execution map: one camera over a scope's scene. Each node is a focus of the source; the map's items and edges
  * are named by node id, so a click or key that names a node is turned into a focus by the source first (`focusOf`).
  */
+/** The smallest scale the whole project fits at. Below it the first program (the Browser one) fills the stage instead. */
+const READABLE_FIT_K = 0.9;
+
 export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFocus, hint = true, inset = 0, leftInset = 0, bottomInset = 0, findings, layers = { frames: true, calls: true }, flat = false, motion = true }: Props) {
   /** The details that are closing: they stay drawn for EXIT_CLOSE_MS while they shrink and fade (see setExp). */
   const [leaving, setLeaving] = useState<readonly Expansion[]>([]);
@@ -489,7 +492,14 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     const room = roomOf();
     const opens = b.placed.items.some((i) => i.id === b.nodeId && i.kind === "frame");
     // A roots-only grid fits at 1x when it fits: the cards are never enlarged past their size.
-    const c = opens || b.node(b.nodeId)?.chart !== undefined ? fitChartCamera(rect, room, CHART_MIN_PX) : fitCamera(rect, room, flat ? { maxK: 1 } : {});
+    let c = opens || b.node(b.nodeId)?.chart !== undefined ? fitChartCamera(rect, room, CHART_MIN_PX) : fitCamera(rect, room, flat ? { maxK: 1 } : {});
+    // The whole project too small to read: the first program (the Browser one, listed first) fills the stage instead, and
+    // the rest of the map is panned to.
+    if (b.node(b.nodeId)?.kind === "project" && c.k < READABLE_FIT_K) {
+      const first = b.placed.items.find((i) => i.kind === "frame" && b.node(i.id)?.kind === "program");
+      const prect = first !== undefined ? b.placed.rects.get(first.id) : undefined;
+      if (prect !== undefined) c = fitCamera(prect, room, { minK: READABLE_FIT_K });
+    }
     return { ...c, x: c.x + leftRef.current, y: c.y + TOP_RESERVE };
   };
 
@@ -608,8 +618,17 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   };
 
   /** Opens the node a click, key or link names: the source turns the node into its focus, then the map shows it. */
+  /** A click on a "+N more" card shows the rest of its thread's cards in place. Undefined when `nodeId` is another box. */
+  const expandMore = (nodeId: string): boolean => {
+    const b = buildRef.current;
+    if (!b || !source.expandMore || !nodeId.endsWith(MORE_SUFFIX)) return false;
+    void source.expandMore(b, nodeId).then(() => show(b.focus, false, true));
+    return true;
+  };
+
   const openNode = (nodeId: string) => {
     const b = buildRef.current;
+    if (expandMore(nodeId)) return;
     // The keys go to the map after a click: the chart's link that had the focus is removed by the re-render, and the
     // focus would fall to the page, so the stage takes it here.
     stageRef.current?.focus({ preventScroll: true });
@@ -620,6 +639,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   /** A click on a box. A function with a chart toggles its expansion; any other box opens as a link does. */
   const boxClick = (nodeId: string) => {
     const b = buildRef.current;
+    if (expandMore(nodeId)) return;
     stageRef.current?.focus({ preventScroll: true });
     if (!b) return;
     const toggle = b.node(nodeId)?.chart !== undefined;
@@ -1334,6 +1354,7 @@ function AsyncFrame({ expansion, k }: { expansion: Expansion; k: number }) {
       <rect x={x - SLOT_PAD} y={y - SLOT_PAD} width={w + 2 * SLOT_PAD} height={h + 2 * SLOT_PAD} rx={22} className="zm-async-frame" />
       {label !== null && (
         <text x={x + 10} y={y - SLOT_PAD} dominantBaseline="central" className="zm-async-label">
+          <title>{`Async · ${chart.name}`}</title>
           {label}
         </text>
       )}
