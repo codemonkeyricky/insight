@@ -344,7 +344,7 @@ describe("buildExecScene", () => {
           id: "spawn:2",
           kind: "thread",
           grounded: true,
-          spawn: { node: "spawn:2", owner: "main", file: "src/app.ts", line: 7, how: "thread", status: "unresolved", candidates: false },
+          spawn: { node: "spawn:2", owner: "main", file: "src/app.ts", line: 7, how: "thread", status: "unresolved", candidates: false, api: "child_process.execFileSync" },
           roots: [],
           reach: 0,
           reached: [],
@@ -375,7 +375,7 @@ describe("buildExecScene", () => {
     });
     const s = buildExecScene(m);
     const stub = node(s, "thread:spawn:2");
-    expect(stub.label).toBe("Thread · unresolved");
+    expect(stub.label).toBe("Thread · execFileSync (app.ts:7)");
     expect(stub.children).toEqual([]);
     expect(stub.detail).toBe("0 functions");
     expect(stub.note).toBe("Spawned at src/app.ts:7. The spawn target could not be resolved.");

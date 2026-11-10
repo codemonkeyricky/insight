@@ -204,7 +204,14 @@ export function buildExecScene(model: ExecModel): Scene {
   const threadName = (t: ExecThread): string => {
     const first = t.roots[0];
     if (first !== undefined && fns.has(first)) return nameOf(first);
-    return t.spawn?.script !== undefined && t.spawn.script !== "" ? basename(t.spawn.script) : "unresolved";
+    if (t.spawn?.script !== undefined && t.spawn.script !== "") return basename(t.spawn.script);
+    // No target is known: name the spawn by its API and call site, so the box says what starts the thread.
+    const s = t.spawn;
+    if (s === undefined) return "unresolved";
+    const api = s.api !== undefined && s.api !== "" ? (s.api.split(".").pop() ?? s.api) : undefined;
+    const site = s.file !== "" && s.line > 0 ? `${basename(s.file)}:${s.line}` : undefined;
+    if (api === undefined) return site ?? "unresolved";
+    return site !== undefined ? `${api} (${site})` : api;
   };
 
   // The process box a grounded thread's box sits in, made when first asked. Undefined when the box sits on the project.
@@ -441,12 +448,15 @@ export function buildExecScene(model: ExecModel): Scene {
 
   function threadNode(t: ExecThread, id: string, parent: string): SceneNode {
     const script = t.spawn?.script;
-    // A thread that runs a script file is a worker: named by its file, the way a worker is named in the IR.
+    // A thread that runs a script file is a worker: named by its file, the way a worker is named in the IR. A browser Worker
+    // runs its file's module entry, so its file is the module root's file.
+    const moduleFile = t.roots.map((r) => fns.get(r)).find((f) => f?.module === true)?.file;
+    const workerFile = script !== undefined && script !== "" ? script : t.spawn?.api === "Worker" ? moduleFile : undefined;
     const label =
       t.kind === "main" || t.kind === "process"
         ? "Main thread"
-        : script !== undefined && script !== ""
-          ? `Worker · ${basename(script)}`
+        : workerFile !== undefined && workerFile !== ""
+          ? `Worker · ${basename(workerFile)}`
           : `${KIND_LABEL[t.kind] ?? t.kind} · ${threadName(t)}`;
     const node: SceneNode = {
       id,

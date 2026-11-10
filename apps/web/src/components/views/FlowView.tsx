@@ -111,7 +111,6 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
     <>
       <div className="sh-sheet">
         <div className="sh-canvas">
-          <RootsOnly id={id} scope={scope} fn={fn} roots={roots} />
           <ZoomMap
             key={`${roots ? "roots" : "all"}-${shown.lambdas ? "lambdas" : "folded"}-${shown.runtime ? "runtime" : "flat"}`}
             id={id}
@@ -148,7 +147,7 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
               if (key === "runtime") writeRuntimeBoxes(on);
             }}
             onClose={() => setLayersOpen(false)}
-            roots={<RootsOnly id={id} scope={scope} fn={fn} roots={roots} className="sh-check" />}
+            roots={<RootsOnly id={id} scope={scope} fn={fn} roots={roots} />}
           />
         ) : (
           <button type="button" className="sh-card sh-layers-open" onClick={() => setLayersOpen(true)}>
@@ -166,10 +165,10 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
   );
 }
 
-/** The roots-only switch on the canvas. Turning it on or off changes the URL, and the canvas follows the URL. */
-function RootsOnly({ id, scope, fn, roots, className = "sh-roots" }: { id: string; scope: string; fn?: string; roots: boolean; className?: string }) {
+/** The roots-only switch in the Show menu. Turning it on or off changes the URL, and the canvas follows the URL. */
+function RootsOnly({ id, scope, fn, roots }: { id: string; scope: string; fn?: string; roots: boolean }) {
   return (
-    <label className={className}>
+    <label className="sh-check">
       <input
         type="checkbox"
         checked={roots}

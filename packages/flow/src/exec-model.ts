@@ -2,7 +2,7 @@ import type { IREdge, IRNode } from "@insight/ir";
 import { edgeTargets } from "@insight/sdk";
 import { insideScope } from "./scope-map.js";
 import { isNoisePath } from "./scope.js";
-import { factsForFile } from "./build.js";
+import { factsForFile, topLevelName } from "./build.js";
 import { layoutFunction } from "./layout.js";
 
 /**
@@ -81,6 +81,8 @@ export interface ExecSpawn {
   candidates: boolean;
   /** The script file a worker runs. Its top-level code starts the thread, so its roots are the functions that code calls. */
   script?: string;
+  /** The API the spawn calls, as the IR names it (for example "Worker" or "child_process.execFileSync"). */
+  api?: string;
 }
 
 /** A function that a thread awaits or starts. */
@@ -388,7 +390,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     if (fold && anonymous) continue;
     fns.set(n.id, {
       id: n.id,
-      name: strAttr(n.attrs, "name") ?? (n.id.split("#")[1] ?? n.id),
+      name: n.attrs?.module === true && file !== undefined ? topLevelName(file) : (strAttr(n.attrs, "name") ?? (n.id.split("#")[1] ?? n.id)),
       file,
       line: n.span ? n.span.start[0] + 1 : 0,
       inScope: file !== undefined && insideScope(file, scope),
@@ -664,6 +666,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       candidates: s?.candidates ?? false,
       ...(n.parent !== undefined ? { owner: foldId(n.parent) } : {}),
       ...(script !== undefined ? { script } : {}),
+      ...(strAttr(n.attrs, "api") !== undefined ? { api: strAttr(n.attrs, "api") } : {}),
     };
     plans.push(planOf(how, n.id, rootList, spawn));
   }

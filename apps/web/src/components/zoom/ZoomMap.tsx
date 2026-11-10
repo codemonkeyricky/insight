@@ -37,6 +37,11 @@ const PAN_PX = 80;
  * inset and a 10 px margin. A selected function fits above it, so the minimap never covers the chart.
  */
 const MINI_RESERVE = 130;
+/**
+ * Room at the top of the stage that a fit leaves clear for the header chips: the Show card and the breadcrumb (see the
+ * flow view's styles). A fitted box sits below them, so its frame's header is not drawn under a chip.
+ */
+const TOP_RESERVE = 76;
 /** On a phone-width stage the key plan sits higher, so the far grid keeps clear of it by more. */
 const MINI_RESERVE_NARROW = 184;
 const NARROW_STAGE_PX = 520;
@@ -263,7 +268,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     const s = sizeOf();
     // Above a bottom sheet the room ends at its top edge, with the same margin the minimap keeps.
     const reserve = bottomRef.current > 0 ? bottomRef.current + SHEET_ROOM_MARGIN : MINI_RESERVE;
-    return { width: Math.max(1, s.width - leftRef.current), height: Math.max(1, s.height - reserve) };
+    return { width: Math.max(1, s.width - leftRef.current), height: Math.max(1, s.height - reserve - TOP_RESERVE) };
   };
 
   /** The camera's spring. Every programmatic move goes through it; a user's gesture stops it (see the camera effect). */
@@ -485,7 +490,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     const opens = b.placed.items.some((i) => i.id === b.nodeId && i.kind === "frame");
     // A roots-only grid fits at 1x when it fits: the cards are never enlarged past their size.
     const c = opens || b.node(b.nodeId)?.chart !== undefined ? fitChartCamera(rect, room, CHART_MIN_PX) : fitCamera(rect, room, flat ? { maxK: 1 } : {});
-    return { ...c, x: c.x + leftRef.current };
+    return { ...c, x: c.x + leftRef.current, y: c.y + TOP_RESERVE };
   };
 
   /**
@@ -500,7 +505,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     // The scale stays at the mid tier's floor, so the boxes stay out of the far tier while the details scale down.
     const boxH = medianOf(b.placed.items.filter((i) => i.kind === "box").map((i) => i.rect.h));
     const c = fitCamera(all, roomOf(), { minK: boxH > 0 ? MID_TILE_PX / boxH : undefined });
-    return { ...c, x: c.x + leftRef.current };
+    return { ...c, x: c.x + leftRef.current, y: c.y + TOP_RESERVE };
   };
 
   /** Moves the camera to `target`. `animate` is false for a move that must not animate (a resize, the first view). */
@@ -510,10 +515,10 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
 
   /** The camera that shows an expansion from `from`, the least it can move (see revealCamera). */
   const revealOf = (from: Camera, e: Expansion, minPx = CHART_MIN_PX): Camera => {
-    // The reveal works in the stage's own coordinates (from the left inset), so the inset is taken off and put back.
+    // The reveal works in the room's own coordinates (from the left and top insets), so the insets are taken off and put back.
     const left = leftRef.current;
-    const c = revealCamera({ ...from, x: from.x - left }, { x: e.x, y: e.y, w: e.w, h: e.h }, e.chart.width, roomOf(), minPx);
-    return { ...c, x: c.x + left };
+    const c = revealCamera({ ...from, x: from.x - left, y: from.y - TOP_RESERVE }, { x: e.x, y: e.y, w: e.w, h: e.h }, e.chart.width, roomOf(), minPx);
+    return { ...c, x: c.x + left, y: c.y + TOP_RESERVE };
   };
 
   /** The expansions as the build places them: the boxes they hang from, in the build's layout, placed on the current view. */
@@ -1358,7 +1363,7 @@ export function FrameShape({
   const text = headerLabels(node?.label ?? nameOfId(item.id), node?.detail, rect.w * k);
   return (
     <g className={`zm-frame${node ? ` zm-${node.kind}` : ""} ${lineClass(line)}`} data-sx={rect.x} data-fid={item.id}>
-      <title>{node?.title || item.id}</title>
+      <title>{node?.title || (node ? (node.detail ? `${node.label} (${node.detail})` : node.label) : item.id)}</title>
       <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={10} className="zm-frame-body" />
       <g className="zm-hit" onClick={() => onOpen(item.id)}>
         <rect x={rect.x} y={rect.y} width={rect.w} height={head} rx={10} className="zm-frame-head" />

@@ -619,7 +619,7 @@ table.grid th { background: var(--faint); }
 .sh-crumb a { color: var(--muted); text-decoration: none; overflow: hidden; text-overflow: ellipsis; max-width: 18ch; }
 .sh-crumb a[aria-current="page"] { color: var(--ink); font-weight: 600; }
 .sh-sep { color: var(--muted); margin: 0 6px; }
-.sh-tab:focus-visible, .sh-split:focus-visible, .sh-tool:focus-visible, .sh-close:focus-visible, .sh-layer-list a:focus-visible, .sh-crumb a:focus-visible, .sh-find-input:focus-visible, .sh-find-list a:focus-visible, .sh-layers-open:focus-visible, .sh-roots input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sh-tab:focus-visible, .sh-split:focus-visible, .sh-tool:focus-visible, .sh-close:focus-visible, .sh-layer-list a:focus-visible, .sh-crumb a:focus-visible, .sh-find-input:focus-visible, .sh-find-list a:focus-visible, .sh-layers-open:focus-visible, .sh-check input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .sh-count { min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--red); color: var(--on-accent); font-size: var(--t-xs); line-height: 16px; text-align: center; }
 .sh-spacer { flex: 1; min-width: 0; }
 .sh-tools { display: inline-flex; align-items: center; gap: 8px; flex: none; }
@@ -638,7 +638,6 @@ table.grid th { background: var(--faint); }
 .sh-canvas { position: absolute; inset: 0; }
 .sh-canvas .zm-stage { position: absolute; inset: 0; height: auto; border: 0; border-radius: 0; background: transparent; }
 .sh-slot:empty { display: none; }
-.sh-roots { position: absolute; left: var(--sh-gap); bottom: var(--sh-gap); z-index: 5; display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 9px; background: var(--glass); box-shadow: var(--float); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); font-size: var(--t-sm); color: var(--ink); }
 
 .sh-card { background: var(--glass-strong); border: 0; border-radius: 14px; box-shadow: var(--float), var(--rim); -webkit-backdrop-filter: blur(24px) saturate(1.6); backdrop-filter: blur(24px) saturate(1.6); color: var(--ink); }
 .sh-card-head, .sh-tree-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -789,7 +788,6 @@ table.grid th { background: var(--faint); }
   .sh-layers { left: 0; right: 0; top: auto; bottom: 0; width: auto; max-height: 62%; border-radius: 16px 16px 0 0; }
   /* A wide table scrolls inside its page rather than widening the page. */
   .sh-page table.grid { display: block; max-width: 100%; overflow-x: auto; }
-  .sh-roots { display: none; }
 }
 .sh-count-inline { color: var(--muted); font-size: var(--t-xs); }
 

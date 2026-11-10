@@ -5,6 +5,15 @@ import type { FlowRole, FlowSpan } from "./types.js";
 type Pos = readonly [number, number];
 const cmp = (a: Pos, b: Pos) => a[0] - b[0] || a[1] - b[1];
 
+/**
+ * The name a file's top-level code shows under: "<file basename> · top level", e.g. "main.tsx · top level". The IR names the
+ * module entry "(module)", which says nothing about which file runs.
+ */
+export function topLevelName(file: string): string {
+  const base = file.slice(file.lastIndexOf("/") + 1);
+  return `${base} · top level`;
+}
+
 /** One fact inside a function that takes part in the flow, reduced to what the chart needs. */
 interface Ev {
   type: "call" | "await" | "spawn" | "effect" | "branch" | "switch" | "arm" | "loop" | "block" | "try" | "return" | "throw" | "break" | "continue";
@@ -275,7 +284,7 @@ export function factsForFile(file: string, nodes: Iterable<IRNode>, edges: Itera
   // Statements outside every function run when the module loads.
   const top = events.get(file);
   if (top && top.length > 0) {
-    out.push({ id: file, name: "(module)", async: false, items: convertAll(nest(top)) });
+    out.push({ id: file, name: topLevelName(file), async: false, items: convertAll(nest(top)) });
   }
   return out.sort((a, b) => (a.span ? a.span.start[0] : 0) - (b.span ? b.span.start[0] : 0) || a.name.localeCompare(b.name));
 }
