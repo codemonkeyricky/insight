@@ -1,7 +1,8 @@
-import { useId, type MouseEvent, type ReactNode } from "react";
+import { useId, useMemo, useRef, type MouseEvent, type ReactNode } from "react";
 import type { FlowEdge, FlowNode, FunctionFlow } from "../api";
 import { outsideScope, outsideText } from "../flowTargets";
 import { hrefFile, hrefView } from "../router";
+import { backEdgeFlags, edgeMotions, prefersReducedMotion, PULSE_S, useMarchBudget, useOnScreen, usePageVisible, type EdgeMotion } from "../zoom/flowMotion";
 
 /** A step's click, when a caller takes it over. Return true to handle it: the link (if any) is then not followed. */
 export type FlowNodeClick = (node: FlowNode) => boolean;
@@ -11,11 +12,22 @@ export type FlowNodeClick = (node: FlowNode) => boolean;
  * @insight/flow; this only draws them. A call into a function in scope links to that function's chart.
  * A call outside the scope is drawn unresolved. Any other step with a source span links to its line.
  * `onNodeClick` takes over the clicks (the zoom map does, so a click selects in place); `selectedId` marks one step.
+ * `motion` (default on) makes each edge march in its direction, and a back-edge (a loop's return) also carries a pulse. It
+ * is off under reduced motion, while the page is hidden, and while the chart is off screen (see zoom/flowMotion.ts).
  */
-export function FlowChart({ id, fn, scope, onNodeClick, selectedId }: { id: string; fn: FunctionFlow; scope: string; onNodeClick?: FlowNodeClick; selectedId?: string }) {
-  const arrow = `arrow-${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
+export function FlowChart({ id, fn, scope, onNodeClick, selectedId, motion = true }: { id: string; fn: FunctionFlow; scope: string; onNodeClick?: FlowNodeClick; selectedId?: string; motion?: boolean }) {
+  const uid = useId();
+  const arrow = `arrow-${uid.replace(/[^a-zA-Z0-9]/g, "")}`;
+  const ref = useRef<SVGSVGElement>(null);
+  const onScreen = useOnScreen(ref);
+  const visible = usePageVisible();
+  const reduced = prefersReducedMotion();
+  const on = motion && visible && onScreen && !reduced;
+  const back = useMemo(() => backEdgeFlags(fn.nodes, fn.edges), [fn]);
+  const budget = useMarchBudget(uid, fn.edges.length, on);
+  const motions = useMemo(() => edgeMotions(back, { on, reduced, budget }), [back, on, reduced, budget]);
   return (
-    <svg className="flow" width={fn.width} height={fn.height} viewBox={`0 0 ${fn.width} ${fn.height}`} role="img" aria-label={`Control flow of ${fn.name}`}>
+    <svg ref={ref} className="flow" width={fn.width} height={fn.height} viewBox={`0 0 ${fn.width} ${fn.height}`} role="img" aria-label={`Control flow of ${fn.name}`}>
       <defs>
         <marker id={arrow} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
           <path d="M0,0 L10,5 L0,10 z" className="flow-arrow" />
@@ -23,7 +35,7 @@ export function FlowChart({ id, fn, scope, onNodeClick, selectedId }: { id: stri
       </defs>
       <g>
         {fn.edges.map((e, i) => (
-          <Edge key={`${e.from}>${e.to}>${i}`} edge={e} marker={arrow} />
+          <Edge key={`${e.from}>${e.to}>${i}`} edge={e} marker={arrow} motion={motions[i] ?? NO_MOTION} back={back[i] === true} />
         ))}
       </g>
       <g>
@@ -35,11 +47,23 @@ export function FlowChart({ id, fn, scope, onNodeClick, selectedId }: { id: stri
   );
 }
 
-function Edge({ edge, marker }: { edge: FlowEdge; marker: string }) {
+const NO_MOTION: EdgeMotion = { march: false, pulse: false };
+
+/**
+ * One edge: its solid path with the arrow, then (when it moves) a dashed overlay that marches along the same path in its
+ * direction, and on a back-edge a dot that travels the path every PULSE_S. The overlay sits on top of the solid line.
+ */
+function Edge({ edge, marker, motion, back }: { edge: FlowEdge; marker: string; motion: EdgeMotion; back: boolean }) {
   const d = edge.points.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x} ${y}`).join(" ");
   return (
-    <g className={`flow-edge ${edge.kind}`}>
+    <g className={`flow-edge ${edge.kind}${back ? " back-edge" : ""}`}>
       <path d={d} markerEnd={`url(#${marker})`} />
+      {motion.march && <path d={d} className={`flow-march${back ? " back" : ""}`} />}
+      {motion.pulse && (
+        <circle r={2.6} className="flow-pulse">
+          <animateMotion dur={`${PULSE_S}s`} repeatCount="indefinite" path={d} />
+        </circle>
+      )}
       {edge.label && edge.labelAt && (
         <text x={edge.labelAt[0]} y={edge.labelAt[1]} className="flow-label" textAnchor="middle">
           {edge.label}

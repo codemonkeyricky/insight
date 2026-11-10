@@ -1,4 +1,5 @@
 import { readLambdas, writeLambdas } from "../../zoom/lambdaPref";
+import { readFlowMotion, writeFlowMotion } from "../../zoom/flowMotionPref";
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { api, type FileEntry, type FindingRow } from "../../api";
@@ -50,7 +51,7 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
   const { showCode } = useCodeTarget();
   const kind = scopeKind(scope, files);
   /** What the map shows: frames and calls on by default, findings off until the reader turns the layer on, lambdas off (folded). */
-  const [shown, setShown] = useState<LayerState>(() => ({ frames: true, calls: true, findings: findingKind !== undefined, lambdas: readLambdas() }));
+  const [shown, setShown] = useState<LayerState>(() => ({ frames: true, calls: true, findings: findingKind !== undefined, lambdas: readLambdas(), motion: readFlowMotion() }));
   const exec = useMemo(() => new ExecStore(id, roots, shown.lambdas), [id, roots, shown.lambdas]);
   // A "Show in Flow" link for a kind turns the findings layer on, even when the flow is already open.
   useEffect(() => {
@@ -121,6 +122,7 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
             onFocus={setFocus}
             hint={false}
             flat={roots}
+            motion={shown.motion}
             bottomInset={bottomInset}
             leftInset={leftInset}
             layers={mapLayers}
@@ -141,6 +143,7 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
             onChange={(key, on) => {
               setShown((s) => ({ ...s, [key]: on }));
               if (key === "lambdas") writeLambdas(on);
+              if (key === "motion") writeFlowMotion(on);
             }}
             onClose={() => setLayersOpen(false)}
             roots={<RootsOnly id={id} scope={scope} fn={fn} roots={roots} className="sh-check" />}

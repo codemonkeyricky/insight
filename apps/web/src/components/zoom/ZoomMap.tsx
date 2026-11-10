@@ -11,7 +11,8 @@ import { ZOOM_SIZE, fitCamera, fitChartCamera, visibleWorld, type Camera, type F
 import { nameOfId } from "../../flowTargets";
 import { hrefView } from "../../router";
 import { CHART_MIN_PX } from "../../zoom/chart";
-import { anchoredTo, calloutOf, closeExpansion, detailLetter, openExpansion, refresh, revealCamera, shiftAt, type Expansion, type ExpandAnchor } from "../../zoom/expand";
+import { anchoredTo, closeExpansion, connectorOf, openExpansion, refresh, revealCamera, shiftAt, type Expansion, type ExpandAnchor } from "../../zoom/expand";
+import { connectorD, headD } from "../../zoom/connector";
 import { releaseVelocity, type DragSample } from "../../zoom/spring";
 import { useCameraSpring } from "../../zoom/useCameraSpring";
 import { motionFor, progressAt } from "../../zoom/tween";
@@ -24,7 +25,7 @@ import { FarCards, type FarCard } from "./FarCards";
 import { zoneCells, zoneLetter, zoneLines } from "../../zoom/zones";
 import { offMapSelected } from "../../zoom/offMap";
 import type { ZoomStore } from "../../zoom/scene";
-import { CalloutShape, ExpansionShape } from "./Expansion";
+import { ConnectorShape, ExpansionShape, type ConnectorEnds } from "./Expansion";
 
 /** The camera's scale range: from the whole project down to a single line of a chart. */
 const SCALE: [number, number] = [0.02, 16];
@@ -105,6 +106,26 @@ function writeShift(root: SVGGElement, sh: ShiftState) {
     const at = (x: number) => x + displayShift(sh, x);
     el.setAttribute("d", `M${at(sx)} ${sy} C${at(c1x)} ${c1y} ${at(c2x)} ${c2y} ${at(ex)} ${ey}`);
   }
+  // A connector's ends: its start moves with its anchor's shift (data-s1), its end with the detail's (data-s2). Its head
+  // moves with the end. Both are redrawn from their unshifted ends, so they stay on the boxes through a slide.
+  for (const el of root.querySelectorAll<SVGPathElement>("path.zm-connector[data-x1]")) {
+    const num = (name: string) => Number(el.getAttribute(name));
+    const x1 = num("data-x1") + displayShift(sh, num("data-s1"));
+    const x2 = num("data-x2") + displayShift(sh, num("data-s2"));
+    el.setAttribute("d", connectorD(x1, num("data-y1"), x2, num("data-y2")));
+  }
+  for (const el of root.querySelectorAll<SVGPathElement>("path.zm-connector-head[data-hx]")) {
+    const num = (name: string) => Number(el.getAttribute(name));
+    const x = num("data-hx") + displayShift(sh, num("data-s2"));
+    el.setAttribute("d", headD(x, num("data-hy"), num("data-hs")));
+  }
+}
+
+/** The ends of the connector of an expansion, in world units: from its anchor's right edge to its title, see connectorOf. */
+function endsOf(e: Expansion, list: readonly Expansion[]): ConnectorEnds | undefined {
+  const c = connectorOf(e, list);
+  if (c === undefined) return undefined;
+  return { ...c, s1: e.anchor.kind === "box" ? e.anchor.rect.x : e.pivot, s2: e.pivot };
 }
 
 /** What the map has selected, for the page's source panel: the function, its build, and the construct picked in its chart. */
@@ -148,6 +169,8 @@ interface Props {
   layers?: { frames: boolean; calls: boolean };
   /** The roots-only flat map: its boxes are cards with a file line, and the zone rulers and lines are off. */
   flat?: boolean;
+  /** Whether the charts' edges march and the back-edges pulse (the Flow motion choice). On by default. */
+  motion?: boolean;
 }
 
 /** What an expansion needs to draw its chart: the project, the scope its links resolve in, and the flow store. */
@@ -174,7 +197,7 @@ interface OffMap {
  * The execution map: one camera over a scope's scene. Each node is a focus of the source; the map's items and edges
  * are named by node id, so a click or key that names a node is turned into a focus by the source first (`focusOf`).
  */
-export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFocus, hint = true, inset = 0, leftInset = 0, bottomInset = 0, findings, layers = { frames: true, calls: true }, flat = false }: Props) {
+export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFocus, hint = true, inset = 0, leftInset = 0, bottomInset = 0, findings, layers = { frames: true, calls: true }, flat = false, motion = true }: Props) {
   /** The details that are closing: they stay drawn for EXIT_CLOSE_MS while they shrink and fade (see setExp). */
   const [leaving, setLeaving] = useState<readonly Expansion[]>([]);
   /** The key plan's open state. It is closed by default, so it does not cover the boxes. */
@@ -1137,11 +1160,18 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
                 const ref = node.ref;
                 return <FindingShape key={`finding-${it.id}`} rect={it.rect} count={count} k={labelScale} onSelect={() => void selectFunction(ref)} />;
               })}
+            {/* The connectors sit outside the detail groups: the side shift writes their ends (see writeShift), so they are not moved as a group. */}
             {expansions.map((e) => {
-              const c = calloutOf(e, expansions);
+              const ends = endsOf(e, expansions);
+              return ends === undefined ? null : <ConnectorShape key={`conn-${e.fnId}`} ends={ends} k={labelScale} reduced={reduceMotion()} />;
+            })}
+            {leaving.map((e) => {
+              const ends = endsOf(e, [...expansions, ...leaving]);
+              return ends === undefined ? null : <ConnectorShape key={`leave-conn-${e.fnId}`} ends={ends} k={labelScale} closing reduced={reduceMotion()} />;
+            })}
+            {expansions.map((e) => {
               return (
                 <g key={`exp-${e.fnId}`} className="zm-expansion-group" data-sx={e.pivot}>
-                  {c !== undefined && <CalloutShape callout={c} letter={detailLetter(e.index)} k={labelScale} />}
                   {/* The entrance plays on this wrapper, not the group: the group carries the side shift as its transform. */}
                   <g className="zm-expansion-motion">
                     <ExpansionShape
@@ -1153,6 +1183,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
                       onNodeClick={(n) => chartStep(e.fnId, n)}
                       onSelect={() => void selectFunction(e.fnId)}
                       onClose={() => setExp(closeExpansion(expRef.current, e.fnId))}
+                      motion={motion}
                     />
                   </g>
                 </g>
@@ -1161,7 +1192,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
             {leaving.map((e) => (
               <g key={`leave-${e.fnId}`} className="zm-expansion-group is-leaving" data-sx={e.pivot} aria-hidden="true">
                 <g className="zm-expansion-motion">
-                  <ExpansionShape id={id} scope={charts?.scope ?? scope} expansion={e} k={labelScale} selectedId={undefined} onNodeClick={() => false} onSelect={() => undefined} onClose={() => undefined} />
+                  <ExpansionShape id={id} scope={charts?.scope ?? scope} expansion={e} k={labelScale} selectedId={undefined} onNodeClick={() => false} onSelect={() => undefined} onClose={() => undefined} motion={false} />
                 </g>
               </g>
             ))}
