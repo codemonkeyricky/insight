@@ -51,6 +51,11 @@ export interface ExecFunctionRef {
   noise?: true;
   /** Set for an anonymous function: a function expression, arrow function or lambda with no declaration of its own. */
   anonymous?: true;
+  /**
+   * Set for a file's module entry, `<file>#(module)`: the code the file runs when it loads. An entry module of an HTML page
+   * or of a file no project file imports is a main root (see `execModel`).
+   */
+  module?: true;
   /** For an anonymous function, the function, or the file for module-level code, it is written in. */
   parent?: string;
   /** How the function runs. See ExecRuntime. */
@@ -262,6 +267,10 @@ interface Fn {
   noise: boolean;
   anonymous: boolean;
   parent: string | undefined;
+  /** A file's module entry. See ExecFunctionRef.module. */
+  module: boolean;
+  /** A module entry an HTML page loads with a script tag. */
+  htmlEntry: boolean;
 }
 
 interface Dispatch {
@@ -386,6 +395,8 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       noise: file !== undefined && isNoisePath(file),
       anonymous,
       parent: anonymous ? n.parent : undefined,
+      module: n.attrs?.module === true,
+      htmlEntry: n.attrs?.htmlEntry === true,
     });
   }
 
@@ -571,11 +582,38 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
   programs.sort((a, b) => byText(a.id, b.id));
   const programMains = new Set(programs.flatMap((p) => (p.main !== undefined ? [p.main] : [])));
 
-  // An anonymous function is never a main root: whatever runs it is its creator, a spawn or a dispatch.
-  const mainRoots = [...fns.values()]
-    .filter((f) => f.inScope && !f.anonymous && !referenced.has(f.id) && (scopeNoise || !f.noise) && !programMains.has(f.id))
-    .map((f) => f.id)
-    .sort(byText);
+  // A module entry is a main root when an HTML page loads its file, or when no other project file imports it. A file
+  // a spawn runs is the root of that spawn's thread, not of main, and a declaration file has no entry to run.
+  const scriptFiles = new Set<string>();
+  for (const { e, ids } of keyed) {
+    if (e.kind === "concurrency.spawns") for (const id of ids) scriptFiles.add(fileOf(id) ?? id);
+  }
+  const importedFiles = new Set<string>();
+  for (const e of edges) {
+    if (e.kind !== "packaging.import" && e.kind !== "packaging.re-export") continue;
+    for (const to of edgeTargets(e).nodes) if (to !== e.from) importedFiles.add(to);
+  }
+  const entryModules = [...fns.values()]
+    .filter(
+      (f) =>
+        f.module &&
+        f.inScope &&
+        (scopeNoise || !f.noise) &&
+        f.file !== undefined &&
+        !f.file.endsWith(".d.ts") &&
+        !scriptFiles.has(f.file) &&
+        (f.htmlEntry || !importedFiles.has(f.file)),
+    )
+    .map((f) => f.id);
+
+  // An anonymous function is never a main root: whatever runs it is its creator, a spawn or a dispatch. A module entry
+  // is a root only through the rule above, not because nothing references it.
+  const mainRoots = [
+    ...[...fns.values()]
+      .filter((f) => f.inScope && !f.anonymous && !f.module && !referenced.has(f.id) && (scopeNoise || !f.noise) && !programMains.has(f.id))
+      .map((f) => f.id),
+    ...entryModules,
+  ].sort(byText);
   const planOf = (kind: ExecThreadKind, id: string, roots: string[], spawn?: ExecSpawn): Plan => ({
     kind,
     id,
@@ -688,6 +726,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       inScope: fn.inScope,
       ...(fn.noise ? { noise: true as const } : {}),
       ...(fn.anonymous ? { anonymous: true as const, ...(fn.parent !== undefined ? { parent: fn.parent } : {}) } : {}),
+      ...(fn.module ? { module: true as const } : {}),
       runtime: runtimeOf(id),
       ...(chart !== undefined ? { chart } : {}),
     });
@@ -707,8 +746,8 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       if (!take(co.target)) continue;
       coroutines.push({ ...co, callees: co.callees.filter(take) });
     }
-    // A main thread is grounded when a root is a program's main or a function named `main`; a spawn always is.
-    const grounded = p.kind !== "main" || p.roots.some((r) => programMains.has(r) || fns.get(r)?.name === "main");
+    // A main thread is grounded when a root is a program's main, a function named `main`, or a module entry; a spawn always is.
+    const grounded = p.kind !== "main" || p.roots.some((r) => programMains.has(r) || fns.get(r)?.name === "main" || fns.get(r)?.module === true);
     return {
       id: p.id,
       kind: p.kind,
