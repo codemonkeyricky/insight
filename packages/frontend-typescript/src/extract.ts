@@ -3,7 +3,7 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import ts from "typescript";
 import type { IREdge, IRFinding, IRNode, IRRecord, NodeId, Provenance, Span, UnresolvedRef } from "@insight/ir";
 import type { IRBatch } from "@insight/sdk";
-import { importBindings, matchCall, matchEnvRead, matchSchedule, matchWorker, scriptPath, type ImportBinding, type ScriptPath } from "./effects.js";
+import { importBindings, matchCall, matchEnvRead, matchSchedule, matchWorker, scriptPath, type ImportBinding, type ScriptPath, type WorkerEnv } from "./effects.js";
 import { scriptKind } from "./digest.js";
 import { dispatchFor, MAX_DISPATCH_TARGETS, propName } from "./dispatch.js";
 
@@ -12,9 +12,23 @@ export const SOURCE_RE = /\.(?:[mc]?[jt]sx?)$/;
 const PROV: Provenance = { frontend: FRONTEND_ID, confidence: "exact" };
 type Confidence = Provenance["confidence"];
 
+/** The name of a file's module entry: the function its top-level executable code belongs to. */
+const MODULE_NAME = "(module)";
+
 type Entity =
   | { type: "type"; name: string; typeKind: "class" | "interface" | "enum" | "alias" }
-  | { type: "function"; name: string; async: boolean; generator: boolean; exported: boolean; anonymous: boolean };
+  | {
+      type: "function";
+      name: string;
+      async: boolean;
+      generator: boolean;
+      exported: boolean;
+      anonymous: boolean;
+      /** Set for a file's module entry: its top-level code runs when the module loads. */
+      module?: true;
+      /** Set for a module that an index.html loads with a script tag. */
+      htmlEntry?: true;
+    };
 
 export interface Decl {
   id: NodeId;
@@ -33,6 +47,8 @@ export interface Project {
   options: ts.CompilerOptions;
   host: ts.CompilerHost;
   decls: Map<ts.Node, Decl>;
+  /** The module entry of a file, `<rel>#(module)`, when its top-level code is executable. Undefined otherwise. */
+  moduleOf(rel: string): NodeId | undefined;
   sourceFor(rel: string): ts.SourceFile | undefined;
   /** Maps a path under the compiler's output directory to the same path under its source directory. Undefined for other paths. */
   mapOutput(rel: string): string | undefined;
@@ -145,8 +161,53 @@ function classify(node: ts.Node, sf: ts.SourceFile, literals: LiteralNames): Ent
   return undefined;
 }
 
+const isAssignOp = (k: ts.SyntaxKind): boolean => k >= ts.SyntaxKind.FirstAssignment && k <= ts.SyntaxKind.LastAssignment;
+
+/**
+ * True when a file's top level runs code when the module loads: a call, `new`, `await`, an assignment or JSX outside any
+ * function. Functions, arrows and methods are skipped, since they run later. A file of declarations and imports has none.
+ */
+function runsAtLoad(sf: ts.SourceFile): boolean {
+  const walk = (n: ts.Node): boolean => {
+    if (ts.isFunctionLike(n)) return false;
+    if (
+      ts.isCallExpression(n) ||
+      ts.isNewExpression(n) ||
+      ts.isAwaitExpression(n) ||
+      ts.isJsxOpeningElement(n) ||
+      ts.isJsxSelfClosingElement(n) ||
+      (ts.isBinaryExpression(n) && isAssignOp(n.operatorToken.kind))
+    ) {
+      return true;
+    }
+    return ts.forEachChild(n, walk) === true;
+  };
+  return ts.forEachChild(sf, walk) === true;
+}
+
+/** The span of a module entry: from its first top-level statement to its last. */
+function moduleSpan(rel: string, sf: ts.SourceFile): Span {
+  const first = sf.statements[0];
+  const last = sf.statements[sf.statements.length - 1];
+  return first && last ? { file: rel, start: pos(sf, first.getStart(sf)), end: pos(sf, last.getEnd()) } : { file: rel, start: [0, 0], end: [0, 0] };
+}
+
 /** Assigns IDs to every declaration in a file: <file>#<qualified name>, with ~N for repeats. */
-function assignDecls(rel: string, sf: ts.SourceFile, out: Map<ts.Node, Decl>): void {
+function assignDecls(rel: string, sf: ts.SourceFile, out: Map<ts.Node, Decl>, htmlEntry: boolean): void {
+  // The module entry is keyed by the source file itself. Its name is not a container, so declarations keep their ids.
+  if (runsAtLoad(sf)) {
+    const entity: Entity = {
+      type: "function",
+      name: MODULE_NAME,
+      async: false,
+      generator: false,
+      exported: false,
+      anonymous: false,
+      module: true,
+      ...(htmlEntry ? { htmlEntry: true as const } : {}),
+    };
+    out.set(sf, { id: `${rel}#${MODULE_NAME}`, rel, qname: MODULE_NAME, entity, node: sf });
+  }
   const counts = new Map<string, number>();
   const literals: LiteralNames = new Map();
   const visit = (node: ts.Node, container: { qname: string } | undefined): void => {
@@ -196,11 +257,31 @@ function compilerOptions(root: string): ts.CompilerOptions {
   return { ...base, allowJs: true, checkJs: false, noEmit: true, skipLibCheck: true };
 }
 
+const SCRIPT_SRC = /<script\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/gi;
+
+/**
+ * The project source files an HTML page loads with a script tag. A leading slash is the project root, as in Vite; any
+ * other path is relative to the page. `html` maps the page's project path to its text.
+ */
+function htmlScriptEntries(html: Map<string, string>, rels: Set<string>): Set<string> {
+  const out = new Set<string>();
+  for (const [page, text] of html) {
+    for (const m of text.matchAll(SCRIPT_SRC)) {
+      const src = (m[1] ?? "").split(/[?#]/)[0] ?? "";
+      if (src === "" || src.startsWith("//") || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(src)) continue;
+      const at = src.startsWith("/") ? joinRel("", src.slice(1)) : joinRel(dirOf(page), src);
+      const hit = at === undefined ? undefined : candidatesAt(at).find((c) => rels.has(c));
+      if (hit !== undefined) out.add(hit);
+    }
+  }
+  return out;
+}
+
 /**
  * Parses every project source file into one program, so calls and imports resolve across files.
  * `texts` maps absolute paths to contents. Files are read once per extraction run.
  */
-export function buildProject(root: string, rels: string[], texts: Map<string, string>): Project {
+export function buildProject(root: string, rels: string[], texts: Map<string, string>, html: Map<string, string> = new Map()): Project {
   const options = compilerOptions(root);
   const abs = (rel: string) => join(root, rel);
   const relOf = (file: string) => relative(root, file).split(sep).join("/");
@@ -225,11 +306,16 @@ export function buildProject(root: string, rels: string[], texts: Map<string, st
   const program = ts.createProgram({ rootNames: roots, options, host });
   const checker = program.getTypeChecker();
   const decls = new Map<ts.Node, Decl>();
+  const relSet = new Set(rels);
+  const htmlEntries = htmlScriptEntries(html, relSet);
   for (const rel of rels) {
     const sf = program.getSourceFile(abs(rel));
-    if (sf) assignDecls(rel, sf, decls);
+    if (sf) assignDecls(rel, sf, decls, htmlEntries.has(rel));
   }
-  const relSet = new Set(rels);
+  const moduleIds = new Map<string, NodeId>();
+  for (const d of decls.values()) {
+    if (d.entity.type === "function" && d.entity.module === true) moduleIds.set(d.rel, d.id);
+  }
   return {
     root,
     rels: relSet,
@@ -238,6 +324,7 @@ export function buildProject(root: string, rels: string[], texts: Map<string, st
     options,
     host,
     decls,
+    moduleOf: (rel) => moduleIds.get(rel),
     sourceFor: (rel) => program.getSourceFile(abs(rel)),
     mapOutput: outputMapper(root, options, rels),
     sourceOf: declarationSources(root, relSet, decls),
@@ -512,7 +599,8 @@ function declOf(project: Project, sym: ts.Symbol | undefined): Decl | undefined 
     }
   }
   const declNode = resolved?.valueDeclaration ?? resolved?.declarations?.[0];
-  if (!declNode) return undefined;
+  // A namespace import names a file, whose module entry is not a callable declaration: it is not a target.
+  if (!declNode || ts.isSourceFile(declNode)) return undefined;
   // A workspace package's call resolves to its built .d.ts, which is not indexed: its source declaration is the target.
   return project.decls.get(declNode) ?? project.sourceOf(declNode);
 }
@@ -583,6 +671,23 @@ export function emitFile(project: Project, rel: string): IRBatch {
   const records: IRRecord[] = [];
   const deps = new Set<string>();
   const imports = importBindings(sf);
+  const moduleId = project.moduleOf(rel);
+  // A spawn runs a script's module entry when the script has one, and the file otherwise.
+  const spawnTarget = (to: string): string => project.moduleOf(to) ?? to;
+  // The browser's Worker and SharedWorker are globals. A name the file or project declares is not one of them.
+  const workerEnv: WorkerEnv = {
+    constOf: (id) => {
+      const d = project.checker.getSymbolAtLocation(id)?.valueDeclaration;
+      if (d === undefined || !ts.isVariableDeclaration(d) || !ts.isIdentifier(d.name) || d.initializer === undefined) return undefined;
+      if ((ts.getCombinedNodeFlags(d) & ts.NodeFlags.Const) === 0 || d.getSourceFile() !== sf) return undefined;
+      return d.initializer;
+    },
+    declared: (id) => {
+      const sym = project.checker.getSymbolAtLocation(id);
+      const d = sym?.valueDeclaration ?? sym?.declarations?.[0];
+      return d !== undefined && !d.getSourceFile().isDeclarationFile;
+    },
+  };
   const usedIds = new Set<string>();
   const uniqueId = (base: string): string => {
     let id = `${rel}@${base}`;
@@ -628,9 +733,11 @@ export function emitFile(project: Project, rel: string): IRBatch {
   const visit = (node: ts.Node, container: string, fn: string): void => {
     let nextContainer = container;
     let nextFn = fn;
+    // Code that runs at the top of the file belongs to its module entry, when it has one. Structure keeps the file as parent.
+    const owner = container === rel && moduleId !== undefined ? moduleId : container;
     const decl = project.decls.get(node);
     if (decl && decl.rel === rel) {
-      const span = spanOf(rel, sf, node);
+      const span = decl.entity.type === "function" && decl.entity.module === true ? moduleSpan(rel, sf) : spanOf(rel, sf, node);
       if (decl.entity.type === "type") {
         push({
           id: decl.id,
@@ -646,13 +753,16 @@ export function emitFile(project: Project, rel: string): IRBatch {
           id: decl.id,
           facet: "structure",
           kind: "structure.function",
-          parent: container,
+          // A top-level lambda is written in its module entry, so folding it reaches that entry's owner.
+          parent: decl.entity.anonymous ? owner : container,
           attrs: {
             name: decl.entity.name,
             qualifiedName: decl.qname,
             async: decl.entity.async,
             exported: decl.entity.exported,
             ...(decl.entity.anonymous ? { anonymous: true } : {}),
+            ...(decl.entity.module ? { module: true } : {}),
+            ...(decl.entity.htmlEntry ? { htmlEntry: true } : {}),
           },
           span,
           provenance: PROV,
@@ -686,7 +796,8 @@ export function emitFile(project: Project, rel: string): IRBatch {
           });
         }
       }
-      nextContainer = decl.id;
+      // A module entry holds the file's top-level code, but declarations there stay in the file's structure.
+      if (!(decl.entity.type === "function" && decl.entity.module === true)) nextContainer = decl.id;
     }
 
     /** A function that `fn` refers to without calling it: constructed, rendered as JSX, or used as a value. */
@@ -796,7 +907,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
           id: uniqueId(`effect:${pos(sf, call.getStart(sf)).join(":")}`),
           facet: "effects",
           kind: effect.kind,
-          parent: container,
+          parent: owner,
           attrs: effect.attrs,
           span: spanOf(rel, sf, call),
           provenance: PROV,
@@ -808,7 +919,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
             id: spawnId,
             facet: "concurrency",
             kind: "concurrency.spawn-process",
-            parent: container,
+            parent: owner,
             attrs: { target: effect.attrs.command, api: effect.attrs.api },
             span: spanOf(rel, sf, call),
             provenance: PROV,
@@ -816,7 +927,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
           // fork runs a script rather than a command, so a project file it names is the code the process runs.
           const forked = effect.attrs.api === "child_process.fork" ? scriptTarget(scriptPath(call.arguments[0], imports)) : undefined;
           if (forked !== undefined) {
-            pushEdge({ from: spawnId, to: forked.to, facet: "concurrency", kind: "concurrency.spawns", attrs: { how: "process" }, span: spanOf(rel, sf, call), provenance: { frontend: FRONTEND_ID, confidence: forked.confidence } });
+            pushEdge({ from: spawnId, to: spawnTarget(forked.to), facet: "concurrency", kind: "concurrency.spawns", attrs: { how: "process" }, span: spanOf(rel, sf, call), provenance: { frontend: FRONTEND_ID, confidence: forked.confidence } });
           }
         }
       }
@@ -827,7 +938,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
         id: uniqueId(`${tag}:${pos(sf, at.getStart(sf)).join(":")}`),
         facet: "flow",
         kind,
-        parent: container,
+        parent: owner,
         attrs,
         span: spanOf(rel, sf, at),
         provenance: PROV,
@@ -881,7 +992,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
         id: uniqueId(`await:${pos(sf, node.getStart(sf)).join(":")}`),
         facet: "concurrency",
         kind: "concurrency.await",
-        parent: container,
+        parent: owner,
         attrs: {},
         span: spanOf(rel, sf, node),
         provenance: PROV,
@@ -889,21 +1000,21 @@ export function emitFile(project: Project, rel: string): IRBatch {
     }
 
     if (ts.isNewExpression(node)) {
-      const worker = matchWorker(node, imports);
+      const worker = matchWorker(node, imports, workerEnv);
       if (worker !== undefined) {
         const spawnId = uniqueId(`spawn:${pos(sf, node.getStart(sf)).join(":")}`);
         push({
           id: spawnId,
           facet: "concurrency",
           kind: "concurrency.spawn-thread",
-          parent: container,
+          parent: owner,
           attrs: { target: worker.target, api: worker.api },
           span: spanOf(rel, sf, node),
           provenance: PROV,
         });
         const script = scriptTarget(worker.script);
         if (script !== undefined) {
-          pushEdge({ from: spawnId, to: script.to, facet: "concurrency", kind: "concurrency.spawns", attrs: { how: "thread" }, span: spanOf(rel, sf, node), provenance: { frontend: FRONTEND_ID, confidence: script.confidence } });
+          pushEdge({ from: spawnId, to: spawnTarget(script.to), facet: "concurrency", kind: "concurrency.spawns", attrs: { how: "thread" }, span: spanOf(rel, sf, node), provenance: { frontend: FRONTEND_ID, confidence: script.confidence } });
         }
       }
       const ctor = callableOf(project, declOf(project, project.checker.getSymbolAtLocation(nameOf(node.expression))));
@@ -943,7 +1054,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
           id: uniqueId(`env:${pos(sf, node.getStart(sf)).join(":")}`),
           facet: "effects",
           kind: "effects.env.read",
-          parent: container,
+          parent: owner,
           attrs: { api: "process.env", name },
           span: spanOf(rel, sf, node),
           provenance: PROV,
