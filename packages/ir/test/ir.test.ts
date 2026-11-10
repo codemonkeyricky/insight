@@ -109,3 +109,26 @@ describe("core registry", () => {
     expect(registry.subkinds("sync.lock-acquire")).toContain("sync.rwlock-acquire");
   });
 });
+
+describe("calls.reference how", () => {
+  const ndjson = (how: unknown) => {
+    const node = (id: string) => ({
+      node: { id, facet: "structure", kind: "structure.function", parent: "app/a.ts", attrs: { name: id.split("#")[1] }, provenance: { frontend: "test", confidence: "exact" } },
+    });
+    const edge = { edge: { from: "app/a.ts#a", to: "app/a.ts#onMessage", facet: "calls", kind: "calls.reference", attrs: { how }, provenance: { frontend: "test", confidence: "exact" } } };
+    const file = { node: { id: "app/a.ts", facet: "structure", kind: "structure.file", attrs: { path: "app/a.ts", language: "typescript", parseStatus: "ok" }, provenance: { frontend: "test", confidence: "exact" } } };
+    return [file, node("app/a.ts#a"), node("app/a.ts#onMessage"), edge].map((r) => JSON.stringify(r)).join("\n");
+  };
+
+  it("accepts how \"handler\", the value the TypeScript frontend emits for an installed message handler", () => {
+    const report = validateIR(ndjson("handler"), createCoreRegistry());
+    expect(report.errors).toEqual([]);
+    expect(report.ok).toBe(true);
+  });
+
+  it("rejects a how value that no frontend emits", () => {
+    const report = validateIR(ndjson("bogus"), createCoreRegistry());
+    expect(report.ok).toBe(false);
+    expect(report.errors.some((e) => e.message.includes("how must be equal to one of the allowed values"))).toBe(true);
+  });
+});
