@@ -19,6 +19,7 @@ import { releaseVelocity, type DragSample } from "../../zoom/spring";
 import { useCameraSpring } from "../../zoom/useCameraSpring";
 import { motionFor, progressAt, TWEEN_MS } from "../../zoom/tween";
 import { pickBox } from "../../zoom/gesture";
+import { clampTop } from "../../zoom/clampTop";
 import { edgeClass, edgeKey, edgeTitle, edgeWidth, lineClass, runtimeLine, type MapBuild, type MapEdge, type MapNode, type MapSelected, type MapSource, type RuntimeLine } from "../../zoom/source";
 import { bucketScale, FAR_TILE_PX, fitLabel, headerLabels, labelChars, lodBucket, MID_TILE_PX } from "../../zoom/lod";
 import { badgeText, cloudPath, markerAnchors, MARKER_BADGE_R, MARKER_TRIANGLE } from "../../zoom/findingsLayer";
@@ -66,6 +67,9 @@ const union = (a: Rect, b: Rect): Rect => {
   const y = Math.min(a.y, b.y);
   return { x, y, w: Math.max(a.x + a.w, b.x + b.w) - x, h: Math.max(a.y + a.h, b.y + b.h) - y };
 };
+
+/** The rectangle `rect` grown to hold every open expansion in `list`. */
+const unionWith = (rect: Rect, list: readonly Expansion[]): Rect => list.reduce((r, e) => union(r, { x: e.x, y: e.y, w: e.w, h: e.h }), rect);
 
 const toCamera = (t: ZoomTransform): Camera => ({ k: t.k, x: t.x, y: t.y });
 const toTransform = (c: Camera): ZoomTransform => zoomIdentity.translate(c.x, c.y).scale(c.k);
@@ -483,10 +487,12 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   };
 
   /** The camera that fits the build's node in the stage's room (a function with a chart is capped, see fitChartCamera). */
-  const fitTarget = (b: MapBuild): Camera | undefined => {
-    const rect = b.placed.rects.get(b.nodeId);
-    if (!rect || !svgRef.current || !zoomRef.current) return undefined;
+  const fitTarget = (b: MapBuild, list: readonly Expansion[] = []): Camera | undefined => {
+    const focus = b.placed.rects.get(b.nodeId);
+    if (!focus || !svgRef.current || !zoomRef.current) return undefined;
     const room = roomOf();
+    // The focus and its open expansions are fitted together, so an opened detail is framed with its card.
+    const rect = unionWith(focus, list);
     const opens = b.placed.items.some((i) => i.id === b.nodeId && i.kind === "frame");
     // A roots-only grid fits at 1x when it fits: the cards are never enlarged past their size.
     let c = opens || b.node(b.nodeId)?.chart !== undefined ? fitChartCamera(rect, room, CHART_MIN_PX) : fitCamera(rect, room, flat ? { maxK: 1 } : {});
@@ -497,7 +503,14 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
       const prect = first !== undefined ? b.placed.rects.get(first.id) : undefined;
       if (prect !== undefined) c = fitCamera(prect, room, { minK: READABLE_FIT_K });
     }
-    return { ...c, x: c.x + leftRef.current, y: c.y + TOP_RESERVE };
+    const placed = { ...c, x: c.x + leftRef.current, y: c.y + TOP_RESERVE };
+    // No empty band above the scene: the scene's top edge lands at the reserve, unless that would push the focus's bottom
+    // above the room's top edge.
+    let sceneTop = Infinity;
+    for (const r of b.placed.rects.values()) sceneTop = Math.min(sceneTop, r.y);
+    if (!Number.isFinite(sceneTop)) return placed;
+    const clamped = clampTop(placed, sceneTop, TOP_RESERVE + 8);
+    return clamped.y + (focus.y + focus.h) * clamped.k >= TOP_RESERVE ? clamped : placed;
   };
 
   /**
@@ -508,7 +521,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     if (bottomRef.current <= 0 || list.length === 0) return undefined;
     const rect = b.placed.rects.get(b.nodeId);
     if (!rect) return undefined;
-    const all = list.reduce((r, e) => union(r, { x: e.x, y: e.y, w: e.w, h: e.h }), rect);
+    const all = unionWith(rect, list);
     // The scale stays at the mid tier's floor, so the boxes stay out of the far tier while the details scale down.
     const boxH = medianOf(b.placed.items.filter((i) => i.kind === "box").map((i) => i.rect.h));
     const c = fitCamera(all, roomOf(), { minK: boxH > 0 ? MID_TILE_PX / boxH : undefined });
@@ -605,7 +618,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     // desktop. On a phone, a detail that opens is fitted with the sheet over the map: the one move that is allowed there.
     const fit = !(toggle && holds) || (bottomRef.current > 0 && list.length > openBefore);
     if (fit) {
-      const target = fitDetails(b, list) ?? fitTarget(b);
+      const target = fitDetails(b, list) ?? fitTarget(b, list);
       if (target !== undefined) moveTo(target, animate);
     } else if (list.length > openBefore) {
       // A detail opened off the stage's edge is panned into view; a camera that already shows it does not move.
@@ -869,7 +882,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
       if (b?.selected !== undefined && (force || changed)) {
         // The refit keeps the newest expansion in view too: the source panel opening narrows the stage under it.
         const newest = expRef.current[expRef.current.length - 1];
-        const fit = fitDetails(b, expRef.current) ?? fitTarget(b);
+        const fit = fitDetails(b, expRef.current) ?? fitTarget(b, expRef.current);
         const target = fit === undefined ? undefined : newest === undefined || bottomRef.current > 0 ? fit : revealOf(fit, newest);
         // A forced fit (a sheet opening) glides; a resize cuts, as it always has.
         if (target !== undefined) moveTo(target, force);
