@@ -251,7 +251,6 @@ a.flow-node:hover :is(rect, polygon, circle) { stroke: var(--accent); stroke-wid
 .flow-token-dot { fill: var(--accent); stroke: var(--panel); stroke-width: 1.5; }
 .flow-glow-in { stop-color: var(--accent); stop-opacity: 0.2; }
 .flow-glow-out { stop-color: var(--accent); stop-opacity: 0; }
-.flow-node.flow-lit :is(rect, polygon, circle) { stroke: var(--accent); stroke-width: 1.6; }
 /* A call step whose chart is open is selected by its own outline: an accent stroke and a slightly brighter fill. */
 .flow-node.selected :is(rect, polygon, circle) { stroke: var(--accent); stroke-width: 1.5; fill: color-mix(in srgb, var(--accent) 10%, var(--sheet)); }
 .flow-arrow { fill: color-mix(in srgb, var(--graphite) 70%, transparent); }
@@ -436,15 +435,11 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 .zm-expansion-close:hover text { fill: var(--fg); }
 /* The connector from a call step (or box) to the detail it opened: a solid accent line, drawn in on open (240 ms) and
  * retracted on close (160 ms). Its width is set inline, in map units, so it stays 1.5 px on screen. The head fades in last. */
-.zm-connector { fill: none; stroke: var(--accent); stroke-dasharray: 1 1; stroke-linecap: butt; pointer-events: none; opacity: 0.75; }
-.zm-connector-head { fill: var(--accent); pointer-events: none; }
-.zm-connector-group.is-opening .zm-connector { animation: zm-connector-draw 240ms cubic-bezier(0.2, 0, 0, 1) both; }
-.zm-connector-group.is-opening .zm-connector-head { animation: zm-fade-in 120ms linear 180ms both; }
-.zm-connector-group.is-closing .zm-connector { animation: zm-connector-retract 160ms cubic-bezier(0.4, 0, 1, 1) both; }
-.zm-connector-group.is-closing .zm-connector-head { animation: zm-fade-out 80ms linear both; }
+.zm-callout { fill: color-mix(in srgb, var(--accent) 9%, transparent); stroke: color-mix(in srgb, var(--accent) 45%, transparent); stroke-width: 1; vector-effect: non-scaling-stroke; stroke-linejoin: round; pointer-events: none; }
+.zm-expansion-accent { fill: var(--accent); pointer-events: none; }
+.zm-connector-group.is-opening .zm-callout { animation: zm-fade-in 240ms linear both; }
+.zm-connector-group.is-closing .zm-callout { animation: zm-fade-out 160ms linear both; }
 .zm-connector-group.is-fade { animation: zm-fade-in 240ms linear both; }
-@keyframes zm-connector-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
-@keyframes zm-connector-retract { from { stroke-dashoffset: 0; } to { stroke-dashoffset: 1; } }
 @keyframes zm-fade-out { from { opacity: 1; } to { opacity: 0; } }
 .flow-call-bar { stroke: currentColor; stroke-width: 1; fill: none; opacity: 0.35; }
 .zm-box.expanded .zm-box-body { stroke: var(--accent); stroke-width: 1.5; fill: color-mix(in srgb, var(--accent) 6%, var(--sheet)); }
@@ -454,7 +449,7 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 .zm-box.zm-card.expanded .zm-box-body { stroke: var(--accent); stroke-width: 1.5; fill: color-mix(in srgb, var(--accent) 6%, var(--sheet)); }
 @media (prefers-reduced-motion: reduce) {
   .flow-march, .flow-pulse, .flow-token { display: none; }
-  .zm-connector-group.is-opening .zm-connector, .zm-connector-group.is-closing .zm-connector { animation: none; }
+  .zm-connector-group.is-opening .zm-callout, .zm-connector-group.is-closing .zm-callout { animation: none; }
 }
 .zm-loading { position: absolute; inset: 0; margin: 0; display: flex; align-items: center; justify-content: center; }
 /* The key plan sits bottom right, above the title chip, and is small and collapsible (closed by default). */

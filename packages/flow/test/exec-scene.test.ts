@@ -375,11 +375,11 @@ describe("buildExecScene", () => {
     });
     const s = buildExecScene(m);
     const stub = node(s, "thread:spawn:2");
-    expect(stub.label).toBe("Thread · execFileSync (app.ts:7)");
+    expect(stub.label).toBe("Thread · execFileSync");
     expect(stub.children).toEqual([]);
     expect(stub.detail).toBe("0 functions");
     expect(stub.note).toBe("Spawned at src/app.ts:7. The spawn target could not be resolved.");
-    expect(node(s, execProcessId("spawn:3")).label).toBe("Process · job.py");
+    expect(node(s, execProcessId("spawn:3")).label).toBe("Process · job");
     const outside = node(s, "thread:spawn:3");
     expect(outside.note).toContain("outside this scope");
     expect(outside.note).toContain("several possible targets");
@@ -408,7 +408,7 @@ describe("buildExecScene", () => {
       ],
     });
     const s = buildExecScene(m);
-    expect(node(s, "thread:spawn:4").label).toBe("Worker · worker.ts");
+    expect(node(s, "thread:spawn:4").label).toBe("Worker");
     expect(s.edges.filter((e) => e.kind === "spawn")).toEqual([
       { from: "thread:main>main", to: "thread:spawn:4", kind: "spawn", count: 1, how: "thread" },
     ]);

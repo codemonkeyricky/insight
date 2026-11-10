@@ -1,5 +1,6 @@
 import type { Arm, FunctionFacts, Item } from "./build.js";
 import type { FlowEdge, FlowEdgeKind, FlowNode, FlowShape, FlowRole, FlowSpan, FlowStats, FunctionFlow } from "./types.js";
+import { displayName } from "./names.js";
 
 const STEP_W = 236;
 const STEP_H = 34;
@@ -246,7 +247,7 @@ export function layoutFunction(fn: FunctionFacts): FunctionFlow {
   const base = { id: fn.id, name: fn.name, async: fn.async, ...(fn.span ? { span: fn.span } : {}), stats };
   if (countNodes(fn.items) > MAX_NODES) return { ...base, tooLarge: true, width: 0, height: 0, nodes: [], edges: [] };
   const mk = new Maker();
-  const start = single(mk.node("start", "terminator", `${fn.async ? "async " : ""}${clipLabel(fn.name, STEP_LABEL)}`, STEP_W, TERM_H, { title: fn.name, ...(fn.span ? { span: fn.span } : {}) }));
+  const start = single(mk.node("start", "terminator", `${fn.async ? "async " : ""}${clipLabel(displayName(fn.name, fn.id), STEP_LABEL)}`, STEP_W, TERM_H, { title: fn.name, ...(fn.span ? { span: fn.span } : {}) }));
   const body = stack(fn.items.map((i) => piece(mk, i)));
   const parts = [start, body];
   if (body.entry === undefined || body.exit !== undefined) parts.push(single(mk.node("end", "terminator", "end", TERM_W, TERM_H)));

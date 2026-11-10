@@ -15,6 +15,7 @@ export * from "./exec-scene.js";
 export * from "./scene-filter.js";
 export * from "./roots-grid.js";
 export * from "./runtime-boxes.js";
+export * from "./names.js";
 
 /**
  * The control-flow chart of every function in one source file, rebuilt from the IR.

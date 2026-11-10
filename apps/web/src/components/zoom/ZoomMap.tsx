@@ -11,8 +11,9 @@ import { MORE_SUFFIX, ZOOM_SIZE, fitCamera, fitChartCamera, visibleWorld, type C
 import { nameOfId } from "../../flowTargets";
 import { hrefView } from "../../router";
 import { CHART_MIN_PX } from "../../zoom/chart";
-import { anchoredTo, closeExpansion, connectorOf, footprintOf, openExpansion, refresh, revealCamera, rootBoxOf, sameFootprint, SLOT_PAD, shiftAt, type Expansion, type ExpandAnchor } from "../../zoom/expand";
-import { connectorD, headD } from "../../zoom/connector";
+import { anchoredTo, calloutOf, closeExpansion, footprintOf, openExpansion, refresh, revealCamera, rootBoxOf, sameFootprint, SLOT_PAD, shiftAt, type Expansion, type ExpandAnchor } from "../../zoom/expand";
+import { calloutD } from "../../zoom/connector";
+import { displayName } from "../../zoom/names";
 import { releaseVelocity, type DragSample } from "../../zoom/spring";
 import { useCameraSpring } from "../../zoom/useCameraSpring";
 import { motionFor, progressAt, TWEEN_MS } from "../../zoom/tween";
@@ -25,7 +26,7 @@ import { FarCards, type FarCard } from "./FarCards";
 import { zoneCells, zoneLetter, zoneLines } from "../../zoom/zones";
 import { offMapSelected } from "../../zoom/offMap";
 import type { ZoomStore } from "../../zoom/scene";
-import { ConnectorShape, ExpansionShape, type ConnectorEnds } from "./Expansion";
+import { CalloutShape, ExpansionShape, type CalloutEnds } from "./Expansion";
 
 /** The camera's scale range: from the whole project down to a single line of a chart. */
 const SCALE: [number, number] = [0.02, 16];
@@ -111,24 +112,19 @@ function writeShift(root: SVGGElement, sh: ShiftState) {
     const at = (x: number) => x + displayShift(sh, x);
     el.setAttribute("d", `M${at(sx)} ${sy} C${at(c1x)} ${c1y} ${at(c2x)} ${c2y} ${at(ex)} ${ey}`);
   }
-  // A connector's ends: its start moves with its anchor's shift (data-s1), its end with the detail's (data-s2). Its head
-  // moves with the end. Both are redrawn from their unshifted ends, so they stay on the boxes through a slide.
-  for (const el of root.querySelectorAll<SVGPathElement>("path.zm-connector[data-x1]")) {
+  // A callout's edges: its anchor edge moves with the anchor's shift (data-s1), its expansion edge with the detail's (data-s2).
+  // Its top and bottom are unshifted. It is redrawn from its unshifted edges, so it stays on its boxes through a slide.
+  for (const el of root.querySelectorAll<SVGPathElement>("path.zm-callout[data-ax]")) {
     const num = (name: string) => Number(el.getAttribute(name));
-    const x1 = num("data-x1") + displayShift(sh, num("data-s1"));
-    const x2 = num("data-x2") + displayShift(sh, num("data-s2"));
-    el.setAttribute("d", connectorD(x1, num("data-y1"), x2, num("data-y2")));
-  }
-  for (const el of root.querySelectorAll<SVGPathElement>("path.zm-connector-head[data-hx]")) {
-    const num = (name: string) => Number(el.getAttribute(name));
-    const x = num("data-hx") + displayShift(sh, num("data-s2"));
-    el.setAttribute("d", headD(x, num("data-hy"), num("data-hs")));
+    const ax = num("data-ax") + displayShift(sh, num("data-s1"));
+    const ex = num("data-ex") + displayShift(sh, num("data-s2"));
+    el.setAttribute("d", calloutD(ax, num("data-ayt"), num("data-ayb"), ex, num("data-eyt"), num("data-eyb")));
   }
 }
 
-/** The ends of the connector of an expansion, in world units: from its anchor's right edge to its title, see connectorOf. */
-function endsOf(e: Expansion, list: readonly Expansion[]): ConnectorEnds | undefined {
-  const c = connectorOf(e, list);
+/** The ends of the callout of an expansion, in world units: from its anchor's right edge to its box, see calloutOf. */
+function endsOf(e: Expansion, list: readonly Expansion[]): CalloutEnds | undefined {
+  const c = calloutOf(e, list);
   if (c === undefined) return undefined;
   return { ...c, s1: e.anchor.kind === "box" ? e.anchor.rect.x : e.pivot, s2: e.pivot };
 }
@@ -1283,14 +1279,14 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
                 const ref = node.ref;
                 return <FindingShape key={`finding-${it.id}`} rect={it.rect} count={count} k={labelScale} onSelect={() => void selectFunction(ref)} />;
               })}
-            {/* The connectors sit outside the detail groups: the side shift writes their ends (see writeShift), so they are not moved as a group. */}
+            {/* The callouts sit outside the detail groups and behind them: the side shift writes their edges (see writeShift), so they are not moved as a group. */}
             {expansions.map((e) => {
               const ends = endsOf(e, expansions);
-              return ends === undefined ? null : <ConnectorShape key={`conn-${e.fnId}`} ends={ends} k={labelScale} reduced={reduceMotion()} />;
+              return ends === undefined ? null : <CalloutShape key={`conn-${e.fnId}`} ends={ends} reduced={reduceMotion()} />;
             })}
             {leaving.map((e) => {
               const ends = endsOf(e, [...expansions, ...leaving]);
-              return ends === undefined ? null : <ConnectorShape key={`leave-conn-${e.fnId}`} ends={ends} k={labelScale} closing reduced={reduceMotion()} />;
+              return ends === undefined ? null : <CalloutShape key={`leave-conn-${e.fnId}`} ends={ends} closing reduced={reduceMotion()} />;
             })}
             {expansions.map((e) => {
               return (
@@ -1477,26 +1473,22 @@ function BoxShape({
   card?: boolean;
 }) {
   const { rect } = item;
+  // The function's display name on the map (the full name stays in the tooltip).
+  const shown = displayName(node.label, node.ref);
   // The mid tier's name is 10-13 px on screen (the zoom's inverse scales it): its characters are measured at that size.
   const fontPx = small ? Math.min(13, Math.max(10, Math.round(rect.h * k * 0.42))) : 0;
-  const label = bare ? null : small ? fitLabel(node.label, labelChars(rect.w * k, fontPx * 0.6, 10)) : fitLabel(node.label, labelChars(rect.w * k));
+  const label = bare ? null : small ? fitLabel(shown, labelChars(rect.w * k, fontPx * 0.6, 10)) : fitLabel(shown, labelChars(rect.w * k));
   const holdsChart = node.chart !== undefined;
   if (card && !small && !bare) {
-    // A card: the name in the first line, the file line under it, both fitted to the card's width on screen.
-    const sub = node.detail !== undefined && rect.h >= 48 ? fitLabel(node.detail, labelChars(rect.w * k, 6.8, 20)) : null;
-    const name = fitLabel(node.label, labelChars(rect.w * k, 8, 20));
+    // A card: its name alone, centred vertically, fitted to the card's width on screen.
+    const name = fitLabel(shown, labelChars(rect.w * k, 8, 20));
     return (
       <g className={`zm-box zm-${node.kind} zm-card ${lineClass(line)}${holdsChart ? " zm-has-chart" : ""}${chartOpen ? " expanded" : ""}`} data-sx={rect.x} data-fid={item.id} onClick={() => onOpen(item.id)}>
         <title>{node.detail !== undefined ? `${node.label} (${node.detail})` : node.title || node.label}</title>
         <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={10} className="zm-box-body" />
         {name !== null && (
-          <text x={rect.x + 12} y={rect.y + (sub !== null ? 21 : rect.h / 2)} dominantBaseline="central" className="zm-label">
+          <text x={rect.x + 12} y={rect.y + rect.h / 2} dominantBaseline="central" className="zm-label">
             {name}
-          </text>
-        )}
-        {sub !== null && (
-          <text x={rect.x + 12} y={rect.y + 40} dominantBaseline="central" className="zm-card-sub">
-            {sub}
           </text>
         )}
       </g>
