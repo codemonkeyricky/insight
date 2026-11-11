@@ -50,6 +50,11 @@ export interface LoadOptions {
   userPluginDir?: string;
   /** Extra folders to scan, after the built-in ones. Used by tests. */
   extraDirs?: string[];
+  /**
+   * Whether the project's own `.insight/plugins` folder is loaded. Defaults to true. A hosted server sets it to false,
+   * since importing a plugin runs the code in the repository being indexed.
+   */
+  projectPlugins?: boolean;
 }
 
 interface Candidate {
@@ -73,7 +78,7 @@ function scanCandidates(opts: LoadOptions): { candidates: Candidate[]; disabled:
     dirs.push(...childDirs(join(builtin, "packages")), ...childDirs(join(builtin, "plugins")));
   }
   dirs.push(...childDirs(opts.userPluginDir ?? join(homedir(), ".insight", "plugins")));
-  dirs.push(...childDirs(projectPaths(opts.projectPath).localPlugins));
+  if (opts.projectPlugins !== false) dirs.push(...childDirs(projectPaths(opts.projectPath).localPlugins));
   for (const extra of opts.extraDirs ?? []) dirs.push(...childDirs(extra));
 
   const candidates: Candidate[] = [];

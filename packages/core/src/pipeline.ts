@@ -6,6 +6,7 @@ import type { Frontend, IRBatch, ProjectRoot } from "@insight/sdk";
 import { link, type LinkShard } from "./linker.js";
 import { loadPlugins, type DisabledPlugin, type LoadOptions } from "./loader.js";
 import { diffTrees, scanProject, type StatCache, type TreeDiff, type TreeNode } from "./merkle.js";
+import { formatBytes, type IndexLimits } from "./limits.js";
 import { projectPaths, type ProjectPaths } from "./paths.js";
 import { computeCoverage, type CoverageRow, type CoverageShard } from "./coverage.js";
 import { writeIndex, readIndexedSnapshot } from "./indexdb.js";
@@ -51,6 +52,12 @@ export interface IndexOptions extends LoadOptions {
    * sets it to a folder under its home, so the user's folder stays clean.
    */
   stateDir?: string;
+  /** Write the SQLite index to `index.sqlite`. Defaults to true. Off when the index is only read through the server. */
+  writeIndexDb?: boolean;
+  /** Caps on what the run reads. Unset means no caps. Files over `maxFileBytes` are skipped with a warning. */
+  limits?: IndexLimits;
+  /** Snapshots kept per project, the newest first. Defaults to KEEP_SNAPSHOTS. */
+  keepSnapshots?: number;
 }
 
 export interface IndexReport {
@@ -101,6 +108,10 @@ export async function runIndex(opts: IndexOptions): Promise<IndexReport> {
   const started = Date.now();
   const root = resolve(opts.projectPath);
   if (!existsSync(root)) throw new Error(`project path does not exist: ${root}`);
+  if (opts.keepSnapshots !== undefined && (!Number.isInteger(opts.keepSnapshots) || opts.keepSnapshots < 1)) {
+    throw new Error(`keepSnapshots must be a whole number of 1 or more, got ${opts.keepSnapshots}`);
+  }
+  const keepSnapshots = opts.keepSnapshots ?? KEEP_SNAPSHOTS;
   const paths: ProjectPaths = projectPaths(root, opts.stateDir);
   mkdirSync(paths.shards, { recursive: true });
   mkdirSync(paths.snapshots, { recursive: true });
@@ -131,7 +142,12 @@ export async function runIndex(opts: IndexOptions): Promise<IndexReport> {
   const previousTree = readJsonFile<TreeNode | undefined>(paths.treeFile, undefined);
   const previousStats = readJsonFile<StatCache>(paths.statCache, {});
   phase({ phase: "scan", label: "Scanning files" });
-  const scan = scanProject(root, previousStats);
+  const scan = scanProject(root, previousStats, opts.limits);
+  const oversizeWarnings = 20;
+  for (const s of scan.skipped.slice(0, oversizeWarnings)) {
+    say(`warning: skipped ${s.file}: ${formatBytes(s.bytes)}, over the ${formatBytes(opts.limits?.maxFileBytes ?? 0)} per-file limit`);
+  }
+  if (scan.skipped.length > oversizeWarnings) say(`warning: ${scan.skipped.length - oversizeWarnings} more files skipped for size`);
   const changes = diffTrees(previousTree, scan.tree);
   const allFiles = [...scan.files.keys()];
   phase({ phase: "scan", label: "Scanning files", done: allFiles.length, total: allFiles.length });
@@ -385,7 +401,7 @@ export async function runIndex(opts: IndexOptions): Promise<IndexReport> {
       findings: linked.doc.findings.length,
       ...(opts.commit !== undefined ? { commit: opts.commit } : {}),
     });
-    while (state.snapshots.length > KEEP_SNAPSHOTS) {
+    while (state.snapshots.length > keepSnapshots) {
       const old = state.snapshots.shift();
       if (old && old.id !== id) {
         deleteSnapshot(paths, old.id);
@@ -397,10 +413,13 @@ export async function runIndex(opts: IndexOptions): Promise<IndexReport> {
     if (entry) entry.commit = opts.commit;
   }
 
+  // Lens settings live in the project's own .insight/lenses folder, so they follow the same switch as its plugins.
   const configs: Record<string, unknown> = {};
-  for (const l of plugins.lenses) {
-    const cfg = readJsonFile<unknown>(join(paths.lensConfigs, `${l.lens.id}.json`), undefined);
-    if (cfg !== undefined) configs[l.lens.id] = cfg;
+  if (opts.projectPlugins !== false) {
+    for (const l of plugins.lenses) {
+      const cfg = readJsonFile<unknown>(join(paths.lensConfigs, `${l.lens.id}.json`), undefined);
+      if (cfg !== undefined) configs[l.lens.id] = cfg;
+    }
   }
   const lensLabel = "Running lenses";
   phase({ phase: "analyze", label: lensLabel, done: 0, total: plugins.lenses.length });
@@ -421,8 +440,8 @@ export async function runIndex(opts: IndexOptions): Promise<IndexReport> {
   state.latest = id;
 
   phase({ phase: "save", label: "Saving" });
-  if (readIndexedSnapshot(paths.indexDb) !== id) {
-    writeIndex(paths.indexDb, linked.doc, id);
+  if (opts.writeIndexDb !== false && (await readIndexedSnapshot(paths.indexDb)) !== id) {
+    await writeIndex(paths.indexDb, linked.doc, id);
   }
 
   state.frontends = nextFrontends;

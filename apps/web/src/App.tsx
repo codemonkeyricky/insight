@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
-import { api, IS_DEMO } from "./api";
+import { api, IS_DEMO, IS_HOSTED } from "./api";
 import type { DemoMeta } from "./staticApi";
 import { staticApi } from "./staticApi";
 import { parseRoute, type Route } from "./router";
 import { ProjectsPage } from "./pages/Projects";
+import { HostedHome } from "./pages/HostedHome";
+import { HostedIndexPage } from "./pages/HostedIndex";
 import { Workspace } from "./components/Workspace";
 import { ThemeSwitch } from "./components/ThemeSwitch";
 import { BrandMark } from "./components/sheet/BrandMark";
@@ -34,13 +36,13 @@ export function App() {
   }, []);
 
   return (
-    <div className={route.name === "workspace" ? "app wide" : route.name === "projects" ? "app home" : "app"}>
+    <div className={route.name === "workspace" ? "app wide" : route.name === "projects" || route.name === "hosted" ? "app home" : "app"}>
       {route.name !== "workspace" && (
         <header className="sh-top sh-page-top">
           <BrandMark />
           <div className="sh-spacer" />
           <div className="sh-tools">
-            <span className="sh-server">{IS_DEMO ? "read-only demo" : server}</span>
+            <span className="sh-server">{IS_HOSTED ? "read-only, hosted" : IS_DEMO ? "read-only demo" : server}</span>
             {IS_DEMO && meta && (
               <span className="sh-server mono" title={`captured ${meta.capturedAt}`}>
                 Insight at {meta.commit}
@@ -51,7 +53,15 @@ export function App() {
         </header>
       )}
       <main>
-        {route.name === "projects" && <ProjectsPage />}
+        {route.name === "projects" && (IS_HOSTED ? <HostedHome /> : <ProjectsPage />)}
+        {route.name === "hosted" &&
+          (IS_HOSTED ? (
+            <HostedIndexPage key={`${route.owner}/${route.repo}@${route.sha ?? ""}`} owner={route.owner} repo={route.repo} sha={route.sha} />
+          ) : (
+            <p>
+              Page not found. <a href="#/">Back to projects</a>
+            </p>
+          ))}
         {route.name === "workspace" && (
           <Workspace
             key={route.id}

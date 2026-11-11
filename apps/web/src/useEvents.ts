@@ -1,4 +1,4 @@
-import { IS_DEMO, type RunProgress } from "./api";
+import { NO_SERVER, type RunProgress } from "./api";
 import { useEffect, useRef } from "react";
 
 export interface RunEvent {
@@ -21,7 +21,7 @@ export function useProjectEvents(projectId: string | undefined, onEvent: (event:
   handler.current = onEvent;
 
   useEffect(() => {
-    if (!projectId || IS_DEMO || typeof EventSource === "undefined") return;
+    if (!projectId || NO_SERVER || typeof EventSource === "undefined") return;
     const source = new EventSource(`/api/projects/${encodeURIComponent(projectId)}/events`);
     const listen = () => (message: MessageEvent<string>) => {
       try {

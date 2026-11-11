@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import ignore, { type Ignore } from "ignore";
+import { formatBytes, formatCount, IndexLimitError, type IndexLimits } from "./limits.js";
 import { STATE_DIR } from "./paths.js";
 import { compareStrings, sha256 } from "./util.js";
 
@@ -24,6 +25,8 @@ export interface ScanResult {
   stats: StatCache;
   /** Number of files whose content was read because the stat cache did not match. */
   rehashed: number;
+  /** Files left out because they are over `maxFileBytes`. They are not in the tree, the files map, or the stat cache. */
+  skipped: { file: string; bytes: number }[];
 }
 
 export interface TreeDiff {
@@ -60,12 +63,21 @@ function dirHash(children: Record<string, TreeNode>): string {
 /**
  * Walks the project and builds its Merkle tree. A file's hash is reused from the stat cache when
  * its size and mtime are unchanged, so unchanged files are not read.
+ *
+ * With `limits`, a file over `maxFileBytes` is skipped. A count or total over its cap throws an
+ * IndexLimitError once the walk ends. Past a cap the rest of the walk only counts sizes, so a huge
+ * repository is not hashed.
  */
-export function scanProject(root: string, previous: StatCache = {}): ScanResult {
+export function scanProject(root: string, previous: StatCache = {}, limits: IndexLimits = {}): ScanResult {
   const ig = loadIgnore(root);
   const stats: StatCache = {};
   const files = new Map<string, string>();
+  const skipped: { file: string; bytes: number }[] = [];
   let rehashed = 0;
+  let count = 0;
+  let total = 0;
+  const overCap = (): boolean =>
+    (limits.maxFiles !== undefined && count > limits.maxFiles) || (limits.maxTotalBytes !== undefined && total > limits.maxTotalBytes);
 
   const walk = (rel: string): TreeNode => {
     const abs = rel === "" ? root : join(root, rel);
@@ -83,6 +95,13 @@ export function scanProject(root: string, previous: StatCache = {}): ScanResult 
       } else if (entry.isFile()) {
         if (ig.ignores(childRel)) continue;
         const st = statSync(join(root, childRel));
+        if (limits.maxFileBytes !== undefined && st.size > limits.maxFileBytes) {
+          skipped.push({ file: childRel, bytes: st.size });
+          continue;
+        }
+        count++;
+        total += st.size;
+        if (overCap()) continue;
         const cached = previous[childRel];
         let hash: string;
         if (cached && cached.size === st.size && cached.mtimeMs === st.mtimeMs) {
@@ -100,8 +119,14 @@ export function scanProject(root: string, previous: StatCache = {}): ScanResult 
   };
 
   const tree = walk("");
+  if (limits.maxFiles !== undefined && count > limits.maxFiles) {
+    throw new IndexLimitError(`repo has ${formatCount(count)} files; limit ${formatCount(limits.maxFiles)}`);
+  }
+  if (limits.maxTotalBytes !== undefined && total > limits.maxTotalBytes) {
+    throw new IndexLimitError(`repo has ${formatBytes(total)} of files; limit ${formatBytes(limits.maxTotalBytes)}`);
+  }
   const sorted = new Map([...files.entries()].sort(([a], [b]) => compareStrings(a, b)));
-  return { tree, files: sorted, stats, rehashed };
+  return { tree, files: sorted, stats, rehashed, skipped };
 }
 
 /** Lists the files under a node as [path, hash] pairs. */

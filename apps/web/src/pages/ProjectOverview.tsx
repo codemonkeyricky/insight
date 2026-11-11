@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, IS_DEMO, type FindingRow, type Overview } from "../api";
+import { api, NO_SERVER, type FindingRow, type Overview } from "../api";
 import { useIndexProgress } from "../useIndexProgress";
 import { hrefLens } from "../router";
 
@@ -63,7 +63,7 @@ export function ProjectOverview({ id }: { id: string }) {
         <Stat label="Indexed" value={p.last ? new Date(p.last.finishedAt).toLocaleString() : "never"} />
       </div>
 
-      {!IS_DEMO && (
+      {!NO_SERVER && (
         <>
           <h2>Run log</h2>
           <pre className="log" aria-live="polite" data-testid="run-log">

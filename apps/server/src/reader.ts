@@ -362,13 +362,21 @@ export function serializedModelOf(paths: ProjectPaths, snapshot: string): Serial
 
 const pluginCache = new Map<string, Promise<LoadedPlugins>>();
 
+/** How a scope read treats the project's own folder. See IndexingOptions.projectPlugins. */
+export interface ScopeReadOptions {
+  /** Load the project's `.insight/plugins` and its lens settings. Defaults to true. */
+  projectPlugins?: boolean;
+}
+
 /** The lenses and kinds a project's indexer loads. Loaded once per project folder, since loading scans and imports. */
-export function pluginsFor(root: string): Promise<LoadedPlugins> {
-  const hit = pluginCache.get(root);
+export function pluginsFor(root: string, opts: ScopeReadOptions = {}): Promise<LoadedPlugins> {
+  const projectPlugins = opts.projectPlugins !== false;
+  const key = `${root}\0${projectPlugins}`;
+  const hit = pluginCache.get(key);
   if (hit) return hit;
-  const loaded = loadPlugins({ projectPath: root });
-  pluginCache.set(root, loaded);
-  loaded.catch(() => pluginCache.delete(root));
+  const loaded = loadPlugins({ projectPath: root, projectPlugins });
+  pluginCache.set(key, loaded);
+  loaded.catch(() => pluginCache.delete(key));
   return loaded;
 }
 
@@ -387,14 +395,14 @@ export interface ScopeView {
  * Checks a scope path against one snapshot and cuts its IR. A path that leaves the project is an
  * InputError (400). A path with no indexed file under it is a 404.
  */
-export async function scopeView(paths: ProjectPaths, snapshot: string, path: string): Promise<ScopeView> {
+export async function scopeView(paths: ProjectPaths, snapshot: string, path: string, opts: ScopeReadOptions = {}): Promise<ScopeView> {
   const scope = normalizeScope(path);
   const snap = loadSnapshot(paths, snapshot);
   const kind = scopeKindOf(snap, scope);
   if (!kind) throw new ProjectError(404, "no such scope");
   const view = modelScopeView(snap.model, scope);
   const cut = view.toDoc();
-  return { snapshot, scope, kind, doc: snap.model.doc, stats: cut.stats, facets: scopeFacets(cut.doc), plugins: await pluginsFor(paths.root) };
+  return { snapshot, scope, kind, doc: snap.model.doc, stats: cut.stats, facets: scopeFacets(cut.doc), plugins: await pluginsFor(paths.root, opts) };
 }
 
 /** The call flow of one scope, and the scope it names. */
@@ -580,10 +588,11 @@ export function scopeLensRows(view: ScopeView, paths: ProjectPaths): ScopeLensRo
   });
 }
 
-/** Settings per lens id, read the way the pipeline reads them from .insight/lenses/<id>.json. */
-function readLensConfigs(root: string, lensIds: string[]): Record<string, unknown> {
-  const dir = projectPaths(root).lensConfigs;
+/** Settings per lens id, read the way the pipeline reads them from .insight/lenses/<id>.json. None when the project's folder is not read. */
+function readLensConfigs(root: string, lensIds: string[], opts: ScopeReadOptions): Record<string, unknown> {
   const configs: Record<string, unknown> = {};
+  if (opts.projectPlugins === false) return configs;
+  const dir = projectPaths(root).lensConfigs;
   for (const id of lensIds) {
     const value = readJsonFile<unknown>(join(dir, `${id}.json`), undefined);
     if (value !== undefined) configs[id] = value;
@@ -595,7 +604,13 @@ function readLensConfigs(root: string, lensIds: string[]): Record<string, unknow
  * Runs one lens on the scope, or reads its stored result when the inputs have not changed. A lens
  * that throws comes back with status "error" and is not stored.
  */
-export async function runScopedLens(view: ScopeView, lensId: string, project: ProjectRoot, stateDir: string): Promise<LensRecord> {
+export async function runScopedLens(
+  view: ScopeView,
+  lensId: string,
+  project: ProjectRoot,
+  stateDir: string,
+  opts: ScopeReadOptions = {},
+): Promise<LensRecord> {
   const item = view.plugins.lenses.find((l) => l.lens.id === lensId);
   if (!item) throw new ProjectError(404, `no lens ${lensId}`);
   return runLensOnScope({
@@ -606,7 +621,7 @@ export async function runScopedLens(view: ScopeView, lensId: string, project: Pr
     scope: view.scope,
     lens: item,
     lenses: view.plugins.lenses,
-    configs: readLensConfigs(project.path, view.plugins.lenses.map((l) => l.lens.id)),
+    configs: readLensConfigs(project.path, view.plugins.lenses.map((l) => l.lens.id), opts),
     stateDir,
   });
 }
