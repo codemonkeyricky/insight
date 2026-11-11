@@ -11,7 +11,7 @@ import { MORE_SUFFIX, ZOOM_SIZE, fitCamera, fitChartCamera, visibleWorld, type C
 import { nameOfId } from "../../flowTargets";
 import { hrefView } from "../../router";
 import { CHART_MIN_PX } from "../../zoom/chart";
-import { anchoredTo, calloutOf, closeExpansion, footprintOf, openExpansion, refresh, revealCamera, rootBoxOf, sameFootprint, SLOT_PAD, shiftAt, type Expansion, type ExpandAnchor } from "../../zoom/expand";
+import { anchoredTo, calloutOf, closeExpansion, footprintOf, NARROW_VIEW_PX, openExpansion, refresh, revealCamera, rootBoxOf, sameFootprint, sceneCamera, SLOT_PAD, shiftAt, type Expansion, type ExpandAnchor } from "../../zoom/expand";
 import { calloutD } from "../../zoom/connector";
 import { popDelay } from "../../zoom/pop";
 import { displayName } from "../../zoom/names";
@@ -45,6 +45,10 @@ const MINI_RESERVE = 130;
  * flow view's styles). A fitted box sits below them, so its frame's header is not drawn under a chip.
  */
 const TOP_RESERVE = 76;
+/** The status pill (the title block, bottom-right on a desktop) is measured for its room; this is its height when it cannot be measured. */
+const PILL_FALLBACK_PX = 56;
+/** The gap a fit keeps between the status pill and the room above it. */
+const PILL_GAP = 12;
 /** On a phone-width stage the key plan sits higher, so the far grid keeps clear of it by more. */
 const MINI_RESERVE_NARROW = 184;
 const NARROW_STAGE_PX = 520;
@@ -52,6 +56,32 @@ const NARROW_STAGE_PX = 520;
 const SHEET_ROOM_MARGIN = 16;
 /** A function tile at least this tall on screen (px) shows its name in the mid tier. */
 const TILE_LABEL_PX = 16;
+
+/**
+ * The room the status pill takes at the bottom of a desktop stage: its measured height (or the fallback) and a gap. Nothing
+ * when the pill is not shown (a phone hides it).
+ */
+function pillRoomOf(): number {
+  const pill = document.querySelector<HTMLElement>(".sh-sheet .sh-title");
+  if (pill === null || getComputedStyle(pill).display === "none") return 0;
+  return (pill.offsetHeight || PILL_FALLBACK_PX) + PILL_GAP;
+}
+
+/** The drawn scene's bounds: the placed items' union, or undefined when nothing is drawn. */
+function sceneRectOf(b: MapBuild): Rect | undefined {
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (const i of b.placed.items) {
+    x0 = Math.min(x0, i.rect.x);
+    y0 = Math.min(y0, i.rect.y);
+    x1 = Math.max(x1, i.rect.x + i.rect.w);
+    y1 = Math.max(y1, i.rect.y + i.rect.h);
+  }
+  if (!Number.isFinite(x0)) return undefined;
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
 
 const sameList = <T,>(a: readonly T[], b: readonly T[], key: (t: T) => string): boolean =>
   a.length === b.length &&
@@ -203,8 +233,6 @@ interface OffMap {
  * The execution map: one camera over a scope's scene. Each node is a focus of the source; the map's items and edges
  * are named by node id, so a click or key that names a node is turned into a focus by the source first (`focusOf`).
  */
-/** The smallest scale the whole project fits at. Below it the first program (the Browser one) fills the stage instead. */
-const READABLE_FIT_K = 0.9;
 
 export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFocus, hint = true, inset = 0, leftInset = 0, bottomInset = 0, findings, layers = { frames: true, calls: true }, flat = false, motion = true }: Props) {
   /** The details that are closing: they stay drawn for EXIT_CLOSE_MS while they shrink and fade (see setExp). */
@@ -270,8 +298,9 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   /** The stage's room above the minimap, and right of the left inset: where a fit or a reveal may put things. */
   const roomOf = () => {
     const s = sizeOf();
-    // Above a bottom sheet the room ends at its top edge, with the same margin the minimap keeps.
-    const reserve = bottomRef.current > 0 ? bottomRef.current + SHEET_ROOM_MARGIN : MINI_RESERVE;
+    // Above a bottom sheet the room ends at its top edge, with the same margin the minimap keeps. On a desktop the room also
+    // ends above the status pill, so a fit never places a card under it.
+    const reserve = bottomRef.current > 0 ? bottomRef.current + SHEET_ROOM_MARGIN : MINI_RESERVE + pillRoomOf();
     return { width: Math.max(1, s.width - leftRef.current), height: Math.max(1, s.height - reserve - TOP_RESERVE) };
   };
 
@@ -496,12 +525,15 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     const opens = b.placed.items.some((i) => i.id === b.nodeId && i.kind === "frame");
     // A roots-only grid fits at 1x when it fits: the cards are never enlarged past their size.
     let c = opens || b.node(b.nodeId)?.chart !== undefined ? fitChartCamera(rect, room, CHART_MIN_PX) : fitCamera(rect, room, flat ? { maxK: 1 } : {});
-    // The whole project too small to read: the first program (the Browser one, listed first) fills the stage instead, and
-    // the rest of the map is panned to.
-    if (b.node(b.nodeId)?.kind === "project" && c.k < READABLE_FIT_K) {
-      const first = b.placed.items.find((i) => i.kind === "frame" && b.node(i.id)?.kind === "program");
-      const prect = first !== undefined ? b.placed.rects.get(first.id) : undefined;
-      if (prect !== undefined) c = fitCamera(prect, room, { minK: READABLE_FIT_K });
+    // The whole project (the first view): its full width is scaled down to fit the room, and aligned to the room's top-left,
+    // so no frame is clipped at the right. The height may run on (the map is panned), and the scale never goes above 1.
+    if (b.node(b.nodeId)?.kind === "project") {
+      const scene = sceneRectOf(b);
+      if (scene !== undefined) {
+        const narrow = typeof window !== "undefined" && window.innerWidth <= NARROW_VIEW_PX;
+        const s = sceneCamera(scene, room.width, 1, narrow);
+        return { ...s, x: s.x + leftRef.current, y: s.y + TOP_RESERVE };
+      }
     }
     const placed = { ...c, x: c.x + leftRef.current, y: c.y + TOP_RESERVE };
     // No empty band above the scene: the scene's top edge lands at the reserve, unless that would push the focus's bottom
@@ -613,16 +645,19 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     }
     setExp(list);
     if (writeUrl) syncUrl(b, focus);
+    // The expansions as they are placed now: a slotted build may have been laid out again to make room for them (see setExp),
+    // so the camera works from these, not from the list before the layout.
+    const placed = expRef.current;
 
     // A toggle keeps the camera where it is; any other focus fits. Opening or closing a detail never moves the camera on a
     // desktop. On a phone, a detail that opens is fitted with the sheet over the map: the one move that is allowed there.
-    const fit = !(toggle && holds) || (bottomRef.current > 0 && list.length > openBefore);
+    const fit = !(toggle && holds) || (bottomRef.current > 0 && placed.length > openBefore);
     if (fit) {
-      const target = fitDetails(b, list) ?? fitTarget(b, list);
+      const target = fitDetails(b, placed) ?? fitTarget(b, placed);
       if (target !== undefined) moveTo(target, animate);
-    } else if (list.length > openBefore) {
+    } else if (placed.length > openBefore) {
       // A detail opened off the stage's edge is panned into view; a camera that already shows it does not move.
-      const newest = list[list.length - 1];
+      const newest = placed[placed.length - 1];
       if (newest !== undefined) moveTo(revealOf(cameraRef.current, newest, 0), true);
     }
   };
@@ -675,7 +710,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     if (next === list) return;
     setExp(next);
     // The new detail is panned into view when it is off the stage (the camera zooms only for a detail too narrow to read).
-    const opened = next.find((e) => e.fnId === callee);
+    // It is read from the placed list: setExp may have laid the build out again (see there).
+    const opened = expRef.current.find((e) => e.fnId === callee);
     if (opened !== undefined) moveTo(revealOf(cameraRef.current, opened, 0), true);
     // The code pane follows the chain: the callee is the last function clicked.
     if (opened !== undefined) void selectFunction(callee);

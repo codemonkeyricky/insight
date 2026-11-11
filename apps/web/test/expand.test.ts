@@ -14,6 +14,7 @@ import {
   reflow,
   detailLetter,
   revealCamera,
+  sceneCamera,
   shiftAt,
   shiftOf,
   type Expansion,
@@ -190,5 +191,93 @@ describe("the side shift", () => {
     const moved = openExpansion(both, "A", { kind: "box", nodeId: "n", rect: { ...box, x: 400 } }, chart("A", 300, 200), view);
     expect(moved.find((e) => e.fnId === "A")?.index).toBe(0);
     expect(detailLetter(26)).toBe("AA");
+  });
+});
+
+describe("revealCamera fit", () => {
+  const margin = 16;
+  /** Where the rect's left and right edges and top and bottom edges sit on screen, in the room's coordinates. */
+  const edges = (cam: { k: number; x: number; y: number }, r: { x: number; y: number; w: number; h: number }) => ({
+    left: r.x * cam.k + cam.x,
+    right: (r.x + r.w) * cam.k + cam.x,
+    top: r.y * cam.k + cam.y,
+    bottom: (r.y + r.h) * cam.k + cam.y,
+  });
+
+  it("keeps a wider-than-room expansion's left edge visible at a scale of at least 0.5", () => {
+    const room = { width: 400, height: 600 };
+    const rect = { x: 900, y: 50, w: 1000, h: 200 };
+    const cam = revealCamera({ k: 1, x: 0, y: 0 }, rect, 1000, room, 0);
+    expect(cam.k).toBeGreaterThanOrEqual(0.5);
+    const e = edges(cam, rect);
+    expect(e.left).toBeGreaterThanOrEqual(0);
+    expect(e.left).toBeLessThanOrEqual(margin + 0.001);
+  });
+
+  it("zooms out to fit an expansion that fits at a smaller scale, then keeps it fully inside the room", () => {
+    const room = { width: 400, height: 600 };
+    const rect = { x: 900, y: 50, w: 700, h: 200 };
+    const cam = revealCamera({ k: 1, x: 0, y: 0 }, rect, 700, room, 0);
+    expect(cam.k).toBeLessThan(1);
+    expect(cam.k).toBeGreaterThanOrEqual(0.5);
+    const e = edges(cam, rect);
+    expect(e.left).toBeGreaterThanOrEqual(margin - 0.001);
+    expect(e.right).toBeLessThanOrEqual(room.width - margin + 0.001);
+  });
+
+  it("aligns an expansion larger than the room in both directions to the top-left, at the 0.5 floor", () => {
+    const room = { width: 400, height: 300 };
+    const rect = { x: 900, y: 50, w: 1000, h: 900 };
+    const cam = revealCamera({ k: 1, x: 0, y: 0 }, rect, 1000, room, 0);
+    expect(cam.k).toBe(0.5);
+    const e = edges(cam, rect);
+    expect(e.left).toBeCloseTo(margin, 6);
+    expect(e.top).toBeCloseTo(margin, 6);
+  });
+
+  it("pans a fitting expansion the least that brings it inside the room, without changing the scale", () => {
+    const room = { width: 1000, height: 700 };
+    const rect = { x: 100, y: 50, w: 200, h: 100 };
+    const cam = revealCamera({ k: 1, x: -300, y: 0 }, rect, 200, room, 0);
+    expect(cam.k).toBe(1);
+    const e = edges(cam, rect);
+    expect(e.left).toBeCloseTo(margin, 6);
+  });
+});
+
+describe("sceneCamera", () => {
+  const pad = 16;
+
+  it("scales a wide scene down to fit the room's width, top-left aligned with padding, so no frame is clipped on the right", () => {
+    const scene = { x: 0, y: 0, w: 900, h: 700 };
+    const cam = sceneCamera(scene, 270, 1, false);
+    expect(cam.k).toBeLessThan(1);
+    expect(cam.x).toBeCloseTo(pad, 6);
+    expect(scene.w * cam.k + cam.x).toBeLessThanOrEqual(270 - pad + 0.001);
+  });
+
+  it("does not fit the height: a tall scene keeps its scale, so its top is the one that is aligned", () => {
+    const cam = sceneCamera({ x: 0, y: 0, w: 700, h: 2740 }, 718, 1, false);
+    expect(cam.k).toBeCloseTo(686 / 700, 6);
+    expect(cam.y).toBeCloseTo(pad, 6);
+  });
+
+  it("never goes above the cap, so a small scene is not enlarged", () => {
+    const cam = sceneCamera({ x: 0, y: 0, w: 100, h: 50 }, 1000, 1, false);
+    expect(cam.k).toBe(1);
+  });
+
+  it("keeps the scene's left edge visible on a phone, at a readable scale of at least 0.6 when the width allows", () => {
+    const scene = { x: 40, y: 20, w: 900, h: 700 };
+    const cam = sceneCamera(scene, 390, 1, true);
+    expect(cam.k).toBeGreaterThanOrEqual(0.6);
+    expect(cam.k).toBeLessThanOrEqual(1);
+    expect(scene.x * cam.k + cam.x).toBeCloseTo(pad, 6);
+  });
+
+  it("aligns the scene's top-left to the room with padding when it is scaled, not centred", () => {
+    const cam = sceneCamera({ x: 300, y: 200, w: 400, h: 300 }, 300, 1, false);
+    expect(300 * cam.k + cam.x).toBeCloseTo(pad, 6);
+    expect(200 * cam.k + cam.y).toBeCloseTo(pad, 6);
   });
 });
