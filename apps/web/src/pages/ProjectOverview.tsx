@@ -2,15 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, IS_DEMO, type FindingRow, type Overview } from "../api";
 import { useIndexProgress } from "../useIndexProgress";
 import { hrefLens } from "../router";
-import { IndexProgress } from "../components/IndexProgress";
 
-/** The overview tab: run controls, counts, lenses, coverage and findings for the whole project. */
+/** The overview tab: counts, the run log, lenses, coverage and findings for the whole project. The strip above the tabs is the run control. */
 export function ProjectOverview({ id }: { id: string }) {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [findings, setFindings] = useState<FindingRow[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [full, setFull] = useState(false);
-  const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -31,7 +28,6 @@ export function ProjectOverview({ id }: { id: string }) {
   const run = useIndexProgress(id, overview?.project.progress, (event) => {
     if (event.type === "done" || event.type === "failed" || event.type === "status") void load();
   });
-  const running = run.running || overview?.project.status === "indexing";
 
   const grouped = useMemo(() => {
     const byLens = new Map<string, FindingRow[]>();
@@ -47,30 +43,8 @@ export function ProjectOverview({ id }: { id: string }) {
   if (!overview) return <p className="muted">Loading</p>;
   const p = overview.project;
 
-  const reindex = async () => {
-    setBusy(true);
-    try {
-      await api.reindex(id, full);
-      await load();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <section>
-      {!IS_DEMO && (
-        <div className="actions">
-          <label className="check small">
-            <input type="checkbox" checked={full} onChange={(e) => setFull(e.target.checked)} /> full
-          </label>
-          <button type="button" onClick={() => void reindex()} disabled={busy || running}>
-            Re-index
-          </button>
-        </div>
-      )}
       {p.error && <p className="error" role="alert">Last run failed: {p.error}</p>}
       {error && <p className="error" role="alert">{error}</p>}
 
@@ -92,9 +66,8 @@ export function ProjectOverview({ id }: { id: string }) {
       {!IS_DEMO && (
         <>
           <h2>Run log</h2>
-          {running && <IndexProgress progress={run.progress} fraction={run.progress ? run.fraction : undefined} />}
           <pre className="log" aria-live="polite" data-testid="run-log">
-            {run.lines.length === 0 ? "No run since the server started. Re-index to see progress." : run.lines.join("\n")}
+            {run.lines.length === 0 ? "No run since the server started. Start one with Index above to see progress." : run.lines.join("\n")}
           </pre>
         </>
       )}

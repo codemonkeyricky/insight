@@ -110,6 +110,24 @@ describe("IndexStrip", () => {
   });
 });
 
+describe("IndexStrip polish", () => {
+  it("the done summary is normal text, not the muted rest colour", () => {
+    const html = renderToStaticMarkup(<IndexProgress fraction={1} label="Indexed · 23,502 nodes" />);
+    expect(html).toContain('class="idx-label small"');
+    expect(html).not.toContain("muted");
+  });
+
+  it("the Overview has no Re-index row or progress bar of its own, and the header badge is off that page", () => {
+    const overview = readFileSync(new URL("../src/pages/ProjectOverview.tsx", import.meta.url), "utf8");
+    expect(overview).not.toContain("Re-index");
+    expect(overview).not.toContain("components/IndexProgress");
+    expect(overview).not.toMatch(/<IndexProgress\b/);
+    expect(overview).toContain("Run log");
+    const workspace = readFileSync(new URL("../src/components/Workspace.tsx", import.meta.url), "utf8");
+    expect(workspace).toContain('content !== "overview" && <StatusBadge');
+  });
+});
+
 describe("FirstIndex", () => {
   it("names the project while its first run is under way", () => {
     const html = renderToStaticMarkup(

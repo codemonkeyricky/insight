@@ -67,7 +67,7 @@ export function IndexProgress({ progress, fraction, label, error, compact = fals
       >
         <span className="idx-fill" style={{ width: `${(f * 100).toFixed(1)}%` }} />
       </div>
-      <div className={`idx-label small ${error !== undefined ? "error" : "muted"}`} title={text}>
+      <div className={`idx-label small ${error !== undefined ? "error" : label !== undefined ? "" : "muted"}`.trim()} title={text}>
         {text}
       </div>
     </div>

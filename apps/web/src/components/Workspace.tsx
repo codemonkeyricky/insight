@@ -362,7 +362,7 @@ export function Workspace({ id, tab, scope, line, fn, roots = true, base, head, 
             <div className="sh-stage sh-page">
               <div className="sh-page-head">
                 <h1>{p.name}</h1>
-                <StatusBadge project={p} />
+                {content !== "overview" && <StatusBadge project={p} />}
               </div>
               {error && <p className="error" role="alert">{error}</p>}
               {listingError && (

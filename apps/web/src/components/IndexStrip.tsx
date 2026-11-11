@@ -103,7 +103,7 @@ export function IndexStrip({ id, project, snapshot, run, onRequested }: IndexStr
           </button>
         </>
       ) : done ? (
-        <div className="idx-strip-main idx-rest">
+        <div className="idx-strip-main idx-done">
           <IndexProgress fraction={1} label={`Indexed · ${(snapshot?.nodes ?? 0).toLocaleString()} nodes`} />
         </div>
       ) : (
