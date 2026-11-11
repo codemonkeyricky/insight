@@ -17,7 +17,7 @@ import { CodePane } from "./sheet/CodePane";
 import { FileTree } from "./sheet/FileTree";
 import { FindPalette } from "./sheet/FindPalette";
 import { LayerTabs, type LayerLink } from "./sheet/LayerTabs";
-import { isNarrow, CODE_KEY, TREE_KEY, useNarrow, usePaneWidth } from "./sheet/panes";
+import { CODE_KEY, COMPACT_CODE_W, COMPACT_TREE_W, TREE_KEY, isNarrow, useCompactPanes, useNarrow, usePaneWidth } from "./sheet/panes";
 import { Splitter } from "./sheet/Splitter";
 import { TopBar, type Crumb } from "./sheet/TopBar";
 import type { TitleFacts } from "./sheet/TitleBlock";
@@ -79,6 +79,7 @@ export function Workspace({ id, tab, scope, line, fn, roots = true, base, head, 
   const [treeW, setTreeW] = usePaneWidth(TREE_KEY, TREE_DEFAULT);
   const [codeW, setCodeW] = usePaneWidth(CODE_KEY, CODE_DEFAULT);
   const narrow = useNarrow();
+  const compact = useCompactPanes();
   /** What the code pane shows, and the element the flow map draws its exec panel into. */
   const [target, setTarget] = useState<CodeTarget>();
   const [slot, setSlot] = useState<HTMLElement | null>(null);
@@ -261,10 +262,13 @@ export function Workspace({ id, tab, scope, line, fn, roots = true, base, head, 
   // side panes are drawers, so the widths do not apply.
   const treeShown = narrow ? filesOpen : !treeCollapsed;
   const codeShown = narrow ? codeDrawer : !codeCollapsed;
+  // Below 1200px the side panes narrow (Files 220px, Code 300px), so the tab strip has room in the centre column.
+  const treeEff = compact ? Math.min(treeW, COMPACT_TREE_W) : treeW;
+  const codeEff = compact ? Math.min(codeW, COMPACT_CODE_W) : codeW;
   const bodyStyle = {
-    "--tree-col": `${treeShown ? treeW : 0}px`,
+    "--tree-col": `${treeShown ? treeEff : 0}px`,
     "--split-l": treeShown ? "1px" : "0px",
-    "--code-col": `${codeShown ? codeW : 0}px`,
+    "--code-col": `${codeShown ? codeEff : 0}px`,
     "--split-r": codeShown ? "1px" : "0px",
   } as CSSProperties;
 
@@ -335,7 +339,7 @@ export function Workspace({ id, tab, scope, line, fn, roots = true, base, head, 
           open={treeShown}
           onClose={toggleFiles}
         />
-        <Splitter side="left" label="Resize the files pane" width={treeW} shown={treeShown && !narrow} onResize={setTreeW} />
+        <Splitter side="left" label="Resize the files pane" width={treeEff} shown={treeShown && !narrow} onResize={setTreeW} />
         <section className="sh-center">
           <LayerTabs links={layers} />
           <IndexStrip id={id} project={p} snapshot={overview.snapshot} run={run} onRequested={() => void load()} />
@@ -381,7 +385,7 @@ export function Workspace({ id, tab, scope, line, fn, roots = true, base, head, 
             </div>
           )}
         </section>
-        <Splitter side="right" label="Resize the code pane" width={codeW} shown={codeShown && !narrow} onResize={setCodeW} />
+        <Splitter side="right" label="Resize the code pane" width={codeEff} shown={codeShown && !narrow} onResize={setCodeW} />
         <CodePane
           id={id}
           roots={roots}

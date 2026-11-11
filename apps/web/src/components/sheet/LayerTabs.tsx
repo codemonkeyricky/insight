@@ -38,12 +38,7 @@ export function LayerTabs({ links }: Props) {
   useLayoutEffect(() => {
     const el = strip.current;
     const cur = el?.querySelector<HTMLElement>('[aria-selected="true"]');
-    if (el && cur) {
-      const left = cur.offsetLeft;
-      const right = left + cur.offsetWidth;
-      if (left < el.scrollLeft + 12) el.scrollLeft = left - 12;
-      else if (right > el.scrollLeft + el.clientWidth - 12) el.scrollLeft = right - el.clientWidth + 12;
-    }
+    cur?.scrollIntoView({ block: "nearest", inline: "nearest" });
     fades();
     // The scroll follows the current tab only, not every re-render of the same page.
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -21,6 +21,25 @@ export function useNarrow(): boolean {
   return narrow;
 }
 
+/** Below this width the desktop panes are narrowed so the centre column keeps room for its tabs. */
+const COMPACT_QUERY = "(max-width: 1199px)";
+/** Side pane widths on a compact desktop: Files 220px, Code 300px. */
+export const COMPACT_TREE_W = 220;
+export const COMPACT_CODE_W = 300;
+
+/** Whether the desktop layout is compact (below 1200px), kept current as the window resizes. */
+export function useCompactPanes(): boolean {
+  const [compact, setCompact] = useState(() => typeof matchMedia === "function" && matchMedia(COMPACT_QUERY).matches);
+  useEffect(() => {
+    if (typeof matchMedia !== "function") return;
+    const mq = matchMedia(COMPACT_QUERY);
+    const onChange = () => setCompact(mq.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+  return compact;
+}
+
 export const PANE_MIN = 220;
 export const PANE_MAX = 560;
 export const TREE_KEY = "insight.treeWidth";

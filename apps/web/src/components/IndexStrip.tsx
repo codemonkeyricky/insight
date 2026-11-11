@@ -81,14 +81,14 @@ export function IndexStrip({ id, project, snapshot, run, onRequested }: IndexStr
         {running ? "Indexing" : "Index"}
       </button>
       <label className="check small">
-        <input type="checkbox" checked={full} disabled={running} onChange={(e) => setFull(e.target.checked)} /> full
+        <input type="checkbox" checked={full} disabled={running} onChange={(e) => setFull(e.target.checked)} /> Full
       </label>
       {running ? (
         <>
           <div className="idx-strip-main">
             <IndexProgress progress={run.progress} fraction={run.progress ? run.fraction : undefined} />
           </div>
-          {project.queued && <span className="muted small">One more queued</span>}
+          {project.queued && <span className="idx-note">One more queued</span>}
           <a className="small" href={hrefView(id, "overview", { full: true })}>
             Log
           </a>
@@ -107,7 +107,7 @@ export function IndexStrip({ id, project, snapshot, run, onRequested }: IndexStr
           <IndexProgress fraction={1} label={`Indexed · ${(snapshot?.nodes ?? 0).toLocaleString()} nodes`} />
         </div>
       ) : (
-        <span className="muted small idx-rest">{rest}</span>
+        <span className="idx-rest" title={rest}>{rest}</span>
       )}
       {requestError && (
         <span className="error small" role="alert">
