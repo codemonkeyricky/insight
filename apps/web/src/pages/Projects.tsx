@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { api, ApiError, IS_DEMO, type Project } from "../api";
+import { api, ApiError, IS_DEMO, NO_SERVER, type Project } from "../api";
 import { IndexProgress } from "../components/IndexProgress";
 import { hrefProject } from "../router";
 import { projectFindingsTotal } from "../projectFindings";
@@ -17,7 +17,7 @@ export function ProjectsPage() {
   }, []);
 
   useEffect(() => {
-    if (IS_DEMO) return;
+    if (NO_SERVER) return;
     const timer = setInterval(() => void load(), anyIndexing ? 1000 : 4000);
     return () => clearInterval(timer);
   }, [anyIndexing]);

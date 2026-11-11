@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, IS_DEMO, type Project, type SnapshotSummary } from "../api";
+import { api, NO_SERVER, type Project, type SnapshotSummary } from "../api";
 import { hrefView } from "../router";
 import type { IndexRun } from "../useIndexProgress";
 import { IndexProgress } from "./IndexProgress";
@@ -46,7 +46,7 @@ export function IndexStrip({ id, project, snapshot, run, onRequested }: IndexStr
     return () => clearTimeout(timer);
   }, [run.finishedAt]);
 
-  if (IS_DEMO) return null;
+  if (NO_SERVER) return null;
 
   const running = run.running || project.status === "indexing";
   const failed = !running && run.lastError !== undefined;
