@@ -44,6 +44,11 @@ export interface SceneNode {
   chart?: Size;
   /** For a function with a chart: the box's size, just its name. This is the size the box is always laid out at. */
   compact?: Size;
+  /**
+   * A thread that is an external command: a process spawn whose target the IR cannot resolve to a function, so the thread
+   * has no functions. It is a leaf, drawn as a plain chip with no function glyph, and it opens nothing when clicked.
+   */
+  external?: boolean;
 }
 
 /**

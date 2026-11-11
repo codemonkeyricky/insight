@@ -6,7 +6,7 @@
 // A function is drawn once per place it runs: a helper two threads call has a box in each thread, and the call edges
 // of one thread stay inside that thread. Pure and deterministic: the scene depends only on the model's content, not
 // on the order of its call pairs.
-import type { ExecCoroutine, ExecFunctionRef, ExecModel, ExecProgram, ExecResourceSite, ExecThread } from "./exec-model.js";
+import type { ExecCoroutine, ExecFunctionRef, ExecModel, ExecProgram, ExecResourceSite, ExecSpawn, ExecThread } from "./exec-model.js";
 import type { Scene, SceneEdge, SceneEdgeKind, SceneLevel, SceneNode } from "./scene.js";
 import { LAYERED, ZOOM_SIZE } from "./zoom-layout.js";
 
@@ -81,6 +81,19 @@ function basename(path: string): string {
 }
 
 const KIND_LABEL: Record<string, string> = { thread: "Thread", process: "Process", async: "Async" };
+
+/** The IR's placeholder for a command or argument it has no literal for. */
+const DYNAMIC_ARG = "<dynamic>";
+
+/**
+ * What an external command runs, named from the spawn's IR facts: the literal command ("git"), or "node <script>" for a
+ * forked script. A command with no literal is named "dynamic command".
+ */
+function externalLabel(s: ExecSpawn): string {
+  const cmd = s.command !== undefined && s.command !== "" && s.command !== DYNAMIC_ARG ? s.command : undefined;
+  if (s.script !== undefined && s.script !== "" && (s.api === "child_process.fork" || cmd === "node")) return `node ${basename(s.script)}`;
+  return cmd ?? "dynamic command";
+}
 
 /** The placements of one function in one thread (or the project, for plain code flow). */
 interface Placed {
@@ -458,16 +471,20 @@ export function buildExecScene(model: ExecModel): Scene {
 
   function threadNode(t: ExecThread, id: string, parent: string): SceneNode {
     const script = t.spawn?.script;
+    // A process that runs an external command has no function of its own: it is a leaf named by what it runs.
+    const external = t.kind === "process" && t.reach === 0 && t.spawn?.status === "unresolved";
     // A thread that runs a script file is a worker: named by its file, the way a worker is named in the IR. A browser Worker
     // runs its file's module entry, so its file is the module root's file.
     const moduleFile = t.roots.map((r) => fns.get(r)).find((f) => f?.module === true)?.file;
     const workerFile = script !== undefined && script !== "" ? script : t.spawn?.api === "Worker" ? moduleFile : undefined;
     const label =
-      t.kind === "main" || t.kind === "process"
-        ? "Main thread"
-        : workerFile !== undefined && workerFile !== ""
-          ? "Worker"
-          : `${KIND_LABEL[t.kind] ?? t.kind} · ${threadName(t)}`;
+      external && t.spawn !== undefined
+        ? externalLabel(t.spawn)
+        : t.kind === "main" || t.kind === "process"
+          ? "Main thread"
+          : workerFile !== undefined && workerFile !== ""
+            ? "Worker"
+            : `${KIND_LABEL[t.kind] ?? t.kind} · ${threadName(t)}`;
     const node: SceneNode = {
       id,
       kind: "thread",
@@ -475,6 +492,7 @@ export function buildExecScene(model: ExecModel): Scene {
       parent,
       children: [],
       detail: plural(t.reach, "function"),
+      ...(external ? { external: true } : {}),
     };
     const s = t.spawn;
     if (s !== undefined) {

@@ -12,7 +12,7 @@ import {
   execThreadId,
   MAX_SYNC_EDGES_PER_RESOURCE,
 } from "../src/exec-scene.js";
-import type { ExecFunctionRef, ExecModel, ExecModelStats, ExecProgram, ExecResource, ExecThread } from "../src/exec-model.js";
+import type { ExecFunctionRef, ExecModel, ExecModelStats, ExecProgram, ExecResource, ExecSpawn, ExecThread } from "../src/exec-model.js";
 import type { Scene } from "../src/scene.js";
 import { sceneLeafSize } from "../src/scene-layout.js";
 
@@ -728,5 +728,64 @@ describe("buildExecScene: sync edges", () => {
       threads: [mainThread({ roots: ["m1"], reach: 1, reached: ["m1"] }), worker("t1", ["w1"])],
     });
     expect(syncEdges(buildExecScene(m))).toEqual([]);
+  });
+});
+
+describe("buildExecScene: external process threads", () => {
+  /** A process spawn thread: unresolved and function-less unless `thread` says otherwise. */
+  const processSpawn = (id: string, spawn: Partial<ExecSpawn> = {}, thread: Partial<ExecThread> = {}): ExecThread => ({
+    id,
+    kind: "process",
+    grounded: true,
+    spawn: { node: id, owner: "main", file: "src/app.ts", line: 9, how: "process", status: "unresolved", candidates: false, api: "child_process.execFileSync", ...spawn },
+    roots: [],
+    reach: 0,
+    reached: [],
+    coroutines: [],
+    coroutineOnly: [],
+    ...thread,
+  });
+
+  it("labels a process that spawns a literal command by the command and flags it external", () => {
+    const m = model({
+      functions: [fn("main")],
+      threads: [mainThread({ roots: ["main"], reached: ["main"], reach: 1 }), processSpawn("spawn:git", { command: "git" })],
+    });
+    const s = buildExecScene(m);
+    const leaf = node(s, execThreadId("spawn:git"));
+    expect(leaf).toMatchObject({ kind: "thread", label: "git", external: true, children: [] });
+    expect(node(s, execProcessId("spawn:git"))).toMatchObject({ label: "Process · execFileSync" });
+  });
+
+  it("keeps Main thread, and no external flag, for a process thread that has functions", () => {
+    const m = model({
+      functions: [fn("main"), fn("w1")],
+      threads: [
+        mainThread({ roots: ["main"], reached: ["main"], reach: 1 }),
+        processSpawn("spawn:job", { command: "<dynamic>", status: "resolved" }, { roots: ["w1"], reach: 1, reached: ["w1"] }),
+      ],
+    });
+    const thread = node(buildExecScene(m), execThreadId("spawn:job"));
+    expect(thread.label).toBe("Main thread");
+    expect(thread.external).toBeUndefined();
+  });
+
+  it("names a process with no literal command by its call, and flags it external", () => {
+    const m = model({
+      functions: [fn("main")],
+      threads: [mainThread({ roots: ["main"], reached: ["main"], reach: 1 }), processSpawn("spawn:dyn", { command: "<dynamic>" })],
+    });
+    expect(node(buildExecScene(m), execThreadId("spawn:dyn"))).toMatchObject({ label: "dynamic command", external: true });
+  });
+
+  it("names a forked script by node and its basename, and flags it external", () => {
+    const m = model({
+      functions: [fn("main")],
+      threads: [
+        mainThread({ roots: ["main"], reached: ["main"], reach: 1 }),
+        processSpawn("spawn:fork", { api: "child_process.fork", command: "<dynamic>", script: "workers/job.js" }),
+      ],
+    });
+    expect(node(buildExecScene(m), execThreadId("spawn:fork"))).toMatchObject({ label: "node job.js", external: true });
   });
 });
