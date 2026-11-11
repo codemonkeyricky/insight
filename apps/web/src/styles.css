@@ -1021,3 +1021,15 @@ button.add-submit:disabled { background: var(--faint); color: var(--graphite); b
 .zm-expansion-runtime { fill: var(--thread); font-weight: 600; }
 .zm-expansion.is-runtime .zm-expansion-body { stroke: color-mix(in srgb, var(--thread) 55%, var(--hair)); stroke-dasharray: 6 3; }
 .zm-expansion.is-runtime .zm-expansion-accent { fill: var(--thread); }
+
+/* Hosted pages: the repository input on the home, an index run's progress bar and its failure panel. */
+.index-page { max-width: 760px; }
+.index-sha { font-family: var(--font-code); font-size: var(--t-md); font-weight: 400; }
+.index-run, .index-error { display: grid; gap: 12px; max-width: 560px; margin: 16px 0; padding: 18px; border: 1px solid var(--hair); border-radius: 14px; background: var(--glass-strong); box-shadow: var(--float); }
+.index-run p, .index-error p { margin: 0; }
+.index-bar { height: 8px; border-radius: var(--r-pill); background: var(--faint); overflow: hidden; }
+.index-bar-fill { height: 100%; border-radius: inherit; background: var(--accent-fill, var(--accent)); transition: width var(--dur-2) var(--ease-out); }
+.index-bar-fill.indeterminate { width: 35%; animation: index-slide 1.4s var(--ease-out) infinite; }
+@keyframes index-slide { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
+@media (prefers-reduced-motion: reduce) { .index-bar-fill.indeterminate { animation: none; width: 100%; opacity: .5; } }
+.index-error .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }

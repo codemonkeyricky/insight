@@ -5,6 +5,7 @@ import type { SerializedModel } from "@insight/model";
 import { refsFor, scopeCallersFor, scopeExecFor, scopeFlowFor, type ScopeRefsPayload } from "./model/payloads";
 import { models } from "./model/store";
 import { staticApi } from "./staticApi";
+import { hostedApi } from "./hostedApi";
 
 // Types only: the flow package is not bundled, its charts are drawn by components/FlowChart.tsx.
 // The architecture model is plain data from the lens package; the Arch tab draws it in components/views/ArchView.tsx.
@@ -44,6 +45,10 @@ export type {
 
 /** True in the read-only demo build (VITE_STATIC=1): one fixed project, served from JSON files. */
 export const IS_DEMO = import.meta.env.VITE_STATIC === "1";
+/** True in the hosted build (VITE_HOSTED=1): indexed GitHub repositories, read from storage and GitHub. */
+export const IS_HOSTED = import.meta.env.VITE_HOSTED === "1";
+/** True in any build without a live server: the demo and the hosted build. Their write, compare and review controls are hidden. */
+export const NO_SERVER = IS_DEMO || IS_HOSTED;
 
 export type Span = { file: string; start: [number, number]; end: [number, number] };
 export type Severity = "error" | "warning" | "info";
@@ -463,5 +468,5 @@ const liveApi = {
   removeAnnotation: (id: string, annId: string) => call<void>("DELETE", `/api/projects/${id}/annotations/${encodeURIComponent(annId)}`),
 };
 
-/** The demo build answers from captured JSON; every other build calls the server. */
-export const api: typeof liveApi = IS_DEMO ? staticApi : liveApi;
+/** The hosted build answers from storage; the demo from captured JSON; every other build calls the server. */
+export const api: typeof liveApi = IS_HOSTED ? hostedApi : IS_DEMO ? staticApi : liveApi;

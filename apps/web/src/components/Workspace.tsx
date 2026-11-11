@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { api, IS_DEMO, type FileEntry, type Overview, type ScopeLenses } from "../api";
+import { api, NO_SERVER, type FileEntry, type Overview, type ScopeLenses } from "../api";
 import { CodeTargetContext, scopeCodeTarget, type CodeTarget, type CodeTargetValue } from "../codeTarget";
 import { contentOf, flowScopeOf, type ShellContent } from "./sheet/shell";
 import { hrefView, redirectFor } from "../router";
@@ -203,7 +203,7 @@ export function Workspace({ id, tab, scope, line, fn, roots = true, base, head, 
   const content: ShellContent = contentOf(tab, kind, full);
   // A project with no snapshot yet has nothing to chart, so its views give way to the first index's progress.
   const noSnapshot = overview.snapshot === null;
-  const lensTabs = listing ? tabbedLenses(listing.lenses).map((row) => lensTab(row, !IS_DEMO)) : [];
+  const lensTabs = listing ? tabbedLenses(listing.lenses).map((row) => lensTab(row, !NO_SERVER)) : [];
   // The banner's numbers belong to one scope. A listing for another scope is not shown while the new one loads.
   const stats = listing && listing.scope === canonicalScope(scope) ? listing.stats : null;
   // The tree picks flow for the flow view, and source for the project-wide pages, so a picked file opens its flow or source.
@@ -237,7 +237,7 @@ export function Workspace({ id, tab, scope, line, fn, roots = true, base, head, 
     pageLink("flow", "Flow", content === "flow" && tab !== "overview"),
     pageLink("arch", "Arch", content === "arch"),
     { ...pageLink("findings", "Findings", content === "findings"), count: overview.findings.total },
-    ...(IS_DEMO ? [] : [pageLink("compare", "Compare", content === "compare"), pageLink("review", "Triage", content === "triage")]),
+    ...(NO_SERVER ? [] : [pageLink("compare", "Compare", content === "compare"), pageLink("review", "Triage", content === "triage")]),
     ...lensTabs.map((t): LayerLink => ({
       id: t.id,
       title: t.title,

@@ -1,4 +1,5 @@
 import { RETIRED_LENSES } from "./scopeLenses";
+import { isRepoName } from "./hostedRepo";
 
 /** The tabs every project has. Any other tab id is a lens id. */
 export const BUILTIN_TABS = ["overview", "source", "flow", "arch", "findings", "compare", "review"] as const;
@@ -24,6 +25,8 @@ export type Route =
       base?: string;
       head?: string;
     }
+  /** A hosted repository: its latest index (no sha), or the index at one commit. Only the hosted build opens it. */
+  | { name: "hosted"; owner: string; repo: string; sha?: string }
   | { name: "unknown" };
 
 export interface ViewOptions {
@@ -53,6 +56,7 @@ export function parseRoute(hash: string): Route {
   const query = new URLSearchParams(at === -1 ? "" : raw.slice(at + 1));
   const parts = path.split("/").filter((p) => p.length > 0).map((p) => decodeURIComponent(p));
   if (parts.length === 0 || (parts[0] === "projects" && parts.length === 1)) return { name: "projects" };
+  if (parts[0] === "gh") return parseHostedRoute(parts);
   if (parts[0] !== "projects") return { name: "unknown" };
   const id = parts[1] as string;
   const lineOf = () => {
@@ -90,6 +94,18 @@ export function parseRoute(hash: string): Route {
     return { name: "workspace", id, tab: "source", scope: file, ...(file && line ? { line } : {}) };
   }
   return { name: "unknown" };
+}
+
+/** #/gh/<owner>/<repo> or #/gh/<owner>/<repo>@<sha>. Names are read in lowercase, as the storage holds them. */
+function parseHostedRoute(parts: string[]): Route {
+  if (parts.length !== 3) return { name: "unknown" };
+  const owner = (parts[1] ?? "").toLowerCase();
+  const last = parts[2] ?? "";
+  const at = last.lastIndexOf("@");
+  const repo = (at === -1 ? last : last.slice(0, at)).toLowerCase();
+  const sha = at === -1 ? undefined : last.slice(at + 1).toLowerCase();
+  if (!isRepoName(owner, repo) || (sha !== undefined && !/^[0-9a-f]{40}$/.test(sha))) return { name: "unknown" };
+  return { name: "hosted", owner, repo, ...(sha ? { sha } : {}) };
 }
 
 const enc = encodeURIComponent;
