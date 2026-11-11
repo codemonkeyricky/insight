@@ -138,6 +138,16 @@ reads `latest.json` from the Worker, and the progress from the local `/api/statu
 End-to-end checks were run with playwright-core and headless chromium (see the PR description and
 `docs/screenshots/hosted/*.png`; `kv-e2e.png` is the live KV run).
 
+## Links
+
+A repository opens at a path as well as from the home page: `https://arch-insight.vercel.app/facebook/zstd` (the
+`github.com/<owner>/<repo>` and `https://github.com/<owner>/<repo>` forms work too, with an optional `.git`). The page
+moves the path to the hash route `#/gh/<owner>/<repo>` before the router reads it, and that route indexes the repository
+if it has no index yet, exactly as the home page's Index button does. A `/tree/<ref>/<path>` or `/blob/<ref>/<path>` link
+opens the repository's default branch: the ref and the path are ignored in v1. Paths under `/api/`, `/assets/` and
+`/storage/`, and any other path, show the home page. Vercel and `scripts/hosted-dev.mjs` send every unknown path to
+`index.html`, so the same page answers all of them. The parser is `parseRepoPath` in `apps/web/src/hostedRepo.ts`.
+
 ## Packaging and deploy
 
 ### 1. The storage Worker (once, and after changing `workers/storage`)

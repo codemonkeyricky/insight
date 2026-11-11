@@ -175,6 +175,10 @@ export function HostedHome() {
         )}
       </form>
 
+      <p className="muted small">
+        Tip: open {window.location.host}/&lt;owner&gt;/&lt;repo&gt; directly, e.g. /facebook/zstd
+      </p>
+
       {auth?.signedIn && <YourRepos repos={repos} installUrl={installUrl ?? auth.installUrl} error={reposError} />}
 
       <h2>Featured</h2>
