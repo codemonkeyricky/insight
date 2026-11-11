@@ -214,6 +214,11 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false }: System
   const arrows = layout.arrows;
 
   const empty = layout.boxes.length === 0;
+  // Content past the stage's edge: a fade along the right edge and a hint to pan.
+  const stageW = stage.current?.clientWidth ?? 0;
+  const stageHt = stage.current?.clientHeight ?? 0;
+  const cut = !empty && stageW > 0 && (cam.x + layout.width * cam.k > stageW + 4 || cam.x < -4 || cam.y < -4 || cam.y + layout.height * cam.k > stageHt + 4);
+  const cutRight = cut && cam.x + layout.width * cam.k > stageW + 4;
   return (
     <div className={`sysv${expanded ? " expanded" : ""}`}>
       <div className="sysv-bar">
@@ -367,6 +372,8 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false }: System
               </g>
             </svg>
           )}
+          {cutRight && <div className="sysv-fade" aria-hidden="true" />}
+          {cut && sel === null && <span className="sysv-hint small muted">drag to pan · Fit</span>}
           {!empty && sel === null && <Legend />}
           {sel !== null && <Panel id={id} sys={sys} layout={layout} sel={sel} onSelect={setSel} onOpen={openScope} onClose={() => setSel(null)} />}
         </div>

@@ -7,7 +7,7 @@ import type { SystemComponent, SystemEdge, SystemExternal, SystemModel, SystemRo
 export const SYS_CARD_W = 224;
 export const SYS_EXT_W = 210;
 /** Space between two columns, where the curves run and the verb pills sit. */
-export const SYS_GAP_X = 190;
+export const SYS_GAP_X = 170;
 export const SYS_GAP_Y = 22;
 export const SYS_PAD = 28;
 export const SYS_HEADER_H = 34;
@@ -20,8 +20,8 @@ export const SYS_PILL_H = 24;
 export const SYS_MAX_CHIPS = 4;
 const PORT_INSET = 16;
 /** The first lane sits this far above (below) the cards; the next ones are a step further out. */
-const LANE_FIRST = 20;
-const LANE_STEP = 12;
+const LANE_FIRST = 16;
+const LANE_STEP = 4;
 
 export const CATEGORY_ORDER: ReadonlyArray<SystemExternal["category"]> = ["service", "store", "api", "process", "filesystem", "config", "worker"];
 export const CATEGORY_TITLES: Record<SystemExternal["category"], string> = {
@@ -173,6 +173,12 @@ export function layoutSystem(sys: SystemModel): SysLayout {
   const placed = new Set(stages.flat());
   const stray = sys.components.filter((c) => !placed.has(c.id)).map((c) => c.id);
   if (stray.length > 0) stages.push(stray);
+  // A last column of components nothing connects to is folded into the column before it, so it does not cost a column of width.
+  const linked = new Set(sys.edges.filter((e) => e.from !== e.to).flatMap((e) => [e.from, e.to]));
+  while (stages.length > 1 && (stages[stages.length - 1] as string[]).every((id) => !linked.has(id))) {
+    const last = stages.pop() as string[];
+    (stages[stages.length - 1] as string[]).push(...last);
+  }
   const stacks: Array<{ column: number; items: SysBox[]; headers: Array<{ category: SystemExternal["category"]; before: number }> }> = [];
   stages.forEach((stage, i) => {
     columns.push({ index: i, title: i === 0 ? "Entry" : "", x, w: SYS_CARD_W });
@@ -319,13 +325,26 @@ export function layoutSystem(sys: SystemModel): SysLayout {
     else geos[i] = { segs };
   });
   pending.sort((p, q) => p.span - q.span || p.i - q.i);
+  // A lane runs just above the top card (below the bottom card) of the columns it crosses, so it stays inside the layout's
+  // bounds. Parallel lanes sit LANE_STEP apart.
+  const colBoxes = new Map<number, SysBox[]>();
+  for (const bx of boxes) colBoxes.set(bx.column, [...(colBoxes.get(bx.column) ?? []), bx]);
   let nTop = 0;
   let nBot = 0;
+  let minLane = top;
+  let maxLane = bottom;
   for (const { i } of pending) {
     const { x1, y1, x2, y2 } = ends[i] as (typeof ends)[number];
+    const { a, b } = sides[i] as (typeof sides)[number];
     const dir = x2 > x1 ? 1 : -1;
-    const lane: "top" | "bottom" = (y1 + y2) / 2 < (top + bottom) / 2 ? "top" : "bottom";
-    const ly = lane === "top" ? top - LANE_FIRST - nTop++ * LANE_STEP : bottom + LANE_FIRST + nBot++ * LANE_STEP;
+    const crossed: SysBox[] = [];
+    for (let c = Math.min(a.column, b.column) + 1; c < Math.max(a.column, b.column); c++) crossed.push(...(colBoxes.get(c) ?? []));
+    const spanTop = crossed.length > 0 ? Math.min(...crossed.map((q) => q.y)) : top;
+    const spanBottom = crossed.length > 0 ? Math.max(...crossed.map((q) => q.y + q.h)) : bottom;
+    const lane: "top" | "bottom" = (y1 + y2) / 2 < (spanTop + spanBottom) / 2 ? "top" : "bottom";
+    const ly = lane === "top" ? spanTop - LANE_FIRST - nTop++ * LANE_STEP : spanBottom + LANE_FIRST + nBot++ * LANE_STEP;
+    minLane = Math.min(minLane, ly);
+    maxLane = Math.max(maxLane, ly);
     const xa = x1 + dir * SYS_GAP_X * 0.4;
     const xb = x2 - dir * SYS_GAP_X * 0.4;
     const k = SYS_GAP_X * 0.2;
@@ -339,8 +358,8 @@ export function layoutSystem(sys: SystemModel): SysLayout {
     };
   }
   // Room for the lanes: everything moves down by what the top lanes need, and the canvas grows for the bottom ones.
-  const dy = nTop > 0 ? Math.max(0, 54 - (top - LANE_FIRST - (nTop - 1) * LANE_STEP)) : 0;
-  const height = dy + bottom + (nBot > 0 ? LANE_FIRST + (nBot - 1) * LANE_STEP : 0) + SYS_PAD;
+  const dy = minLane < top ? Math.max(0, 54 - minLane) : 0;
+  const height = dy + maxLane + SYS_PAD;
   if (dy > 0) {
     for (const bx of boxes) bx.y += dy;
     for (const g of groups) g.y += dy;
@@ -350,10 +369,11 @@ export function layoutSystem(sys: SystemModel): SysLayout {
 
   // Pills sit on their curve, slid along it (t 0.3 to 0.7) and then offset off it until they touch no card and no other pill.
   const taken: Array<{ x: number; y: number; w: number; h: number }> = boxes.map((b) => ({ x: b.x - 4, y: b.y - 4, w: b.w + 8, h: b.h + 8 }));
+  for (const g of groups) taken.push({ x: g.x - 2, y: g.y - 16, w: 150, h: 22 });
   const arrows: SysArrow[] = [];
-  const NUDGES = [0, 26, -26, 52, -52, 78, -78, 104, -104, 130, -130, 156, -156, 182, -182, 208, -208];
+  const NUDGES = [0, 26, -26, 52, -52, 78, -78, 104, -104, 130, -130, 156, -156, 182, -182, 208, -208, 234, -234, 260, -260, 312, -312, 364, -364, 416, -416];
   const TS = [0.5, 0.45, 0.55, 0.4, 0.6, 0.35, 0.65, 0.3, 0.7];
-  const WIDE_TS = [0.5, 0.4, 0.6, 0.3, 0.7, 0.2, 0.8, 0.12, 0.88];
+  const WIDE_TS = [0.5, 0.4, 0.6, 0.3, 0.7, 0.2, 0.8, 0.12, 0.88, 0.06, 0.94];
   live.forEach((e, i) => {
     const geo = geos[i] as Geo;
     const samples = polyline(geo.segs);

@@ -69,6 +69,9 @@ The geometry is `layoutSystem` in `apps/web/src/arch/system-layout.ts`, pure and
   the cards and enters the gap before its target, so no edge goes through a card that is not one of its ends.
 - Verb pills sit on their curve, slid along it (0.3 to 0.7 of its length) and then offset until they touch no card and no
   other pill. Above 30 edges the pills are shown only for the hovered or selected node's edges (the others are lines).
+- While System is shown and no code is open, the workspace starts with the right Code pane collapsed, to give the diagram width. Opening code (a `file:line` link) or the Code button brings it back, and leaving System restores it. A last column of components that nothing connects to is folded into the column before it.
+- Lanes run just above the top card (below the bottom card) of the columns they cross, 4 px apart, inside the layout's bounds.
+- When part of the graph is off-screen, a fade on the right edge and a "drag to pan · Fit" hint say so.
 - The first view is fitted to the stage but never smaller than 0.56, so a card title (18 px) renders at 10 px or more. A
   wider graph is panned (drag, wheel zoom, `-`/`+`, Fit). Expand fills the window (Esc leaves). The stage is as tall as the
   window leaves room for, at least 60vh.

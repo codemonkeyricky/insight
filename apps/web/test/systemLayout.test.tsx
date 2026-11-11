@@ -217,6 +217,20 @@ describe.each([
     }
   });
 
+  it("keeps every lane just outside the cards, inside the layout bounds", () => {
+    const cardTop = Math.min(...layout.boxes.map((b) => b.y));
+    const cardBottom = Math.max(...layout.boxes.map((b) => b.y + b.h));
+    const lanes = layout.arrows.filter((a) => a.lane !== undefined);
+    // The first lane is 16 px off the cards and each further one 4 px: no lane strays further than that from the cards.
+    const reach = 16 + 4 * lanes.length + 1;
+    for (const a of lanes) {
+      const ys = a.samples.map((q) => q.y);
+      expect(Math.min(...ys)).toBeGreaterThanOrEqual(Math.max(0, cardTop - reach));
+      expect(Math.max(...ys)).toBeLessThanOrEqual(Math.min(layout.height, cardBottom + reach));
+    }
+    expect(layout.height).toBeLessThanOrEqual(cardBottom + reach + 28 + 54);
+  });
+
   if (name === "dense") {
     it("sends the edges that would cross a card along a lane", () => {
       expect(layout.arrows.some((a) => a.lane !== undefined)).toBe(true);

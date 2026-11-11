@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ARCH_MODES, ARCH_MODE_LABELS, readArchMode, writeArchMode, type ArchMode } from "../../arch/mode";
 import { ArchView } from "./ArchView";
 import { SystemView } from "./SystemView";
@@ -20,8 +20,13 @@ export function ArchModeToggle({ mode, onChange }: { mode: ArchMode; onChange: (
  * The Arch tab: System (the explorer scope's components, routes and outside systems) or Packages (the whole project's
  * package graph, unchanged). System is the default, and the reader's choice is kept in localStorage.
  */
-export function ArchTab({ id, scope, initial }: { id: string; scope: string; initial?: ArchMode }) {
+export function ArchTab({ id, scope, initial, onSystemActive }: { id: string; scope: string; initial?: ArchMode; onSystemActive?: (on: boolean) => void }) {
   const [mode, setMode] = useState<ArchMode>(() => initial ?? readArchMode());
+  // The workspace collapses its code pane while System is shown and no code is open.
+  useEffect(() => {
+    onSystemActive?.(mode === "system");
+    return () => onSystemActive?.(false);
+  }, [mode, onSystemActive]);
   const pick = (m: ArchMode) => {
     setMode(m);
     writeArchMode(m);

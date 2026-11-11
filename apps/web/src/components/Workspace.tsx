@@ -93,6 +93,25 @@ export function Workspace({ id, tab, scope, line, fn, roots = true, base, head, 
       setCodeDrawer(true);
       setFilesOpen(false);
     } else {
+      autoCodeCollapse.current = false;
+      setCodeCollapsed(false);
+    }
+  }, []);
+  // The System view wants the width: while it is shown and no code is open, the code pane starts collapsed. Opening code (a
+  // file:line link) or the Code button brings it back, and leaving System restores it.
+  const autoCodeCollapse = useRef(false);
+  const codeCollapsedNow = useRef(codeCollapsed);
+  codeCollapsedNow.current = codeCollapsed;
+  const targetNow = useRef(target);
+  targetNow.current = target;
+  const onSystemActive = useCallback((on: boolean) => {
+    if (on) {
+      if (!isNarrow() && !codeCollapsedNow.current && targetNow.current === undefined) {
+        autoCodeCollapse.current = true;
+        setCodeCollapsed(true);
+      }
+    } else if (autoCodeCollapse.current) {
+      autoCodeCollapse.current = false;
       setCodeCollapsed(false);
     }
   }, []);
@@ -263,6 +282,7 @@ export function Workspace({ id, tab, scope, line, fn, roots = true, base, head, 
       setCodeDrawer(!codeDrawer);
       setFilesOpen(false);
     } else {
+      autoCodeCollapse.current = false;
       setCodeCollapsed(!codeCollapsed);
     }
   };
@@ -272,7 +292,7 @@ export function Workspace({ id, tab, scope, line, fn, roots = true, base, head, 
       case "overview":
         return <ProjectOverview id={id} />;
       case "arch":
-        return <ArchTab id={id} scope={scope} />;
+        return <ArchTab id={id} scope={scope} onSystemActive={onSystemActive} />;
       case "compare":
         return <ComparePage id={id} base={base} head={head} />;
       case "triage":
