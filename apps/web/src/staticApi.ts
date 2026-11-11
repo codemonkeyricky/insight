@@ -29,6 +29,7 @@ import type {
   TargetType,
 } from "./api";
 import type { SerializedModel } from "@insight/model";
+import { buildFileFlow } from "@insight/flow";
 import { refsFor, scopeCallersFor, scopeExecFor, scopeFlowFor, type ScopeRefsPayload } from "./model/payloads";
 import { models } from "./model/store";
 import { canonicalScope, scopeKey, scopeProblem } from "./scopeKey";
@@ -302,14 +303,17 @@ export function makeStaticApi(baseFor: (projectId: string) => string, opts: Stat
         findings,
       };
     },
-    /** A file with no functions has no flow file, so that answers an empty chart rather than an error. */
+    /**
+     * A file's function charts, laid out from the project's graph the way the live server lays them out (its fileFlow). The
+     * export has no flow/* files (the spec computes flow layouts in the client), so this reads the graph, not a file.
+     */
     flow: async (id: string, path: string): Promise<FileFlow> => {
       await checkProject(id);
-      const name = `flow/${path.split("/").map(encodeURIComponent).join("/")}.json`;
-      return load<FileFlow>(id, name).catch((e: unknown) => {
-        if (e instanceof ApiError && e.status === 404) return { file: path, functions: [] };
-        throw e;
-      });
+      const { graph } = await loadGraph(id);
+      const nodes = graph.nodes.filter((n) => n.span?.file === path);
+      const edges = graph.edges.filter((e) => e.span?.file === path);
+      type FlowInput = Parameters<typeof buildFileFlow>;
+      return buildFileFlow(path, nodes as unknown as FlowInput[1], edges as unknown as FlowInput[2]);
     },
     flowSummary: async (id: string): Promise<FileFlowSummary[]> => {
       await checkProject(id);

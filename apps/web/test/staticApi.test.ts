@@ -50,3 +50,34 @@ describe("makeStaticApi", () => {
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/demo/project.json");
   });
 });
+
+describe("makeStaticApi file flow", () => {
+  it("lays out a file's function charts from the graph, with no flow file in the export", async () => {
+    const span = (file: string) => ({ file, start: [1, 0], end: [3, 1] });
+    const graph = {
+      snapshot: "snap",
+      nodes: [
+        { id: "a.ts#f", kind: "structure.function", facet: "structure", attrs: { name: "f" }, span: span("a.ts"), provenance: { confidence: "exact", frontend: "x" } },
+        { id: "b.ts#g", kind: "structure.function", facet: "structure", attrs: { name: "g" }, span: span("b.ts"), provenance: { confidence: "exact", frontend: "x" } },
+      ],
+      edges: [],
+      incoming: {},
+    };
+    const requested: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        requested.push(url);
+        if (url.endsWith("/project.json")) return json(projectJson("flowy"));
+        if (url.endsWith("/graph.json")) return json(graph);
+        return new Response("nope", { status: 404 });
+      }),
+    );
+    const api = makeStaticApi(() => "https://factory.test/flowy/");
+    const flow = await api.flow("flowy", "a.ts");
+    expect(flow.file).toBe("a.ts");
+    expect(flow.functions.map((f) => f.id)).toEqual(["a.ts#f"]);
+    expect(requested.some((u) => u.includes("/flow/"))).toBe(false);
+    expect((await api.flow("flowy", "c.ts")).functions).toEqual([]);
+  });
+});
