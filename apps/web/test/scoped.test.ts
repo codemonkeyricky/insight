@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ArchEdge, ArchFile, ArchFileImport, ArchModel, ArchPackage } from "@insight/lens-dependencies";
-import { bandPerRow, IMPORTED_BY, IMPORTS, scopedView } from "../src/arch/scoped.js";
+import { bandPerRow, IMPORTED_BY, IMPORTS, scopedView, withoutCodeText } from "../src/arch/scoped.js";
 
 const span = (file: string, line: number) => ({ file, start: [line, 0] as [number, number], end: [line, 10] as [number, number] });
 const pkg = (id: string, layer: string, fileCount: number): ArchPackage => ({ id, name: id.split("/").pop() ?? id, path: id, layer, fileCount });
@@ -290,5 +290,18 @@ describe("bandPerRow", () => {
     expect(bandPerRow(1400)).toBe(2);
     expect(bandPerRow(846)).toBe(1);
     expect(bandPerRow(0)).toBe(1);
+  });
+});
+
+describe("withoutCodeText", () => {
+  it("names the files left out with file cards, and the folders with folder cards", () => {
+    expect(withoutCodeText({ cards: "files", other: 3 })).toBe("3 files without code are not drawn.");
+    expect(withoutCodeText({ cards: "files", other: 1 })).toBe("1 file without code is not drawn.");
+    expect(withoutCodeText({ cards: "folders", other: 3 })).toBe("3 folders without code are not drawn.");
+    expect(withoutCodeText({ cards: "folders", other: 1 })).toBe("1 folder without code is not drawn.");
+  });
+
+  it("says nothing when nothing is left out", () => {
+    expect(withoutCodeText({ cards: "folders", other: 0 })).toBeNull();
   });
 });

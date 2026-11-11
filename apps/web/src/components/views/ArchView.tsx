@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { api, type ArchModel, type Span } from "../../api";
 import { diagramModel, FOLDER_GRID, type DiagramModel } from "../../arch/folders";
 import { ARCH_HEADER_H, ARCH_PAD, archLayout, arrowKey, arrowLabel, type ArchBox } from "../../arch/layout";
-import { bandPerRow, IMPORTED_BY, IMPORTS, scopedView, type ScopedDiagram } from "../../arch/scoped";
+import { bandPerRow, IMPORTED_BY, IMPORTS, scopedView, withoutCodeText, type ScopedDiagram } from "../../arch/scoped";
 import { hrefFile, hrefView } from "../../router";
 
 /** What is selected in the diagram: one arrow, named by its key. */
@@ -128,7 +128,7 @@ function ArchDiagram({ id, scope, model: whole }: { id: string; scope: string; m
           <p className="muted small arch-caption">
             Inside {at}: {scoped.cards === "folders" ? `${plural(innerCount, "folder")} (cut at depth ${scoped.depth})` : plural(innerCount, "file")}.
             Left: what imports it. Right: what it imports.
-            {scoped.cards === "files" && scoped.other > 0 && ` ${plural(scoped.other, "file")} without code ${scoped.other === 1 ? "is" : "are"} not drawn.`}
+            {withoutCodeText(scoped) !== null && ` ${withoutCodeText(scoped)}`}
             {scoped.fromFile !== undefined && " Scope is a file; showing its folder."}
           {scoped.notDrawn > 0 &&
             ` ${scoped.notDrawn} cross-package ${scoped.notDrawn === 1 ? "link has" : "links have"} no import site and ${
@@ -237,7 +237,7 @@ function ArchDiagram({ id, scope, model: whole }: { id: string; scope: string; m
           })}
         </svg>
       </div>}
-      {!empty && shown.other > 0 && (
+      {!empty && scoped === null && shown.other > 0 && (
         <p className="muted small arch-other">
           Other: {shown.other} {shown.other === 1 ? "folder" : "folders"} without code
         </p>

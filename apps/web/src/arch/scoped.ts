@@ -47,6 +47,17 @@ export function bandPerRow(containerWidth: number): number {
   return containerWidth >= WIDE_BAND_MIN ? 2 : 1;
 }
 
+/**
+ * The caption sentence for what a scoped view leaves out: "3 files without code are not drawn" with file cards, "3 folders
+ * without code are not drawn" with folder cards. Null when nothing is left out.
+ */
+export function withoutCodeText(view: Pick<ScopedDiagram, "cards" | "other">): string | null {
+  if (view.other === 0) return null;
+  const noun = view.cards === "files" ? "file" : "folder";
+  return `${plural(view.other, noun)} without code ${view.other === 1 ? "is" : "are"} not drawn.`;
+}
+
+const plural = (n: number, one: string): string => `${n} ${n === 1 ? one : `${one}s`}`;
 const spanKey = (s: Span): string => JSON.stringify(s);
 /** True when `path` lies under the folder `dir`, and is not `dir` itself. */
 const under = (path: string, dir: string): boolean => path.startsWith(`${dir}/`);
