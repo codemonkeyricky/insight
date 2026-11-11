@@ -15,6 +15,26 @@ import { deleteSnapshot, serializeDocument, snapshotExists, snapshotId, writeSna
 import { canonicalJson, readJsonFile, sha256, writeFileAtomic } from "./util.js";
 import { analysisPath, readAnalysis, runAnalysis, writeAnalysis, type LensRecord } from "./analyze.js";
 
+/** The stages of a run, in the order they happen. */
+export type IndexPhase = "scan" | "extract" | "link" | "analyze" | "save";
+
+/** A structured progress event. Counts are set only for the phases that can count their work. */
+export interface PhaseProgress {
+  phase: IndexPhase;
+  /** "Scanning files", "Extracting · typescript", "Linking", "Running lenses", "Saving". */
+  label: string;
+  /** Extract only: the frontend this event is about. */
+  frontend?: string;
+  /** Extract only: this frontend's 1-based position among the frontends that have files to extract. */
+  step?: number;
+  /** Extract only: the number of frontends with files to extract. Not set yet, see runIndex. */
+  steps?: number;
+  /** Counted phases only: units finished so far. */
+  done?: number;
+  /** Counted phases only: units in this phase. */
+  total?: number;
+}
+
 export interface IndexOptions extends LoadOptions {
   /** Ignore every cached shard and re-extract everything. */
   full?: boolean;
@@ -22,6 +42,8 @@ export interface IndexOptions extends LoadOptions {
   allowBuildTools?: boolean;
   /** Receives progress lines as they happen. */
   onProgress?: (line: string) => void;
+  /** Receives structured phase events. A callback that throws is ignored, so it cannot fail the run. */
+  onPhase?: (p: PhaseProgress) => void;
   /** The commit this tree was taken from, when known. Recorded on the snapshot. */
   commit?: string;
   /**
@@ -88,6 +110,15 @@ export async function runIndex(opts: IndexOptions): Promise<IndexReport> {
     logs.push(line);
     opts.onProgress?.(line);
   };
+  // A throwing onPhase must never fail the run, so every call goes through here.
+  const phase = (p: PhaseProgress) => {
+    if (!opts.onPhase) return;
+    try {
+      opts.onPhase(p);
+    } catch {
+      // Ignored on purpose: progress reporting is best effort.
+    }
+  };
 
   const plugins = await loadPlugins({ ...opts, projectPath: root });
   for (const d of plugins.disabled) say(`plugin ${d.id} disabled: ${d.reason}`);
@@ -99,9 +130,11 @@ export async function runIndex(opts: IndexOptions): Promise<IndexReport> {
 
   const previousTree = readJsonFile<TreeNode | undefined>(paths.treeFile, undefined);
   const previousStats = readJsonFile<StatCache>(paths.statCache, {});
+  phase({ phase: "scan", label: "Scanning files" });
   const scan = scanProject(root, previousStats);
   const changes = diffTrees(previousTree, scan.tree);
   const allFiles = [...scan.files.keys()];
+  phase({ phase: "scan", label: "Scanning files", done: allFiles.length, total: allFiles.length });
 
   const prior: IndexState = loadState(paths);
   const state: IndexState = opts.full ? { ...prior, frontends: {} } : prior;
@@ -145,6 +178,7 @@ export async function runIndex(opts: IndexOptions): Promise<IndexReport> {
   const nextFrontends: Record<string, FrontendState> = {};
   const ran: { id: string; frontend: Frontend; files: string[] }[] = [];
   let reused = 0;
+  let extractingFrontends = 0;
 
   for (const lf of plugins.frontends) {
     const { manifest, frontend } = lf;
@@ -199,9 +233,28 @@ export async function runIndex(opts: IndexOptions): Promise<IndexReport> {
     }
 
     if (toExtract.length > 0) {
+      extractingFrontends++;
       say(`${manifest.id}: extracting ${toExtract.length} of ${files.length} files`);
       const batches = new Map<string, IRBatch>();
       const failures = new Map<string, string>();
+      // Files that failed even when retried alone. They are finished, so they count toward done.
+      const finalFailures = new Set<string>();
+      const wanted = new Set(toExtract);
+      const countDone = (): number => {
+        let n = finalFailures.size;
+        for (const f of batches.keys()) if (wanted.has(f)) n++;
+        return n;
+      };
+      const emitExtract = (): void =>
+        phase({
+          phase: "extract",
+          label: `Extracting · ${manifest.id}`,
+          frontend: manifest.id,
+          step: extractingFrontends,
+          done: countDone(),
+          total: toExtract.length,
+        });
+      emitExtract();
       // Runs the frontend over some files. A throw is recorded against the files it had not yet yielded.
       const runOver = async (targets: string[]): Promise<void> => {
         try {
@@ -213,6 +266,7 @@ export async function runIndex(opts: IndexOptions): Promise<IndexReport> {
             log: (m) => say(`${manifest.id}: ${m}`),
           })) {
             batches.set(batch.file, batch);
+            emitExtract();
           }
         } catch (err) {
           const failure = errorText(err);
@@ -225,7 +279,19 @@ export async function runIndex(opts: IndexOptions): Promise<IndexReport> {
       // those alone, so one bad file cannot fail its neighbours.
       const retry = toExtract.filter((f) => failures.has(f) && !batches.has(f));
       failures.clear();
-      for (const f of retry) await runOver([f]);
+      for (const f of retry) {
+        await runOver([f]);
+        if (!batches.has(f)) finalFailures.add(f);
+        emitExtract();
+      }
+      phase({
+        phase: "extract",
+        label: `Extracting · ${manifest.id}`,
+        frontend: manifest.id,
+        step: extractingFrontends,
+        done: toExtract.length,
+        total: toExtract.length,
+      });
 
       for (const f of toExtract) {
         const batch = batches.get(f);
@@ -295,6 +361,7 @@ export async function runIndex(opts: IndexOptions): Promise<IndexReport> {
     }
   }
 
+  phase({ phase: "link", label: "Linking" });
   const linked = await link({
     root: projectRoot,
     files: allFiles,
@@ -335,6 +402,8 @@ export async function runIndex(opts: IndexOptions): Promise<IndexReport> {
     const cfg = readJsonFile<unknown>(join(paths.lensConfigs, `${l.lens.id}.json`), undefined);
     if (cfg !== undefined) configs[l.lens.id] = cfg;
   }
+  const lensLabel = "Running lenses";
+  phase({ phase: "analyze", label: lensLabel, done: 0, total: plugins.lenses.length });
   const analysis = await runAnalysis({
     doc: linked.doc,
     registry: plugins.registry,
@@ -343,6 +412,7 @@ export async function runIndex(opts: IndexOptions): Promise<IndexReport> {
     lenses: plugins.lenses,
     configs,
     previous: previousLatest ? readAnalysis(paths, previousLatest) : undefined,
+    onLens: (i, n) => phase({ phase: "analyze", label: lensLabel, done: i, total: n }),
   });
   writeAnalysis(paths, analysis);
   for (const r of analysis.lenses) {
@@ -350,6 +420,7 @@ export async function runIndex(opts: IndexOptions): Promise<IndexReport> {
   }
   state.latest = id;
 
+  phase({ phase: "save", label: "Saving" });
   if (readIndexedSnapshot(paths.indexDb) !== id) {
     writeIndex(paths.indexDb, linked.doc, id);
   }

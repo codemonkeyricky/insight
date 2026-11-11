@@ -27,6 +27,9 @@ In the Projects page, add a local folder by its path, or a git URL. A folder is 
 written to. A git URL is cloned into the Insight home, and each later run fetches it. If the fetch fails, for
 example offline, the last clone is indexed and a warning appears in the run log.
 
+Indexing is on demand. A project is indexed when you add it and when you press Re-index. The server does not
+re-index on its own: nothing runs at startup or on a timer.
+
 ## Where data lives
 
 - `INSIGHT_HOME` (default `~/.insight`) holds `projects.json`, the git clones, and the state of each project

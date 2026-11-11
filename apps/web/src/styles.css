@@ -930,3 +930,35 @@ a.btn.primary { background: linear-gradient(180deg, var(--gloss), transparent 52
   .zm-pop, .zm-frame, .zm-box.zm-card.expanded .zm-box-body, .zm-expansion-motion, .zm-connector-group .zm-callout,
   .zm-expansion .flow-node, .zm-expansion .flow-edge > path, .zm-expansion .flow-edge .flow-label, .zm-frame-dot { animation: none !important; }
 }
+
+/* ---- Index progress: the bar on project cards, the workspace strip, the first-index stage and the overview. Page tokens only. ---- */
+.idx { display: flex; flex-direction: column; gap: 4px; min-width: 0; width: 100%; }
+.idx-bar { position: relative; height: 3px; border-radius: 999px; background: var(--faint); overflow: hidden; }
+.idx-fill { position: absolute; top: 0; bottom: 0; left: 0; width: 0; border-radius: inherit; background: var(--accent); transition: width 300ms linear; }
+.idx.is-failed .idx-fill { background: var(--error); }
+.idx-bar.is-uncounted::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 38%, transparent), transparent); transform: translateX(-100%); animation: idx-shimmer 1.4s linear infinite; }
+.idx-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.idx-compact { margin-top: 6px; }
+.idx-strip { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-height: 34px; padding: 4px 0 8px; font-size: 0.85rem; }
+.idx-strip-main { flex: 1 1 220px; min-width: 0; max-width: 460px; }
+/* One line: the label and the bar sit on the strip's centre line, level with the Index button's text. */
+.idx-strip .idx { flex-direction: row; align-items: center; gap: 10px; }
+.idx-strip .idx-label { order: -1; flex: 0 1 auto; font-size: 0.82rem; line-height: 1.3; }
+.idx-strip .idx-bar { flex: 1 1 auto; min-width: 48px; }
+/* Done: fully opaque for the 2 s it shows (DONE_MS in IndexStrip.tsx), with a fade over the last 300 ms before it returns to rest. */
+.idx-strip.is-done .idx-done { animation: idx-done-out 2000ms linear both; }
+@keyframes idx-done-out { 0%, 85% { opacity: 1; } 100% { opacity: 0; } }
+.idx-rest { animation: idx-fade 300ms ease; }
+.idx-first { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; min-height: 240px; padding: 24px; text-align: center; }
+.idx-first .idx { width: min(440px, 100%); }
+.idx-first h2 { margin: 0; }
+.idx-first p { margin: 0; }
+@keyframes idx-shimmer { to { transform: translateX(100%); } }
+@keyframes idx-fade { from { opacity: 0; } to { opacity: 1; } }
+/* Reduced motion: the bar still shows its value, but the shimmer and the easing are off. */
+@media (prefers-reduced-motion: reduce) {
+  .idx-fill { transition: none; }
+  .idx-bar.is-uncounted::after { animation: none; transform: none; opacity: 0.5; }
+  .idx-rest { animation: none; }
+  .idx-strip.is-done .idx-done { animation: none; }
+}

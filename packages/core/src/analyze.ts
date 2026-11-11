@@ -39,6 +39,8 @@ export interface AnalyzeInput {
   configs: Record<string, unknown>;
   /** The analysis of the previous snapshot, used to keep results whose inputs did not change. */
   previous?: AnalysisFile;
+  /** Called before each lens is considered, with its 0-based position in run order and the lens count. */
+  onLens?: (i: number, n: number, id: string) => void;
 }
 
 export function analysisPath(paths: ProjectPaths, snapshot: string): string {
@@ -99,7 +101,9 @@ export async function runAnalysis(input: AnalyzeInput): Promise<AnalysisFile> {
   const results = new Map<string, LensResult>();
   const records: LensRecord[] = [];
 
-  for (const { lens, manifest } of orderLenses(input.lenses)) {
+  const ordered = orderLenses(input.lenses);
+  for (const [i, { lens, manifest }] of ordered.entries()) {
+    input.onLens?.(i, ordered.length, lens.id);
     const config = input.configs[lens.id];
     const inputs = inputsFor(lens, input.doc);
     const inputsHash = sha256(

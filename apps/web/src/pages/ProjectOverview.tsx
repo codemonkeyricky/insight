@@ -1,18 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, IS_DEMO, type FindingRow, type Overview } from "../api";
-import { useProjectEvents, type RunEvent } from "../useEvents";
+import { useIndexProgress } from "../useIndexProgress";
 import { hrefLens } from "../router";
 
-const LOG_LIMIT = 200;
-
-/** The overview tab: run controls, counts, lenses, coverage and findings for the whole project. */
+/** The overview tab: counts, the run log, lenses, coverage and findings for the whole project. The strip above the tabs is the run control. */
 export function ProjectOverview({ id }: { id: string }) {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [findings, setFindings] = useState<FindingRow[]>([]);
-  const [log, setLog] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [full, setFull] = useState(false);
-  const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -26,17 +21,12 @@ export function ProjectOverview({ id }: { id: string }) {
   }, [id]);
 
   useEffect(() => {
-    setLog([]);
     void load();
   }, [id, load]);
 
-  useProjectEvents(id, (event: RunEvent) => {
-    if (event.type === "progress" && event.line) {
-      setLog((prev) => [...prev.slice(-(LOG_LIMIT - 1)), `${event.at.slice(11, 19)}  ${event.line}`]);
-    }
-    if (event.type === "done" || event.type === "failed" || event.type === "status") {
-      void load();
-    }
+  // The run log is the run's recent lines, replayed on connect, so a page opened mid-run still shows them.
+  const run = useIndexProgress(id, overview?.project.progress, (event) => {
+    if (event.type === "done" || event.type === "failed" || event.type === "status") void load();
   });
 
   const grouped = useMemo(() => {
@@ -53,30 +43,8 @@ export function ProjectOverview({ id }: { id: string }) {
   if (!overview) return <p className="muted">Loading</p>;
   const p = overview.project;
 
-  const reindex = async () => {
-    setBusy(true);
-    try {
-      await api.reindex(id, full);
-      await load();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <section>
-      {!IS_DEMO && (
-        <div className="actions">
-          <label className="check small">
-            <input type="checkbox" checked={full} onChange={(e) => setFull(e.target.checked)} /> full
-          </label>
-          <button type="button" onClick={() => void reindex()} disabled={busy}>
-            Re-index
-          </button>
-        </div>
-      )}
       {p.error && <p className="error" role="alert">Last run failed: {p.error}</p>}
       {error && <p className="error" role="alert">{error}</p>}
 
@@ -99,7 +67,7 @@ export function ProjectOverview({ id }: { id: string }) {
         <>
           <h2>Run log</h2>
           <pre className="log" aria-live="polite" data-testid="run-log">
-            {log.length === 0 ? "No run in this session yet. Re-index to see progress." : log.join("\n")}
+            {run.lines.length === 0 ? "No run since the server started. Start one with Index above to see progress." : run.lines.join("\n")}
           </pre>
         </>
       )}
