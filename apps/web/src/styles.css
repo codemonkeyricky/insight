@@ -401,6 +401,10 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 .zm-expansion-title .zm-label { font-family: var(--font-ui); font-weight: 600; }
 .zm-count { fill: color-mix(in srgb, var(--graphite) 75%, transparent); font-family: var(--font-ui); font-size: calc(11px * var(--zinv, 1)); pointer-events: none; }
 .zm-box { cursor: pointer; }
+/* An external command: a muted leaf with no glyph and no pointer, since a click opens nothing (see BoxShape). */
+.zm-box.zm-external { cursor: default; }
+.zm-box.zm-external .zm-box-body { fill: color-mix(in srgb, var(--graphite) 4%, var(--sheet)); stroke-dasharray: 4 3; }
+.zm-external-caption { font-family: var(--font-ui); font-size: calc(10px * var(--zinv, 1)); font-style: italic; fill: color-mix(in srgb, var(--graphite) 60%, transparent); pointer-events: none; }
 .zm-box-body, .zm-frame-body, .zm-frame-head, .zm-stub-body, .zm-cfg-body { vector-effect: non-scaling-stroke; }
 .zm-box-body { fill: var(--band, var(--sheet)); stroke: var(--hair); stroke-width: 1; filter: drop-shadow(0 1px 2px var(--shadow)); }
 .zm-box.zm-function .zm-label { font-family: var(--font-ui); font-weight: 600; font-size: calc(13px * var(--zinv, 1)); fill: var(--ink); }

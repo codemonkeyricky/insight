@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { FrameShape } from "../src/components/zoom/ZoomMap";
+import { BoxShape, FrameShape } from "../src/components/zoom/ZoomMap";
 import type { MapNode } from "../src/zoom/source";
 import type { PlacedItem } from "@insight/flow";
 
@@ -17,6 +17,8 @@ const frame = (id: string, x: number, y: number, w: number, h: number): PlacedIt
 
 const node = (id: string, kind: string, label: string, extra: Partial<MapNode> = {}): MapNode =>
   ({ id, kind, label, title: label, ...extra }) as MapNode;
+
+const box = (id: string, x: number, y: number, w: number, h: number): PlacedItem => ({ id, kind: "box", rect: { x, y, w, h }, depth: 1 });
 
 const svg = (el: React.ReactElement) => renderToStaticMarkup(<svg>{el}</svg>);
 
@@ -48,5 +50,47 @@ describe("ZoomMap runtime frames", () => {
     expect(html).toContain("zm-frame zm-program");
     expect(html).toContain("zm-line-process");
     expect(html).toContain("Process · main");
+  });
+
+  it("draws an external command as a muted leaf: no function glyph, its name and a caption", () => {
+    const html = svg(
+      <BoxShape item={box("thread:spawn:1", 0, 0, 300, 60)} node={node("thread:spawn:1", "thread", "git", { external: true, detail: "0 functions" })} line="thread" k={1} onOpen={() => undefined} chartOpen={false} card />,
+    );
+    expect(html).toContain("zm-external");
+    expect(html).toContain("zm-thread");
+    expect(html).toContain(">git<");
+    expect(html).toContain("external command");
+    expect(html).not.toContain("ƒ");
+    expect(html).not.toContain("zm-card");
+  });
+
+  it("does not open anything when an external command is clicked", () => {
+    const clicks: string[] = [];
+    const el = BoxShape({
+      item: box("thread:spawn:1", 0, 0, 300, 60),
+      node: node("thread:spawn:1", "thread", "git", { external: true }),
+      line: "thread",
+      k: 1,
+      onOpen: (id) => clicks.push(id),
+      chartOpen: false,
+      card: true,
+    }) as React.ReactElement<{ onClick?: () => void }>;
+    el.props.onClick?.();
+    expect(clicks).toEqual([]);
+  });
+
+  it("still opens a function card on click", () => {
+    const clicks: string[] = [];
+    const el = BoxShape({
+      item: box("thread:main>a#run", 0, 0, 300, 60),
+      node: node("thread:main>a#run", "function", "run", { ref: "a#run" }),
+      line: "thread",
+      k: 1,
+      onOpen: (id) => clicks.push(id),
+      chartOpen: false,
+      card: true,
+    }) as React.ReactElement<{ onClick?: () => void }>;
+    el.props.onClick?.();
+    expect(clicks).toEqual(["thread:main>a#run"]);
   });
 });

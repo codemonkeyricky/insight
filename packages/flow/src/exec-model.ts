@@ -86,6 +86,11 @@ export interface ExecSpawn {
   script?: string;
   /** The API the spawn calls, as the IR names it (for example "Worker" or "child_process.execFileSync"). */
   api?: string;
+  /**
+   * The command a process spawn runs, as the IR names it: the literal first argument ("git"), or "<dynamic>" when the
+   * IR has no literal. Absent for a thread spawn.
+   */
+  command?: string;
 }
 
 /** A function that a thread awaits or starts. */
@@ -735,6 +740,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       ...(n.parent !== undefined ? { owner: foldId(n.parent) } : {}),
       ...(script !== undefined ? { script } : {}),
       ...(strAttr(n.attrs, "api") !== undefined ? { api: strAttr(n.attrs, "api") } : {}),
+      ...(strAttr(n.attrs, "target") !== undefined ? { command: strAttr(n.attrs, "target") } : {}),
     };
     plans.push(planOf(how, n.id, rootList, spawn));
   }

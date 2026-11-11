@@ -1482,7 +1482,7 @@ export function FrameShape({
 /**
  * A box keeps its name in the middle. A function with a chart is marked, and `expanded` while its chart is open beside it.
  */
-function BoxShape({
+export function BoxShape({
   item,
   node,
   line,
@@ -1516,6 +1516,27 @@ function BoxShape({
   const fontPx = small ? Math.min(13, Math.max(10, Math.round(rect.h * k * 0.42))) : 0;
   const label = bare ? null : small ? fitLabel(shown, labelChars(rect.w * k, fontPx * 0.6, 10)) : fitLabel(shown, labelChars(rect.w * k));
   const holdsChart = node.chart !== undefined;
+  if (node.external === true) {
+    // An external command: a muted chip with its name and a caption, no function glyph. It opens nothing, so a click is a no-op.
+    const name = fitLabel(shown, labelChars(rect.w * k, 8, 20));
+    const caption = rect.h >= 40;
+    return (
+      <g className={`zm-box zm-${node.kind} zm-external ${lineClass(line)}`} data-sx={rect.x} data-fid={item.id}>
+        <title>{node.detail !== undefined ? `${node.label} (${node.detail})` : node.title || node.label}</title>
+        <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={12} className="zm-box-body" />
+        {name !== null && (
+          <text x={rect.x + 12} y={rect.y + (caption ? rect.h / 2 - 7 : rect.h / 2)} dominantBaseline="central" className="zm-label">
+            {name}
+          </text>
+        )}
+        {caption && (
+          <text x={rect.x + 12} y={rect.y + rect.h / 2 + 9} dominantBaseline="central" className="zm-external-caption">
+            external command
+          </text>
+        )}
+      </g>
+    );
+  }
   if (card && !small && !bare) {
     // A card: its name alone, centred vertically, fitted to the card's width on screen.
     // Two characters of the budget go to the leading function glyph (ƒ), so the name stays inside the card.

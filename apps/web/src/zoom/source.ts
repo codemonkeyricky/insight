@@ -26,6 +26,11 @@ export interface MapNode {
    * size, with its name only.
    */
   chart?: { w: number; h: number };
+  /**
+   * An external command: a leaf the map draws as a plain chip, with no function glyph, that a click does not open. Its
+   * caption says so.
+   */
+  external?: boolean;
 }
 
 /** An edge as the map draws it. A call has no kind (or "call"); spawns and dispatches get their own class. */

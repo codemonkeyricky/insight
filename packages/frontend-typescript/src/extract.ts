@@ -3,7 +3,7 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import ts from "typescript";
 import type { IREdge, IRFinding, IRNode, IRRecord, NodeId, Provenance, Span, UnresolvedRef } from "@insight/ir";
 import type { IRBatch } from "@insight/sdk";
-import { importBindings, matchCall, matchEnvRead, matchSchedule, matchWorker, scriptPath, type ImportBinding, type ScriptPath, type WorkerEnv } from "./effects.js";
+import { importBindings, matchCall, matchEnvRead, matchSchedule, matchWorker, nodeScriptArgument, scriptPath, type ImportBinding, type ScriptPath, type WorkerEnv } from "./effects.js";
 import { scriptKind } from "./digest.js";
 import { dispatchFor, MAX_DISPATCH_TARGETS, propName } from "./dispatch.js";
 
@@ -619,13 +619,43 @@ function resolveScript(project: Project, rel: string, script: ScriptPath): Resol
     const source = project.mapOutput(at);
     return source === undefined ? [] : [{ confidence: "inferred" as const, names: candidatesAt(source) }];
   });
+  const built = paths.flatMap(({ at }) => buildSourcesOf(at).map((source) => ({ confidence: "inferred" as const, names: candidatesAt(source) })));
+  const groups = [...plain, ...mapped, ...built];
   // Every candidate is recorded, so that creating any of them re-extracts the file. The first hit in order wins.
-  for (const group of [...plain, ...mapped]) tried.push(...group.names);
-  for (const group of [...plain, ...mapped]) {
+  for (const group of groups) tried.push(...group.names);
+  for (const group of groups) {
     const hit = group.names.find((name) => project.rels.has(name));
     if (hit !== undefined) return { to: hit, confidence: group.confidence, tried };
   }
   return { tried };
+}
+
+/** Directory names a build writes its compiled output into. */
+const BUILD_OUTPUT_DIRS = new Set(["dist", "build", "out", "lib"]);
+
+/** The source extensions a compiled file may have come from, for each output extension. The output name is also tried. */
+const SOURCE_EXTS_FOR_BUILT: Record<string, string[]> = { ".js": [".ts", ".tsx"], ".jsx": [".tsx"], ".mjs": [".mts"], ".cjs": [".cts"] };
+
+/**
+ * Where a build's output path may have been compiled from: the same path with a build-output directory renamed to `src`,
+ * and the source extension in place of the output one. Used when the compiler's own output mapping does not reach the file,
+ * as for a package that builds into its own `dist/`. Each candidate is still checked against the project's files.
+ */
+function buildSourcesOf(at: string): string[] {
+  const parts = at.split("/");
+  const out: string[] = [];
+  parts.forEach((seg, i) => {
+    if (!BUILD_OUTPUT_DIRS.has(seg)) return;
+    const renamed = [...parts];
+    renamed[i] = "src";
+    const path = renamed.join("/");
+    const ext = /\.(js|jsx|mjs|cjs)$/.exec(path)?.[0];
+    if (ext === undefined) return;
+    const stem = path.slice(0, -ext.length);
+    for (const source of SOURCE_EXTS_FOR_BUILT[ext] ?? []) out.push(stem + source);
+    out.push(path);
+  });
+  return out;
 }
 
 /** The expression inside any parentheses around it. */
@@ -1260,10 +1290,13 @@ export function emitFile(project: Project, rel: string): IRBatch {
             span: spanOf(rel, sf, call),
             provenance: PROV,
           });
-          // fork runs a script rather than a command, so a project file it names is the code the process runs.
-          const forked = effect.attrs.api === "child_process.fork" ? scriptTarget(scriptPath(call.arguments[0], imports)) : undefined;
-          if (forked !== undefined) {
-            pushEdge({ from: spawnId, to: spawnTarget(forked.to), facet: "concurrency", kind: "concurrency.spawns", attrs: { how: "process" }, span: spanOf(rel, sf, call), provenance: { frontend: FRONTEND_ID, confidence: forked.confidence } });
+          // fork runs a script rather than a command, and so does a Node binary started with an argument vector: a project file
+          // the process is told to run is the code it runs.
+          const api = String(effect.attrs.api);
+          const script = api === "child_process.fork" ? call.arguments[0] : nodeScriptArgument(call, api, imports);
+          const ran = scriptTarget(scriptPath(script, imports, workerEnv));
+          if (ran !== undefined) {
+            pushEdge({ from: spawnId, to: spawnTarget(ran.to), facet: "concurrency", kind: "concurrency.spawns", attrs: { how: "process" }, span: spanOf(rel, sf, call), provenance: { frontend: FRONTEND_ID, confidence: ran.confidence } });
           }
         }
       }

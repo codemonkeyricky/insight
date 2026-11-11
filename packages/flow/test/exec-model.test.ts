@@ -120,6 +120,13 @@ describe("execModel: threads", () => {
     expect(model.stats).toMatchObject({ spawns: 1, unresolved: 1 });
   });
 
+  it("carries a process spawn's literal command and API onto its unresolved process thread", () => {
+    // An external command: `execFileSync("git", ...)` has no function target, and its node names the command it runs.
+    const proc: IRNode = { ...spawnNode("src/m.ts", 2, "src/m.ts#main", "concurrency.spawn-process"), attrs: { target: "git", api: "child_process.execFileSync" } };
+    const model = execModel([fnNode("src/m.ts", "main", 0), proc], [], "");
+    expect(model.threads[1]).toMatchObject({ kind: "process", roots: [], reach: 0, spawn: { status: "unresolved", command: "git", api: "child_process.execFileSync" } });
+  });
+
   it("lists a function once and in every thread that runs it", () => {
     const nodes = [
       fnNode("src/m.ts", "main", 0),

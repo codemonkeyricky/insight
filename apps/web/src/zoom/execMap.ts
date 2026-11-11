@@ -44,6 +44,7 @@ export function execMapNode(scene: Scene, id: string): MapNode | undefined {
   if (n.parent !== undefined) node.parent = n.parent;
   if (n.kind === "function" && n.ref !== undefined) node.ref = n.ref;
   if (n.chart !== undefined) node.chart = n.chart;
+  if (n.external === true) node.external = true;
   return node;
 }
 
