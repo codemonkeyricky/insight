@@ -1,15 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, IS_DEMO, type FindingRow, type Overview } from "../api";
-import { useProjectEvents, type RunEvent } from "../useEvents";
+import { useIndexProgress } from "../useIndexProgress";
 import { hrefLens } from "../router";
-
-const LOG_LIMIT = 200;
+import { IndexProgress } from "../components/IndexProgress";
 
 /** The overview tab: run controls, counts, lenses, coverage and findings for the whole project. */
 export function ProjectOverview({ id }: { id: string }) {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [findings, setFindings] = useState<FindingRow[]>([]);
-  const [log, setLog] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [full, setFull] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -26,18 +24,14 @@ export function ProjectOverview({ id }: { id: string }) {
   }, [id]);
 
   useEffect(() => {
-    setLog([]);
     void load();
   }, [id, load]);
 
-  useProjectEvents(id, (event: RunEvent) => {
-    if (event.type === "progress" && event.line) {
-      setLog((prev) => [...prev.slice(-(LOG_LIMIT - 1)), `${event.at.slice(11, 19)}  ${event.line}`]);
-    }
-    if (event.type === "done" || event.type === "failed" || event.type === "status") {
-      void load();
-    }
+  // The run log is the run's recent lines, replayed on connect, so a page opened mid-run still shows them.
+  const run = useIndexProgress(id, overview?.project.progress, (event) => {
+    if (event.type === "done" || event.type === "failed" || event.type === "status") void load();
   });
+  const running = run.running || overview?.project.status === "indexing";
 
   const grouped = useMemo(() => {
     const byLens = new Map<string, FindingRow[]>();
@@ -72,7 +66,7 @@ export function ProjectOverview({ id }: { id: string }) {
           <label className="check small">
             <input type="checkbox" checked={full} onChange={(e) => setFull(e.target.checked)} /> full
           </label>
-          <button type="button" onClick={() => void reindex()} disabled={busy}>
+          <button type="button" onClick={() => void reindex()} disabled={busy || running}>
             Re-index
           </button>
         </div>
@@ -98,8 +92,9 @@ export function ProjectOverview({ id }: { id: string }) {
       {!IS_DEMO && (
         <>
           <h2>Run log</h2>
+          {running && <IndexProgress progress={run.progress} fraction={run.progress ? run.fraction : undefined} />}
           <pre className="log" aria-live="polite" data-testid="run-log">
-            {log.length === 0 ? "No run in this session yet. Re-index to see progress." : log.join("\n")}
+            {run.lines.length === 0 ? "No run since the server started. Re-index to see progress." : run.lines.join("\n")}
           </pre>
         </>
       )}

@@ -84,6 +84,30 @@ export interface LastRun {
   lenses: LensSummary[];
 }
 
+/** The phases of an index run, in run order. `fetch` is the git clone or pull; the rest are the core pipeline's phases. */
+export type IndexPhase = "fetch" | "scan" | "extract" | "link" | "analyze" | "save";
+
+/** Where a run is now. The counts are set only for the phases that count their work. */
+export interface PhaseProgress {
+  phase: IndexPhase;
+  label: string;
+  frontend?: string;
+  /** Extract only: the frontend's 1-based position among the frontends with work. */
+  step?: number;
+  /** Extract only: how many frontends have work. Undefined when the detect pass has not settled it. */
+  steps?: number;
+  done?: number;
+  total?: number;
+}
+
+/** A run's progress: the current phase, when the run and the phase started, and the last successful run's length. */
+export interface RunProgress extends PhaseProgress {
+  startedAt: string;
+  phaseStartedAt: string;
+  full: boolean;
+  previousMs?: number;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -94,6 +118,8 @@ export interface Project {
   queued: boolean;
   error?: string;
   last?: LastRun;
+  /** Present only while the project is indexing. */
+  progress?: RunProgress;
 }
 
 export interface SnapshotSummary {
