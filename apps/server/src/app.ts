@@ -54,13 +54,13 @@ export const DEFAULT_WEB_DIST = resolve(HERE, "..", "..", "web", "dist");
 export interface ServerOptions {
   /** Registry and clone folder. Defaults to INSIGHT_HOME or ~/.insight. */
   home?: string;
-  /** Re-index interval. Zero disables it. Defaults to five minutes. */
+  /** Opt-in re-index schedule. Zero, the default, disables it: runs start only when triggered. */
   intervalMs?: number;
   /** Replaces the indexer. Used by tests. */
   index?: IndexFn;
   /** Folder with the built web app. Pass null to serve the API only. */
   webDist?: string | null;
-  /** Start the schedule and index every project on startup. Defaults to true. */
+  /** Arm the optional schedule on startup. Nothing is indexed at startup either way. Defaults to true. */
   autostart?: boolean;
 }
 
@@ -178,6 +178,15 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
       at: new Date().toISOString(),
       ...(current.error ? { error: current.error } : {}),
     });
+    // A client that connects mid-run gets the current stage and the recent log lines, then live events.
+    // Nothing else runs between these writes and the subscribe below, so no event is lost or repeated.
+    if (jobs.isIndexing(p.id)) {
+      const progress = jobs.progressOf(p.id);
+      if (progress) send({ type: "phase", projectId: p.id, progress, at: new Date().toISOString() });
+      for (const r of jobs.recentLines(p.id)) {
+        send({ type: "progress", projectId: p.id, line: r.line, at: r.at, replay: true });
+      }
+    }
     const unsubscribe = jobs.subscribe(p.id, send);
     const heartbeat = setInterval(() => reply.raw.write(": ping\n\n"), 15_000);
     heartbeat.unref();

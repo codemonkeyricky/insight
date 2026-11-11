@@ -206,6 +206,8 @@ export function publicProject(p: ProjectRecord, jobs: JobRunner) {
     queued: jobs.isQueued(p.id),
     error: p.error,
     last: p.last,
+    // Only while a run is active. The stage and counts, for the project cards and the workspace strip.
+    progress: jobs.isIndexing(p.id) ? jobs.progressOf(p.id) : undefined,
   };
 }
 
