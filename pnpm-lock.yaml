@@ -9,6 +9,7 @@ overrides:
   d3-timer: 3.0.1
   d3-ease: 3.0.1
   d3-color: 3.1.0
+  light-my-request: 6.6.0
 
 importers:
 
@@ -391,9 +392,6 @@ packages:
   '@fastify/ajv-compiler@4.0.7':
     resolution: {integrity: sha512-VP0yIfwlc1ohj733keYDqyHm1VWeP9VQxYomunhr90jkC4aNNibbkrRiaNgPgqj1ORxUenILR4qzA/ppYBNAtQ==}
 
-  '@fastify/deepmerge@3.2.4':
-    resolution: {integrity: sha512-kc8GQq5gX9RRhw0rov3DMrN8wS8yRlxJRdDzsYwwdBV/wazuVgc/1K7CKL90tlvu3RlHan6Y0R0aE3nJtBz2eQ==}
-
   '@fastify/error@4.2.1':
     resolution: {integrity: sha512-MYBumuIwP+5MIpXSyKm6/o1Eigcoij186lWUssX3LH5U8KWqU0ktZhzC4CErIX9EJeQeRGI+zJZQWakBlFbUcg==}
 
@@ -704,9 +702,9 @@ packages:
     resolution: {integrity: sha512-5jRCH9Z/+DRP7rkvY83B+yGIGX96OYdJmzngqnw2SBSxqCFPd0w2km3s5iawpGX8krnwSGmF0FW5Nhr0Hfai3g==}
     engines: {node: '>=18'}
 
-  cookie@2.0.2:
-    resolution: {integrity: sha512-SL0cVuEdETEp7pN0FuZb01toc3vnODEfVUCooxG1SJN0yIirh7JMb9X9bvfCFf0vzzbT68RdbKDHYTiWy7a7iw==}
-    engines: {node: '>=22'}
+  cookie@1.1.1:
+    resolution: {integrity: sha512-ei8Aos7ja0weRpFzJnEA9UHJ/7XQmqglbRwnf2ATjcB9Wq874VKH9kfjjirM6UhU2/E5fFYadylyhFldcqSidQ==}
+    engines: {node: '>=18'}
 
   cross-spawn@7.0.6:
     resolution: {integrity: sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA==}
@@ -890,8 +888,8 @@ packages:
   json-schema-traverse@1.0.0:
     resolution: {integrity: sha512-NM8/P9n3XjXhIZn1lLhkFaACTOURQXjWhV4BA/RnOv8xvgqtqpAX9IO4mRQxSx1Rlo4tqzeqb0sOlruaOy3dug==}
 
-  light-my-request@6.8.0:
-    resolution: {integrity: sha512-5Q8PjoSEdtGIB8fikZsTem5vgRo4F2mR6vUKTDW/H1g6MtAt8e3duQbg/QxL5yzg6BZhor2KOUm3hhWMWLTZwg==}
+  light-my-request@6.6.0:
+    resolution: {integrity: sha512-CHYbu8RtboSIoVsHZ6Ye4cj4Aw/yg2oAFimlF7mNvfDV192LR7nDiKtSIfCuLT7KokPSTn/9kfVLm5OGN0A28A==}
 
   lightningcss-android-arm64@1.33.0:
     resolution: {integrity: sha512-gEpRTalKdosp4Bb8qWtc2iOgE5SeIHlpS1up9bFq2wAyYhl1UdTObYiHe98zEM9SQvSoqQZ1IQD0JNpg3Ml5pg==}
@@ -1071,6 +1069,9 @@ packages:
     engines: {node: '>=14'}
     hasBin: true
 
+  process-warning@4.0.1:
+    resolution: {integrity: sha512-3c2LzQ3rY9d0hc1emcsHhfT9Jwz0cChib/QN89oME2R451w5fy3f0afAhERFZAwrbDU43wk12d0ORBpDVME50Q==}
+
   process-warning@5.1.1:
     resolution: {integrity: sha512-oCkNVj4OKnKEcocVBcDfiIugN1/cE6rgfT3nCtzeqZPA8+rIxMaQ0xXzIkGP8Gj2qUaP1UR7uhJ1VD8lUCpzCg==}
 
@@ -1128,8 +1129,8 @@ packages:
     engines: {node: '>=10'}
     hasBin: true
 
-  set-cookie-parser@3.2.2:
-    resolution: {integrity: sha512-df017qMeYuXo4emL09nlyMpi2i2MtEIKS/6jtXH3vmjFgIRsOi852/5RmhJ4EkvN3ZF8jXadM/EkTPXgc8yPIw==}
+  set-cookie-parser@2.7.3:
+    resolution: {integrity: sha512-irZHtTqurLna57KQG/s+fzOwv/J6XSH4cs8M/vsrY3uCaQ3S6+QJguAH0WdN47SXlk82voMZ4naWMQf8fdEoIg==}
 
   setprototypeof@1.2.0:
     resolution: {integrity: sha512-E5LDX7Wrp85Kil5bhZv46j8jOeboKq5JMmYM3gVGdGH8xFpPWXUMsNrlODCrkoxMEeNi/XZIwuRvY4XNwYMJpw==}
@@ -1346,8 +1347,6 @@ snapshots:
       ajv: 8.20.0
       ajv-formats: 3.0.1
       fast-uri: 4.2.3
-
-  '@fastify/deepmerge@3.2.4': {}
 
   '@fastify/error@4.2.1': {}
 
@@ -1586,7 +1585,7 @@ snapshots:
 
   content-disposition@1.1.0: {}
 
-  cookie@2.0.2: {}
+  cookie@1.1.1: {}
 
   cross-spawn@7.0.6:
     dependencies:
@@ -1697,7 +1696,7 @@ snapshots:
       avvio: 9.3.1
       fast-json-stringify: 7.3.1
       find-my-way: 9.10.0
-      light-my-request: 6.8.0
+      light-my-request: 6.6.0
       pino: 10.4.0
       process-warning: 5.1.1
       rfdc: 1.4.1
@@ -1777,12 +1776,11 @@ snapshots:
 
   json-schema-traverse@1.0.0: {}
 
-  light-my-request@6.8.0:
+  light-my-request@6.6.0:
     dependencies:
-      '@fastify/deepmerge': 3.2.4
-      cookie: 2.0.2
-      process-warning: 5.1.1
-      set-cookie-parser: 3.2.2
+      cookie: 1.1.1
+      process-warning: 4.0.1
+      set-cookie-parser: 2.7.3
 
   lightningcss-android-arm64@1.33.0:
     optional: true
@@ -1918,6 +1916,8 @@ snapshots:
 
   prettier@3.9.10: {}
 
+  process-warning@4.0.1: {}
+
   process-warning@5.1.1: {}
 
   quick-format-unescaped@4.0.4: {}
@@ -1972,7 +1972,7 @@ snapshots:
 
   semver@7.8.6: {}
 
-  set-cookie-parser@3.2.2: {}
+  set-cookie-parser@2.7.3: {}
 
   setprototypeof@1.2.0: {}
 

@@ -14,11 +14,11 @@
 //   KV_PUBLIC_BASE=https://insight-storage.<account>.workers.dev node scripts/build-vercel-hosted.mjs <outDir>
 //   (KV_PUBLIC_BASE falls back to R2_PUBLIC_BASE)
 //   then: cd <outDir> && vercel deploy --prebuilt --prod --archive=tgz
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const FUNCTION_LIMIT_BYTES = 250 * 1024 * 1024;
@@ -149,6 +149,25 @@ try {
   }
 } finally {
   rmSync(deployDir, { recursive: true, force: true });
+}
+
+// 3b. Runtime guard. Vercel's Node runtime cannot require() ESM, and a dependency that moves to an ESM-only release
+// (light-my-request -> cookie@2 did) would still work on the build machine's newer Node. So the Function is loaded here
+// with require(esm) disabled, the way the Vercel runtime loads it: the handler by import, fastify by require.
+for (const fn of FUNCTIONS) {
+  const dest = join(outputRoot, fn.dir);
+  const checks = [
+    ["handler import", ["--input-type=module", "-e", `await import(${JSON.stringify(pathToFileURL(join(dest, "handler.mjs")).href)})`]],
+    ["fastify require", ["-e", `require(${JSON.stringify(join(dest, "node_modules", "fastify"))})`]],
+  ];
+  for (const [label, args] of checks) {
+    try {
+      execFileSync(process.execPath, ["--no-experimental-require-module", ...args], { cwd: dest, stdio: "inherit" });
+    } catch {
+      fail(`runtime guard failed (${label}) for ${fn.dir}: the Function does not load under the Vercel Node runtime. Check for an ESM-only dependency (require(esm) is disabled there).`);
+    }
+  }
+  console.log(`runtime guard ok: ${fn.dir} (handler import, fastify require with require(esm) disabled)`);
 }
 
 // 4. The routing: real files first, then the API rewrites (each sends its route name as ?route=, so the Function does not

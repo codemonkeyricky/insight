@@ -13,3 +13,6 @@ overrides:
   d3-timer: 3.0.1
   d3-ease: 3.0.1
   d3-color: 3.1.0
+  # light-my-request >=6.8 depends on cookie@2 (ESM-only); the Vercel Node runtime cannot
+  # require() it. 6.6.0 is the newest 6.x still on cookie@^1 (CJS). Drop once fastify/cookie move.
+  light-my-request: 6.6.0
