@@ -382,35 +382,58 @@ function constInit(e: ts.Expression, env: WorkerEnv): ts.Expression | undefined 
 }
 
 /** A URL as written: its text with substitutions as SUB, and whether it begins with one that is an env read. */
-interface UrlText {
+export interface UrlText {
   text: string;
   leadEnv: boolean;
+  /** The env variable the URL reads, when a hooked substitution carried one. */
+  env?: string;
 }
+
+/** Resolves an expression the caller binds (a wrapper's parameter) to a URL; undefined leaves it to the normal rules. */
+export type UrlHook = (e: ts.Expression) => UrlText | undefined;
 
 /**
  * The text of a URL expression. An identifier is followed to its const once (`follow`); a substitution's env read
  * is found by the caller, so the text here only needs the shape.
  */
-function urlText(e0: ts.Expression, imports: Map<string, ImportBinding>, env: WorkerEnv, follow: boolean): UrlText | undefined {
+export function urlText(e0: ts.Expression, imports: Map<string, ImportBinding>, env: WorkerEnv, follow: boolean, hook?: UrlHook): UrlText | undefined {
   const e = unwrapAll(e0);
+  const hooked = hook?.(e);
+  if (hooked !== undefined) return hooked;
   if (ts.isStringLiteralLike(e)) return { text: e.text, leadEnv: false };
   if (ts.isNoSubstitutionTemplateLiteral(e)) return { text: e.text, leadEnv: false };
   if (ts.isTemplateExpression(e)) {
     let text = e.head.text;
-    // A substituted same-file const that holds a string is written in place, so `${KV_API}/x` reads as its host.
-    for (const span of e.templateSpans) text += (constString(span.expression, env) ?? SUB) + span.literal.text;
+    let hitEnv: string | undefined;
+    let leadHit: UrlText | undefined;
+    e.templateSpans.forEach((span, i) => {
+      const hit = hook?.(unwrapAll(span.expression));
+      if (hit !== undefined) {
+        if (i === 0) leadHit = hit;
+        if (hitEnv === undefined) hitEnv = hit.env;
+        text += hit.text + span.literal.text;
+        return;
+      }
+      // A substituted same-file const that holds a string is written in place, so `${KV_API}/x` reads as its host.
+      text += (constString(span.expression, env) ?? SUB) + span.literal.text;
+    });
     const first = e.templateSpans[0];
-    const leadEnv = e.head.text === "" && first !== undefined && envOf(first.expression, imports, env) !== undefined;
-    return { text, leadEnv };
+    const leadEnv =
+      e.head.text === "" && first !== undefined
+        ? leadHit !== undefined
+          ? leadHit.leadEnv
+          : envOf(first.expression, imports, env) !== undefined
+        : false;
+    return hitEnv === undefined ? { text, leadEnv } : { text, leadEnv, env: hitEnv };
   }
   if (ts.isNewExpression(e)) {
     if (!ts.isIdentifier(e.expression) || e.expression.text !== "URL") return undefined;
     const [first] = e.arguments ?? [];
-    return first === undefined ? undefined : urlText(first, imports, env, follow);
+    return first === undefined ? undefined : urlText(first, imports, env, follow, hook);
   }
   if (ts.isIdentifier(e) && follow) {
     const init = constInit(e, env);
-    return init === undefined ? undefined : urlText(init, imports, env, false);
+    return init === undefined ? undefined : urlText(init, imports, env, false, hook);
   }
   return undefined;
 }
@@ -446,7 +469,14 @@ const GLOBAL_FETCH_BASES = new Set(["globalThis", "window", "self"]);
  * A `fetch`-like call: the global fetch (exact), or any callee whose name contains `fetch` (any case) with at least one
  * argument (inferred, e.g. `deps.fetch(url)`, `fetchFn(url)`, `fetchImpl(url)`). Its URL is read from the first argument, its method from the second.
  */
-export function matchFetch(call: ts.CallExpression, imports: Map<string, ImportBinding>, env: WorkerEnv = {}): FetchMatch | undefined {
+export interface FetchHooks {
+  /** Gives the URL an argument-bound name stands for. */
+  url?: UrlHook;
+  /** Gives the method an argument-bound name stands for, when the argument is a string. */
+  method?: (e: ts.Expression) => string | undefined;
+}
+
+export function matchFetch(call: ts.CallExpression, imports: Map<string, ImportBinding>, env: WorkerEnv = {}, hooks: FetchHooks = {}): FetchMatch | undefined {
   const callee = unwrapAll(call.expression) as ts.Expression;
   let name: string | undefined;
   let exact = false;
@@ -469,8 +499,8 @@ export function matchFetch(call: ts.CallExpression, imports: Map<string, ImportB
   if (urlArg === undefined) return undefined;
 
   const attrs: Record<string, unknown> = { api: callee.getText().slice(0, 40) };
-  const found = urlText(urlArg, imports, env, true);
-  const envName = envOf(urlArg, imports, env);
+  const found = urlText(urlArg, imports, env, true, hooks.url);
+  const envName = found?.env ?? envOf(urlArg, imports, env);
   if (found === undefined) {
     attrs.host = DYNAMIC;
   } else {
@@ -510,14 +540,20 @@ export function matchFetch(call: ts.CallExpression, imports: Map<string, ImportB
     const o = unwrapAll(opts);
     if (ts.isObjectLiteralExpression(o)) {
       const hasSpread = o.properties.some((p) => ts.isSpreadAssignment(p));
+      // `method: x` and the shorthand `{ method }` both name a value; the shorthand's name is the value.
       const prop = o.properties.find(
-        (p): p is ts.PropertyAssignment =>
-          ts.isPropertyAssignment(p) && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) && p.name.text === "method",
+        (p): p is ts.PropertyAssignment | ts.ShorthandPropertyAssignment =>
+          (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) && p.name.text === "method",
       );
       if (prop === undefined) {
         if (!hasSpread) attrs.method = "GET";
-      } else if (ts.isStringLiteralLike(unwrapAll(prop.initializer))) {
-        attrs.method = (unwrapAll(prop.initializer) as ts.StringLiteralLike).text.toUpperCase();
+      } else {
+        const value = ts.isShorthandPropertyAssignment(prop) ? prop.name : unwrapAll(prop.initializer);
+        if (ts.isStringLiteralLike(value)) attrs.method = value.text.toUpperCase();
+        else {
+          const m = hooks.method?.(value);
+          if (m !== undefined) attrs.method = m;
+        }
       }
     }
   }
@@ -624,6 +660,23 @@ export function matchServe(call: ts.CallExpression, imports: Map<string, ImportB
  */
 export function matchExportRoute(node: ts.Node): ServeMatch[] {
   const exported = (n: ts.Node): boolean => ts.canHaveModifiers(n) && (ts.getModifiers(n) ?? []).some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
+  // `export { handler as POST }`: the exported name is the verb, whatever the local function is called.
+  if (ts.isExportDeclaration(node) && node.moduleSpecifier === undefined && node.exportClause && ts.isNamedExports(node.exportClause)) {
+    return node.exportClause.elements
+      .filter((el) => HTTP_EXPORTS.has(el.name.text))
+      .map((el) => ({ kind: "effects.net.serve" as const, attrs: { framework: "export", method: el.name.text, path: "" } }));
+  }
+  // `export default { fetch(req) {...} }` or `export default { async fetch }`: a Worker, which answers every path.
+  if (ts.isExportAssignment(node) && !node.isExportEquals) {
+    const o = unwrapAll(node.expression);
+    const hasFetch = ts.isObjectLiteralExpression(o) && o.properties.some(
+      (p) =>
+        (ts.isMethodDeclaration(p) || ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) &&
+        (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) &&
+        p.name.text === "fetch",
+    );
+    return hasFetch ? [{ kind: "effects.net.serve", attrs: { framework: "worker", method: "*", path: "/*" } }] : [];
+  }
   if (ts.isFunctionDeclaration(node) && node.name !== undefined && exported(node) && HTTP_EXPORTS.has(node.name.text)) {
     return [{ kind: "effects.net.serve", attrs: { framework: "export", method: node.name.text, path: "" } }];
   }

@@ -3,7 +3,7 @@ import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import ts from "typescript";
 import type { IREdge, IRFinding, IRNode, IRRecord, NodeId, Provenance, Span, UnresolvedRef } from "@insight/ir";
 import type { IRBatch } from "@insight/sdk";
-import { importBindings, matchCall, matchEnvRead, matchExportRoute, matchFetch, matchSchedule, matchServe, matchWorker, nodeScriptArgument, scriptPath, type ImportBinding, type ScriptPath, type WorkerEnv } from "./effects.js";
+import { importBindings, matchCall, matchEnvRead, matchExportRoute, matchFetch, matchSchedule, matchServe, matchWorker, nodeScriptArgument, scriptPath, urlText, type ImportBinding, type ScriptPath, type UrlText, type WorkerEnv } from "./effects.js";
 import { scriptKind } from "./digest.js";
 import { dispatchFor, MAX_DISPATCH_TARGETS, propName } from "./dispatch.js";
 
@@ -707,6 +707,122 @@ function spanOf(rel: string, sf: ts.SourceFile, node: ts.Node): Span {
 /** The name node of a callee or tag: `b` for `a.b`, the node itself otherwise. */
 const nameOf = (e: ts.Expression): ts.Node => (ts.isPropertyAccessExpression(e) ? e.name : e);
 
+/** The most call sites of one wrapper whose URL argument is resolved. A wrapper with more is left at its `<dynamic>` node. */
+const MAX_WRAPPER_SITES = 100;
+
+/** The function a declaration names: a function-like node, or the arrow or function expression a const holds. */
+function fnNodeOf(node: ts.Node): ts.SignatureDeclaration | undefined {
+  if (ts.isVariableDeclaration(node) && node.initializer !== undefined) {
+    const init = unwrapAll(node.initializer);
+    return ts.isArrowFunction(init) || ts.isFunctionExpression(init) ? init : undefined;
+  }
+  return ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) || ts.isArrowFunction(node) || ts.isFunctionExpression(node) ? node : undefined;
+}
+
+/** The name node a function is declared under, for its symbol. */
+function fnNameNode(fn: ts.SignatureDeclaration): ts.Node | undefined {
+  if ((ts.isFunctionDeclaration(fn) || ts.isMethodDeclaration(fn)) && fn.name !== undefined) return fn.name;
+  if ((ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) && fn.parent && ts.isVariableDeclaration(fn.parent)) return fn.parent.name;
+  return undefined;
+}
+
+/** A symbol with an import alias followed to what it names. */
+function resolvedSymbol(checker: ts.TypeChecker, sym: ts.Symbol | undefined): ts.Symbol | undefined {
+  if (sym && sym.flags & ts.SymbolFlags.Alias) {
+    try {
+      return checker.getAliasedSymbol(sym);
+    } catch {
+      return undefined;
+    }
+  }
+  return sym;
+}
+
+const siteCounts = new WeakMap<Project, Map<ts.Node, number>>();
+
+/**
+ * How many calls in the project resolve to a function, counted up to one past MAX_WRAPPER_SITES. The program's project files
+ * are scanned once per function and cached for the run.
+ */
+function callSiteCount(project: Project, fn: ts.SignatureDeclaration): number {
+  let cache = siteCounts.get(project);
+  if (cache === undefined) {
+    cache = new Map();
+    siteCounts.set(project, cache);
+  }
+  const hit = cache.get(fn);
+  if (hit !== undefined) return hit;
+  const nameNode = fnNameNode(fn);
+  const target = nameNode === undefined ? undefined : resolvedSymbol(project.checker, project.checker.getSymbolAtLocation(nameNode));
+  let count = 0;
+  if (target !== undefined) {
+    const limit = MAX_WRAPPER_SITES + 1;
+    for (const sf of project.program.getSourceFiles()) {
+      if (sf.isDeclarationFile || sf.fileName.includes("/node_modules/")) continue;
+      const visit = (n: ts.Node): void => {
+        if (count >= limit) return;
+        if (ts.isCallExpression(n) && resolvedSymbol(project.checker, project.checker.getSymbolAtLocation(nameOf(n.expression))) === target) count++;
+        ts.forEachChild(n, visit);
+      };
+      visit(sf);
+    }
+  }
+  cache.set(fn, count);
+  return count;
+}
+
+/** The nearest function-like node a node sits in. */
+function enclosingFn(node: ts.Node): ts.SignatureDeclaration | undefined {
+  let p: ts.Node | undefined = node.parent;
+  while (p !== undefined && !ts.isFunctionLike(p)) p = p.parent;
+  return p as ts.SignatureDeclaration | undefined;
+}
+
+/** A parameter name the URL expression reads: an identifier that is not the name of a property access. */
+function readsParam(e: ts.Node, params: readonly string[]): boolean {
+  if (ts.isIdentifier(e) && params.includes(e.text) && !(e.parent && ts.isPropertyAccessExpression(e.parent) && e.parent.name === e)) return true;
+  let found = false;
+  ts.forEachChild(e, (c) => {
+    found = readsParam(c, params);
+    return found;
+  });
+  return found;
+}
+
+/** A function that hands a parameter to fetch as its URL: the fetch call inside it, and the parameter names. */
+export interface Wrapper {
+  params: string[];
+  fetch: ts.CallExpression;
+  sf: ts.SourceFile;
+}
+
+const wrappers = new WeakMap<ts.Node, Wrapper | null>();
+
+/** The wrapper a function is, when a fetch-like call in its own body takes its URL from one of its parameters. */
+function wrapperOf(project: Project, fn: ts.SignatureDeclaration): Wrapper | undefined {
+  const known = wrappers.get(fn);
+  if (known !== undefined) return known ?? undefined;
+  const params = fn.parameters.map((p) => (ts.isIdentifier(p.name) ? p.name.text : ""));
+  let out: Wrapper | null = null;
+  const sf = fn.getSourceFile();
+  const imports = importBindings(sf);
+  const env = workerEnvFor(project, sf);
+  const visit = (n: ts.Node): void => {
+    if (out !== null) return;
+    if (ts.isCallExpression(n) && enclosingFn(n) === fn) {
+      const callee = declOf(project, project.checker.getSymbolAtLocation(nameOf(n.expression)));
+      const m = callee?.entity.type === "function" ? undefined : matchFetch(n, imports, env);
+      const url = n.arguments[0];
+      if (m !== undefined && url !== undefined && readsParam(url, params)) out = { params, fetch: n, sf };
+    }
+    ts.forEachChild(n, visit);
+  };
+  const body = (fn as { body?: ts.Node }).body;
+  if (body !== undefined) visit(body);
+  wrappers.set(fn, out);
+  return out ?? undefined;
+}
+
 /** The declaration a symbol names, following an import alias. Undefined when the project does not declare it. */
 function declOf(project: Project, sym: ts.Symbol | undefined): Decl | undefined {
   let resolved = sym;
@@ -1312,6 +1428,51 @@ export function emitFile(project: Project, rel: string): IRBatch {
           provenance: PROV,
         });
       }
+      // A call to a wrapper (one level): the URL the caller passes for the wrapper's parameter, read with the caller's own names.
+      // The node is owned by this caller and says which wrapper it went through. An unresolved argument emits nothing here.
+      if (!effect && target?.entity.type === "function") {
+        const fn = fnNodeOf(target.node);
+        const wrapper = fn === undefined ? undefined : wrapperOf(project, fn);
+        if (fn !== undefined && wrapper !== undefined && callSiteCount(project, fn) <= MAX_WRAPPER_SITES) {
+          let unresolved = false;
+          const argFor = (i: number): ts.Expression | undefined => {
+            const a = call.arguments[i];
+            return a === undefined || ts.isSpreadElement(a) ? undefined : a;
+          };
+          const paramIndex = (e: ts.Expression): number => (ts.isIdentifier(e) ? wrapper.params.indexOf(e.text) : -1);
+          const hooks = {
+            url: (e: ts.Expression): UrlText | undefined => {
+              const i = paramIndex(e);
+              if (i < 0) return undefined;
+              const a = argFor(i);
+              const resolved = a === undefined ? undefined : urlText(a, imports, workerEnv, true);
+              if (resolved === undefined) unresolved = true;
+              return resolved ?? { text: "\uFFFC", leadEnv: false };
+            },
+            method: (e: ts.Expression): string | undefined => {
+              const i = paramIndex(e);
+              const a = i < 0 ? undefined : argFor(i);
+              const v = a === undefined ? undefined : unwrapAll(a);
+              return v !== undefined && ts.isStringLiteralLike(v) ? v.text.toUpperCase() : undefined;
+            },
+          };
+          const wrapperEnv = workerEnvFor(project, wrapper.sf);
+          const m = matchFetch(wrapper.fetch, importBindings(wrapper.sf), wrapperEnv, hooks);
+          if (m !== undefined && !unresolved) {
+            const attrs = { ...m.attrs, via: target.entity.name };
+            push({
+              id: uniqueId(`effect:${pos(sf, call.getStart(sf)).join(":")}`),
+              facet: "effects",
+              kind: m.kind,
+              parent: owner,
+              attrs,
+              span: spanOf(rel, sf, call),
+              provenance: PROV,
+            });
+            dependOn(target.rel);
+          }
+        }
+      }
       if (effect) {
         push({
           id: uniqueId(`effect:${pos(sf, call.getStart(sf)).join(":")}`),
@@ -1478,7 +1639,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
     }
 
     // An HTTP verb exported from a file is a route the deployment serves.
-    if (ts.isFunctionDeclaration(node) || ts.isVariableStatement(node)) {
+    if (ts.isFunctionDeclaration(node) || ts.isVariableStatement(node) || ts.isExportDeclaration(node) || ts.isExportAssignment(node)) {
       for (const serve of matchExportRoute(node)) {
         push({
           id: uniqueId(`serve:${pos(sf, node.getStart(sf)).join(":")}`),
