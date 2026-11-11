@@ -367,6 +367,9 @@ importers:
 
   packages/model:
     dependencies:
+      '@insight/flow':
+        specifier: workspace:*
+        version: link:../flow
       '@insight/ir':
         specifier: workspace:*
         version: link:../ir

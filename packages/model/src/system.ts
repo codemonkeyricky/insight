@@ -1,6 +1,7 @@
 // The System view's model: one scope's components, the HTTP routes they serve, the outside systems they touch, and the
 // verbs between them. Computed from the whole-project model, so a scope is a closed world: a fact that leaves it is not drawn.
 import type { IRNode, NodeId, Span } from "@insight/ir";
+import { isNoisePath } from "@insight/flow";
 import { edgeTargets } from "@insight/sdk";
 import type { ProjectModel } from "./model.js";
 import { inScope, normalizeScope, ROOT_SCOPE } from "./scope.js";
@@ -14,6 +15,10 @@ export interface SystemModel {
   externals: SystemExternal[];
   edges: SystemEdge[];
   stages: string[][]; // component ids per column, left → right; externals are drawn after
+  via?: string; // set when the scope held one code folder, so its children are shown instead: the folder, relative to the scope ("src")
+}
+export interface SystemOptions {
+  tests?: boolean; // include tests, fixtures and samples (hidden by default)
 }
 export interface Site {
   file: string;
@@ -84,11 +89,35 @@ interface Bucket {
   importOnly?: boolean;
 }
 
-/** The System model of one scope. A scope outside the project, or with no files, gives an empty model. */
-export function systemModel(model: ProjectModel, scopePath: string): SystemModel {
+/** Folders a scope may pass through to reach its children, a guard against a chain of single folders. */
+const MAX_VIA = 8;
+
+/**
+ * The System model of one scope. A scope outside the project, or with no files, gives an empty model. Tests, fixtures and
+ * samples (the Flow tab's noise rule) are left out unless `opts.tests` is set. When the scope holds one folder of code
+ * (packages/hosted → src), that folder's children are shown and `via` names the folder.
+ */
+export function systemModel(model: ProjectModel, scopePath: string, opts: SystemOptions = {}): SystemModel {
   const scope = normalizeScope(scopePath);
+  const tests = opts.tests === true || isNoisePath(scope) || isNoisePath(`${scope}/x`);
+  let inner = scope;
+  const via: string[] = [];
+  for (let i = 0; ; i++) {
+    const sys = buildSystem(model, inner, tests);
+    const only = sys.components.length === 1 ? sys.components[0] : undefined;
+    if (only !== undefined && only.kind === "folder" && only.path !== inner && i < MAX_VIA) {
+      via.push(only.path.slice(inner === ROOT_SCOPE ? 0 : inner.length + 1));
+      inner = only.path;
+      continue;
+    }
+    const rel = scope === ROOT_SCOPE ? inner : inner.slice(scope.length + 1);
+    return { ...sys, scope, ...(inner !== scope ? { via: rel } : {}) };
+  }
+}
+
+function buildSystem(model: ProjectModel, scope: string, tests: boolean): SystemModel {
   const view = scopeView(model, scope);
-  const files = view.files();
+  const files = tests ? view.files() : view.files().filter((f) => !isNoisePath(f));
   if (files.length === 0) return { scope, components: [], routes: [], externals: [], edges: [], stages: [] };
 
   const inside = (file: string | undefined): file is string => file !== undefined && inScope(file, scope) && fileSet.has(file);
@@ -315,7 +344,18 @@ export function systemModel(model: ProjectModel, scopePath: string): SystemModel
   const importOnly = new Set<string>();
   for (const ib of importEdges.values()) importOnly.add(`${ib.from}>calls>${ib.to}`);
 
-  // Entries: components with a route, a program entry point, or nothing in the scope calls or imports them.
+  // Components must hold code: a child with no functions, no route and no fact is dropped (package.json, tsconfig.json, lockfiles).
+  const touched = new Set<string>();
+  for (const e of edges) {
+    touched.add(e.from);
+    touched.add(e.to);
+  }
+  for (const r of routeList) touched.add(r.component);
+  for (const id of [...componentById.keys()]) if ((fnCount.get(id) ?? 0) === 0 && !touched.has(id)) componentById.delete(id);
+  if (componentById.size === 0) return { scope, components: [], routes: [], externals: [], edges: [], stages: [] };
+
+  // Entries: components with a route or a program entry point. Another component nothing calls starts a column 0 only when
+  // it has facts going out; one with nothing in or out goes to the last column.
   const compIds = [...componentById.keys()].sort();
   const hasRoute = new Set(routeList.map((r) => r.component));
   const hasMain = new Set<string>();
@@ -325,10 +365,15 @@ export function systemModel(model: ProjectModel, scopePath: string): SystemModel
     if (comp && (fn.name === "main" || isProgramFile(fn.file))) hasMain.add(comp.id);
   }
   const incoming = new Set<string>();
-  for (const e of edges) if (e.from !== e.to) incoming.add(e.to);
-  const entries = new Set(compIds.filter((id) => hasRoute.has(id) || hasMain.has(id) || !incoming.has(id)));
+  const outgoing = new Set<string>();
+  for (const e of edges) {
+    if (e.from !== e.to) incoming.add(e.to);
+    outgoing.add(e.from);
+  }
+  const entries = new Set(compIds.filter((id) => hasRoute.has(id) || hasMain.has(id)));
+  const seeds = new Set([...entries, ...compIds.filter((id) => !incoming.has(id) && outgoing.has(id))]);
 
-  // Columns: BFS over calls, requests and spawns from the entries. A component no entry reaches goes in a last column.
+  // Columns: BFS over calls, requests and spawns from the seeds. A component none reaches goes in a last column.
   const adj = new Map<string, string[]>();
   for (const e of edges) {
     if (e.from === e.to || importOnly.has(`${e.from}>calls>${e.to}`)) continue;
@@ -338,7 +383,7 @@ export function systemModel(model: ProjectModel, scopePath: string): SystemModel
     adj.set(e.from, list);
   }
   const depth = new Map<string, number>();
-  let frontier = [...entries].sort();
+  let frontier = [...seeds].sort();
   for (const id of frontier) depth.set(id, 0);
   for (let d = 0; frontier.length > 0; d++) {
     const next: string[] = [];
@@ -359,7 +404,9 @@ export function systemModel(model: ProjectModel, scopePath: string): SystemModel
     const d = depth.get(id) as number;
     (columns[d] ??= []).push(id);
   }
-  const stages = columns.map((col) => col.sort((x, y) => cmp(componentById.get(x)?.label ?? x, componentById.get(y)?.label ?? y) || cmp(x, y)));
+  const stages = columns
+    .filter((col) => col !== undefined)
+    .map((col) => col.sort((x, y) => cmp(componentById.get(x)?.label ?? x, componentById.get(y)?.label ?? y) || cmp(x, y)));
 
   const components: SystemComponent[] = compIds.map((id) => {
     const c = componentById.get(id) as Comp;

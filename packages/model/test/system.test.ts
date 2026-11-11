@@ -231,7 +231,7 @@ describe("systemModel rules", () => {
     const sys = systemModel(modelOf(hostedDoc()), HG);
     expect(sys.scope).toBe(HG);
     expect(sys.components).toHaveLength(1);
-    expect(sys.components[0]).toMatchObject({ id: HG, label: "(scope)", kind: "file", entry: true });
+    expect(sys.components[0]).toMatchObject({ id: HG, label: "(scope)", kind: "file", entry: false });
     expect(sys.edges.every((e) => e.from === HG)).toBe(true);
     expect(sys.edges.some((e) => e.to === HI || e.to === HS)).toBe(false);
     expect(sys.externals.map((e) => e.label).sort()).toEqual(["Environment", "GitHub API", "GitHub codeload"]);
@@ -295,5 +295,71 @@ describe("services catalog", () => {
     expect(classifyHost("bucket.acc.r2.cloudflarestorage.com").category).toBe("store");
     expect(classifyHost("app.example.workers.dev").category).toBe("worker");
     expect(classifyHost("example.org")).toMatchObject({ label: "example.org", category: "service" });
+  });
+});
+
+describe("systemModel follow-ups", () => {
+  const T = "packages/hosted/test/indexer.test.ts";
+  const withTests = (): IRDocument => {
+    const doc = hostedDoc();
+    doc.nodes.push(file("packages/hosted/tsconfig.json"), file(T), fn(T, "check"));
+    doc.edges.push(call(`${T}#check`, `${HI}#indexRepo`, T, 3));
+    return doc;
+  };
+
+  it("drops children that hold no code (package.json, tsconfig.json)", () => {
+    const sys = systemModel(modelOf(withTests()), "packages/hosted", { tests: true });
+    expect(sys.components.map((c) => c.id)).not.toContain("packages/hosted/package.json");
+    expect(sys.components.map((c) => c.id)).not.toContain("packages/hosted/tsconfig.json");
+  });
+
+  it("hides tests by default and includes them with the tests option", () => {
+    const hidden = systemModel(modelOf(withTests()), "packages/hosted");
+    expect(hidden.components.some((c) => c.path.includes("test"))).toBe(false);
+    expect(hidden.edges.every((e) => !e.from.includes("test"))).toBe(true);
+    const shown = systemModel(modelOf(withTests()), "packages/hosted", { tests: true });
+    expect(shown.components.map((c) => c.id)).toContain("packages/hosted/test");
+    expect(shown.edges.some((e) => e.from === "packages/hosted/test")).toBe(true);
+  });
+
+  it("shows a scope inside a test folder without the option", () => {
+    const sys = systemModel(modelOf(withTests()), "packages/hosted/test");
+    expect(sys.components.map((c) => c.id)).toEqual([T]);
+  });
+
+  it("descends through a scope that holds one code folder, and names it in via", () => {
+    const sys = systemModel(modelOf(withTests()), "packages/hosted");
+    expect(sys.scope).toBe("packages/hosted");
+    expect(sys.via).toBe("src");
+    expect(sys.components.map((c) => c.id)).toEqual([HG, HI, HS, HV]);
+    expect(sys.stages).toEqual([[HV], [HI], [HG, HS]]);
+  });
+
+  it("sets no via when the scope holds several components", () => {
+    expect(systemModel(modelOf(withTests()), "packages/hosted", { tests: true }).via).toBeUndefined();
+    expect(systemModel(modelOf(hostedDoc()), "packages/hosted/src").via).toBeUndefined();
+  });
+
+  it("descends repeatedly through nested single folders", () => {
+    const doc: IRDocument = { nodes: [file("pkg/a/b/x.ts"), file("pkg/a/b/y.ts"), fn("pkg/a/b/x.ts", "x"), fn("pkg/a/b/y.ts", "y")], edges: [call("pkg/a/b/x.ts#x", "pkg/a/b/y.ts#y", "pkg/a/b/x.ts", 3)], findings: [] };
+    const sys = systemModel(modelOf(doc), "pkg");
+    expect(sys.via).toBe("a/b");
+    expect(sys.components.map((c) => c.id)).toEqual(["pkg/a/b/x.ts", "pkg/a/b/y.ts"]);
+  });
+
+  it("starts column 0 with routes, main and callers-with-facts; an isolated component goes last", () => {
+    const A = "src/a.ts";
+    const B = "src/b.ts";
+    const C = "src/c.ts";
+    const D = "src/d.ts";
+    const doc: IRDocument = {
+      nodes: [file(A), file(B), file(C), file(D), fn(A, "a"), fn(B, "b"), fn(C, "c"), fn(D, "d"), effect(C, "c", 3, "effects.fs.read", { api: "fs.readFile" })],
+      edges: [call(`${A}#a`, `${B}#b`, A, 3)],
+      findings: [],
+    };
+    const sys = systemModel(modelOf(doc), "src");
+    // A and C have no callers but facts going out; B is called by A; D has nothing in or out.
+    expect(sys.stages).toEqual([[A, C], [B], [D]]);
+    expect(sys.components.every((c) => !c.entry)).toBe(true);
   });
 });
