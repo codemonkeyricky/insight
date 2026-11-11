@@ -175,15 +175,6 @@ textarea { min-height: 3.2em; width: 100%; box-sizing: border-box; resize: verti
 .annotations .field { gap: 6px; }
 .note-text { white-space: pre-wrap; }
 
-/* Tabs */
-.tabs { display: flex; flex-wrap: wrap; gap: 2px 4px; border-bottom: 1px solid var(--line); margin: 8px 0 14px; align-items: flex-end; }
-.tab { padding: 7px 12px; text-decoration: none; color: var(--muted); border: 1px solid transparent; border-bottom: none; border-radius: 6px 6px 0 0; margin-bottom: -1px; font-size: 0.92rem; }
-.tab:hover { color: var(--fg); }
-.tab.on { color: var(--fg); background: var(--panel); border-color: var(--line); font-weight: 600; }
-/* A lens with nothing to show here stays a link, but reads as quieter. */
-.tab.dim { color: var(--muted); opacity: 0.6; }
-.tab.dim.on { opacity: 1; }
-.tab-sep { align-self: stretch; width: 1px; background: var(--line); margin: 6px 6px; }
 .scope-banner { margin: 0 0 6px; color: var(--muted); font-size: 0.85rem; overflow-wrap: anywhere; }
 .lens-empty { border: 1px dashed var(--line); border-radius: 8px; padding: 12px 14px; margin: 8px 0; color: var(--muted); }
 .lens-empty p { margin: 0; }
@@ -210,9 +201,6 @@ textarea { min-height: 3.2em; width: 100%; box-sizing: border-box; resize: verti
 .dir-kids { margin-left: 8px; padding-left: 10px; border-left: 1px solid var(--line); }
 .file { display: flex; justify-content: space-between; gap: 8px; padding: 2px 6px; border-radius: 4px; text-decoration: none; color: var(--fg); font-size: 0.88rem; }
 .fname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.count { font-size: 0.72rem; padding: 0 6px; border-radius: 999px; border: 1px solid var(--line); }
-.count.warn { color: var(--warn); border-color: var(--warn); }
-.node.on .count, .file.on .count { color: var(--on-accent); border-color: var(--on-accent); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
 .chip { padding: 3px 10px; border: 1px solid var(--line); border-radius: 999px; text-decoration: none; color: var(--fg); background: var(--panel); font-size: 0.88rem; }
 .chip:hover { border-color: var(--accent); }
@@ -563,15 +551,15 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 .zm-far-card:disabled { cursor: default; }
 .zm-far-name { font: 600 15px/1.2 system-ui, sans-serif; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .zm-far-count { font: 400 12px/1.2 system-ui, sans-serif; color: var(--graphite); opacity: 0.8; white-space: nowrap; }
-.zm-far-pill { position: absolute; top: 8px; right: 8px; min-width: 22px; padding: 1px 7px; border-radius: 999px; background: var(--red); color: #fff; font: 600 11px/16px system-ui, sans-serif; text-align: center; }
+.zm-far-pill { position: absolute; top: 8px; right: 8px; }
 @media (prefers-reduced-motion: reduce) { .zm-world, .zm-far-layer { transition: none; } }
 /* Aggregated calls between cards: screen-pixel width grows with log(count) (farEdgeWidth), faint, no arrows. */
 /* Findings: a red revision cloud around the box, a red triangle top-left and a count badge top-right. */
 .zm-cloud { fill: color-mix(in srgb, var(--red) 4%, transparent); stroke: var(--red); stroke-width: 1.25; vector-effect: non-scaling-stroke; pointer-events: none; }
 .zm-finding .zm-marker, .zm-finding .zm-badge { cursor: pointer; }
 .zm-marker-tri { fill: var(--red); stroke: var(--sheet); stroke-width: 1.5; }
-.zm-badge rect { fill: var(--red); stroke: var(--sheet); stroke-width: 1.5; }
-.zm-badge text { fill: var(--on-accent); font-family: var(--font-ui); font-size: 10px; font-weight: 600; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+.zm-badge rect { fill: var(--red-fill, var(--red)); stroke: var(--sheet); stroke-width: 1.5; }
+.zm-badge text { fill: var(--on-accent); font-family: var(--font-ui); font-size: 11px; font-weight: 600; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
 .zm-hint { margin: 6px 0 0; }
 .zm-detail { margin-top: 14px; }
 .zm-roots { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 2px; margin: 0 0 8px; font-size: 0.88rem; cursor: pointer; }
@@ -629,8 +617,6 @@ input[type="text"], input:not([type]), input[type="url"], input[type="search"], 
   -webkit-backdrop-filter: blur(30px) saturate(190%); backdrop-filter: blur(30px) saturate(190%);
   box-shadow: inset 0 -0.5px 0 var(--hair), inset 0 1px 0 var(--sheen);
 }
-.tabs { background: linear-gradient(180deg, var(--sheen), transparent 60%), var(--glass); border-radius: 14px; box-shadow: var(--rim); padding: 4px 6px 0; border-bottom: 0; }
-.tab.on { background: var(--sheet); border-color: var(--hair); box-shadow: var(--rim); }
 .panel, .card, .stat, .explorer, .source, .zm-source, .outline {
   background: linear-gradient(180deg, var(--sheen), transparent 38%), var(--glass-strong);
   -webkit-backdrop-filter: blur(30px) saturate(190%); backdrop-filter: blur(30px) saturate(190%);
@@ -657,7 +643,7 @@ table.grid th { background: var(--faint); }
 }
 /* Reduced transparency: solid surfaces, no blur. */
 @media (prefers-reduced-transparency: reduce) {
-  .top, .tabs, .panel, .card, .stat, .explorer, .source, .zm-source, .outline, table.grid, .toast, button, input, select, textarea {
+  .top, .panel, .card, .stat, .explorer, .source, .zm-source, .outline, table.grid, .toast, .sh-menu, button, input, select, textarea {
     background: var(--sheet); -webkit-backdrop-filter: none; backdrop-filter: none;
   }
   button[type="submit"], button.primary, .seg button[aria-pressed="true"] { background: var(--accent); }
@@ -666,9 +652,9 @@ table.grid th { background: var(--faint); }
 }
 /* More contrast: solid outlines in ink, no faint fills behind text. */
 @media (prefers-contrast: more) {
-  .top, .tabs, .panel, .card, .stat, .explorer, .source, .zm-source, table.grid { background: var(--sheet); -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: 0 0 0 1.5px var(--ink); }
-  button, input, select, textarea, .seg, .tab, .chip { box-shadow: inset 0 0 0 1px var(--ink); }
-  .fg-muted, .muted, .tab, .fc, .where, .small { color: var(--ink); }
+  .top, .panel, .card, .stat, .explorer, .source, .zm-source, table.grid { background: var(--sheet); -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: 0 0 0 1.5px var(--ink); }
+  button, input, select, textarea, .seg, .chip { box-shadow: inset 0 0 0 1px var(--ink); }
+  .fg-muted, .muted, .fc, .where, .small { color: var(--ink); }
   .fn rect, .zone-box, .cfg-node, .arch-box, .detail-bg, .zm-box-body { stroke: var(--ink); }
   .graph, .graph-scroll, .arch-scroll, .flow-scroll { box-shadow: 0 0 0 1.5px var(--ink); }
 }
@@ -688,8 +674,7 @@ table.grid th { background: var(--faint); }
 .sh-crumb a { color: var(--muted); text-decoration: none; overflow: hidden; text-overflow: ellipsis; max-width: 18ch; }
 .sh-crumb a[aria-current="page"] { color: var(--ink); font-weight: 600; }
 .sh-sep { color: var(--muted); margin: 0 6px; }
-.sh-tab:focus-visible, .sh-split:focus-visible, .sh-tool:focus-visible, .sh-close:focus-visible, .sh-layer-list a:focus-visible, .sh-crumb a:focus-visible, .sh-find-input:focus-visible, .sh-find-list a:focus-visible, .sh-layers-open:focus-visible, .sh-check input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.sh-count { min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--red); color: var(--on-accent); font-size: var(--t-xs); line-height: 16px; text-align: center; }
+.sh-tab:focus-visible, .sh-tab-menu:focus-visible, .sh-split:focus-visible, .sh-tool:focus-visible, .sh-close:focus-visible, .sh-layer-list a:focus-visible, .sh-crumb a:focus-visible, .sh-find-input:focus-visible, .sh-find-list a:focus-visible, .sh-layers-open:focus-visible, .sh-check input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .sh-spacer { flex: 1; min-width: 0; }
 .sh-tools { display: inline-flex; align-items: center; gap: 8px; flex: none; }
 .sh-tool { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border: 0; border-radius: 8px; background: var(--btn-glass); box-shadow: var(--btn-rim); color: var(--ink); font: inherit; font-size: var(--t-sm); cursor: pointer; }
@@ -780,6 +765,22 @@ table.grid th { background: var(--faint); }
 .sh-tab[aria-selected="true"] { background: var(--thumb); color: var(--ink); box-shadow: var(--shadow); }
 .sh-tab.dim { opacity: 0.55; }
 .sh-tab-sep { flex: none; width: 1px; height: 18px; margin: 0 6px; background: var(--hair); }
+/* Count badges: one shape and type for every count. Red is a finding count, neutral a total, and an outline a warning. */
+.badge-count { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; min-width: 1.5em; height: 1.5em; padding: 0 0.4em; border-radius: 999px; font: 600 var(--t-xs, 0.75rem)/1 var(--font-ui); font-variant-numeric: tabular-nums; white-space: nowrap; background: var(--red-fill, var(--red)); color: var(--on-accent); }
+.badge-count.is-neutral { background: var(--faint); color: var(--ink); }
+.badge-count.is-warn { background: transparent; box-shadow: inset 0 0 0 1.5px var(--warn-text, var(--coroutine)); color: var(--warn-text, var(--coroutine)); }
+.node.on .badge-count, .file.on .badge-count { background: color-mix(in srgb, var(--on-accent) 25%, transparent); color: var(--on-accent); }
+.file.on .badge-count.is-warn { box-shadow: inset 0 0 0 1.5px var(--on-accent); }
+/* The Lenses tab: a button styled as a tab, with a chevron. The menu floats over the page, outside the strip's overflow. */
+.sh-tab-menu { border: 0; background: none; font-family: inherit; cursor: pointer; }
+.sh-tab-menu svg { flex: none; }
+.sh-menu { position: fixed; z-index: 70; box-sizing: border-box; min-width: 220px; display: flex; flex-direction: column; gap: 2px; padding: 6px; border-radius: 12px; border: 1px solid var(--hair); background: var(--glass-strong); -webkit-backdrop-filter: var(--blur-glass, blur(28px) saturate(1.6)); backdrop-filter: var(--blur-glass, blur(28px) saturate(1.6)); box-shadow: var(--float); }
+.sh-menu-item { display: flex; align-items: center; gap: 8px; min-height: 36px; box-sizing: border-box; padding: 0 10px; border-radius: 8px; color: var(--ink); text-decoration: none; font-size: var(--t-sm); font-weight: 500; white-space: nowrap; }
+.sh-menu-item:hover, .sh-menu-item:focus-visible { background: var(--faint); }
+.sh-menu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.sh-menu-item[aria-current="page"] { font-weight: 600; }
+.sh-menu-item.dim { opacity: 0.55; }
+.sh-menu-item .badge-count { margin-left: auto; }
 .sh-code-head { display: flex; flex-direction: column; gap: 2px; min-width: 0; margin-bottom: 8px; }
 .sh-code-head strong { overflow-wrap: anywhere; }
 /* The docked pane's header row: the title (path, or function name and location) beside the close button, one row, one hair under it. */
@@ -863,7 +864,6 @@ table.grid th { background: var(--faint); }
   /* A wide table scrolls inside its page rather than widening the page. */
   .sh-page table.grid { display: block; max-width: 100%; overflow-x: auto; }
 }
-.sh-count-inline { color: var(--muted); font-size: var(--t-xs); }
 
 /* Title block: one line by default (scope, selection, zone) with a Details disclosure; the table shows when expanded. */
 .sh-title-line { display: flex; align-items: center; gap: 10px; min-width: 0; font-size: var(--t-sm); }
