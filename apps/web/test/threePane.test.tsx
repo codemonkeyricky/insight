@@ -4,7 +4,7 @@ import type { FileEntry } from "../src/api";
 import { CodeTargetContext, fileTarget, scopeCodeTarget, targetPath, type CodeTarget } from "../src/codeTarget";
 import { Explorer } from "../src/components/Explorer";
 import { CodePane } from "../src/components/sheet/CodePane";
-import { LayerTabs, type LayerLink } from "../src/components/sheet/LayerTabs";
+import { LayerTabs, LensPopover, type LayerLink } from "../src/components/sheet/LayerTabs";
 import type { ZoomStore } from "../src/zoom/scene";
 
 // Static markup only: the vitest setup has no DOM, so effects and click handlers are not run here. The explorer's click
@@ -40,27 +40,55 @@ describe("LayerTabs", () => {
     { id: "lens-b", title: "Lens B", href: "#/m", current: false, group: "lens", dim: true, reason: "Not run yet" },
   ];
 
-  it("renders a tablist with one tab per link and marks the current one", () => {
+  it("renders a tablist with the page tabs and one Lenses tab that opens the menu", () => {
     const html = renderToStaticMarkup(<LayerTabs links={links} />);
     expect(html).toContain('role="tablist"');
-    expect(html.match(/role="tab"/g)?.length).toBe(4);
+    // Two page tabs and the Lenses trigger; the lens tabs themselves are in the menu, not the strip.
+    expect(html.match(/role="tab"/g)?.length).toBe(3);
     expect(html).toMatch(/aria-selected="true"[^>]*>Overview/);
     expect(html).toMatch(/aria-selected="false"[^>]*>Findings/);
+    expect(html).toContain('aria-haspopup="menu"');
+    expect(html).toMatch(/>Lenses<svg/);
+    expect(html).not.toContain('role="menu"');
   });
 
-  it("shows a count only when it is above zero, and a separator between the pages and the lenses", () => {
+  it("shows a count only when it is above zero, and a separator before the Lenses tab", () => {
     const html = renderToStaticMarkup(<LayerTabs links={links} />);
-    expect(html).toContain('class="sh-count"');
+    expect(html).toContain('class="badge-count"');
     expect(html).toContain(">7</span>");
     expect(html).toContain("sh-tab-sep");
     const zero = renderToStaticMarkup(<LayerTabs links={[{ ...links[1]!, count: 0 }]} />);
-    expect(zero).not.toContain("sh-count");
+    expect(zero).not.toContain("badge-count");
+    // Without any lens there is no Lenses tab and no separator.
+    const pagesOnly = renderToStaticMarkup(<LayerTabs links={links.slice(0, 2)} />);
+    expect(pagesOnly).not.toContain("Lenses");
+    expect(pagesOnly).not.toContain("sh-tab-sep");
   });
 
-  it("dims a lens that has not run, and gives it its reason as the title", () => {
-    const html = renderToStaticMarkup(<LayerTabs links={links} />);
-    expect(html).toContain('class="sh-tab dim"');
+  it("names the Lenses tab after the open lens, and selects it while a lens is open", () => {
+    const lensOpen = links.map((l) => ({ ...l, current: l.id === "lens-a" }));
+    const html = renderToStaticMarkup(<LayerTabs links={lensOpen} />);
+    expect(html).toMatch(/>Lenses: Lens A<svg/);
+    expect(html).toMatch(/aria-selected="true"[^>]*aria-haspopup="menu"/);
+    expect(html).toMatch(/aria-selected="false"[^>]*>Overview/);
+  });
+
+  it("renders one menu item per lens with its link, dim state and reason", () => {
+    const lensOnly = links.filter((l) => l.group === "lens");
+    const html = renderToStaticMarkup(<LensPopover lenses={lensOnly} />);
+    expect(html.match(/role="menuitem"/g)?.length).toBe(2);
+    expect(html).toContain('href="#/l"');
+    expect(html).toContain('href="#/m"');
+    expect(html).toMatch(/href="#\/l" class="sh-menu-item"/);
+    expect(html).toContain('class="sh-menu-item dim"');
     expect(html).toContain('title="Not run yet"');
+  });
+
+  it("marks the current lens in the menu with aria-current", () => {
+    const lensOnly = links.filter((l) => l.group === "lens").map((l) => ({ ...l, current: l.id === "lens-b" }));
+    const html = renderToStaticMarkup(<LensPopover lenses={lensOnly} />);
+    expect(html).toMatch(/aria-current="page"[^>]*href="#\/m"|href="#\/m"[^>]*aria-current="page"/);
+    expect(html).not.toMatch(/aria-current="page"[^>]*href="#\/l"|href="#\/l"[^>]*aria-current="page"/);
   });
 });
 

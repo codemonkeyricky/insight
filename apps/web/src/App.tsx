@@ -6,6 +6,7 @@ import { parseRoute, type Route } from "./router";
 import { ProjectsPage } from "./pages/Projects";
 import { Workspace } from "./components/Workspace";
 import { ThemeSwitch } from "./components/ThemeSwitch";
+import { BrandMark } from "./components/sheet/BrandMark";
 
 function useRoute(): Route {
   const read = () => parseRoute(window.location.hash);
@@ -33,19 +34,20 @@ export function App() {
   }, []);
 
   return (
-    <div className={route.name === "workspace" ? "app wide" : "app"}>
+    <div className={route.name === "workspace" ? "app wide" : route.name === "projects" ? "app home" : "app"}>
       {route.name !== "workspace" && (
-        <header className="top">
-          <a className="brand" href="#/">
-            Insight
-          </a>
-          <span className="muted small">{IS_DEMO ? "read-only demo" : server}</span>
-          {IS_DEMO && meta && (
-            <span className="muted small mono" title={`captured ${meta.capturedAt}`}>
-              Insight at {meta.commit}
-            </span>
-          )}
-          <ThemeSwitch />
+        <header className="sh-top sh-page-top">
+          <BrandMark />
+          <div className="sh-spacer" />
+          <div className="sh-tools">
+            <span className="sh-server">{IS_DEMO ? "read-only demo" : server}</span>
+            {IS_DEMO && meta && (
+              <span className="sh-server mono" title={`captured ${meta.capturedAt}`}>
+                Insight at {meta.commit}
+              </span>
+            )}
+            <ThemeSwitch />
+          </div>
         </header>
       )}
       <main>
