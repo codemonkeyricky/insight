@@ -3,7 +3,7 @@ import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import ts from "typescript";
 import type { IREdge, IRFinding, IRNode, IRRecord, NodeId, Provenance, Span, UnresolvedRef } from "@insight/ir";
 import type { IRBatch } from "@insight/sdk";
-import { importBindings, matchCall, matchEnvRead, matchSchedule, matchWorker, nodeScriptArgument, scriptPath, type ImportBinding, type ScriptPath, type WorkerEnv } from "./effects.js";
+import { importBindings, matchCall, matchEnvRead, matchExportRoute, matchFetch, matchSchedule, matchServe, matchWorker, nodeScriptArgument, scriptPath, type ImportBinding, type ScriptPath, type WorkerEnv } from "./effects.js";
 import { scriptKind } from "./digest.js";
 import { dispatchFor, MAX_DISPATCH_TARGETS, propName } from "./dispatch.js";
 
@@ -1285,7 +1285,21 @@ export function emitFile(project: Project, rel: string): IRBatch {
           dependOn(dispatch.owner.rel);
         }
       }
-      const effect = matchCall(call, imports);
+      // A call to a function the project declares is that function, not a network request, so a fetch-named one is not matched.
+      const effect = matchCall(call, imports) ?? (target?.entity.type === "function" ? undefined : matchFetch(call, imports, workerEnv));
+      // An HTTP route the call registers on a server object: the path it serves, owned by the code that registers it.
+      const serve = matchServe(call, imports);
+      if (serve) {
+        push({
+          id: uniqueId(`serve:${pos(sf, call.getStart(sf)).join(":")}`),
+          facet: "effects",
+          kind: serve.kind,
+          parent: owner,
+          attrs: serve.attrs,
+          span: spanOf(rel, sf, call),
+          provenance: PROV,
+        });
+      }
       // A message a worker or page posts to its peer: a step of its own, since the runtime has no call the project declares.
       if (!effect && target === undefined && ts.isPropertyAccessExpression(callee) && callee.name.text === "postMessage") {
         push({
@@ -1457,6 +1471,21 @@ export function emitFile(project: Project, rel: string): IRBatch {
           kind: "effects.env.read",
           parent: owner,
           attrs: { api: "process.env", name },
+          span: spanOf(rel, sf, node),
+          provenance: PROV,
+        });
+      }
+    }
+
+    // An HTTP verb exported from a file is a route the deployment serves.
+    if (ts.isFunctionDeclaration(node) || ts.isVariableStatement(node)) {
+      for (const serve of matchExportRoute(node)) {
+        push({
+          id: uniqueId(`serve:${pos(sf, node.getStart(sf)).join(":")}`),
+          facet: "effects",
+          kind: serve.kind,
+          parent: owner,
+          attrs: serve.attrs,
           span: spanOf(rel, sf, node),
           provenance: PROV,
         });

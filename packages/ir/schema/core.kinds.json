@@ -394,6 +394,15 @@
     }
   },
   {
+    "kind": "effects.net.serve",
+    "facet": "effects",
+    "on": "node",
+    "description": "An HTTP route a file serves: registered on a server object, or exported under an HTTP verb name.",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/effects.json#/$defs/EffectsNetServe"
+    }
+  },
+  {
     "kind": "effects.proc.exec",
     "facet": "effects",
     "on": "node",
@@ -415,6 +424,15 @@
     "on": "node",
     "attrs": {
       "$ref": "https://insight.dev/ir/facets/effects.json#/$defs/EffectsClockRead"
+    }
+  },
+  {
+    "kind": "effects.message.post",
+    "facet": "effects",
+    "on": "node",
+    "description": "A message posted to a peer (postMessage) from a page or worker.",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/effects.json#/$defs/EffectsMessagePost"
     }
   },
   {

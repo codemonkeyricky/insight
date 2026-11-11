@@ -6,11 +6,13 @@
   "$defs": {
     "EffectsFsRead": { "type": "object", "required": ["api"], "properties": { "api": { "type": "string" }, "path": { "type": "string" } } },
     "EffectsFsWrite": { "type": "object", "required": ["api"], "properties": { "api": { "type": "string" }, "path": { "type": "string" } } },
-    "EffectsNetConnect": { "type": "object", "required": ["api"], "properties": { "api": { "type": "string" }, "host": { "type": "string" } } },
+    "EffectsNetConnect": { "type": "object", "required": ["api"], "properties": { "api": { "type": "string" }, "host": { "type": "string" }, "path": { "type": "string" }, "method": { "type": "string" }, "env": { "type": "string" }, "relative": { "type": "boolean" }, "confidence": { "type": "string", "enum": ["exact", "inferred"] } } },
     "EffectsNetListen": { "type": "object", "required": ["api"], "properties": { "api": { "type": "string" }, "port": { "type": "string" } } },
+    "EffectsNetServe": { "type": "object", "required": ["framework", "method", "path"], "properties": { "framework": { "type": "string" }, "method": { "type": "string" }, "path": { "type": "string" }, "handler": { "type": "string" } } },
     "EffectsProcExec": { "type": "object", "required": ["api"], "properties": { "api": { "type": "string" }, "command": { "type": "string" } } },
     "EffectsEnvRead": { "type": "object", "required": ["api"], "properties": { "api": { "type": "string" }, "name": { "type": "string" } } },
     "EffectsClockRead": { "type": "object", "required": ["api"], "properties": { "api": { "type": "string" } } },
+    "EffectsMessagePost": { "type": "object", "required": ["api"], "properties": { "api": { "type": "string" } } },
     "EffectsUnknown": { "type": "object", "properties": { "api": { "type": "string" } } }
   }
 }
