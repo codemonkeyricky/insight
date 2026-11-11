@@ -209,9 +209,60 @@ Without the cloud variables it writes to `INSIGHT_STORAGE_DIR`. The script write
 and a `done` status, so the repository opens at `#/gh/<owner>/<repo>` straight away. A seed counts toward the KV write budget
 (about 20 writes).
 
+## Private repositories
+
+A visitor signs in with GitHub through a GitHub App that is installed only on the repositories they choose. A signed-in
+user can then index and view a private repository that they can read on GitHub. Nobody without read access can read its
+index or sources. Public repositories work as before, signed in or not. Sign-in is off unless all three of
+`GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET` and `SESSION_SECRET` are set; then `/api/auth/*` and `/api/private/*`
+answer 404 and `/api/index` and `/api/status` behave as before.
+
+How it works: `/api/auth/login` and `/api/auth/callback` run GitHub's user OAuth (the app's user-to-server tokens, which
+expire after 8 hours and are refreshed with the refresh token). The session is an encrypted, HttpOnly cookie
+`insight_session` (AES-256-GCM with `SESSION_SECRET`). Visibility is decided by GitHub's `private` field, never by the
+client. A private index is written under `private/gh/<owner>/<repo>/<sha>/` only (no `recent.json`, no public
+`latest.json`). The browser reads it through `GET /api/private/grant`, which checks access and returns a base URL on the
+storage Worker signed for 12 hours (`/p/<exp>/<sig>/private/gh/...`). The Worker refuses every `private/` key without a
+valid signature.
+
+| Variable | Where | Meaning |
+|---|---|---|
+| `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET` | Function | The GitHub App's client id and a client secret generated for it. |
+| `GITHUB_APP_SLUG` | Function | The app's slug; gives the install link (`https://github.com/apps/<slug>/installations/new`). |
+| `SESSION_SECRET` | Function | 32 random bytes, base64. Seals the session and the OAuth state cookies. |
+| `STORAGE_SIGNING_KEY` | Function and the storage Worker (same value) | 32 random bytes, base64. Signs the storage paths. Generate one with `openssl rand -base64 32`. |
+| `STORAGE_PUBLIC_BASE` | Function | The storage Worker's public URL (no trailing slash). Falls back to `KV_PUBLIC_BASE`, then `R2_PUBLIC_BASE`. |
+| `PUBLIC_ORIGIN` | Function | The site's origin, e.g. `https://arch-insight.vercel.app`. Used for the OAuth redirect and the origin check. |
+| `ALLOWED_ORIGINS` | Function (optional) | Extra origins allowed to make state-changing requests (comma separated), e.g. a preview URL or `http://localhost:5310`. |
+
+GitHub App setup (Settings → Developer settings → GitHub Apps → New GitHub App):
+
+1. Name it, e.g. "Insight Viewer". Homepage URL `https://arch-insight.vercel.app`.
+2. Callback URL `https://arch-insight.vercel.app/api/auth/callback`. Add `http://localhost:5310/api/auth/callback` for local
+   development.
+3. Turn on "Expire user authorization tokens". Turn off "Active" under Webhook (no webhook).
+4. Repository permissions: Contents, read-only (Metadata read-only comes with it). No other permissions.
+5. Where it can be installed: any account, or only your own.
+6. Generate a client secret. Record the client id, the client secret and the app's slug.
+
+The storage Worker's secret must match the Function's `STORAGE_SIGNING_KEY`:
+
+```sh
+cd workers/storage
+printf '%s' "$STORAGE_SIGNING_KEY" | CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… npx wrangler@4 secret put STORAGE_SIGNING_KEY
+```
+
+Or, through the Cloudflare API, `PUT /accounts/<id>/workers/scripts/insight-storage/secrets` with a `secret_text` binding of
+that name. Deploy the Worker before the Function (the Function's grants point at it).
+
+Seeding a private repository from a local checkout (the same files, under `private/`):
+`node scripts/hosted-seed.mjs --private <localPath> <owner/repo> <sha>`.
+
 ## Known limits
 
-- Only public GitHub repositories. Private repositories need the accounts work (plan phase 6).
+- Anonymous requests: GitHub answers 404 for private repos, so with sign-in configured a missing repo and a private one both answer 401 auth_required (sign in to check). With sign-in disabled, a missing repo answers 404 not_found as before.
+- Private repositories need the GitHub App and the three sign-in variables. A grant lasts 12 hours: revoking access on GitHub
+  stops new grants and source reads at once, but a grant already issued works until it expires.
 - The index is of the default branch's head at the time of the request. There is no freshness check: an index is
   reused until it is replaced by a new request for a different commit.
 - Storage is append-only: old commits are kept. Nothing evicts them yet. KV's free allowance is about 1 GB.

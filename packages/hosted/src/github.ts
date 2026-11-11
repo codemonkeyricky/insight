@@ -88,6 +88,8 @@ export class UpstreamError extends Error {
 export interface GithubOptions {
   fetch: FetchLike;
   token?: string;
+  /** Let repoInfo return a private repo (the caller checks the visibility). Default false: a private repo is NotFoundError. */
+  allowPrivate?: boolean;
 }
 
 export interface RepoInfo {
@@ -112,7 +114,7 @@ export async function repoInfo(owner: string, repo: string, opts: GithubOptions)
   if (res.status === 404) throw new NotFoundError(`${repoName(owner, repo)} was not found on GitHub`);
   if (!res.ok) throw new UpstreamError(`GitHub answered ${res.status} for ${repoName(owner, repo)}`);
   const body = (await res.json()) as RepoInfo;
-  if (body.private) throw new NotFoundError(`${repoName(owner, repo)} is private`);
+  if (body.private && !opts.allowPrivate) throw new NotFoundError(`${repoName(owner, repo)} is private`);
   return body;
 }
 
@@ -150,9 +152,11 @@ export class ArchiveLimitError extends Error {
 }
 
 /**
- * Downloads https://codeload.github.com/<o>/<r>/tar.gz/<sha> and extracts it into `dir`, stripping the archive's top
- * folder. Symlinks, hardlinks and devices are skipped. Files over maxFileBytes are skipped; a count or byte total over
- * the cap fails with ArchiveLimitError.
+ * Downloads the commit's tarball and extracts it into `dir`, stripping the archive's top folder. Without a token it is
+ * https://codeload.github.com/<o>/<r>/tar.gz/<sha>; with one (a private repo) it is GET api.github.com/repos/<o>/<r>/tarball/<sha>
+ * with the Bearer token (the 302 to codeload carries its own signed URL, and fetch drops the token across origins).
+ * Symlinks, hardlinks and devices are skipped. Files over maxFileBytes are skipped; a count or byte total over the cap
+ * fails with ArchiveLimitError.
  */
 export async function downloadAndExtract(
   owner: string,
@@ -161,10 +165,15 @@ export async function downloadAndExtract(
   dir: string,
   limits: ExtractLimits,
   fetchFn: FetchLike,
+  token?: string,
 ): Promise<ExtractResult> {
-  const res = await fetchFn(`https://codeload.github.com/${owner}/${repo}/tar.gz/${sha}`, {
-    headers: { "User-Agent": "insight-indexer" },
-  });
+  const res = token
+    ? await fetchFn(`https://api.github.com/repos/${owner}/${repo}/tarball/${sha}`, {
+        headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}`, "User-Agent": "insight-indexer" },
+      })
+    : await fetchFn(`https://codeload.github.com/${owner}/${repo}/tar.gz/${sha}`, {
+        headers: { "User-Agent": "insight-indexer" },
+      });
   if (res.status === 404) throw new NotFoundError(`${repoName(owner, repo)} at ${sha} was not found`);
   if (!res.ok || res.body === null) throw new UpstreamError(`codeload answered ${res.status}`);
 

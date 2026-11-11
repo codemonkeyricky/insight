@@ -1,6 +1,17 @@
 import { useEffect, useState } from "react";
 import { hrefView } from "../router";
-import { IndexRequestError, projectIdOf, readLatest, readStatus, requestIndex, storageRoot, type HostedRef } from "../hostedApi";
+import {
+  authMe,
+  IndexRequestError,
+  projectIdOf,
+  readLatest,
+  readPrivateLatest,
+  readStatus,
+  requestIndex,
+  signInUrl,
+  storageRoot,
+  type HostedRef,
+} from "../hostedApi";
 import { canRetry, indexErrorText, phaseLabel } from "../hostedRepo";
 import { watchIndex, type PollStatus } from "../indexPoll";
 
@@ -40,7 +51,8 @@ function RunProgress({ status }: { status: PollStatus }) {
 
 /**
  * #/gh/<owner>/<repo> and #/gh/<owner>/<repo>@<sha>: opens the repository's index when there is one, or asks the server
- * to index it and follows the run until it is done (then opens it) or fails (then says why).
+ * to index it and follows the run until it is done (then opens it) or fails (then says why). A private index is found
+ * only while signed in; a private repository asked for while signed out says so, with a sign-in link.
  */
 export function HostedIndexPage({ owner, repo, sha }: { owner: string; repo: string; sha?: string }) {
   const [view, setView] = useState<View>({ kind: "checking" });
@@ -52,8 +64,8 @@ export function HostedIndexPage({ owner, repo, sha }: { owner: string; repo: str
     let stop: (() => void) | undefined;
     const root = storageRoot();
 
-    const open = (commit: string) => {
-      window.location.hash = hrefView(projectIdOf({ owner, repo, sha: commit }), "flow");
+    const open = (ref: HostedRef) => {
+      window.location.hash = hrefView(projectIdOf(ref), "flow");
     };
     const fail = (code: string, message?: string) => {
       setView({ kind: "failed", code, message: indexErrorText(code, repoName, message) });
@@ -65,7 +77,7 @@ export function HostedIndexPage({ owner, repo, sha }: { owner: string; repo: str
           if (!cancelled) setView({ kind: "running", status });
         },
         onDone: () => {
-          if (!cancelled) open(ref.sha);
+          if (!cancelled) open(ref);
         },
         onFailed: (error) => {
           if (!cancelled) fail(error.code, error.message);
@@ -75,25 +87,42 @@ export function HostedIndexPage({ owner, repo, sha }: { owner: string; repo: str
         },
       });
     };
-    const settle = (reply: { state: "running" | "done" | "failed"; sha: string; error?: { code: string; message: string } }) => {
-      if (reply.state === "done") return open(reply.sha);
+    const settle = (reply: { state: "running" | "done" | "failed"; sha: string; error?: { code: string; message: string } }, isPrivate: boolean) => {
+      const ref = { owner, repo, sha: reply.sha, private: isPrivate };
+      if (reply.state === "done") return open(ref);
       if (reply.state === "failed") return fail(reply.error?.code ?? "index_failed", reply.error?.message);
-      follow({ owner, repo, sha: reply.sha });
+      follow(ref);
     };
+    const signedIn = async () => (await authMe()).signedIn;
 
     const run = async () => {
       setView({ kind: "checking" });
       try {
         if (sha) {
-          const status = await readStatus({ owner, repo, sha });
+          const pub = { owner, repo, sha };
+          const status = await readStatus(pub);
           if (cancelled) return;
-          if (status) return settle(status);
-          return settle(await requestIndex(repoName, sha));
+          if (status) return settle(status, false);
+          if (await signedIn()) {
+            const priv = await readStatus({ ...pub, private: true });
+            if (cancelled) return;
+            if (priv) return settle(priv, true);
+          }
+          const reply = await requestIndex(repoName, sha);
+          if (cancelled) return;
+          return settle(reply, reply.visibility === "private");
         }
         const latest = await readLatest(root, owner, repo);
         if (cancelled) return;
-        if (latest) return open(latest.sha);
-        return settle(await requestIndex(repoName));
+        if (latest) return open({ owner, repo, sha: latest.sha });
+        if (await signedIn()) {
+          const priv = await readPrivateLatest(owner, repo);
+          if (cancelled) return;
+          if (priv) return open({ owner, repo, sha: priv.sha, private: true });
+        }
+        const reply = await requestIndex(repoName);
+        if (cancelled) return;
+        return settle(reply, reply.visibility === "private");
       } catch (err) {
         if (cancelled) return;
         if (err instanceof IndexRequestError) fail(err.code, err.message);
@@ -127,7 +156,13 @@ export function HostedIndexPage({ owner, repo, sha }: { owner: string; repo: str
 
       {view.kind === "failed" && (
         <div className="panel index-error" role="alert">
-          <p className="error">{view.message}</p>
+          {view.code === "auth_required" ? (
+            <p className="error">
+              This repository is private. <a href={signInUrl(window.location.hash || "#/")}>Sign in with GitHub</a>
+            </p>
+          ) : (
+            <p className="error">{view.message}</p>
+          )}
           <div className="row">
             {canRetry(view.code) && (
               <button type="button" className="add-submit" onClick={() => setAttempt((n) => n + 1)}>

@@ -37,7 +37,7 @@ describe("hosted project ids", () => {
     for (const ref of refs) {
       const id = projectIdOf(ref);
       expect(id).toBe(`gh~${ref.owner}~${ref.repo}~${ref.sha}`);
-      expect(parseProjectId(id)).toEqual(ref);
+      expect(parseProjectId(id)).toEqual({ ...ref, private: false });
     }
   });
 

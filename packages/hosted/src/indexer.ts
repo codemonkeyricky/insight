@@ -2,9 +2,21 @@
 // stored status of its commit, counted against the daily caps, and then indexed in the background (waitUntil). The job
 // downloads the commit's tarball, exports it (@insight/export) and uploads the static files. Its progress and result go
 // to status.json, which the browser polls. The layout and the codes are in the hosted-backend plan (Free-tier contract).
+//
+// Private repos: when the signed-in user can read the repo (GitHub's `private` field decides), the same flow runs with the
+// user's token and writes under private/gh/... only (see private.ts). Public submissions are unchanged.
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { exportProject as defaultExportProject, ExportError, type ExportResult, type PhaseEvent } from "@insight/export";
+import {
+  authConfigFromEnv,
+  installUrlOf,
+  originAllowed,
+  requireAccess,
+  sessionFrom,
+  type Env,
+  type Session,
+} from "./auth.js";
 import {
   ArchiveLimitError,
   checkRef,
@@ -17,12 +29,15 @@ import {
   resolveSha,
   UpstreamError,
   type ExtractLimits,
+  type RepoInfo,
 } from "./github.js";
+import { errorResponse, json, NO_STORE, withCookies } from "./http.js";
+import { repoStorageBase, repoStoragePrefix, type Visibility } from "./private.js";
 import type { FetchLike, Storage } from "./storage.js";
 
+export { NO_STORE };
 export const IMMUTABLE = "public, max-age=31536000, immutable";
 export const SHORT_CACHE = "public, max-age=60";
-export const NO_STORE = "no-store";
 const JSON_TYPE = "application/json";
 const RECENT_LIMIT = 50;
 const RUNNING_FRESH_MS = 6 * 60 * 1000;
@@ -49,7 +64,9 @@ export type ErrorCode =
   | "rate_limited"
   | "timeout"
   | "index_failed"
-  | "upstream_error";
+  | "upstream_error"
+  | "auth_required"
+  | "forbidden";
 
 export interface IndexError {
   code: ErrorCode | string;
@@ -71,29 +88,18 @@ export interface IndexStatus {
 
 export interface IndexDeps {
   storage: Storage;
-  /** GITHUB_TOKEN, MAX_REPO_KB, INDEX_DAILY_CAP, INDEX_IP_DAILY_CAP. Unset values take their defaults. */
+  /** GITHUB_TOKEN, MAX_REPO_KB, INDEX_DAILY_CAP, INDEX_IP_DAILY_CAP, and the sign-in variables. Unset values take their defaults. */
   env: Record<string, string | undefined>;
   fetch: FetchLike;
   waitUntil: (promise: Promise<unknown>) => void;
   now: () => number;
   exportProject: typeof defaultExportProject;
-  /** Scratch folder; each job works in <tmpRoot>/<sha> and removes it when done. */
+  /** Scratch folder; each job works in <tmpRoot>/<sha> (private: <tmpRoot>/private-<sha>) and removes it when done. */
   tmpRoot: string;
   /** Watchdog for one job. Defaults to 270 s. */
   timeoutMs?: number;
   /** Caps for the download and the export. Defaults to HOSTED_LIMITS. */
   limits?: Required<ExtractLimits>;
-}
-
-function json(status: number, body: unknown, cacheControl = NO_STORE): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": JSON_TYPE, "cache-control": cacheControl },
-  });
-}
-
-function errorResponse(status: number, code: ErrorCode, message: string): Response {
-  return json(status, { error: { code, message } });
 }
 
 function intEnv(value: string | undefined, fallback: number): number {
@@ -112,10 +118,6 @@ export function clientIp(request: Request): string {
 
 function utcDay(nowMs: number): string {
   return new Date(nowMs).toISOString().slice(0, 10);
-}
-
-function repoPrefix(owner: string, repo: string, sha: string): string {
-  return `gh/${owner}/${repo}/${sha}/`;
 }
 
 interface DailyCounter {
@@ -137,23 +139,28 @@ function failureCode(err: unknown): ErrorCode {
   return "index_failed";
 }
 
-/** Writes the commit's static export (gzip, immutable), then latest.json and recent.json. */
+/**
+ * Writes the commit's static export (gzip, immutable), then latest.json and, for a public index only, recent.json. A
+ * private index writes its files and latest.json under private/gh/... and nothing else.
+ */
 export async function publishExport(
   storage: Storage,
-  args: { owner: string; repo: string; sha: string; ref: string; indexedAt: string; result: ExportResult },
+  args: { owner: string; repo: string; sha: string; ref: string; indexedAt: string; result: ExportResult; visibility?: Visibility },
 ): Promise<void> {
   const { owner, repo, sha, ref, indexedAt, result } = args;
-  const prefix = repoPrefix(owner, repo, sha);
+  const visibility = args.visibility ?? "public";
+  const prefix = repoStoragePrefix(owner, repo, sha, visibility);
   for (const [path, text] of result.files) {
     await storage.put(prefix + path, text, { contentType: JSON_TYPE, cacheControl: IMMUTABLE, gzip: true });
   }
   const name = repoName(owner, repo);
   const { nodes, files } = result.meta;
   await storage.put(
-    `gh/${owner}/${repo}/latest.json`,
+    `${repoStorageBase(owner, repo, visibility)}latest.json`,
     JSON.stringify({ repo: name, sha, ref, indexedAt, nodes, files }),
     { contentType: JSON_TYPE, cacheControl: SHORT_CACHE, gzip: true },
   );
+  if (visibility === "private") return;
   const previous = (await storage.getJson<{ repo: string }[]>("meta/recent.json")) ?? [];
   const recent = [{ repo: name, sha, indexedAt, nodes, files }, ...previous.filter((e) => e.repo !== name)].slice(
     0,
@@ -167,8 +174,15 @@ export async function publishExport(
 }
 
 /** Writes status.json (never cached, not gzipped: the browser polls it). */
-export async function writeStatus(storage: Storage, owner: string, repo: string, sha: string, status: IndexStatus) {
-  await storage.put(`${repoPrefix(owner, repo, sha)}status.json`, JSON.stringify(status), {
+export async function writeStatus(
+  storage: Storage,
+  owner: string,
+  repo: string,
+  sha: string,
+  status: IndexStatus,
+  visibility: Visibility = "public",
+) {
+  await storage.put(`${repoStoragePrefix(owner, repo, sha, visibility)}status.json`, JSON.stringify(status), {
     contentType: JSON_TYPE,
     cacheControl: NO_STORE,
   });
@@ -189,6 +203,9 @@ interface JobContext {
   phase?: string;
   /** When status.json was last written (ms); the write throttle reads it. */
   lastWrite: number;
+  visibility: Visibility;
+  /** The signed-in user's token, for a private index only. Used for the download; never stored. */
+  token?: string;
 }
 
 async function writeJobStatus(ctx: JobContext, patch: Partial<IndexStatus>): Promise<void> {
@@ -203,12 +220,17 @@ async function writeJobStatus(ctx: JobContext, patch: Partial<IndexStatus>): Pro
     ...patch,
   };
   ctx.lastWrite = ctx.deps.now();
-  await writeStatus(ctx.deps.storage, ctx.owner, ctx.repo, ctx.sha, status);
+  await writeStatus(ctx.deps.storage, ctx.owner, ctx.repo, ctx.sha, status, ctx.visibility);
+}
+
+/** The scratch folder key of a job: private jobs get their own folder, so they never share one with a public job. */
+function scratchKey(ctx: JobContext): string {
+  return ctx.visibility === "private" ? `private-${ctx.sha}` : ctx.sha;
 }
 
 async function runJob(ctx: JobContext): Promise<void> {
   const { owner, repo, sha, ref, deps } = ctx;
-  const jobDir = join(deps.tmpRoot, sha);
+  const jobDir = join(deps.tmpRoot, scratchKey(ctx));
   const src = join(jobDir, "src");
   const home = join(jobDir, "home");
   // Phase writes: one per phase change, at most one per STATUS_INTERVAL_MS (later events of the same phase are dropped).
@@ -225,7 +247,7 @@ async function runJob(ctx: JobContext): Promise<void> {
   try {
     progress({ phase: "download" });
     await chain;
-    await downloadAndExtract(owner, repo, sha, src, ctx.limits, deps.fetch);
+    await downloadAndExtract(owner, repo, sha, src, ctx.limits, deps.fetch, ctx.token);
     const result = await deps.exportProject({
       root: src,
       name: repo,
@@ -244,6 +266,7 @@ async function runJob(ctx: JobContext): Promise<void> {
       ref,
       indexedAt: new Date(deps.now()).toISOString(),
       result,
+      visibility: ctx.visibility,
     });
     await finish(ctx, { state: "done" });
   } catch (err) {
@@ -257,15 +280,22 @@ async function runJob(ctx: JobContext): Promise<void> {
 async function finish(ctx: JobContext, patch: Partial<IndexStatus>): Promise<void> {
   if (ctx.finalized) return;
   ctx.finalized = true;
-  await writeStatus(ctx.deps.storage, ctx.owner, ctx.repo, ctx.sha, {
-    repo: repoName(ctx.owner, ctx.repo),
-    sha: ctx.sha,
-    ref: ctx.ref,
-    startedAt: ctx.startedAt,
-    updatedAt: new Date(ctx.deps.now()).toISOString(),
-    state: "running",
-    ...patch,
-  } as IndexStatus);
+  await writeStatus(
+    ctx.deps.storage,
+    ctx.owner,
+    ctx.repo,
+    ctx.sha,
+    {
+      repo: repoName(ctx.owner, ctx.repo),
+      sha: ctx.sha,
+      ref: ctx.ref,
+      startedAt: ctx.startedAt,
+      updatedAt: new Date(ctx.deps.now()).toISOString(),
+      state: "running",
+      ...patch,
+    } as IndexStatus,
+    ctx.visibility,
+  );
 }
 
 /** Runs the job, with the watchdog: past the timeout the status becomes failed/timeout and later writes are dropped. */
@@ -281,13 +311,22 @@ async function runWithWatchdog(ctx: JobContext): Promise<void> {
       state: "failed",
       error: { code: "timeout", message: `indexing took longer than ${Math.round(ctx.timeoutMs / 1000)} s` },
     });
-    await rm(join(ctx.deps.tmpRoot, ctx.sha), { recursive: true, force: true });
+    await rm(join(ctx.deps.tmpRoot, scratchKey(ctx)), { recursive: true, force: true });
   }
 }
 
 /** POST /api/index. Body: {repo: "owner/repo" | GitHub URL, ref?: string}. */
 export async function handleIndex(request: Request, deps: IndexDeps): Promise<Response> {
   if (request.method !== "POST") return errorResponse(405, "method_not_allowed", "use POST");
+  const session = await sessionFrom(request, deps.env as Env, deps.fetch);
+  return withCookies(await submit(request, deps, session), session?.setCookie);
+}
+
+async function submit(request: Request, deps: IndexDeps, session: Session | undefined): Promise<Response> {
+  const auth = authConfigFromEnv(deps.env as Env);
+  if (session !== undefined && auth !== undefined && !originAllowed(request, auth)) {
+    return errorResponse(403, "forbidden", "this request must come from the Insight site");
+  }
 
   let body: { repo?: unknown; ref?: unknown };
   try {
@@ -309,15 +348,42 @@ export async function handleIndex(request: Request, deps: IndexDeps): Promise<Re
     return errorResponse(400, "bad_request", errorMessage(err));
   }
   const { owner, repo } = parsed;
-  const opts = { fetch: deps.fetch, token: deps.env.GITHUB_TOKEN || undefined };
+  const name = repoName(owner, repo);
+  // A signed-in request reads GitHub with the user's token (so it sees the repos the user can read); else GITHUB_TOKEN.
+  const opts = { fetch: deps.fetch, token: session ? session.token : deps.env.GITHUB_TOKEN || undefined };
+
+  let info: RepoInfo;
+  try {
+    info = await repoInfo(owner, repo, { ...opts, allowPrivate: true });
+  } catch (err) {
+    if (err instanceof NotFoundError) {
+      if (session === undefined) {
+        if (auth === undefined) return errorResponse(404, "not_found", err.message);
+        // GitHub answers 404 to anonymous requests for private repos, so this may be a private repo.
+        return errorResponse(401, "auth_required", `${name} was not found or is private; sign in with GitHub to index a private repository`);
+      }
+      return errorResponse(404, "not_found", `${name} was not found, or the Insight app is not installed on it`, {
+        installUrl: auth ? installUrlOf(auth) : undefined,
+      });
+    }
+    if (err instanceof UpstreamError) return errorResponse(502, "upstream_error", err.message);
+    throw err;
+  }
+  if (info.private && session === undefined) {
+    if (auth === undefined) return errorResponse(404, "not_found", `${name} is private`);
+    return errorResponse(401, "auth_required", `${name} is private; sign in with GitHub to index it`);
+  }
+  const visibility: Visibility = info.private ? "private" : "public";
+  // Private replies say so; public replies keep their shape.
+  const reply = (status: number, bodyOut: Record<string, unknown>): Response =>
+    json(status, visibility === "private" ? { ...bodyOut, visibility } : bodyOut);
 
   let sha: string;
   let ref: string;
   try {
-    const info = await repoInfo(owner, repo, opts);
     const maxKb = intEnv(deps.env.MAX_REPO_KB, 300_000);
     if (info.size > maxKb) {
-      return errorResponse(413, "too_large", `${repoName(owner, repo)} is ${info.size} KB; the hosted limit is ${maxKb} KB`);
+      return errorResponse(413, "too_large", `${name} is ${info.size} KB; the hosted limit is ${maxKb} KB`);
     }
     ref = requestedRef ?? parsed.ref ?? info.default_branch;
     sha = await resolveSha(owner, repo, ref, opts);
@@ -328,34 +394,35 @@ export async function handleIndex(request: Request, deps: IndexDeps): Promise<Re
   }
 
   const now = deps.now();
-  const name = repoName(owner, repo);
-  const existing = await deps.storage.getJson<IndexStatus>(`${repoPrefix(owner, repo, sha)}status.json`);
+  const existing = await deps.storage.getJson<IndexStatus>(`${repoStoragePrefix(owner, repo, sha, visibility)}status.json`);
   if (existing) {
-    if (existing.state === "done") return json(200, { state: "done", repo: name, sha });
+    if (existing.state === "done") return reply(200, { state: "done", repo: name, sha });
     const updated = Date.parse(existing.updatedAt);
     if (existing.state === "running" && now - updated < RUNNING_FRESH_MS) {
-      return json(202, { state: "running", repo: name, sha });
+      return reply(202, { state: "running", repo: name, sha });
     }
     if (existing.state === "failed" && now - updated < FAILED_RETRY_MS) {
-      return json(200, { state: "failed", repo: name, sha, error: existing.error });
+      return reply(200, { state: "failed", repo: name, sha, error: existing.error });
     }
   }
 
   const dailyCap = intEnv(deps.env.INDEX_DAILY_CAP, deps.storage.kind === "kv" ? KV_DAILY_CAP : DAILY_CAP);
   const ipCap = intEnv(deps.env.INDEX_IP_DAILY_CAP, 10);
-  const ip = clientIp(request);
+  // The per-identity cap: an address for public indexes, the signed-in user for private ones.
+  const identity = session !== undefined && visibility === "private" ? `user:${session.user.id}` : clientIp(request);
   const dayKey = `meta/daily/${utcDay(now)}.json`;
   const counter = (await deps.storage.getJson<DailyCounter>(dayKey)) ?? { total: 0, ips: {} };
-  const ipCount = counter.ips[ip] ?? 0;
+  const identityCount = counter.ips[identity] ?? 0;
   if (counter.total >= dailyCap) {
     return errorResponse(429, "rate_limited", "the daily indexing limit has been reached; try again tomorrow");
   }
-  if (ipCount >= ipCap) {
-    return errorResponse(429, "rate_limited", `this address has reached its ${ipCap} indexes for today`);
+  if (identityCount >= ipCap) {
+    const who = identity.startsWith("user:") ? "this account" : "this address";
+    return errorResponse(429, "rate_limited", `${who} has reached its ${ipCap} indexes for today`);
   }
   await deps.storage.put(
     dayKey,
-    JSON.stringify({ total: counter.total + 1, ips: { ...counter.ips, [ip]: ipCount + 1 } }),
+    JSON.stringify({ total: counter.total + 1, ips: { ...counter.ips, [identity]: identityCount + 1 } }),
     { contentType: JSON_TYPE, cacheControl: NO_STORE },
   );
 
@@ -372,10 +439,12 @@ export async function handleIndex(request: Request, deps: IndexDeps): Promise<Re
     finalized: false,
     phase: "queued",
     lastWrite: 0,
+    visibility,
+    token: visibility === "private" ? session?.token : undefined,
   };
   await writeJobStatus(ctx, { state: "running", phase: "queued" });
   deps.waitUntil(runWithWatchdog(ctx));
-  return json(202, { state: "running", repo: name, sha });
+  return reply(202, { state: "running", repo: name, sha });
 }
 
 /** GET /api/health: {ok, storage: "kv" | "r2" | "fs"}. */
@@ -384,10 +453,14 @@ export function handleHealth(deps: { storage: Pick<Storage, "kind"> }): Response
 }
 
 /**
- * GET /api/status?repo=owner/repo&sha=<40 hex>: the run's status.json, never cached. The page polls this rather than
- * reading the storage: edge reads of a changing object can lag by up to a minute, the API read does not.
+ * GET /api/status?repo=owner/repo&sha=<40 hex>[&visibility=private]: the run's status.json, never cached. The page polls
+ * this rather than reading the storage: edge reads of a changing object can lag by up to a minute, the API read does not.
+ * A private run needs a signed-in user who can read the repo.
  */
-export async function handleStatus(request: Request, deps: { storage: Storage }): Promise<Response> {
+export async function handleStatus(
+  request: Request,
+  deps: { storage: Storage; env?: Env; fetch?: FetchLike },
+): Promise<Response> {
   if (request.method !== "GET") return errorResponse(405, "method_not_allowed", "use GET");
   const url = new URL(request.url);
   const repoText = url.searchParams.get("repo") ?? "";
@@ -400,7 +473,23 @@ export async function handleStatus(request: Request, deps: { storage: Storage })
   }
   if (parsed.ref !== undefined) return errorResponse(400, "bad_request", "repo must be owner/repo");
   if (!/^[0-9a-f]{40}$/.test(sha)) return errorResponse(400, "bad_request", "sha must be a 40-character commit id");
-  const status = await deps.storage.getJson<IndexStatus>(`${repoPrefix(parsed.owner, parsed.repo, sha)}status.json`);
+  const visibility = url.searchParams.get("visibility");
+  if (visibility !== null && visibility !== "public" && visibility !== "private") {
+    return errorResponse(400, "bad_request", "visibility must be public or private");
+  }
+
+  if (visibility === "private") {
+    const fetchFn: FetchLike = deps.fetch ?? ((input, init) => fetch(input, init));
+    const session = await requireAccess(request, deps.env ?? {}, fetchFn, parsed.owner, parsed.repo);
+    if (session instanceof Response) return session;
+    const status = await deps.storage.getJson<IndexStatus>(
+      `${repoStoragePrefix(parsed.owner, parsed.repo, sha, "private")}status.json`,
+    );
+    if (status === undefined) return withCookies(errorResponse(404, "not_found", "no index run for this commit"), session.setCookie);
+    return withCookies(json(200, status), session.setCookie);
+  }
+
+  const status = await deps.storage.getJson<IndexStatus>(`${repoStoragePrefix(parsed.owner, parsed.repo, sha, "public")}status.json`);
   if (status === undefined) return errorResponse(404, "not_found", "no index run for this commit");
   return json(200, status);
 }

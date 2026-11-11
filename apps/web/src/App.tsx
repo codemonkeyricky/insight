@@ -8,6 +8,7 @@ import { HostedHome } from "./pages/HostedHome";
 import { HostedIndexPage } from "./pages/HostedIndex";
 import { Workspace } from "./components/Workspace";
 import { ThemeSwitch } from "./components/ThemeSwitch";
+import { AuthChip } from "./components/HostedAuth";
 import { BrandMark } from "./components/sheet/BrandMark";
 
 function useRoute(): Route {
@@ -42,7 +43,8 @@ export function App() {
           <BrandMark />
           <div className="sh-spacer" />
           <div className="sh-tools">
-            <span className="sh-server">{IS_HOSTED ? "read-only, hosted" : IS_DEMO ? "read-only demo" : server}</span>
+            <span className={IS_HOSTED ? "sh-server sh-hosted-note" : "sh-server"}>{IS_HOSTED ? "read-only, hosted" : IS_DEMO ? "read-only demo" : server}</span>
+            {IS_HOSTED && <AuthChip />}
             {IS_DEMO && meta && (
               <span className="sh-server mono" title={`captured ${meta.capturedAt}`}>
                 Insight at {meta.commit}
