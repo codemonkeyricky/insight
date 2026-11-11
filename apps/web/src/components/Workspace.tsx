@@ -29,7 +29,7 @@ import { SourceView } from "./views/SourceView";
 import { ZoomStore } from "../zoom/scene";
 
 /** Tabs that cover the whole project. The explorer scope does not narrow them. */
-const PROJECT_WIDE = new Set(["overview", "arch", "compare", "review"]);
+const PROJECT_WIDE = new Set(["overview", "compare", "review"]);
 
 /** The default widths of the file tree and the code pane, in px, until the reader resizes them. */
 const TREE_DEFAULT = 280;
@@ -296,7 +296,7 @@ export function Workspace({ id, tab, scope, line, fn, roots = true, base, head, 
       case "source":
         return <SourceView id={id} files={files} scope={scope} line={line} />;
       case "arch":
-        return <ArchView id={id} />;
+        return <ArchView id={id} scope={scope} />;
       case "findings":
         return <FindingsView id={id} scope={scope} />;
       case "compare":
