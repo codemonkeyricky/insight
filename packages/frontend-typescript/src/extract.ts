@@ -917,6 +917,21 @@ function workerEnvFor(project: Project, sf: ts.SourceFile): WorkerEnv {
       if ((ts.getCombinedNodeFlags(d) & ts.NodeFlags.Const) === 0 || d.getSourceFile() !== sf) return undefined;
       return d.initializer;
     },
+    fnBody: (id) => {
+      const d = project.checker.getSymbolAtLocation(id)?.valueDeclaration;
+      if (d === undefined || d.getSourceFile() !== sf) return undefined;
+      let fn: ts.FunctionDeclaration | ts.FunctionExpression | ts.ArrowFunction | undefined;
+      if (ts.isFunctionDeclaration(d)) fn = d;
+      else if (ts.isVariableDeclaration(d) && d.initializer !== undefined) {
+        const init = unwrapAll(d.initializer);
+        if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) fn = init;
+      }
+      if (fn === undefined || fn.body === undefined) return undefined;
+      if (!ts.isBlock(fn.body)) return fn.body;
+      if (fn.body.statements.length !== 1) return undefined;
+      const only = fn.body.statements[0];
+      return only !== undefined && ts.isReturnStatement(only) ? only.expression : undefined;
+    },
     declared: (id) => {
       const sym = project.checker.getSymbolAtLocation(id);
       const d = sym?.valueDeclaration ?? sym?.declarations?.[0];
@@ -1454,6 +1469,12 @@ export function emitFile(project: Project, rel: string): IRBatch {
               const a = i < 0 ? undefined : argFor(i);
               const v = a === undefined ? undefined : unwrapAll(a);
               return v !== undefined && ts.isStringLiteralLike(v) ? v.text.toUpperCase() : undefined;
+            },
+            options: (e: ts.Expression): ts.Expression | undefined => {
+              const i = paramIndex(e);
+              const a = i < 0 ? undefined : argFor(i);
+              const v = a === undefined ? undefined : unwrapAll(a);
+              return v !== undefined && ts.isObjectLiteralExpression(v) ? v : undefined;
             },
           };
           const wrapperEnv = workerEnvFor(project, wrapper.sf);

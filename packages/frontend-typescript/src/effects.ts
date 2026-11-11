@@ -248,6 +248,8 @@ export function nodeScriptArgument(call: ts.CallExpression, api: string, imports
 export interface WorkerEnv {
   constOf?: (id: ts.Identifier) => ts.Expression | undefined;
   declared?: (id: ts.Identifier) => boolean;
+  /** The single expression a same-file function returns (`=> e` or `{ return e }`), when the identifier names one. */
+  fnBody?: (id: ts.Identifier) => ts.Expression | undefined;
 }
 
 /**
@@ -392,11 +394,29 @@ export interface UrlText {
 /** Resolves an expression the caller binds (a wrapper's parameter) to a URL; undefined leaves it to the normal rules. */
 export type UrlHook = (e: ts.Expression) => UrlText | undefined;
 
+/** How far a URL evaluation follows same-file consts before it gives up. */
+const MAX_URL_HOPS = 6;
+/** How many same-file helper calls (`url(key)`) a URL evaluation enters, counted along one path. */
+const MAX_URL_CALLS = 2;
+
 /**
- * The text of a URL expression. An identifier is followed to its const once (`follow`); a substitution's env read
- * is found by the caller, so the text here only needs the shape.
+ * The text of a URL expression. An identifier is followed to its const (`follow`), through any enclosing scope of the same
+ * file; a same-file helper call is entered once its body is a single expression, so `url(key)` reads as the expression it
+ * returns with its parameters as :param. A substitution's env read is found by the caller, so the text only needs the shape.
  */
 export function urlText(e0: ts.Expression, imports: Map<string, ImportBinding>, env: WorkerEnv, follow: boolean, hook?: UrlHook): UrlText | undefined {
+  return urlTextAt(e0, imports, env, follow, hook, 0, 0);
+}
+
+function urlTextAt(
+  e0: ts.Expression,
+  imports: Map<string, ImportBinding>,
+  env: WorkerEnv,
+  follow: boolean,
+  hook: UrlHook | undefined,
+  hops: number,
+  calls: number,
+): UrlText | undefined {
   const e = unwrapAll(e0);
   const hooked = hook?.(e);
   if (hooked !== undefined) return hooked;
@@ -415,7 +435,14 @@ export function urlText(e0: ts.Expression, imports: Map<string, ImportBinding>, 
         return;
       }
       // A substituted same-file const that holds a string is written in place, so `${KV_API}/x` reads as its host.
-      text += (constString(span.expression, env) ?? SUB) + span.literal.text;
+      const str = constString(span.expression, env);
+      if (str !== undefined) {
+        text += str + span.literal.text;
+        return;
+      }
+      // A substituted same-file const or helper call that holds a URL is spliced in, so `${base}/values/${k}` reads whole.
+      const spliced = hops < MAX_URL_HOPS ? urlTextAt(span.expression, imports, env, true, undefined, hops + 1, calls) : undefined;
+      text += (spliced?.text ?? SUB) + span.literal.text;
     });
     const first = e.templateSpans[0];
     const leadEnv =
@@ -429,11 +456,17 @@ export function urlText(e0: ts.Expression, imports: Map<string, ImportBinding>, 
   if (ts.isNewExpression(e)) {
     if (!ts.isIdentifier(e.expression) || e.expression.text !== "URL") return undefined;
     const [first] = e.arguments ?? [];
-    return first === undefined ? undefined : urlText(first, imports, env, follow, hook);
+    return first === undefined ? undefined : urlTextAt(first, imports, env, follow, hook, hops, calls);
   }
-  if (ts.isIdentifier(e) && follow) {
+  if (ts.isIdentifier(e) && follow && hops < MAX_URL_HOPS) {
     const init = constInit(e, env);
-    return init === undefined ? undefined : urlText(init, imports, env, false, hook);
+    return init === undefined ? undefined : urlTextAt(init, imports, env, true, hook, hops + 1, calls);
+  }
+  if (ts.isCallExpression(e)) {
+    const callee = unwrapAll(e.expression);
+    if (!ts.isIdentifier(callee) || calls >= MAX_URL_CALLS || hops >= MAX_URL_HOPS) return undefined;
+    const body = env.fnBody?.(callee);
+    return body === undefined ? undefined : urlTextAt(body, imports, env, true, undefined, hops + 1, calls + 1);
   }
   return undefined;
 }
@@ -472,6 +505,8 @@ const GLOBAL_FETCH_BASES = new Set(["globalThis", "window", "self"]);
 export interface FetchHooks {
   /** Gives the URL an argument-bound name stands for. */
   url?: UrlHook;
+  /** Gives the object literal an argument-bound options name stands for (the caller's `{ method: ... }`). */
+  options?: (e: ts.Expression) => ts.Expression | undefined;
   /** Gives the method an argument-bound name stands for, when the argument is a string. */
   method?: (e: ts.Expression) => string | undefined;
 }
@@ -537,7 +572,11 @@ export function matchFetch(call: ts.CallExpression, imports: Map<string, ImportB
   if (opts === undefined) {
     attrs.method = "GET";
   } else {
-    const o = unwrapAll(opts);
+    let o = unwrapAll(opts);
+    if (!ts.isObjectLiteralExpression(o)) {
+      const bound = hooks.options?.(o);
+      if (bound !== undefined) o = unwrapAll(bound);
+    }
     if (ts.isObjectLiteralExpression(o)) {
       const hasSpread = o.properties.some((p) => ts.isSpreadAssignment(p));
       // `method: x` and the shorthand `{ method }` both name a value; the shorthand's name is the value.

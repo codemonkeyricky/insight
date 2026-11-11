@@ -17,6 +17,7 @@ const files = [
   "src/alias.ts",
   "src/worker.ts",
   "src/worker2.ts",
+  "src/kv.ts",
 ];
 const root = { path: fixtureRoot, name: "net-routes", allowBuildTools: false };
 const readFile = async (rel: string) => readFileSync(join(fixtureRoot, rel), "utf8");
@@ -198,5 +199,33 @@ describe("export alias and Worker routes", () => {
   it("reads export default { fetch } (shorthand) as a Worker route", async () => {
     const serve = (await effectNodes()).filter((n) => n.kind === "effects.net.serve" && n.span?.file === "src/worker2.ts");
     expect(serve.map((n) => n.attrs)).toEqual([{ framework: "worker", method: "*", path: "/*" }]);
+  });
+});
+
+describe("URLs through same-file helpers and enclosing consts", () => {
+  it("reads fetch(url(key)) through an inner const base and a helper arrow, with the method from the init literal", async () => {
+    const kv = (await effectNodes()).filter((n) => n.kind === "effects.net.connect" && n.span?.file === "src/kv.ts");
+    const put = kv.find((n) => String(n.parent).endsWith("#kvStore.put"));
+    expect(put?.attrs).toEqual({
+      api: "fetch",
+      host: "api.cloudflare.com",
+      path: "/client/v4/accounts/:param/storage/kv/namespaces/:param/values/:param",
+      method: "PUT",
+      confidence: "exact",
+    });
+  });
+
+  it("reads a wrapper call whose URL is a helper call, with the method from the caller's init literal", async () => {
+    const via = viaNodes(await effectNodes(), "send");
+    expect(via.map((n) => n.attrs)).toEqual([
+      {
+        api: "fetch",
+        host: "api.cloudflare.com",
+        path: "/client/v4/accounts/:param/storage/kv/namespaces/:param/values/:param",
+        method: "DELETE",
+        confidence: "exact",
+        via: "send",
+      },
+    ]);
   });
 });
