@@ -3,8 +3,8 @@
 //
 //   <outDir>/.vercel/output/config.json                version 3: files first, then the API rewrites, then /index.html
 //   <outDir>/.vercel/output/static/                    the hosted web build (VITE_STORAGE_BASE = KV_PUBLIC_BASE/)
-//   <outDir>/.vercel/output/functions/api/index.func   one Function: POST /api/index, GET /api/status, GET /api/health
-//                                                      (self-contained Node bundle; the route comes from ?route=)
+//   <outDir>/.vercel/output/functions/api/index.func   one Function: POST /api/index, GET /api/status, GET /api/health,
+//                                                      /api/auth/*, /api/private/* (self-contained Node bundle; the route comes from ?route=)
 //
 // The Function holds node_modules from `pnpm deploy --prod` (hoisted linker, so no symlinks), the hosted dist, the built-in
 // plugins under packages/ and plugins/, and a pnpm-workspace.yaml marker at its root. Core finds built-in plugins by walking
@@ -29,6 +29,14 @@ const API_ROUTES = [
   { src: "/api/index", route: "index" },
   { src: "/api/status", route: "status" },
   { src: "/api/health", route: "health" },
+  { src: "/api/auth/login", route: "auth-login" },
+  { src: "/api/auth/callback", route: "auth-callback" },
+  { src: "/api/auth/logout", route: "auth-logout" },
+  { src: "/api/auth/me", route: "auth-me" },
+  { src: "/api/private/grant", route: "private-grant" },
+  { src: "/api/private/source", route: "private-source" },
+  { src: "/api/private/latest", route: "private-latest" },
+  { src: "/api/private/repos", route: "private-repos" },
 ];
 
 function fail(message) {

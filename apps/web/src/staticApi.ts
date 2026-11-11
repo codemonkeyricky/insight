@@ -103,20 +103,24 @@ interface GraphIndex {
   outgoing: Map<string, number[]>;
 }
 
-/** The read-only API over one static export per project. `baseFor` names a project's files as a URL base ending in "/". */
-export function makeStaticApi(baseFor: (projectId: string) => string, opts: StaticOptions = {}) {
-  const load = <T>(projectId: string, name: string): Promise<T> => loadFrom<T>(baseFor(projectId), name);
+/**
+ * The read-only API over one static export per project. `baseFor` names a project's files as a URL base ending in "/", either
+ * at once or after a wait (a private project's base is a signed grant). A throw from it is a failed read, as a rejection is.
+ */
+export function makeStaticApi(baseFor: (projectId: string) => string | Promise<string>, opts: StaticOptions = {}) {
+  const baseOf = (projectId: string): Promise<string> => new Promise<string>((resolve) => resolve(baseFor(projectId)));
+  const load = <T>(projectId: string, name: string): Promise<T> => baseOf(projectId).then((base) => loadFrom<T>(base, name));
   const readOnly = (): never => {
     throw new ApiError(405, opts.readOnlyMessage ?? DEMO_READ_ONLY);
   };
   const sourceFor = opts.sourceFor ?? ((projectId: string, path: string) => load<Record<string, string>>(projectId, "sources.json").then((m) => m[path]));
 
   const graphIndexes = new Map<string, Promise<{ graph: Graph; index: GraphIndex }>>();
-  const loadGraph = (projectId: string) => {
-    const base = baseFor(projectId);
+  const loadGraph = async (projectId: string) => {
+    const base = await baseOf(projectId);
     let hit = graphIndexes.get(base);
     if (!hit) {
-      hit = load<Graph>(projectId, "graph.json").then((graph) => {
+      hit = loadFrom<Graph>(base, "graph.json").then((graph) => {
         const byId = new Map(graph.nodes.map((n) => [n.id, n]));
         const children = new Map<string, string[]>();
         for (const n of graph.nodes) {
@@ -204,7 +208,10 @@ export function makeStaticApi(baseFor: (projectId: string) => string, opts: Stat
   const EMPTY_ARCH: ArchModel = { layers: ["project", "frontend", "ir", "lens", "app"], packages: [], edges: [], unresolved: [], externals: [], violations: [], files: [], fileImports: [] };
 
   /** The project's model, loaded once. Scope flows and exec models are computed from it, as the server computes them. */
-  const modelOf = (id: string) => models.get(`static:${baseFor(id)}`, () => load<SerializedModel>(id, "model.json"));
+  const modelOf = async (id: string) => {
+    const base = await baseOf(id);
+    return models.get(`static:${base}`, () => loadFrom<SerializedModel>(base, "model.json"));
+  };
 
   return {
     project: async (id: string) => (await checkProject(id)).project,

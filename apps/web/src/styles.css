@@ -1033,3 +1033,30 @@ button.add-submit:disabled { background: var(--faint); color: var(--graphite); b
 @keyframes index-slide { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
 @media (prefers-reduced-motion: reduce) { .index-bar-fill.indeterminate { animation: none; width: 100%; opacity: .5; } }
 .index-error .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+
+/* Sign-in: the header chip (signed out: a link; signed in: the avatar, @login and a sign-out), the sign-in error line, and the
+   signed-in user's repositories on the home. */
+.auth-chip { display: inline-flex; align-items: center; gap: 6px; font-size: var(--t-sm); white-space: nowrap; }
+a.auth-chip { text-decoration: none; }
+.auth-chip.signed-in { padding: 2px 4px 2px 6px; border: 1px solid var(--line); border-radius: var(--r-pill); background: var(--panel); }
+.auth-avatar { border-radius: 50%; flex: none; }
+.auth-login { font-family: var(--font-code); font-size: var(--t-xs); color: var(--muted); overflow: hidden; text-overflow: ellipsis; max-width: 12rem; }
+.auth-signout, .auth-dismiss { padding: 2px 8px; font-size: var(--t-xs); }
+.auth-short { display: none; }
+/* On a phone the header keeps the logo, the short sign-in control and the theme switch: the read-only label, the signed-in login and the full sign-in text go. */
+@media (max-width: 600px) {
+  .sh-hosted-note { display: none; }
+  .auth-full { display: none; }
+  .auth-short { display: inline; }
+  .auth-chip.signed-in .auth-login { display: none; }
+}
+.home .auth-error { margin: 0 0 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.your-repos { max-width: 560px; margin: 0 0 24px; }
+.your-repos-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 12px; }
+.your-repos h2 { font-size: var(--t-lg); font-weight: 600; margin: 0 0 8px; }
+.your-repos p { margin: 0; }
+.repo-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.repo-list a { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 8px 12px; border: 1px solid var(--hair); border-radius: var(--r-md); background: var(--glass-strong); color: var(--accent-text, var(--accent)); text-decoration: none; font-size: var(--t-md); font-weight: 600; }
+.repo-list a:hover { border-color: var(--accent); }
+.repo-name { min-width: 0; overflow-wrap: anywhere; }
+.repo-lock { color: var(--muted); flex: none; }
