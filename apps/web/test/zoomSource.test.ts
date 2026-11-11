@@ -100,6 +100,12 @@ describe("exec map", () => {
     return { children };
   };
 
+  it("carries the external flag of a command leaf onto its map node, and only then", () => {
+    const leaf: Scene = { ...scene, nodes: new Map([["thread:git", { id: "thread:git", kind: "thread", label: "git", parent: "program", children: [], external: true }]]) };
+    expect(execMapNode(leaf, "thread:git")).toMatchObject({ id: "thread:git", label: "git", external: true });
+    expect(execMapNode(scene, "thread:main")?.external).toBeUndefined();
+  });
+
   it("maps scene nodes, with the note as the tooltip and no file bands", () => {
     expect(execMapNode(scene, "thread:main")).toEqual({ id: "thread:main", kind: "thread", label: "Main thread", title: "Main thread", detail: "2 functions", parent: "program" });
     expect(execMapNode(scene, "thread:main>a#help")?.title).toBe("A helper.");
