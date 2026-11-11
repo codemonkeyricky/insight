@@ -43,7 +43,12 @@ export const LOOP_PASSES = 2;
  * then taken out by its exit. Exception edges are not followed. A run stops at a node with no way on, or after
  * TOKEN_MAX_LEGS edges.
  */
-export function createTokenWalker(nodes: readonly FlowNode[], edges: readonly FlowEdge[]): () => TokenRoute {
+export function createTokenWalker(allNodes: readonly FlowNode[], allEdges: readonly FlowEdge[]): () => TokenRoute {
+  // The token walks the outer chart only: a nested callee's steps (their ids hold a slash) are passed over.
+  const nodes = allNodes.filter((n) => !n.id.includes("/"));
+  // The route's edge numbers index the chart's own edges, which the rendered paths use.
+  const keep = allEdges.flatMap((e, i) => (e.from.includes("/") || e.to.includes("/") ? [] : [i]));
+  const edges = keep.map((i) => allEdges[i] as FlowEdge);
   const byId = new Map(nodes.map((n) => [n.id, n] as const));
   const back = backEdgeFlags(nodes, edges);
   const outs = new Map<string, number[]>();
@@ -95,7 +100,7 @@ export function createTokenWalker(nodes: readonly FlowNode[], edges: readonly Fl
       const to = step === undefined ? undefined : byId.get(step.to);
       if (to === undefined) break;
       taken[pick] = count(pick) + 1;
-      route.edges.push(pick);
+      route.edges.push(keep[pick] as number);
       route.nodes.push(to.id);
       arrivals.set(to.id, (arrivals.get(to.id) ?? 0) + 1);
       at = to;

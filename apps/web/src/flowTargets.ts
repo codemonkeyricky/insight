@@ -107,3 +107,32 @@ export function withMessageTargets(fn: FunctionFlow, receivers: readonly Message
   );
   return { ...fn, nodes };
 }
+
+/** Where a call step's callee runs, against the chart's own function. */
+export type StepRuntime = "same" | "thread" | "process";
+
+/**
+ * Where the callee of a step runs. A spawn step starts a thread or a process, and a message step (`post ▸ receiver`)
+ * hands the message to a handler on another thread; every other step (a plain call, an await, a handler the code
+ * installs) runs the callee on the caller's thread, so its chart can nest in the caller's.
+ */
+export function stepRuntime(node: Pick<FlowNode, "role" | "label" | "title">): StepRuntime {
+  if (node.role === "spawn") {
+    if (/^spawn process\b/.test(node.label)) return "process";
+    if (/^spawn thread\b/.test(node.label)) return "thread";
+  }
+  if (isPostStep(node as FlowNode) || /^post ▸/.test(node.label)) return "thread";
+  return "same";
+}
+
+/**
+ * The header of the box a thread or process step opens, in the words the code-flow map's frames use: "Worker · name" for a
+ * worker script, "Thread · name" for another thread, "Process · name" for a process. `callee` is the callee's IR id and
+ * `name` its display name.
+ */
+export function runtimeLabel(kind: "thread" | "process", callee: string, name: string): string {
+  if (kind === "process") return `Process · ${name}`;
+  const file = fileOfId(callee);
+  const stem = file.slice(file.lastIndexOf("/") + 1).replace(/\.[^.]+$/, "");
+  return callee.endsWith("#(module)") || /worker/i.test(file) ? `Worker · ${stem}` : `Thread · ${name}`;
+}

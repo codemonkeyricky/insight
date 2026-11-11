@@ -430,7 +430,7 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
  */
 .zm-line-process .zm-frame-body, .zm-line-process .zm-box-body { stroke: var(--rule); stroke-width: 1; }
 .zm-line-thread .zm-frame-body, .zm-line-thread .zm-box-body { stroke: color-mix(in srgb, var(--thread) 45%, var(--hair)); stroke-width: 1; }
-.zm-line-coroutine .zm-frame-body, .zm-line-coroutine .zm-box-body { stroke: color-mix(in srgb, var(--coroutine) 55%, var(--hair)); stroke-width: 1; stroke-dasharray: 4 3; }
+.zm-line-coroutine .zm-frame-body, .zm-line-coroutine .zm-box-body { stroke: color-mix(in srgb, var(--thread) 55%, var(--hair)); stroke-width: 1; stroke-dasharray: 4 3; }
 .zm-line-none .zm-frame-body, .zm-line-none .zm-box-body { stroke: var(--hair); stroke-width: 1; stroke-dasharray: 1 3; stroke-linecap: round; }
 .zm-line-process .zm-frame-head, .zm-line-thread .zm-frame-head, .zm-line-coroutine .zm-frame-head, .zm-line-none .zm-frame-head { stroke: none; }
 /* Frames: a lit body, an uppercase graphite header with a runtime dot (the dot carries the line colour). */
@@ -1005,3 +1005,15 @@ button.add-submit:disabled { background: var(--faint); color: var(--graphite); b
   .sh-top.sh-page-top { height: 56px; flex-wrap: nowrap; padding-top: 0; padding-bottom: 0; row-gap: 0; }
   .sh-top.sh-page-top .sh-mark { display: inline-flex; }
 }
+
+/* A callee nested in its call step: a frame under the callee's steps, tinted apart from the box it sits in. */
+.flow-nest { animation: zm-fade-in 200ms ease-out backwards; }
+.flow-nest-body { fill: color-mix(in srgb, var(--accent) 5%, var(--sheet)); stroke: color-mix(in srgb, var(--accent) 38%, var(--hair)); stroke-width: 1; }
+.flow-nest-hit { fill: color-mix(in srgb, var(--accent) 9%, transparent); stroke: none; }
+.flow-nest-head { cursor: pointer; }
+.flow-nest-head:hover .flow-nest-hit { fill: color-mix(in srgb, var(--accent) 18%, transparent); }
+.flow-nest-label { fill: var(--accent-text); font-size: 12px; font-weight: 600; pointer-events: none; }
+.flow-nest.selected .flow-nest-body { stroke: var(--accent); stroke-width: 1.5; }
+.zm-expansion-runtime { fill: var(--thread); font-weight: 600; }
+.zm-expansion.is-runtime .zm-expansion-body { stroke: color-mix(in srgb, var(--thread) 55%, var(--hair)); stroke-dasharray: 6 3; }
+.zm-expansion.is-runtime .zm-expansion-accent { fill: var(--thread); }

@@ -4,7 +4,7 @@ import { layoutFunction, measure } from "./layout.js";
 import type { FileFlow } from "./types.js";
 
 export * from "./types.js";
-export { MAX_NODES } from "./layout.js";
+export { layoutFunction, MAX_NODES, NEST_HEAD, NEST_PAD, NEST_TOP, relayout, type InlineEntry, type InlineTree } from "./layout.js";
 export { SCOPE_FUNCTION_LIMIT, isNoisePath, summarizeScope } from "./scope.js";
 export * from "./scope-map.js";
 export * from "./zoom-layout.js";
@@ -25,7 +25,7 @@ export * from "./names.js";
  * works for any frontend that emits the same flow facts.
  */
 export function buildFileFlow(file: string, nodes: Iterable<IRNode>, edges: Iterable<IREdge>): FileFlow {
-  return { file, functions: factsForFile(file, nodes, edges).map(layoutFunction) };
+  return { file, functions: factsForFile(file, nodes, edges).map((f) => layoutFunction(f)) };
 }
 
 /** What the project, folder and file scopes show for the flow view: how branchy each file is. */
