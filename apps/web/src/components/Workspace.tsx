@@ -27,7 +27,7 @@ import { FlowView } from "./views/FlowView";
 import { ZoomStore } from "../zoom/scene";
 
 /** Tabs that cover the whole project. The explorer scope does not narrow them. */
-const PROJECT_WIDE = new Set(["overview", "arch", "compare", "review"]);
+const PROJECT_WIDE = new Set(["overview", "compare", "review"]);
 
 /** The default widths of the file tree and the code pane, in px, until the reader resizes them. */
 const TREE_DEFAULT = 280;

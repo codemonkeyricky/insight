@@ -64,7 +64,9 @@ export function phaseLabel(phase: string | undefined): string {
 export function indexErrorText(code: string, repo: string, fallback?: string): string {
   switch (code) {
     case "not_found":
-      return `No public GitHub repository named ${repo}. Check the spelling; private repositories cannot be indexed.`;
+      return `No public GitHub repository named ${repo}. Check the spelling. A private one needs sign-in and the Insight app installed on it.`;
+    case "auth_required":
+      return `${repo} is private. Sign in with GitHub to index it.`;
     case "too_large":
       return `${repo} is too large to index on the free hosted tier.`;
     case "rate_limited":
@@ -80,6 +82,14 @@ export function indexErrorText(code: string, repo: string, fallback?: string): s
     default:
       return fallback ?? `Indexing ${repo} failed on the server.`;
   }
+}
+
+/** The code of a failed sign-in, from the `auth_error=<code>` query of the hash the callback returns to, or undefined. */
+export function authErrorOf(hash: string): string | undefined {
+  const at = hash.indexOf("?");
+  if (at === -1) return undefined;
+  const code = new URLSearchParams(hash.slice(at + 1)).get("auth_error");
+  return code !== null && /^[a-z_]{1,40}$/i.test(code) ? code : undefined;
 }
 
 /** Whether a failed index can be asked for again from the page. Other failures are kept for an hour on the server. */
@@ -105,4 +115,52 @@ export function relativeTime(iso: string, now: number): string {
     if (Math.abs(seconds) >= size) return format.format(Math.round(seconds / size), unit);
   }
   return "just now";
+}
+
+/** A repository named by a page path: `/owner/repo`. `scope` is reserved for a folder or file; v1 never sets it. */
+export type RepoPath = { owner: string; repo: string; scope?: string };
+
+/** First path segments that belong to the app or the server, never to a GitHub account. */
+const RESERVED_FIRST = new Set(["api", "assets", "storage", "index.html"]);
+
+/**
+ * Reads a repository from a page path, for the links `/owner/repo`, `/github.com/owner/repo` and
+ * `/https://github.com/owner/repo` (browsers may collapse the `//`). A `/tree/<ref>[/path]` or `/blob/<ref>[/path]` tail is
+ * accepted and its ref and path are ignored: v1 opens the default branch. Anything else under the repository, and any
+ * other path, is null. Names come back lowercased and checked like `isRepoName`.
+ */
+export function parseRepoPath(pathname: string): RepoPath | null {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    return null;
+  }
+  const parts = decoded.split("/").filter((p) => p !== "");
+  if (parts.length === 0) return null;
+  const first = (parts[0] ?? "").toLowerCase();
+  if (RESERVED_FIRST.has(first)) return null;
+  if (/^https?:$/i.test(parts[0] ?? "")) parts.shift();
+  if (/^(?:www\.)?github\.com$/i.test(parts[0] ?? "")) parts.shift();
+  const owner = (parts[0] ?? "").toLowerCase();
+  const repo = (parts[1] ?? "").replace(/\.git$/i, "").toLowerCase();
+  if (parts.length < 2 || !isRepoName(owner, repo)) return null;
+  const rest = parts.slice(2);
+  if (rest.length === 0) return { owner, repo };
+  // A tree or blob link needs its ref; the ref and the path after it are ignored.
+  if ((rest[0] === "tree" || rest[0] === "blob") && rest.length >= 2) return { owner, repo };
+  return null;
+}
+
+/**
+ * The URL the hosted build should show for a page path, or undefined when the path names no repository. With no hash
+ * route, the repository's hash route; with one, the path is dropped and the hash kept (so `/#/projects/...` still opens).
+ * `hash` is `location.hash`, `pathname` is `location.pathname`.
+ */
+export function hashForRepoPath(pathname: string, hash: string): string | undefined {
+  const repo = parseRepoPath(pathname);
+  if (!repo) return undefined;
+  const route = hash.replace(/^#\/?/, "");
+  if (route !== "") return `/${hash}`;
+  return `/#/gh/${repo.owner}/${repo.repo}`;
 }

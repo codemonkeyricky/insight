@@ -2,9 +2,10 @@ import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { api, type ArchModel, type Span } from "../../api";
 import { diagramModel, FOLDER_GRID, type DiagramModel } from "../../arch/folders";
 import { ARCH_HEADER_H, ARCH_PAD, archLayout, arrowKey, arrowLabel, type ArchBox } from "../../arch/layout";
+import { bandPerRow, IMPORTED_BY, IMPORTS, scopedView, withoutCodeText, type ScopedDiagram } from "../../arch/scoped";
 import { hrefFile, hrefView } from "../../router";
 
-/** What is selected in the diagram: one arrow, named by its key. A click on a folder opens it in Flow instead. */
+/** What is selected in the diagram: one arrow, named by its key. */
 type Selection = { kind: "arrow"; key: string } | null;
 
 const LABEL_CHARS = 18;
@@ -14,6 +15,8 @@ const LABEL_CHARS = 18;
  * fits a 390 px phone without shrinking it past reading.
  */
 const cardsPerRow = (width: number): number => (width <= 520 ? 1 : width <= 860 ? 2 : FOLDER_GRID);
+/** The band colour of a scoped card, by layer: the left, the middle and the right each keep one colour. */
+const layerBand = (layer: string): number => (layer === IMPORTED_BY ? 0 : layer === IMPORTS ? 2 : 1);
 
 const fit = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
@@ -21,11 +24,13 @@ const layerTitle = (layer: string): string => (layer === "ir" ? "IR" : layer.cha
 const siteLine = (span: Span): number => span.start[0] + 1;
 
 /**
- * The arch tab: the package architecture of the project, drawn as one column per layer. Packages are folder cards, and each
- * import between two packages is an arrow. Clicking a folder opens it in Flow, scoped to that folder. Selecting an arrow
- * lights its two ends and fills the side panel. The whole project is shown whatever the explorer scope is.
+ * The arch tab: the package architecture, drawn as one column per layer. Packages are folder cards, and each import between
+ * two packages is an arrow. The explorer scope picks what is drawn: a folder or package scope shows the cards inside it in
+ * a middle band, the packages that import it on the left and the ones it imports on the right (see arch/scoped.ts). The
+ * root scope draws the whole project. A click on a card opens it in Arch, or its source for a file. Selecting an arrow
+ * lights its two ends and fills the side panel.
  */
-export function ArchView({ id }: { id: string }) {
+export function ArchView({ id, scope }: { id: string; scope: string }) {
   const [done, setDone] = useState<{ id: string; model?: ArchModel; error?: string } | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -47,24 +52,48 @@ export function ArchView({ id }: { id: string }) {
   if (done.model.packages.length === 0) {
     return <p className="muted">No packages found (this project has no package.json files).</p>;
   }
-  return <ArchDiagram id={id} model={done.model} />;
+  // Keyed by scope, so a new scope starts with no arrow selected.
+  return <ArchDiagram key={scope} id={id} scope={scope} model={done.model} />;
 }
 
-function ArchDiagram({ id, model: whole }: { id: string; model: ArchModel }) {
-  // A project with one package draws its folders instead (see arch/folders.ts). Everything below reads the shown model.
-  const shown = useMemo<DiagramModel>(() => diagramModel(whole), [whole]);
+function ArchDiagram({ id, scope, model: whole }: { id: string; scope: string; model: ArchModel }) {
+  // A folder or package scope derives its diagram (arch/scoped.ts). The root scope, or a file at the root, has none. A project
+  // with one package draws its folders instead (see arch/folders.ts). Everything below reads the shown model.
+  const scoped = useMemo<ScopedDiagram | null>(() => scopedView(whole, scope), [whole, scope]);
+  const shown = useMemo<DiagramModel>(() => scoped ?? diagramModel(whole), [scoped, whole]);
   const model = shown.model;
-  const [perRow, setPerRow] = useState(() => cardsPerRow(window.innerWidth));
+  // The root view's folder grid follows the window's width, as it always has.
+  const [winWidth, setWinWidth] = useState(() => window.innerWidth);
   useEffect(() => {
-    const onResize = () => setPerRow(cardsPerRow(window.innerWidth));
+    const onResize = () => setWinWidth(window.innerWidth);
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
-  const folders = shown.depth !== undefined;
-  const layout = useMemo(() => archLayout(model, folders ? { grid: perRow } : {}), [model, folders, perRow]);
-  // A folder grid narrower than its cards' full row is drawn to the container's width, so every edge stays inside it.
-  const fitWidth = folders && perRow < FOLDER_GRID;
+  // The scoped view follows the width of its container, the centre pane, measured as it changes.
+  const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
+  const [avail, setAvail] = useState(() => window.innerWidth);
+  useEffect(() => {
+    if (!scrollEl || typeof ResizeObserver === "undefined") return;
+    const measure = () => setAvail(scrollEl.clientWidth);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(scrollEl);
+    return () => observer.disconnect();
+  }, [scrollEl]);
+  const perRow = cardsPerRow(winWidth);
+  const folders = scoped === null && shown.depth !== undefined;
+  const layout = useMemo(
+    () => archLayout(model, scoped ? { band: { layer: scoped.inner, perRow: bandPerRow(avail) } } : folders ? { grid: perRow } : {}),
+    [model, scoped, folders, perRow, avail],
+  );
+  // A drawing wider than its container is drawn to the container's width, so every edge and column stays in view. The root
+  // folder grid does this when its cards do not fill a full row.
+  const scaled = scoped !== null ? layout.width > avail : folders && perRow < FOLDER_GRID;
   const [sel, setSel] = useState<Selection>(null);
+  // The scope's folder (a file scope gives its folder), and how many cards lie inside it.
+  const at = scoped?.scope ?? "";
+  const innerCount = scoped ? model.packages.filter((p) => p.layer === scoped.inner).length : 0;
+  const empty = scoped !== null && innerCount === 0;
 
   // The boxes lit by the selection: the two ends of the selected arrow.
   const lit = useMemo<Set<string> | null>(() => {
@@ -78,9 +107,12 @@ function ArchDiagram({ id, model: whole }: { id: string; model: ArchModel }) {
   // Lit arrows are drawn last, so they sit on top of the rest.
   const arrows = [...layout.arrows].sort((a, b) => Number(arrowLit(a.key)) - Number(arrowLit(b.key)));
 
-  // A folder opens in Flow, scoped to it: the Flow far tier then shows the folder's child cards. The root package ('.') is the project.
+  // A file card opens its source. Any other card opens its folder or package in Arch, as the scope. The root package ('.') is the project.
+  const fileCard = (box: ArchBox): boolean => scoped !== null && scoped.cards === "files" && box.pkg.layer === scoped.inner;
+  const cardHref = (box: ArchBox): string =>
+    fileCard(box) ? hrefFile(id, box.pkg.path) : hrefView(id, "arch", { scope: box.pkg.path === "." ? "" : box.pkg.path });
   const openBox = (box: ArchBox) => {
-    window.location.hash = hrefView(id, "flow", { scope: box.pkg.id === "." ? "" : box.pkg.id });
+    window.location.hash = cardHref(box);
   };
   const boxKey = (box: ArchBox, e: KeyboardEvent<SVGGElement>) => {
     if (e.key !== "Enter" && e.key !== " ") return;
@@ -90,18 +122,37 @@ function ArchDiagram({ id, model: whole }: { id: string; model: ArchModel }) {
 
   return (
     <div className="arch">
-      {shown.depth !== undefined && (
+      {scoped !== null && (
+        // The workspace's scope crumbs above the tab keep the Arch tab, so the scope is not repeated here.
+        <div className="arch-scope-head">
+          <p className="muted small arch-caption">
+            Inside {at}: {scoped.cards === "folders" ? `${plural(innerCount, "folder")} (cut at depth ${scoped.depth})` : plural(innerCount, "file")}.
+            Left: what imports it. Right: what it imports.
+            {withoutCodeText(scoped) !== null && ` ${withoutCodeText(scoped)}`}
+            {scoped.fromFile !== undefined && " Scope is a file; showing its folder."}
+          {scoped.notDrawn > 0 &&
+            ` ${scoped.notDrawn} cross-package ${scoped.notDrawn === 1 ? "link has" : "links have"} no import site and ${
+              scoped.notDrawn === 1 ? "is" : "are"
+            } not drawn.`}
+          </p>
+          <a className="arch-flow small" href={hrefView(id, "flow", { scope: at })}>
+            Open in Flow
+          </a>
+        </div>
+      )}
+      {scoped === null && shown.depth !== undefined && (
         <p className="muted small arch-caption">
           {plural(whole.packages.length, "package")} in this project, so the cards are its folders that hold code, cut at depth{" "}
           {shown.depth} (1 is the top-level directories). Edges add up the imports between files in each pair of folders.
         </p>
       )}
-      <div className="arch-scroll">
+      {empty && <p className="muted">No source files in {at}.</p>}
+      {!empty && <div className="arch-scroll" ref={setScrollEl}>
         <svg
           className="arch-svg"
-          width={fitWidth ? undefined : layout.width}
-          height={fitWidth ? undefined : layout.height}
-          style={fitWidth ? { width: "100%", height: "auto" } : undefined}
+          width={scaled ? undefined : layout.width}
+          height={scaled ? undefined : layout.height}
+          style={scaled ? { width: "100%", height: "auto" } : undefined}
           viewBox={`0 0 ${layout.width} ${layout.height}`}
           role="img"
           aria-label="Package architecture"
@@ -144,60 +195,100 @@ function ArchDiagram({ id, model: whole }: { id: string; model: ArchModel }) {
           {layout.boxes.map((box) => {
             const dim = lit !== null && !lit.has(box.id);
             const cls = ["arch-box", dim && "dim"].filter(Boolean).join(" ");
+            const file = fileCard(box);
+            const action = file ? "Open source" : "Open in Arch";
+            // A boundary card's line counts its imports, over all its arrows. Other cards count their files.
+            const boundary = scoped !== null && (box.pkg.layer === IMPORTED_BY || box.pkg.layer === IMPORTS);
+            const imports = boundary ? layout.arrows.reduce((n, a) => (a.from === box.id || a.to === box.id ? n + a.edge.imports : n), 0) : 0;
             return (
               <g
                 key={box.id}
                 className={cls}
                 role="button"
                 tabIndex={0}
-                aria-label={`${box.pkg.name}, ${plural(box.pkg.fileCount, "file")}. Open in Flow`}
+                aria-label={`${box.pkg.name}, ${boundary ? plural(imports, "import") : plural(box.pkg.fileCount, "file")}. ${action}`}
                 onClick={(e) => {
                   e.stopPropagation();
                   openBox(box);
                 }}
                 onKeyDown={(e) => boxKey(box, e)}
               >
-                <title>{`${box.pkg.id}: open in Flow`}</title>
-                <rect x={box.x} y={box.y} width={box.w} height={box.h} rx={14} style={{ fill: `var(--band-${box.column % 6})` }} />
+                <title>{`${box.pkg.path}: ${action.toLowerCase()}`}</title>
+                <rect
+                  x={box.x}
+                  y={box.y}
+                  width={box.w}
+                  height={box.h}
+                  rx={14}
+                  style={{ fill: `var(--band-${scoped ? layerBand(box.pkg.layer) : box.column % 6})` }}
+                />
                 <text className="arch-name" x={box.x + 14} y={box.y + 34}>
                   {fit(box.pkg.name, LABEL_CHARS)}
                 </text>
                 <text className="arch-sub" x={box.x + 14} y={box.y + 60}>
-                  {box.pkg.functions === undefined
-                    ? plural(box.pkg.fileCount, "file")
-                    : `${plural(box.pkg.fileCount, "file")} · ${box.pkg.functions} fns`}
+                  {boundary
+                    ? plural(imports, "import")
+                    : box.pkg.functions === undefined
+                      ? plural(box.pkg.fileCount, "file")
+                      : `${plural(box.pkg.fileCount, "file")} · ${box.pkg.functions} fns`}
                 </text>
               </g>
             );
           })}
         </svg>
-      </div>
-      {shown.other > 0 && (
+      </div>}
+      {!empty && scoped === null && shown.other > 0 && (
         <p className="muted small arch-other">
           Other: {shown.other} {shown.other === 1 ? "folder" : "folders"} without code
         </p>
       )}
-      <Panel id={id} model={model} sel={sel} />
+      {!empty && <Panel id={id} model={model} sel={sel} externalsOf={scoped?.pkg?.name} />}
     </div>
   );
 }
 
-function Panel({ id, model, sel }: { id: string; model: ArchModel; sel: Selection }) {
+function Panel({ id, model, sel, externalsOf }: { id: string; model: ArchModel; sel: Selection; externalsOf?: string }) {
   return (
     <aside className="arch-panel">
       {sel === null ? (
         <>
           <Violations id={id} model={model} />
           <p className="muted small">
-            Click a folder to open it in Flow. Select an arrow to see its import sites. An arrow&apos;s number counts imports; &quot;c&quot;
-            means calls only. Dashed arrows are inferred, for example a workspace import matched by package name.
+            Click a card to open it: a folder or package in Arch, a file in Source. Select an arrow to see its import sites. An
+            arrow&apos;s number counts imports; &quot;c&quot; means calls only. Dashed arrows are inferred, for example a workspace
+            import matched by package name.
           </p>
         </>
       ) : (
         <ArrowDetail id={id} model={model} arrow={sel.key} />
       )}
+      {externalsOf !== undefined && <Externals name={externalsOf} rows={model.externals} />}
       <Unresolved id={id} model={model} />
     </aside>
+  );
+}
+
+/** The external packages a scope's package imports, with their import counts. Only drawn for a scoped view. */
+function Externals({ name, rows }: { name: string; rows: ArchModel["externals"] }) {
+  return (
+    <details className="arch-unresolved">
+      <summary>
+        <h2>
+          External packages of {name} ({rows.length})
+        </h2>
+      </summary>
+      {rows.length === 0 ? (
+        <p className="muted small">No external packages.</p>
+      ) : (
+        <ul className="arch-list">
+          {rows.map((x) => (
+            <li key={x.name}>
+              <span className="mono small">{x.name}</span> {plural(x.imports, "import")}
+            </li>
+          ))}
+        </ul>
+      )}
+    </details>
   );
 }
 

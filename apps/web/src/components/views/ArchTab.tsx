@@ -17,8 +17,8 @@ export function ArchModeToggle({ mode, onChange }: { mode: ArchMode; onChange: (
 }
 
 /**
- * The Arch tab: System (the explorer scope's components, routes and outside systems) or Packages (the whole project's
- * package graph, unchanged). System is the default, and the reader's choice is kept in localStorage.
+ * The Arch tab: System (the explorer scope's components, routes and outside systems) or Packages (the package graph, which follows the
+ * explorer scope). System is the default, and the reader's choice is kept in localStorage.
  */
 export function ArchTab({ id, scope, initial, onSystemActive }: { id: string; scope: string; initial?: ArchMode; onSystemActive?: (on: boolean) => void }) {
   const [mode, setMode] = useState<ArchMode>(() => initial ?? readArchMode());
@@ -37,10 +37,7 @@ export function ArchTab({ id, scope, initial, onSystemActive }: { id: string; sc
       {mode === "system" ? (
         <SystemView id={id} scope={scope} />
       ) : (
-        <>
-          <p className="muted small scope-note">This view covers the whole project, so the scope does not narrow it. Switch to System to see one scope.</p>
-          <ArchView id={id} />
-        </>
+        <ArchView id={id} scope={scope} />
       )}
     </div>
   );
