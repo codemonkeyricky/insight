@@ -66,6 +66,7 @@ class Hierarchy {
   private readonly implemented = new Map<string, Set<string>>();
   private readonly results = new Map<string, Decl[]>();
   private classList: Decl[] | undefined;
+  private literalList: { iface: Decl; members: Map<string, Decl> }[] | undefined;
 
   constructor(private readonly project: Project) {}
 
@@ -161,6 +162,48 @@ class Hierarchy {
     return undefined;
   }
 
+  /** The interface an object literal's contextual type names, when the project declares it. Unions and non-interfaces are not. */
+  private contextualInterface(literal: ts.ObjectLiteralExpression): Decl | undefined {
+    const type = this.project.checker.getContextualType(literal);
+    if (type === undefined || type.isUnion()) return undefined;
+    const node = type.getSymbol()?.declarations?.find((d) => ts.isInterfaceDeclaration(d));
+    return node && this.declOfNode(node);
+  }
+
+  /** The function-valued members of an object literal, by name: its methods and its function-valued properties. */
+  private functionMembers(literal: ts.ObjectLiteralExpression): Map<string, Decl> {
+    const out = new Map<string, Decl>();
+    for (const m of literal.properties) {
+      if (!(ts.isMethodDeclaration(m) || ts.isPropertyAssignment(m))) continue;
+      const decl = this.project.decls.get(ts.isPropertyAssignment(m) ? m.initializer : m);
+      if (decl?.entity.type === "function") out.set(propName(m.name), decl);
+    }
+    return out;
+  }
+
+  /**
+   * Every object literal in the indexed files whose contextual type is an indexed interface, with that interface and its
+   * function members. A literal returned from `(): I`, assigned to an `I`-annotated variable, `satisfies I`, or passed as an
+   * `I` argument all have one. Built once per project.
+   */
+  private literalImplementations(): { iface: Decl; members: Map<string, Decl> }[] {
+    if (this.literalList !== undefined) return this.literalList;
+    const out: { iface: Decl; members: Map<string, Decl> }[] = [];
+    const visit = (n: ts.Node): void => {
+      if (ts.isObjectLiteralExpression(n)) {
+        const iface = this.contextualInterface(n);
+        if (iface) out.push({ iface, members: this.functionMembers(n) });
+      }
+      ts.forEachChild(n, visit);
+    };
+    for (const rel of this.project.rels) {
+      const sf = this.project.sourceFor(rel);
+      if (sf) visit(sf);
+    }
+    this.literalList = out;
+    return out;
+  }
+
   /** The implementations of a site's member, sorted by id. Each is the function the member runs for one concrete type. */
   dispatch(site: Site, owner: Decl): Decl[] {
     const key = `${site.kind}\0${owner.id}\0${site.name}`;
@@ -173,6 +216,14 @@ class Hierarchy {
       if (!reached) continue;
       const impl = this.memberOf(cls, site.name);
       if (impl) found.set(impl.id, impl);
+    }
+    // An object literal implements the interface its contextual type names, and every interface that one extends.
+    if (site.kind === "interface") {
+      for (const lit of this.literalImplementations()) {
+        if (!this.closure(lit.iface).has(owner.id)) continue;
+        const impl = lit.members.get(site.name);
+        if (impl) found.set(impl.id, impl);
+      }
     }
     const out = [...found.values()].sort(byId);
     this.results.set(key, out);

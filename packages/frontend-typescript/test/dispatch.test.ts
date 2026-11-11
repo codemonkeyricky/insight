@@ -192,3 +192,52 @@ describe("interface and abstract dispatch", () => {
     ]);
   });
 });
+
+describe("object-literal implementers of an interface", () => {
+  const literalRoot = join(here, "fixtures", "dispatch-literal");
+  const literalFiles = ["src/shape.ts", "src/factory.ts", "src/annotated.ts", "src/cls.ts", "src/use.ts"];
+  const literalCtx = { root: { path: literalRoot, name: "dispatch-literal", allowBuildTools: false } };
+
+  async function extractLiterals(): Promise<Extracted> {
+    const readLiteral = async (rel: string) => readFileSync(join(literalRoot, rel), "utf8");
+    const ctx = { ...literalCtx, files: literalFiles, listFiles: () => [...literalFiles], readFile: readLiteral, log: () => undefined };
+    const out: Extracted = { nodes: [], edges: [] };
+    for await (const batch of frontend.extract(ctx)) {
+      for (const record of batch.records) {
+        if ("node" in record) out.nodes.push(record.node);
+        if ("edge" in record) out.edges.push(record.edge);
+      }
+    }
+    return out;
+  }
+
+  it("(a) a call through a variable typed by the interface includes the method of a literal a factory returns", async () => {
+    const { edges } = await extractLiterals();
+    const call = callFrom(edges, "src/use.ts#viaFactory", "c.bump") as IREdge;
+    expect(call?.kind).toBe("calls.call");
+    expect(targetText(call)).toContain("src/factory.ts#makeCounter.bump");
+    expect(call.attrs).toEqual({ callee: "c.bump", how: "interface" });
+  });
+
+  it("(b) an interface-annotated variable and a satisfies literal are both candidates", async () => {
+    const { edges } = await extractLiterals();
+    const call = callFrom(edges, "src/use.ts#viaParam", "c.bump") as IREdge;
+    const ids = targetText(call);
+    expect(ids).toContain("src/annotated.ts#annotated.bump");
+    expect(ids).toContain("src/annotated.ts#sat.bump");
+  });
+
+  it("(c) a class and object literals implementing one interface are all candidates, sorted", async () => {
+    const { edges } = await extractLiterals();
+    const call = callFrom(edges, "src/use.ts#viaParam", "c.bump") as IREdge;
+    expect(targetText(call)).toBe(
+      "[src/annotated.ts#annotated.bump, src/annotated.ts#sat.bump, src/cls.ts#Real.bump, src/factory.ts#makeCounter.bump]",
+    );
+  });
+
+  it("(d) a call to an array method from the lib makes no interface edge", async () => {
+    const { edges } = await extractLiterals();
+    expect(edges.filter((e) => e.kind === "calls.call" && e.from === "src/use.ts#viaArray")).toEqual([]);
+    expect(edges.some((e) => e.kind === "calls.call" && (e.attrs as { how?: unknown }).how === "interface" && e.from === "src/use.ts#viaArray")).toBe(false);
+  });
+});
