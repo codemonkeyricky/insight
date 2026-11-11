@@ -25,6 +25,24 @@ function installContext(): void {
   };
 }
 
+/** Used when the request names no host (never on Vercel, where the host header is always sent). */
+const FALLBACK_ORIGIN = "https://insight.vercel.app";
+
+function firstValue(value: string | string[] | undefined): string | undefined {
+  const text = Array.isArray(value) ? value[0] : value;
+  const first = text?.split(",")[0]?.trim();
+  return first ? first : undefined;
+}
+
+/** The origin the client used: x-forwarded-proto and x-forwarded-host (Vercel's), else the host header. */
+export function requestOrigin(req: IncomingMessage): string {
+  const host = firstValue(req.headers["x-forwarded-host"]) ?? firstValue(req.headers.host);
+  if (host === undefined) return FALLBACK_ORIGIN;
+  const loopback = /^(localhost|127\.0\.0\.1)(:|$)/.test(host);
+  const proto = firstValue(req.headers["x-forwarded-proto"]) ?? (loopback ? "http" : "https");
+  return `${proto}://${host}`;
+}
+
 /** The node request as a web Request on the function's own origin. The body is read whole (submissions are small). */
 export async function toWebRequest(req: IncomingMessage): Promise<Request> {
   const chunks: Buffer[] = [];
@@ -36,15 +54,20 @@ export async function toWebRequest(req: IncomingMessage): Promise<Request> {
   }
   const method = req.method ?? "GET";
   const body = method === "GET" || method === "HEAD" || chunks.length === 0 ? undefined : Buffer.concat(chunks);
-  return new Request(new URL(req.url ?? "/", "https://insight.vercel.app"), { method, headers, body });
+  return new Request(new URL(req.url ?? "/", requestOrigin(req)), { method, headers, body });
 }
 
-/** Writes a web Response to the node response, status and headers included. */
+/**
+ * Writes a web Response to the node response, status and headers included. Set-Cookie is written as a list, one line per
+ * cookie: a headers object would merge them, and the browser would keep only one.
+ */
 export async function sendWebResponse(res: ServerResponse, webRes: Response): Promise<void> {
   const headers: Record<string, string> = {};
   webRes.headers.forEach((value, name) => {
-    headers[name] = value;
+    if (name !== "set-cookie") headers[name] = value;
   });
+  const cookies = webRes.headers.getSetCookie();
+  if (cookies.length > 0) res.setHeader("set-cookie", cookies);
   res.writeHead(webRes.status, headers);
   if (webRes.body === null) {
     res.end();
