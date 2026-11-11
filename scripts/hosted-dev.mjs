@@ -12,7 +12,7 @@ import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { dirname, extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildDeps, handleHealth, handleIndex, handleStatus, observedStorage, storageFromEnv } from "../packages/hosted/dist/index.js";
+import { buildDeps, handleCallback, handleGrant, handleHealth, handleIndex, handleLatest, handleLogin, handleLogout, handleMe, handleRepos, handleSource, handleStatus, observedStorage, storageFromEnv } from "../packages/hosted/dist/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const webDist = resolve(here, "../apps/web/dist-hosted");
@@ -142,6 +142,20 @@ export function startHostedDev({ port, host, env: given = process.env }) {
   const deps = buildDeps(env, { waitUntil, storage });
   const origin = `http://${host}:${port}`;
 
+  const fetchFn = (input, init) => fetch(input, init);
+  const now = () => Date.now();
+  // Sign-in and private reads, through the same handlers the Vercel Function uses (env from this process, as configured).
+  const AUTH_ROUTES = {
+    "/api/auth/login": (request) => handleLogin(request, env),
+    "/api/auth/callback": (request) => handleCallback(request, env, fetchFn),
+    "/api/auth/logout": (request) => handleLogout(request, env, fetchFn),
+    "/api/auth/me": (request) => handleMe(request, env, fetchFn),
+    "/api/private/grant": (request) => handleGrant(request, { env, fetch: fetchFn, now }),
+    "/api/private/source": (request) => handleSource(request, { env, fetch: fetchFn, now }),
+    "/api/private/latest": (request) => handleLatest(request, { env, fetch: fetchFn, now, storage }),
+    "/api/private/repos": (request) => handleRepos(request, { env, fetch: fetchFn, now }),
+  };
+
   const server = createServer(async (req, res) => {
     try {
       const { pathname } = new URL(req.url ?? "/", origin);
@@ -151,8 +165,10 @@ export function startHostedDev({ port, host, env: given = process.env }) {
         return await sendWebResponse(res, webRes);
       }
       if (pathname === "/api/status") {
-        return await sendWebResponse(res, await handleStatus(await toWebRequest(req, origin), { storage }));
+        return await sendWebResponse(res, await handleStatus(await toWebRequest(req, origin), { storage, env, fetch }));
       }
+      const authOrPrivate = AUTH_ROUTES[pathname];
+      if (authOrPrivate) return await sendWebResponse(res, await authOrPrivate(await toWebRequest(req, origin)));
       if (pathname === "/api/health") {
         return await sendWebResponse(res, handleHealth({ storage }), head);
       }
