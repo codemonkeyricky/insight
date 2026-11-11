@@ -1,12 +1,12 @@
-// The Node entry of the Vercel Functions (launcherType "Nodejs"): a default export of (req, res) for each route. It turns the
-// node request into a web Request, runs the same POST and GET handlers as vercel.ts, and writes the web Response back.
+// The Node entry of the Vercel Function (launcherType "Nodejs"): a default export of (req, res). It turns the node request
+// into a web Request, runs the route handler of vercel.ts, and writes the web Response back.
 //
 // waitUntil: @vercel/functions registers background work with the runtime's request context, which the Node launcher
 // only provides when helpers are added (the bundle sets shouldAddHelpers false). So this entry installs that context
 // itself: waitUntil promises are collected, the response is sent at once (202 for a submission), and the invocation stays
 // open until the collected jobs settle. The jobs are bounded by the watchdog (270 s) and the function's maxDuration (300 s).
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { GET, POST } from "./vercel.js";
+import { handleRequest } from "./vercel.js";
 
 const REQUEST_CONTEXT = Symbol.for("@vercel/request-context");
 const jobs = new Set<Promise<unknown>>();
@@ -53,15 +53,12 @@ export async function sendWebResponse(res: ServerResponse, webRes: Response): Pr
   res.end(Buffer.from(await webRes.arrayBuffer()));
 }
 
-export type HostedRoute = "index" | "health";
-
-/** The default export for one route: POST /api/index (index) or GET /api/health (health). */
-export function nodeHandler(route: HostedRoute): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
+/** The default export of the function: every route (see vercel.ts), answered from the request's route parameter or path. */
+export function nodeHandler(): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   return async (req, res) => {
     installContext();
     try {
-      const webRes = route === "index" ? await POST(await toWebRequest(req)) : await GET();
-      await sendWebResponse(res, webRes);
+      await sendWebResponse(res, await handleRequest(await toWebRequest(req)));
     } catch (err) {
       if (!res.headersSent) {
         const message = err instanceof Error ? err.message : String(err);

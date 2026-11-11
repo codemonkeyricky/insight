@@ -60,7 +60,7 @@ export function HostedIndexPage({ owner, repo, sha }: { owner: string; repo: str
     };
     const follow = (ref: HostedRef) => {
       stop = watchIndex({
-        read: () => readStatus(root, ref),
+        read: () => readStatus(ref),
         onProgress: (status) => {
           if (!cancelled) setView({ kind: "running", status });
         },
@@ -85,7 +85,7 @@ export function HostedIndexPage({ owner, repo, sha }: { owner: string; repo: str
       setView({ kind: "checking" });
       try {
         if (sha) {
-          const status = await readStatus(root, { owner, repo, sha });
+          const status = await readStatus({ owner, repo, sha });
           if (cancelled) return;
           if (status) return settle(status);
           return settle(await requestIndex(repoName, sha));

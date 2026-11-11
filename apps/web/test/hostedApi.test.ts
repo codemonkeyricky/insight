@@ -8,6 +8,7 @@ import {
   projectIdOf,
   rawSourceUrl,
   recentIndexes,
+  readStatus,
   requestIndex,
   IndexRequestError,
   type HostedRef,
@@ -129,6 +130,22 @@ describe("hostedApi reads", () => {
   it("refuses writes with 405 and a hosted message", async () => {
     await expect(hostedApi.reindex("gh~o~r~" + SHA)).rejects.toMatchObject({ status: 405 });
     await expect(hostedApi.compare("gh~o~r~" + SHA, "a", "b")).rejects.toThrow("read-only");
+  });
+});
+
+describe("run status through the api", () => {
+  it("reads a run's status from /api/status, not from the storage root", async () => {
+    const fetchMock = vi.fn(async () => json({ repo: "o/r", sha: SHA, state: "running", phase: "scan", startedAt: "t", updatedAt: "t" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const status = await readStatus({ owner: "o", repo: "r", sha: SHA });
+    expect(status).toMatchObject({ state: "running", phase: "scan" });
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(`/api/status?repo=o%2Fr&sha=${SHA}`);
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ cache: "no-store" });
+  });
+
+  it("answers undefined when the api has no status for the commit", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response('{"error":{"code":"not_found"}}', { status: 404 })));
+    expect(await readStatus({ owner: "o", repo: "r", sha: SHA })).toBeUndefined();
   });
 });
 

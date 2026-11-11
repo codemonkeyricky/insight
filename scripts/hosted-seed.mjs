@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Indexes a local checkout and publishes it the way the hosted function does: the static export (gzip, immutable),
 // latest.json, recent.json and a done status.json. For repos the function cannot fetch (private) or the featured
-// self-index. Storage comes from the same environment as the function: R2_* when set, else INSIGHT_STORAGE_DIR.
+// self-index. Storage comes from the same environment as the function: Workers KV when the Cloudflare KV variables are set, then R2_*, else INSIGHT_STORAGE_DIR.
 //
 //   pnpm -r build && node scripts/hosted-seed.mjs <localPath> <owner/repo> <sha>
 import { mkdtempSync, rmSync } from "node:fs";

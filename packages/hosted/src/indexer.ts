@@ -27,7 +27,11 @@ const JSON_TYPE = "application/json";
 const RECENT_LIMIT = 50;
 const RUNNING_FRESH_MS = 6 * 60 * 1000;
 const FAILED_RETRY_MS = 60 * 60 * 1000;
-const PROGRESS_INTERVAL_MS = 1000;
+/** Status writes: only on a phase change, and at most one per this many ms (the KV write budget, see docs/hosting.md). */
+const STATUS_INTERVAL_MS = 3000;
+/** The daily index cap with Workers KV (1k writes a day on the free plan; one index writes about 26 times). */
+const KV_DAILY_CAP = 25;
+const DAILY_CAP = 200;
 const WATCHDOG_MS = 270_000;
 
 /** The hosted caps: 10k files, 1 MiB per file, 200 MiB in total. */
@@ -181,6 +185,9 @@ interface JobContext {
   limits: Required<ExtractLimits>;
   timeoutMs: number;
   finalized: boolean;
+  /** The phase last written to status.json (queued at submission). */
+  phase?: string;
+  /** When status.json was last written (ms); the write throttle reads it. */
   lastWrite: number;
 }
 
@@ -204,10 +211,15 @@ async function runJob(ctx: JobContext): Promise<void> {
   const jobDir = join(deps.tmpRoot, sha);
   const src = join(jobDir, "src");
   const home = join(jobDir, "home");
-  // Phase writes are throttled to one per second; the chain keeps them in order.
+  // Phase writes: one per phase change, at most one per STATUS_INTERVAL_MS (later events of the same phase are dropped).
+  // The chain keeps the writes in order.
   let chain: Promise<void> = Promise.resolve();
+  let writtenPhase: string | undefined = ctx.phase;
   const progress = (p: PhaseEvent): void => {
-    if (ctx.finalized || deps.now() - ctx.lastWrite < PROGRESS_INTERVAL_MS) return;
+    if (ctx.finalized || p.phase === writtenPhase) return;
+    if (deps.now() - ctx.lastWrite < STATUS_INTERVAL_MS) return;
+    writtenPhase = p.phase;
+    ctx.lastWrite = deps.now();
     chain = chain.then(() => writeJobStatus(ctx, { phase: p.phase, done: p.done, total: p.total }));
   };
   try {
@@ -329,7 +341,7 @@ export async function handleIndex(request: Request, deps: IndexDeps): Promise<Re
     }
   }
 
-  const dailyCap = intEnv(deps.env.INDEX_DAILY_CAP, 200);
+  const dailyCap = intEnv(deps.env.INDEX_DAILY_CAP, deps.storage.kind === "kv" ? KV_DAILY_CAP : DAILY_CAP);
   const ipCap = intEnv(deps.env.INDEX_IP_DAILY_CAP, 10);
   const ip = clientIp(request);
   const dayKey = `meta/daily/${utcDay(now)}.json`;
@@ -358,6 +370,7 @@ export async function handleIndex(request: Request, deps: IndexDeps): Promise<Re
     limits: deps.limits ?? HOSTED_LIMITS,
     timeoutMs: deps.timeoutMs ?? WATCHDOG_MS,
     finalized: false,
+    phase: "queued",
     lastWrite: 0,
   };
   await writeJobStatus(ctx, { state: "running", phase: "queued" });
@@ -365,7 +378,29 @@ export async function handleIndex(request: Request, deps: IndexDeps): Promise<Re
   return json(202, { state: "running", repo: name, sha });
 }
 
-/** GET /api/health: {ok, storage: "r2" | "fs"}. */
+/** GET /api/health: {ok, storage: "kv" | "r2" | "fs"}. */
 export function handleHealth(deps: { storage: Pick<Storage, "kind"> }): Response {
   return json(200, { ok: true, storage: deps.storage.kind });
+}
+
+/**
+ * GET /api/status?repo=owner/repo&sha=<40 hex>: the run's status.json, never cached. The page polls this rather than
+ * reading the storage: edge reads of a changing object can lag by up to a minute, the API read does not.
+ */
+export async function handleStatus(request: Request, deps: { storage: Storage }): Promise<Response> {
+  if (request.method !== "GET") return errorResponse(405, "method_not_allowed", "use GET");
+  const url = new URL(request.url);
+  const repoText = url.searchParams.get("repo") ?? "";
+  const sha = url.searchParams.get("sha") ?? "";
+  let parsed;
+  try {
+    parsed = parseRepoInput(repoText);
+  } catch {
+    return errorResponse(400, "bad_request", "repo must be owner/repo");
+  }
+  if (parsed.ref !== undefined) return errorResponse(400, "bad_request", "repo must be owner/repo");
+  if (!/^[0-9a-f]{40}$/.test(sha)) return errorResponse(400, "bad_request", "sha must be a 40-character commit id");
+  const status = await deps.storage.getJson<IndexStatus>(`${repoPrefix(parsed.owner, parsed.repo, sha)}status.json`);
+  if (status === undefined) return errorResponse(404, "not_found", "no index run for this commit");
+  return json(200, status);
 }

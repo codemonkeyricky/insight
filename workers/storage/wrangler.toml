@@ -1,0 +1,11 @@
+# The read-only public view of the hosted indexes (Workers KV namespace "insight-index"). Deploy from this folder:
+#   CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=... npx wrangler@4 deploy
+# The namespace id is not a secret; scripts/kv-setup.mjs creates or finds it.
+name = "insight-storage"
+main = "index.js"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+[[kv_namespaces]]
+binding = "INDEX"
+id = "ab014675a88f4badbd9ec95c87112764"

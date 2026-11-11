@@ -1,17 +1,18 @@
 #!/usr/bin/env node
 // Packages the hosted deployment in the Vercel Build Output API layout:
 //
-//   <outDir>/.vercel/output/config.json              version 3: files first, then /index.html
-//   <outDir>/.vercel/output/static/                  the hosted web build (VITE_STORAGE_BASE = R2_PUBLIC_BASE/)
-//   <outDir>/.vercel/output/functions/api/index.func   POST /api/index  (self-contained Node bundle)
-//   <outDir>/.vercel/output/functions/api/health.func  GET /api/health  (the same bundle, another entry)
+//   <outDir>/.vercel/output/config.json                version 3: files first, then the API rewrites, then /index.html
+//   <outDir>/.vercel/output/static/                    the hosted web build (VITE_STORAGE_BASE = KV_PUBLIC_BASE/)
+//   <outDir>/.vercel/output/functions/api/index.func   one Function: POST /api/index, GET /api/status, GET /api/health
+//                                                      (self-contained Node bundle; the route comes from ?route=)
 //
-// Each .func holds node_modules from `pnpm deploy --prod` (hoisted linker, so no symlinks), the hosted dist, the built-in
+// The Function holds node_modules from `pnpm deploy --prod` (hoisted linker, so no symlinks), the hosted dist, the built-in
 // plugins under packages/ and plugins/, and a pnpm-workspace.yaml marker at its root. Core finds built-in plugins by walking
 // up from its own file to pnpm-workspace.yaml, so the marker makes that root the bundle, not the repository.
 // better-sqlite3 is dropped: the hosted export never opens index.sqlite (writeIndexDb is false), and it is imported lazily.
 //
-//   R2_PUBLIC_BASE=https://pub-xxxx.r2.dev node scripts/build-vercel-hosted.mjs <outDir>
+//   KV_PUBLIC_BASE=https://insight-storage.<account>.workers.dev node scripts/build-vercel-hosted.mjs <outDir>
+//   (KV_PUBLIC_BASE falls back to R2_PUBLIC_BASE)
 //   then: cd <outDir> && vercel deploy --prebuilt --prod --archive=tgz
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -21,9 +22,13 @@ import { fileURLToPath } from "node:url";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const FUNCTION_LIMIT_BYTES = 250 * 1024 * 1024;
-const FUNCTIONS = [
-  { name: "index", route: "index", dir: "functions/api/index.func" },
-  { name: "health", route: "health", dir: "functions/api/health.func" },
+/** One Function serves every API route (see packages/hosted/src/vercel.ts). */
+const FUNCTIONS = [{ dir: "functions/api/index.func" }];
+/** The API paths the rewrites send to the Function, each with its route name. */
+const API_ROUTES = [
+  { src: "/api/index", route: "index" },
+  { src: "/api/status", route: "status" },
+  { src: "/api/health", route: "health" },
 ];
 
 function fail(message) {
@@ -69,9 +74,9 @@ function builtinPlugins() {
 }
 
 const outArg = process.argv[2];
-if (!outArg) fail("usage: node scripts/build-vercel-hosted.mjs <outDir>  (env: R2_PUBLIC_BASE)");
-const publicBase = (process.env.R2_PUBLIC_BASE ?? "").replace(/\/+$/, "");
-if (!/^https:\/\/[^/\s]+/.test(publicBase)) fail("R2_PUBLIC_BASE must be the bucket's public https URL, e.g. https://pub-xxxx.r2.dev");
+if (!outArg) fail("usage: node scripts/build-vercel-hosted.mjs <outDir>  (env: KV_PUBLIC_BASE, or R2_PUBLIC_BASE)");
+const publicBase = (process.env.KV_PUBLIC_BASE || process.env.R2_PUBLIC_BASE || "").replace(/\/+$/, "");
+if (!/^https:\/\/[^/\s]+/.test(publicBase)) fail("KV_PUBLIC_BASE must be the public https URL of the storage Worker, e.g. https://insight-storage.<account>.workers.dev");
 
 const out = resolve(outArg);
 const outputRoot = join(out, ".vercel", "output");
@@ -123,7 +128,7 @@ try {
 
     writeFileSync(
       join(dest, "handler.mjs"),
-      `// Vercel Node entry for ${fn.route}: the default export takes (req, res).\nimport { nodeHandler } from "./dist/vercel-node.js";\nexport default nodeHandler(${JSON.stringify(fn.route)});\n`,
+      `// Vercel Node entry: every API route (index, status, health). The default export takes (req, res).\nimport { nodeHandler } from "./dist/vercel-node.js";\nexport default nodeHandler();\n`,
     );
     writeFileSync(
       join(dest, ".vc-config.json"),
@@ -146,10 +151,12 @@ try {
   rmSync(deployDir, { recursive: true, force: true });
 }
 
-// 4. The routing: real files and functions first, then the app shell for client-side routes.
+// 4. The routing: real files first, then the API rewrites (each sends its route name as ?route=, so the Function does not
+// depend on the path it is reached by), then the app shell for client-side routes.
+const apiRoutes = API_ROUTES.map(({ src, route }) => ({ src: `^${src}$`, dest: `/api/index?route=${route}` }));
 writeFileSync(
   join(outputRoot, "config.json"),
-  `${JSON.stringify({ version: 3, routes: [{ handle: "filesystem" }, { src: "/(.*)", dest: "/index.html" }] }, null, 2)}\n`,
+  `${JSON.stringify({ version: 3, routes: [{ handle: "filesystem" }, ...apiRoutes, { src: "/(.*)", dest: "/index.html" }] }, null, 2)}\n`,
 );
 
 // 5. Report: each function's unzipped size and file count, checked against the 250 MB limit.

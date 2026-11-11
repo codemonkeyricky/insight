@@ -13,7 +13,7 @@ export interface PutOptions {
 }
 
 export interface Storage {
-  readonly kind: "r2" | "fs";
+  readonly kind: "kv" | "r2" | "fs";
   put(key: string, body: string, opts: PutOptions): Promise<void>;
   /** The decoded text, or undefined when the key does not exist. */
   get(key: string): Promise<string | undefined>;
@@ -68,6 +68,78 @@ export function fsStorage(dir: string): Storage {
         if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
         throw err;
       }
+    },
+    async getJson<T>(key: string) {
+      return parseJson<T>(await this.get(key));
+    },
+  };
+}
+
+/** Each storage write is reported to `onPut` before it runs (the hosted dev server logs them; tests count them). */
+export function observedStorage(inner: Storage, onPut: (key: string) => void): Storage {
+  return {
+    kind: inner.kind,
+    put: (key, body, opts) => {
+      onPut(key);
+      return inner.put(key, body, opts);
+    },
+    get: (key) => inner.get(key),
+    getJson: (key) => inner.getJson(key),
+  };
+}
+
+export interface KvConfig {
+  accountId: string;
+  namespaceId: string;
+  apiToken: string;
+  fetch?: FetchLike;
+  /** Wait before the one retry of a 429 or 5xx answer. Default 1000 ms. */
+  retryDelayMs?: number;
+}
+
+const KV_API = "https://api.cloudflare.com/client/v4";
+
+/**
+ * A Workers KV namespace, through the Cloudflare REST API (bearer token). A put is a multipart form: `value` (the bytes,
+ * gzipped when gzip is set) and `metadata` (JSON with contentType, cacheControl and contentEncoding). The read-only Worker
+ * (workers/storage) serves the same metadata as headers. Reads gunzip by magic bytes, as the other adapters do.
+ */
+export function kvStorage(config: KvConfig): Storage {
+  const fetchFn: FetchLike = config.fetch ?? ((input, init) => fetch(input, init));
+  const retryDelayMs = config.retryDelayMs ?? 1000;
+  const base = `${KV_API}/accounts/${config.accountId}/storage/kv/namespaces/${config.namespaceId}/values`;
+  const url = (key: string) => `${base}/${encodeURIComponent(key)}`;
+  const auth = { authorization: `Bearer ${config.apiToken}` };
+
+  /** The request, with one retry after a 429 or 5xx answer. */
+  const send = async (target: string, init: RequestInit): Promise<Response> => {
+    const res = await fetchFn(target, init);
+    if (res.status !== 429 && res.status < 500) return res;
+    await res.body?.cancel();
+    await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    return fetchFn(target, init);
+  };
+
+  return {
+    kind: "kv",
+    async put(key, body, opts) {
+      const payload = opts.gzip ? gzipSync(Buffer.from(body, "utf8")) : Buffer.from(body, "utf8");
+      const metadata = {
+        contentType: opts.contentType,
+        cacheControl: opts.cacheControl,
+        ...(opts.gzip ? { contentEncoding: "gzip" } : {}),
+      };
+      const form = new FormData();
+      form.append("value", new Blob([payload], { type: "application/octet-stream" }), "value");
+      form.append("metadata", JSON.stringify(metadata));
+      const res = await send(url(key), { method: "PUT", headers: auth, body: form });
+      if (!res.ok) throw new Error(`KV PUT ${key} failed: ${res.status} ${await res.text()}`);
+    },
+    async get(key) {
+      const res = await send(url(key), { method: "GET", headers: auth });
+      if (res.status === 404) return undefined;
+      if (!res.ok) throw new Error(`KV GET ${key} failed: ${res.status}`);
+      return decodeBody(new Uint8Array(await res.arrayBuffer()));
     },
     async getJson<T>(key: string) {
       return parseJson<T>(await this.get(key));

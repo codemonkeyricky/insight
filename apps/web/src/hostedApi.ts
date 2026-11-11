@@ -69,6 +69,11 @@ export function parseProjectId(id: string): HostedRef | undefined {
   return { owner, repo, sha };
 }
 
+/** The origin of the hosted API (POST /api/index, GET /api/status), without a trailing slash: VITE_API_BASE, or "" (same origin). */
+export function apiBase(): string {
+  return (import.meta.env.VITE_API_BASE ?? "").replace(/\/+$/, "");
+}
+
 /** The storage root with a trailing slash: VITE_STORAGE_BASE, or "/storage/". */
 export function storageRoot(): string {
   const configured = import.meta.env.VITE_STORAGE_BASE || "/storage/";
@@ -111,9 +116,13 @@ async function readJson<T>(url: string): Promise<T | undefined> {
   return (await res.json()) as T;
 }
 
-/** The status of one run, or undefined when no run has written one for that commit. */
-export function readStatus(root: string, ref: HostedRef): Promise<IndexStatus | undefined> {
-  return readJson<IndexStatus>(`${indexBase(root, ref)}status.json`);
+/**
+ * The status of one run, or undefined when no run has written one for that commit. It is read through the API
+ * (GET /api/status, never cached), not from the storage: the storage's edge copy can lag behind a running job.
+ */
+export function readStatus(ref: HostedRef): Promise<IndexStatus | undefined> {
+  const repo = encodeURIComponent(`${ref.owner}/${ref.repo}`);
+  return readJson<IndexStatus>(`${apiBase()}/api/status?repo=${repo}&sha=${ref.sha}`);
 }
 
 /** The newest finished index of a repository, or undefined when none has finished. */
@@ -140,7 +149,7 @@ export async function recentIndexes(root: string): Promise<RecentIndex[]> {
 export async function requestIndex(repo: string, ref?: string): Promise<IndexReply> {
   let res: Response;
   try {
-    res = await fetch("/api/index", {
+    res = await fetch(`${apiBase()}/api/index`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(ref === undefined ? { repo } : { repo, ref }),
