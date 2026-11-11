@@ -11,7 +11,7 @@ import { MORE_SUFFIX, ZOOM_SIZE, fitCamera, fitChartCamera, visibleWorld, type C
 import { nameOfId, runtimeLabel, stepRuntime } from "../../flowTargets";
 import { hrefView } from "../../router";
 import { CHART_MIN_PX } from "../../zoom/chart";
-import { anchoredTo, calloutOf, closeExpansion, footprintOf, isNested, NARROW_VIEW_PX, openExpansion, ownerOf, refresh, revealCamera, rootBoxOf, sameFootprint, sceneCamera, setInline, SLOT_PAD, shiftAt, type Expansion, type ExpandAnchor } from "../../zoom/expand";
+import { anchoredTo, isInPlace, calloutOf, closeExpansion, footprintOf, isNested, NARROW_VIEW_PX, openExpansion, ownerOf, refresh, revealCamera, rootBoxOf, sameFootprint, sceneCamera, setInline, SLOT_PAD, shiftAt, type Expansion, type ExpandAnchor } from "../../zoom/expand";
 import { calloutD } from "../../zoom/connector";
 import { popDelay } from "../../zoom/pop";
 import { displayName } from "../../zoom/names";
@@ -639,7 +639,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
         if (seq !== seqRef.current) return;
         if (chart !== undefined) {
           list = placeAll(b, expRef.current);
-          list = openExpansion(list, ref, { kind: "box", nodeId: b.nodeId, rect: boxRect }, chart, placeView(b));
+          list = openExpansion(list, ref, { kind: "box", nodeId: b.nodeId, rect: boxRect, inPlace: b.slotted === true }, chart, placeView(b));
         }
       }
     }
@@ -873,7 +873,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
       void selectFunction(last);
       return;
     }
-    const list = openExpansion(closeExpansion(placeAll(b, expRef.current), root), last, { kind: "box", nodeId: b.nodeId, rect }, chart, placeView(b));
+    const list = openExpansion(closeExpansion(placeAll(b, expRef.current), root), last, { kind: "box", nodeId: b.nodeId, rect, inPlace: b.slotted === true }, chart, placeView(b));
     setExp(list);
     const opened = list.find((e) => e.fnId === last);
     if (opened !== undefined) moveTo(revealOf(cameraRef.current, opened, 0), true);
@@ -1273,6 +1273,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   };
   /** The functions with an expansion open, by id: their boxes are drawn as expanded. */
   const expandedFns = new Set(expansions.map((e) => e.fnId));
+  /** The cards an expansion replaces in their slots: they are not drawn under it. */
+  const grownCards = new Set(expansions.flatMap((e) => (e.anchor.kind === "box" && e.anchor.inPlace === true ? [e.anchor.nodeId] : [])));
   // A chain box whose function is a dispatch target of its thread is an async box: it gets a dashed frame.
   const asyncFns = new Set(
     view === undefined
@@ -1378,7 +1380,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
             {!far &&
               drawn("box").map((it) => {
                 const node = view?.node(it.id);
-                if (node === undefined) return null;
+                if (node === undefined || grownCards.has(it.id)) return null;
               return (
                 <BoxShape
                   key={it.id}
@@ -1416,7 +1418,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
               return (
                 <g key={`exp-${e.fnId}`} className="zm-expansion-group" data-sx={e.pivot}>
                   {/* The entrance plays on this wrapper, not the group: the group carries the side shift as its transform. */}
-                  <g className="zm-expansion-motion">
+                  <g className={isInPlace(e) ? "zm-expansion-motion is-inplace" : "zm-expansion-motion"}>
                     {asyncFns.has(e.fnId) && <AsyncFrame expansion={e} k={labelScale} />}
                     <ExpansionShape
                       id={id}
@@ -1435,7 +1437,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
             })}
             {leaving.map((e) => (
               <g key={`leave-${e.fnId}`} className="zm-expansion-group is-leaving" data-sx={e.pivot} aria-hidden="true">
-                <g className="zm-expansion-motion">
+                <g className={isInPlace(e) ? "zm-expansion-motion is-inplace" : "zm-expansion-motion"}>
                   <ExpansionShape id={id} scope={charts?.scope ?? scope} expansion={e} k={labelScale} selectedId={undefined} onNodeClick={() => false} onSelect={() => undefined} onClose={() => undefined} motion={false} />
                 </g>
               </g>
