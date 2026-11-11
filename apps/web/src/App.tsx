@@ -43,7 +43,7 @@ export function App() {
           <BrandMark />
           <div className="sh-spacer" />
           <div className="sh-tools">
-            <span className="sh-server">{IS_HOSTED ? "read-only, hosted" : IS_DEMO ? "read-only demo" : server}</span>
+            <span className={IS_HOSTED ? "sh-server sh-hosted-note" : "sh-server"}>{IS_HOSTED ? "read-only, hosted" : IS_DEMO ? "read-only demo" : server}</span>
             {IS_HOSTED && <AuthChip />}
             {IS_DEMO && meta && (
               <span className="sh-server mono" title={`captured ${meta.capturedAt}`}>

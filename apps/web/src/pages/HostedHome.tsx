@@ -17,6 +17,13 @@ const FEATURED: { owner: string; repo: string; note: string }[] = [{ owner: "cod
 
 const INSTALL_TEXT = "Install the Insight app on a repository to index it";
 
+/** The hosted home's intro: the public-only copy when sign-in is off, the private-aware copy when it is on. */
+export function homeIntroText(signInEnabled: boolean): string {
+  return signInEnabled
+    ? "Insight reads a GitHub repository and shows its flow, architecture and findings. Public indexes stay online for anyone to open; private ones only for people who can read the repository on GitHub."
+    : "Insight reads a public repository and shows its flow, architecture and findings. Indexes are read-only and stay online for anyone to open.";
+}
+
 /** A sign-in that failed: the callback's code, with a button that hides the line. */
 export function AuthErrorLine({ code, onDismiss }: { code: string; onDismiss: () => void }) {
   return (
@@ -137,7 +144,7 @@ export function HostedHome() {
       <h1>Index a GitHub repo</h1>
       {authError && <AuthErrorLine code={authError} onDismiss={dismissAuthError} />}
       <p className="muted">
-        Insight reads a public repository and shows its flow, architecture and findings. Indexes are read-only and stay online for anyone to open.
+        {homeIntroText(auth?.enabled === true)}
       </p>
 
       <form className="panel add add-panel" onSubmit={submit} noValidate>

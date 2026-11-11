@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { AuthChip, AuthChipView } from "../src/components/HostedAuth";
-import { AuthErrorLine, YourRepos } from "../src/pages/HostedHome";
+import { AuthErrorLine, YourRepos, homeIntroText } from "../src/pages/HostedHome";
 import { authErrorOf, indexErrorText } from "../src/hostedRepo";
 
 // The components render to static markup: effects do not run, so the chip shows nothing until the state is known.
@@ -26,6 +26,37 @@ describe("header sign-in chip", () => {
 
   it("renders nothing before the sign-in state is known", () => {
     expect(renderToStaticMarkup(<AuthChip />)).toBe("");
+  });
+});
+
+describe("hosted home intro", () => {
+  it("keeps the public-only copy when sign-in is off", () => {
+    expect(homeIntroText(false)).toBe(
+      "Insight reads a public repository and shows its flow, architecture and findings. Indexes are read-only and stay online for anyone to open.",
+    );
+  });
+
+  it("describes private indexes when sign-in is on", () => {
+    expect(homeIntroText(true)).toBe(
+      "Insight reads a GitHub repository and shows its flow, architecture and findings. Public indexes stay online for anyone to open; private ones only for people who can read the repository on GitHub.",
+    );
+  });
+});
+
+describe("header sign-in chip at a phone width", () => {
+  it("carries the full sign-in text as its name and a short visible label", () => {
+    const html = renderToStaticMarkup(<AuthChipView me={{ enabled: true, signedIn: false }} hash="#/" onSignOut={() => undefined} />);
+    expect(html).toContain('aria-label="Sign in with GitHub"');
+    expect(html).toContain('title="Sign in with GitHub"');
+    expect(html).toContain('<span class="auth-short">Sign in</span>');
+  });
+
+  it("keeps the login in the title of the signed-in chip", () => {
+    const html = renderToStaticMarkup(
+      <AuthChipView me={{ enabled: true, signedIn: true, login: "octo", avatarUrl: "https://avatars.test/2" }} hash="#/" onSignOut={() => undefined} />,
+    );
+    expect(html).toContain('title="@octo"');
+    expect(html).toContain("Sign out");
   });
 });
 

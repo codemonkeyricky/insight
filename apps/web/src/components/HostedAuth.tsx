@@ -5,13 +5,14 @@ import { authMe, signInUrl, signOut, type AuthState } from "../hostedApi";
 export function AuthChipView({ me, hash, onSignOut }: { me: AuthState; hash: string; onSignOut: () => void }) {
   if (!me.signedIn) {
     return (
-      <a className="chip auth-chip" href={signInUrl(hash)}>
-        Sign in with GitHub
+      <a className="chip auth-chip" href={signInUrl(hash)} aria-label="Sign in with GitHub" title="Sign in with GitHub">
+        <span className="auth-full">Sign in with GitHub</span>
+        <span className="auth-short">Sign in</span>
       </a>
     );
   }
   return (
-    <span className="auth-chip signed-in">
+    <span className="auth-chip signed-in" title={`@${me.login ?? "github"}`}>
       {me.avatarUrl && <img className="auth-avatar" src={me.avatarUrl} alt="" width={20} height={20} referrerPolicy="no-referrer" />}
       <span className="auth-login">@{me.login ?? "github"}</span>
       <button type="button" className="auth-signout" onClick={onSignOut}>
