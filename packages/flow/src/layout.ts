@@ -38,10 +38,41 @@ interface Frag {
   exit?: string;
 }
 
+/** A callee drawn inside the call step that calls it. `inline` holds the calls nested inside it, by the ids of its steps. */
+export interface InlineEntry {
+  flow: FunctionFlow;
+  inline?: InlineTree;
+}
+
+/** The call steps drawn expanded, by the step's id in its own chart. A step nested inside a frame is drawn with the frame's id, a slash, and that id. */
+export type InlineTree = ReadonlyMap<string, InlineEntry>;
+
+/** The header, top gap and side/bottom padding of the frame a nested callee is drawn in. */
+export const NEST_HEAD = 26;
+export const NEST_TOP = 18;
+export const NEST_PAD = 14;
+
+interface Scope {
+  /** Nodes laid out so far across the whole chart, against MAX_NODES. */
+  budget: { used: number };
+  /** The functions whose charts enclose this one: a callee in the list is never nested again. */
+  ancestors: ReadonlySet<string>;
+}
+
 class Maker {
   private n = 0;
+  constructor(
+    readonly prefix = "",
+    readonly inline: InlineTree | undefined = undefined,
+    readonly base: ReadonlyMap<string, FlowNode> | undefined = undefined,
+    readonly scope: Scope = { budget: { used: 0 }, ancestors: new Set() },
+  ) {}
+  /** Takes an id without making a node: a nested chart skips the id its own chart gives the start terminator, so ids match. */
+  reserve(): void {
+    this.n++;
+  }
   node(role: FlowRole, shape: FlowShape, label: string, w: number, h: number, extra: { title?: string; span?: FlowSpan; target?: string; handler?: true } = {}): FlowNode {
-    const out: FlowNode = { id: `n${++this.n}`, role, shape, label, w, h, x: 0, y: 0 };
+    const out: FlowNode = { id: `${this.prefix}n${++this.n}`, role, shape, label, w, h, x: 0, y: 0 };
     if (extra.title !== undefined && extra.title !== label) out.title = extra.title;
     if (extra.span) out.span = extra.span;
     if (extra.target) out.target = extra.target;
@@ -195,11 +226,60 @@ function clipLabel(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
+/** A step, taking the target a viewer gave the chart it was built from, and nested when its callee is expanded. */
+function stepPiece(mk: Maker, node: FlowNode): Frag {
+  const local = node.id.slice(mk.prefix.length);
+  const b = mk.base?.get(local);
+  if (b !== undefined) {
+    node.label = b.label;
+    if (b.title !== undefined) node.title = b.title;
+    else delete node.title;
+    if (b.target !== undefined) node.target = b.target;
+    else delete node.target;
+    if (b.handler) node.handler = true;
+    else delete node.handler;
+  }
+  const entry = mk.inline?.get(local);
+  return (entry !== undefined ? nest(mk, node, entry) : undefined) ?? single(node);
+}
+
+/**
+ * A call step with its callee's chart inside: a frame (the step's own node, now shaped "nest") with a header naming the
+ * callee and the callee's laid-out steps under it. The edge into the step meets the frame's top and the one out of it
+ * leaves its bottom. Undefined when the callee cannot be nested (no pre-layout chart, a function already in the chain, or
+ * the chart would pass MAX_NODES), and the step stays a plain step.
+ */
+function nest(mk: Maker, node: FlowNode, entry: InlineEntry): Frag | undefined {
+  const flow = entry.flow;
+  const { scope } = mk;
+  if (flow.items === undefined || flow.tooLarge || scope.ancestors.has(flow.id)) return undefined;
+  const add = countNodes(flow.items) + 1;
+  if (scope.budget.used + add > MAX_NODES) return undefined;
+  scope.budget.used += add;
+  const sub = new Maker(`${node.id}/`, entry.inline, new Map(flow.nodes.map((n) => [n.id, n])), { budget: scope.budget, ancestors: new Set([...scope.ancestors, flow.id]) });
+  sub.reserve();
+  const body = stack(flow.items.map((i) => piece(sub, i)));
+  const w = Math.max(body.w + 2 * NEST_PAD, STEP_W);
+  const h = body.entry === undefined ? NEST_HEAD + NEST_PAD : NEST_HEAD + NEST_TOP + body.h + NEST_PAD;
+  node.shape = "nest";
+  node.label = clipLabel(displayName(flow.name, flow.id), STEP_LABEL);
+  node.title = flow.name;
+  node.w = w;
+  node.h = h;
+  const out: Frag = { w, h, nodes: [node], edges: [], entry: node.id, exit: node.id };
+  if (body.entry !== undefined) {
+    shift(body, (w - body.w) / 2, NEST_HEAD + NEST_TOP);
+    out.nodes.push(...body.nodes);
+    out.edges.push({ from: node.id, to: body.entry, kind: "next", points: [[w / 2, NEST_HEAD], [w / 2, NEST_HEAD + NEST_TOP]] }, ...body.edges);
+  }
+  return out;
+}
+
 function piece(mk: Maker, item: Item): Frag {
   switch (item.t) {
     case "step":
       if (item.role === "marker") return single(mk.node("marker", "label", item.label, MARK_W, MARK_H, item.span ? { span: item.span } : {}));
-      return single(mk.node(item.role, "step", item.label, STEP_W, STEP_H, { ...(item.title ? { title: item.title } : {}), ...(item.span ? { span: item.span } : {}), ...(item.target ? { target: item.target } : {}), ...(item.handler ? { handler: true as const } : {}) }));
+      return stepPiece(mk, mk.node(item.role, "step", item.label, STEP_W, STEP_H, { ...(item.title ? { title: item.title } : {}), ...(item.span ? { span: item.span } : {}), ...(item.target ? { target: item.target } : {}), ...(item.handler ? { handler: true as const } : {}) }));
     case "term":
       return single(mk.node(item.role, "exit", item.label, TERM_W, TERM_H, item.span ? { span: item.span } : {}), true);
     case "fork":
@@ -242,15 +322,27 @@ export function measure(items: Item[]): FlowStats {
 }
 
 /** Lay out one function as a top-to-bottom flowchart. */
-export function layoutFunction(fn: FunctionFacts): FunctionFlow {
+export function layoutFunction(fn: FunctionFacts, opts: { inline?: InlineTree; base?: FunctionFlow } = {}): FunctionFlow {
   const stats = measure(fn.items);
   const base = { id: fn.id, name: fn.name, async: fn.async, ...(fn.span ? { span: fn.span } : {}), stats };
-  if (countNodes(fn.items) > MAX_NODES) return { ...base, tooLarge: true, width: 0, height: 0, nodes: [], edges: [] };
-  const mk = new Maker();
+  const count = countNodes(fn.items);
+  if (count > MAX_NODES) return { ...base, tooLarge: true, width: 0, height: 0, nodes: [], edges: [] };
+  const mk = new Maker("", opts.inline, opts.base === undefined ? undefined : new Map(opts.base.nodes.map((n) => [n.id, n])), { budget: { used: count }, ancestors: new Set([fn.id]) });
   const start = single(mk.node("start", "terminator", `${fn.async ? "async " : ""}${clipLabel(displayName(fn.name, fn.id), STEP_LABEL)}`, STEP_W, TERM_H, { title: fn.name, ...(fn.span ? { span: fn.span } : {}) }));
   const body = stack(fn.items.map((i) => piece(mk, i)));
   const parts = [start, body];
   if (body.entry === undefined || body.exit !== undefined) parts.push(single(mk.node("end", "terminator", "end", TERM_W, TERM_H)));
   const whole = stack(parts);
-  return { ...base, width: whole.w, height: whole.h, nodes: whole.nodes, edges: whole.edges };
+  return { ...base, width: whole.w, height: whole.h, nodes: whole.nodes, edges: whole.edges, ...(opts.inline === undefined ? { items: fn.items } : {}) };
+}
+
+/**
+ * The chart laid out again with the callees of `inline` nested in their call steps. A chart without its pre-layout items
+ * (too large to draw) is returned as it is. Nodes outside any frame keep their ids, and a nested node's id starts with
+ * its frame's, so a viewer can tell a step's depth from its id. The returned chart carries the same items.
+ */
+export function relayout(flow: FunctionFlow, inline: InlineTree): FunctionFlow {
+  if (flow.items === undefined || flow.tooLarge || inline.size === 0) return flow;
+  const out = layoutFunction({ id: flow.id, name: flow.name, async: flow.async, ...(flow.span ? { span: flow.span } : {}), items: flow.items }, { inline, base: flow });
+  return { ...out, items: flow.items };
 }

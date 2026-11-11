@@ -814,7 +814,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     let sizes = chartSizes.get(file);
     if (sizes === undefined) {
       sizes = new Map();
-      for (const f of factsForFile(file, nodes, edges).map(layoutFunction)) {
+      for (const f of factsForFile(file, nodes, edges).map((f) => layoutFunction(f))) {
         if (!f.tooLarge && f.nodes.length > 0) sizes.set(f.id, [f.width, f.height]);
       }
       chartSizes.set(file, sizes);

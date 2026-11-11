@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, type MouseEvent, type ReactNode } from "react";
 import type { FlowEdge, FlowNode, FunctionFlow } from "../api";
 import { outsideScope, outsideText } from "../flowTargets";
+import { NEST_HEAD } from "@insight/flow";
 import { hrefFile, hrefView } from "../router";
 import { backEdgeFlags, edgeMotions, prefersReducedMotion, PULSE_S, useMarchBudget, useOnScreen, usePageVisible, type EdgeMotion } from "../zoom/flowMotion";
 import { runFlowToken, useTokenSlot } from "../zoom/flowToken";
@@ -52,12 +53,17 @@ export function FlowChart({ id, fn, scope, onNodeClick, selectedId, motion = tru
         </marker>
       </defs>
       <g>
+        {fn.nodes.filter(isNest).map((n) => (
+          <NestFrame key={n.id} node={n} onNodeClick={onNodeClick} selected={n.id === selectedId} />
+        ))}
+      </g>
+      <g>
         {fn.edges.map((e, i) => (
           <Edge key={`${e.from}>${e.to}>${i}`} edge={e} index={i} marker={arrow} motion={motions[i] ?? NO_MOTION} back={back[i] === true} delay={(nodeDelay.get(e.from) ?? 140) + 80} />
         ))}
       </g>
       <g>
-        {fn.nodes.map((n) => (
+        {fn.nodes.filter((n) => !isNest(n)).map((n) => (
           <Node key={n.id} id={id} node={n} fnId={fn.id} scope={scope} onNodeClick={onNodeClick} selected={n.id === selectedId} delay={nodeDelay.get(n.id) ?? 140} />
         ))}
       </g>
@@ -72,6 +78,29 @@ export function FlowChart({ id, fn, scope, onNodeClick, selectedId, motion = tru
         </g>
       )}
     </svg>
+  );
+}
+
+const isNest = (n: FlowNode): boolean => n.shape === "nest";
+
+/**
+ * A callee nested in the call step that calls it: a rounded frame with the callee's name in a header. Its steps and edges
+ * are drawn over it by the chart, so the frame sits under both. A click on the header folds the callee back.
+ */
+function NestFrame({ node, onNodeClick, selected }: { node: FlowNode; onNodeClick?: FlowNodeClick; selected: boolean }) {
+  const { x, y, w, h } = node;
+  return (
+    <g className={`flow-nest${selected ? " selected" : ""}`} data-node={node.id} data-nest="">
+      <title>{node.title ?? node.label}</title>
+      <rect x={x} y={y} width={w} height={h} rx={12} className="flow-nest-body" />
+      <g className="flow-nest-head" role="button" aria-label={`Fold ${node.label}`} onClick={onNodeClick ? () => onNodeClick(node) : undefined}>
+        <rect x={x} y={y} width={w} height={NEST_HEAD} rx={12} className="flow-nest-hit" />
+        <text x={x + 12} y={y + NEST_HEAD / 2} dominantBaseline="central" className="flow-nest-label">
+          {"▾ "}
+          {node.label}
+        </text>
+      </g>
+    </g>
   );
 }
 

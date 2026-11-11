@@ -67,9 +67,12 @@ export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClic
   const { chart, x, y, w, h } = expansion;
   // The title is the function's display name; the tooltip and the accessible name keep the full name. The detail's letter
   // stays in the accessible name only.
-  const label = fitLabel(displayName(chart.name, chart.id), labelChars(w * k));
+  const runtime = expansion.runtime;
+  // A box on another thread or in another process names its runtime first: "Worker · print.worker", then the function.
+  const own = displayName(chart.name, chart.id);
+  const label = fitLabel(runtime === undefined ? own : runtime.label.endsWith(own) ? runtime.label : `${runtime.label} · ${own}`, labelChars(w * k));
   return (
-    <g className="zm-expansion" role="group" aria-label={`Detail ${detailLetter(expansion.index)}: ${chart.name}`}>
+    <g className={`zm-expansion${runtime !== undefined ? " is-runtime" : ""}`} role="group" aria-label={`Detail ${detailLetter(expansion.index)}: ${chart.name}`}>
       <title>{chart.name}</title>
       <rect x={x} y={y} width={w} height={h} rx={14} className="zm-expansion-body" />
       <rect x={x} y={y + CALLOUT_INSET} width={3} height={Math.max(0, h - 2 * CALLOUT_INSET)} rx={1.5} className="zm-expansion-accent" />
@@ -78,7 +81,7 @@ export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClic
         <line x1={x + 12} x2={x + w - 12} y1={y + CHART_HEAD} y2={y + CHART_HEAD} className="zm-expansion-rule" />
         {label !== null && (
           <text x={x + 14} y={y + CHART_HEAD / 2} dominantBaseline="central" className="zm-label">
-            <tspan className="zm-card-glyph">ƒ</tspan>{" "}{label}
+            <tspan className={runtime !== undefined ? "zm-expansion-runtime" : "zm-card-glyph"}>{runtime !== undefined ? (runtime.kind === "process" ? "▣" : "⑂") : "ƒ"}</tspan>{" "}{label}
           </text>
         )}
       </g>

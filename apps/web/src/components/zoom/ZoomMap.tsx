@@ -8,10 +8,10 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type Keyb
 import { select } from "d3-selection";
 import { zoom, zoomIdentity, type D3ZoomEvent, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
 import { MORE_SUFFIX, ZOOM_SIZE, fitCamera, fitChartCamera, visibleWorld, type Camera, type FlowNode, type FlowSpan, type FunctionFlow, type PlacedItem, type Rect } from "@insight/flow";
-import { nameOfId } from "../../flowTargets";
+import { nameOfId, runtimeLabel, stepRuntime } from "../../flowTargets";
 import { hrefView } from "../../router";
 import { CHART_MIN_PX } from "../../zoom/chart";
-import { anchoredTo, calloutOf, closeExpansion, footprintOf, NARROW_VIEW_PX, openExpansion, refresh, revealCamera, rootBoxOf, sameFootprint, sceneCamera, SLOT_PAD, shiftAt, type Expansion, type ExpandAnchor } from "../../zoom/expand";
+import { anchoredTo, calloutOf, closeExpansion, footprintOf, isNested, NARROW_VIEW_PX, openExpansion, ownerOf, refresh, revealCamera, rootBoxOf, sameFootprint, sceneCamera, setInline, SLOT_PAD, shiftAt, type Expansion, type ExpandAnchor } from "../../zoom/expand";
 import { calloutD } from "../../zoom/connector";
 import { popDelay } from "../../zoom/pop";
 import { displayName } from "../../zoom/names";
@@ -695,7 +695,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
    * Opens the expansion of a call step's callee to the right of the step, and shows it. The step's rect is in the parent
    * expansion's chart units. Nothing else moves: the focus stays where it is.
    */
-  const openStep = async (fnId: string, node: FlowNode, callee: string) => {
+  const openStep = async (fnId: string, node: FlowNode, callee: string, runtimeKind?: "thread" | "process") => {
     const b = buildRef.current;
     if (!b || !expRef.current.some((e) => e.fnId === fnId)) return;
     const chart = await loadChart(callee);
@@ -705,8 +705,9 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     for (const e of list) {
       if (e.anchor.kind === "step" && e.anchor.fnId === fnId && e.fnId !== callee) list = closeExpansion(list, e.fnId);
     }
-    const anchor: ExpandAnchor = { kind: "step", fnId, rect: { x: node.x, y: node.y, w: node.w, h: node.h } };
-    const next = openExpansion(list, callee, anchor, chart, placeView(b));
+    const anchor: ExpandAnchor = { kind: "step", fnId, stepId: node.id, rect: { x: node.x, y: node.y, w: node.w, h: node.h } };
+    const runtime = runtimeKind === undefined ? undefined : { kind: runtimeKind, label: runtimeLabel(runtimeKind, callee, displayName(chart.name, chart.id)) };
+    const next = openExpansion(list, callee, anchor, chart, placeView(b), runtime);
     if (next === list) return;
     setExp(next);
     // The new detail is panned into view when it is off the stage (the camera zooms only for a detail too narrow to read).
@@ -754,15 +755,51 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   const chartStep = (fnId: string, node: FlowNode): boolean => {
     stageRef.current?.focus({ preventScroll: true });
     const b = buildRef.current;
-    const callee = node.target !== undefined && node.target !== fnId ? node.target : undefined;
+    if (node.shape === "nest") {
+      void inlineStep(fnId, node, node.target ?? "");
+      return true;
+    }
+    const callee = node.target !== undefined && node.target !== ownerOf(expRef.current.find((e) => e.fnId === fnId), node.id) ? node.target : undefined;
     // A handler (`ctx.onmessage = (e) => …`) is how a worker processes its messages: it opens, even as a folded lambda.
     if (callee !== undefined && node.handler !== true && isLambdaCall(b, fnId, callee)) void highlightLambda(fnId, node, callee);
-    else if (callee !== undefined) void openStep(fnId, node, callee);
-    else {
-      setConstruct({ ref: fnId, nodeId: node.id, ...(node.span ? { span: node.span } : {}) });
-      void selectFunction(fnId);
+    else if (callee !== undefined) {
+      // A callee on the caller's thread nests in the step; one on another thread or in another process opens its own box.
+      const kind = stepRuntime(node);
+      if (kind === "same") void inlineStep(fnId, node, callee);
+      else void openStep(fnId, node, callee, kind);
+    } else {
+      const owner = ownerOf(expRef.current.find((e) => e.fnId === fnId), node.id);
+      setConstruct({ ref: owner, nodeId: node.id, ...(node.span ? { span: node.span } : {}) });
+      void selectFunction(owner);
     }
     return true;
+  };
+
+  /**
+   * Nests a call step's callee in the step, inside the same box: the step grows into a frame holding the callee's chart, the
+   * box grows to fit, and the roots grid makes room (setExp). A callee that cannot nest (it is already in the chain, the
+   * chart would be too large, or the chart has no pre-layout steps) opens beside the step instead. A click on a frame
+   * folds it back, with every call nested in it.
+   */
+  const inlineStep = async (fnId: string, node: FlowNode, callee: string) => {
+    const b = buildRef.current;
+    if (!b) return;
+    if (node.shape === "nest") {
+      setExp(setInline(placeAll(b, expRef.current), fnId, node.id, undefined, placeView(b)));
+      return;
+    }
+    const chart = await loadChart(callee);
+    if (chart === undefined) return;
+    const list = placeAll(b, expRef.current);
+    const next = setInline(list, fnId, node.id, chart, placeView(b));
+    if (next === list) {
+      if (chart.items === undefined) void openStep(fnId, node, callee);
+      return;
+    }
+    setExp(next);
+    const grown = expRef.current.find((e) => e.fnId === fnId);
+    if (grown !== undefined) moveTo(revealOf(cameraRef.current, grown, 0), true);
+    void selectFunction(callee);
   };
 
   /**
@@ -800,19 +837,36 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     const root = chain[0];
     const last = chain[chain.length - 1];
     if (!b || root === undefined || last === undefined || chain.length < 2) return;
-    const steps: { parent: string; callee: string; node: FlowNode }[] = [];
+    // Each hop opens in turn. A callee on the caller's thread nests in the caller's box (the next hop is looked for inside
+    // the frame); one on another thread or in another process opens its own box, and the chain goes on from there.
+    let owner = root;
+    let prefix = "";
+    let done = true;
     for (let i = 0; i + 1 < chain.length; i++) {
-      const parent = chain[i];
       const callee = chain[i + 1];
-      if (parent === undefined || callee === undefined) break;
-      const node = (await loadChart(parent))?.nodes.find((n) => n.target === callee);
-      if (node === undefined) break;
-      steps.push({ parent, callee, node });
+      if (callee === undefined) break;
+      const exp = expRef.current.find((e) => e.fnId === owner);
+      const depth = prefix === "" ? 0 : prefix.split("/").length - 1;
+      const node = exp?.chart.nodes.find((n) => n.target === callee && n.id.startsWith(prefix) && n.id.split("/").length === depth + 1);
+      if (exp === undefined || node === undefined) {
+        done = false;
+        break;
+      }
+      const kind = stepRuntime(node);
+      if (kind === "same") await inlineStep(owner, node, callee);
+      else await openStep(owner, node, callee, kind);
+      const after = expRef.current.find((e) => e.fnId === owner);
+      if (kind === "same" && after !== undefined && isNested(after, node.id)) {
+        prefix = `${node.id}/`;
+      } else if (expRef.current.some((e) => e.fnId === callee && e.anchor.kind === "step")) {
+        owner = callee;
+        prefix = "";
+      } else {
+        done = false;
+        break;
+      }
     }
-    if (steps.length === chain.length - 1) {
-      for (const s of steps) await openStep(s.parent, s.node, s.callee);
-      return;
-    }
+    if (done) return;
     const rect = b.placed.rects.get(b.nodeId);
     const chart = await loadChart(last);
     if (rect === undefined || chart === undefined) {

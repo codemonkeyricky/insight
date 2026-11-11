@@ -3,7 +3,7 @@
 // layout never depends on expansions (a function box keeps its compact size), so everything here is placement: where
 // each expansion goes, how a chain follows its parent, what closes with what, and how the camera shows a new one. Pure,
 // so these rules are unit tested (test/expand.test.ts).
-import { CHART_FIT_MAX_K, CHART_HEAD, CHART_PAD, type Camera, type FunctionFlow, type Rect } from "@insight/flow";
+import { CHART_FIT_MAX_K, CHART_HEAD, CHART_PAD, relayout, type Camera, type FunctionFlow, type InlineEntry, type InlineTree, type Rect } from "@insight/flow";
 import { zoneLetter } from "./zones";
 
 /** The room between an anchor and the expansion beside it. */
@@ -24,13 +24,26 @@ const REVEAL_MARGIN = 16;
  * the chart of the expansion of `fnId`, with the step's rect in that chart's units (its top-left is the chart's origin
  * plus this rect's corner).
  */
-export type ExpandAnchor = { kind: "box"; nodeId: string; rect: Rect } | { kind: "step"; fnId: string; rect: Rect };
+export type ExpandAnchor = { kind: "box"; nodeId: string; rect: Rect } | { kind: "step"; fnId: string; rect: Rect; stepId?: string };
+
+/** The kind of box a thread or process step opens: its header names the runtime ("Worker · print.worker"). */
+export interface ExpansionRuntime {
+  kind: "thread" | "process";
+  label: string;
+}
 
 /** One open expansion. Identity is the function: a function has at most one expansion open. */
 export interface Expansion {
   fnId: string;
   anchor: ExpandAnchor;
+  /** The chart as drawn: `base` with the callees of `inline` nested in their call steps. */
   chart: FunctionFlow;
+  /** The function's own chart, before any call is nested in it. Absent when nothing was ever nested (then it is `chart`). */
+  base?: FunctionFlow;
+  /** The calls drawn nested in this box's chart, as a tree by step id (see relayout). */
+  inline?: InlineTree;
+  /** Set when the box runs on another thread or in another process than the box it was opened from. */
+  runtime?: ExpansionRuntime;
   /** The top-left corner and size of the box, in world units. */
   x: number;
   y: number;
@@ -164,14 +177,85 @@ function chainHas(list: readonly Expansion[], from: string, target: string): boo
  * its anchor moves and the chains from it follow, so a function never has two. The new one is last, so Escape closes it
  * first. Returns `list` itself when the anchor is inside `fnId`'s own chain, which would cycle.
  */
-export function openExpansion(list: readonly Expansion[], fnId: string, anchor: ExpandAnchor, chart: FunctionFlow, view: Rect | undefined): Expansion[] {
+export function openExpansion(list: readonly Expansion[], fnId: string, anchor: ExpandAnchor, chart: FunctionFlow, view: Rect | undefined, runtime?: ExpansionRuntime): Expansion[] {
   if (anchor.kind === "step" && chainHas(list, anchor.fnId, fnId)) return list as Expansion[];
   const size = expansionSize(chart);
   const others = list.filter((e) => e.fnId !== fnId);
   // A reattached expansion keeps its letter; a new one takes the next letter after the highest one open.
   const kept = list.find((e) => e.fnId === fnId);
   const index = kept?.index ?? others.reduce((hi, e) => Math.max(hi, e.index + 1), 0);
-  return reflow([...others, { fnId, anchor, chart, ...size, x: 0, y: 0, index, pivot: 0 }], view);
+  return reflow([...others, { fnId, anchor, chart, ...(runtime !== undefined ? { runtime } : {}), ...size, x: 0, y: 0, index, pivot: 0 }], view);
+}
+
+/** The node ids of a nested step's path: "n5/n7" is the call n7 inside the frame n5. */
+const pathOf = (nodeId: string): string[] => nodeId.split("/");
+
+/** The tree with the entry at `path` replaced by `entry` (removed when undefined). Undefined when the path leads nowhere. */
+function withEntry(tree: InlineTree | undefined, path: readonly string[], entry: InlineEntry | undefined): InlineTree | undefined {
+  const [head, ...rest] = path;
+  if (head === undefined) return tree;
+  const next = new Map(tree ?? []);
+  if (rest.length === 0) {
+    if (entry === undefined) next.delete(head);
+    else next.set(head, entry);
+    return next;
+  }
+  const cur = next.get(head);
+  if (cur === undefined) return undefined;
+  const inner = withEntry(cur.inline, rest, entry);
+  if (inner === undefined) return undefined;
+  next.set(head, { ...cur, inline: inner });
+  return next;
+}
+
+/**
+ * The function whose own chart holds the step `nodeId`: the expansion's function, or the callee of the innermost frame the
+ * step is drawn in. Undefined `e` gives "".
+ */
+export function ownerOf(e: Expansion | undefined, nodeId: string): string {
+  if (e === undefined) return "";
+  let owner = e.fnId;
+  let tree = e.inline;
+  for (const seg of pathOf(nodeId).slice(0, -1)) {
+    const entry = tree?.get(seg);
+    if (entry === undefined) break;
+    owner = entry.flow.id;
+    tree = entry.inline;
+  }
+  return owner;
+}
+
+/** Whether the call step `nodeId` of an expansion's chart is drawn nested. */
+export function isNested(e: Expansion, nodeId: string): boolean {
+  return e.chart.nodes.some((n) => n.id === nodeId && n.shape === "nest");
+}
+
+/**
+ * The list after the call step `nodeId` of `fnId`'s chart is nested (`callee` given: the callee's chart goes inside the
+ * step) or folded back (`callee` undefined: the step and every call nested in it close). The box takes the new chart's
+ * size, and the boxes anchored to its steps follow their steps, or close when the step is folded away. Returns `list`
+ * itself when nothing changes: no such step, a callee that cannot nest (it is already in the chain, or the chart would
+ * be too large), or a step that is not nested.
+ */
+export function setInline(list: readonly Expansion[], fnId: string, nodeId: string, callee: FunctionFlow | undefined, view: Rect | undefined): Expansion[] {
+  const e = list.find((x) => x.fnId === fnId);
+  if (e === undefined) return list as Expansion[];
+  const base = e.base ?? e.chart;
+  const tree = withEntry(e.inline, pathOf(nodeId), callee === undefined ? undefined : { flow: callee });
+  if (tree === undefined || (callee === undefined && !isNested(e, nodeId))) return list as Expansion[];
+  const chart = relayout(base, tree);
+  if (callee !== undefined && !chart.nodes.some((n) => n.id === nodeId && n.shape === "nest")) return list as Expansion[];
+  const resized: Expansion = { ...e, base, inline: tree, chart, ...expansionSize(chart) };
+  let out = list.map((x) => (x === e ? resized : x));
+  // A box opened from a step of this chart follows the step; one whose step is gone closes with its chain.
+  for (const x of out) {
+    if (x.anchor.kind !== "step" || x.anchor.fnId !== fnId || x.anchor.stepId === undefined) continue;
+    const id = x.anchor.stepId;
+    const n = chart.nodes.find((c) => c.id === id);
+    if (n === undefined) out = closeExpansion(out, x.fnId);
+    else out = out.map((y) => (y === x ? { ...y, anchor: { ...x.anchor, rect: { x: n.x, y: n.y, w: n.w, h: n.h } } } : y));
+  }
+  return reflow(out, view);
 }
 
 /**

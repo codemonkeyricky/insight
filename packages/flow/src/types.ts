@@ -1,3 +1,5 @@
+import type { Item } from "./build.js";
+
 /** A source range copied from the IR. Lines are 0-based, so add 1 to show a line number. */
 export interface FlowSpan {
   file: string;
@@ -24,7 +26,7 @@ export type FlowRole =
   | "continue";
 
 /** How the renderer draws a node. */
-export type FlowShape = "terminator" | "step" | "decision" | "loop" | "label" | "join" | "exit";
+export type FlowShape = "terminator" | "step" | "decision" | "loop" | "label" | "join" | "exit" | "nest";
 
 export interface FlowNode {
   id: string;
@@ -81,6 +83,11 @@ export interface FunctionFlow {
   height: number;
   nodes: FlowNode[];
   edges: FlowEdge[];
+  /**
+   * The chart before layout, kept so a viewer can lay the function out again with a callee nested inside one of its call
+   * steps (see `relayout`). Absent on a chart too large to draw.
+   */
+  items?: Item[];
 }
 
 export interface FileFlow {
