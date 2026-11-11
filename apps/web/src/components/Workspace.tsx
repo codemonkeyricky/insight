@@ -22,7 +22,7 @@ import { Splitter } from "./sheet/Splitter";
 import { TopBar, type Crumb } from "./sheet/TopBar";
 import type { TitleFacts } from "./sheet/TitleBlock";
 import { shortCommit } from "./sheet/TitleBlock";
-import { ArchView } from "./views/ArchView";
+import { ArchTab } from "./views/ArchTab";
 import { FlowView } from "./views/FlowView";
 import { ZoomStore } from "../zoom/scene";
 
@@ -209,7 +209,7 @@ export function Workspace({ id, tab, scope, line, fn, roots = true, base, head, 
   const stats = listing && listing.scope === canonicalScope(scope) ? listing.stats : null;
   // The tree picks flow for the flow view and the project-wide pages (a picked file opens its flow, with its code in the pane),
   // and the lens's own tab for a lens.
-  const explorerTab = content === "flow" || PROJECT_WIDE.has(tab) ? "flow" : tab;
+  const explorerTab = content === "flow" || (PROJECT_WIDE.has(tab) && tab !== "arch") ? "flow" : tab;
   // Views remount when the snapshot, view or scope changes, so no state from the last one carries over. The flow map
   // follows the scope and function in place, so a scope change animates the camera rather than remounting the map.
   const viewKey = `${overview.snapshot?.id ?? "none"}|${content}|${content === "flow" || tab === "arch" ? "" : scope}|${base ?? ""}|${head ?? ""}|${full}`;
@@ -272,7 +272,7 @@ export function Workspace({ id, tab, scope, line, fn, roots = true, base, head, 
       case "overview":
         return <ProjectOverview id={id} />;
       case "arch":
-        return <ArchView id={id} />;
+        return <ArchTab id={id} scope={scope} />;
       case "compare":
         return <ComparePage id={id} base={base} head={head} />;
       case "triage":
@@ -348,7 +348,7 @@ export function Workspace({ id, tab, scope, line, fn, roots = true, base, head, 
                   Lenses unavailable
                 </p>
               )}
-              {PROJECT_WIDE.has(tab) ? (
+              {tab === "arch" ? null : PROJECT_WIDE.has(tab) ? (
                 <p className="muted small scope-note">
                   This page covers the whole project, so the scope does not narrow it. Pick a file in the tree to see its flow and code.
                 </p>

@@ -28,9 +28,9 @@ import type {
   SourceSlice,
   TargetType,
 } from "./api";
-import type { SerializedModel } from "@insight/model";
+import type { SerializedModel, SystemModel } from "@insight/model";
 import { buildFileFlow } from "@insight/flow";
-import { refsFor, scopeCallersFor, scopeExecFor, scopeFlowFor, type ScopeRefsPayload } from "./model/payloads";
+import { refsFor, scopeCallersFor, scopeExecFor, scopeFlowFor, systemFor, type ScopeRefsPayload } from "./model/payloads";
 import { models } from "./model/store";
 import { canonicalScope, scopeKey, scopeProblem } from "./scopeKey";
 
@@ -350,6 +350,14 @@ export function makeStaticApi(baseFor: (projectId: string) => string, opts: Stat
       if (problem) throw new ApiError(400, problem);
       const { model } = await modelOf(id);
       return scopeCallersFor(model, scope);
+    },
+    /** The System view of a scope, computed from the project's model. */
+    getSystem: async (id: string, scope: string, tests = false): Promise<SystemModel> => {
+      await checkProject(id);
+      const problem = scopeProblem(scope);
+      if (problem) throw new ApiError(400, problem);
+      const { model } = await modelOf(id);
+      return systemFor(model, scope, tests);
     },
     /**
      * The architecture model as the export saved it. The model covers the whole project, so the export writes it
