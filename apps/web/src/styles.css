@@ -941,9 +941,6 @@ a.btn.rv-show:hover { background: color-mix(in srgb, var(--accent) 12%, transpar
 }
 .arch-other { flex: 1 1 100%; margin: 0; }
 .arch-scope-head { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
-.arch-crumbs { font-size: var(--t-md); overflow-wrap: anywhere; }
-.arch-crumbs a { color: var(--accent-text); text-decoration: none; }
-.arch-crumbs a:hover { text-decoration: underline; }
 /* Reduced motion: the map's entrances and the chart cascade are cut; the state they land on is shown at once. */
 @media (prefers-reduced-motion: reduce) {
   .zm-pop, .zm-frame, .zm-box.zm-card.expanded .zm-box-body, .zm-expansion-motion, .zm-connector-group .zm-callout,

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { api, type ArchModel, type Span } from "../../api";
 import { diagramModel, FOLDER_GRID, type DiagramModel } from "../../arch/folders";
 import { ARCH_HEADER_H, ARCH_PAD, archLayout, arrowKey, arrowLabel, type ArchBox } from "../../arch/layout";
-import { IMPORTED_BY, IMPORTS, scopedView, type ScopedDiagram } from "../../arch/scoped";
+import { bandPerRow, IMPORTED_BY, IMPORTS, scopedView, type ScopedDiagram } from "../../arch/scoped";
 import { hrefFile, hrefView } from "../../router";
 
 /** What is selected in the diagram: one arrow, named by its key. */
@@ -15,8 +15,8 @@ const LABEL_CHARS = 18;
  * fits a 390 px phone without shrinking it past reading.
  */
 const cardsPerRow = (width: number): number => (width <= 520 ? 1 : width <= 860 ? 2 : FOLDER_GRID);
-/** Cards per row in the middle band of a scoped diagram: two on a desktop, one below it. */
-const bandPerRow = (width: number): number => (width > 1200 ? 2 : 1);
+/** The band colour of a scoped card, by layer: the left, the middle and the right each keep one colour. */
+const layerBand = (layer: string): number => (layer === IMPORTED_BY ? 0 : layer === IMPORTS ? 2 : 1);
 
 const fit = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
@@ -62,20 +62,33 @@ function ArchDiagram({ id, scope, model: whole }: { id: string; scope: string; m
   const scoped = useMemo<ScopedDiagram | null>(() => scopedView(whole, scope), [whole, scope]);
   const shown = useMemo<DiagramModel>(() => scoped ?? diagramModel(whole), [scoped, whole]);
   const model = shown.model;
-  const [width, setWidth] = useState(() => window.innerWidth);
+  // The root view's folder grid follows the window's width, as it always has.
+  const [winWidth, setWinWidth] = useState(() => window.innerWidth);
   useEffect(() => {
-    const onResize = () => setWidth(window.innerWidth);
+    const onResize = () => setWinWidth(window.innerWidth);
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
-  const perRow = cardsPerRow(width);
+  // The scoped view follows the width of its container, the centre pane, measured as it changes.
+  const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
+  const [avail, setAvail] = useState(() => window.innerWidth);
+  useEffect(() => {
+    if (!scrollEl || typeof ResizeObserver === "undefined") return;
+    const measure = () => setAvail(scrollEl.clientWidth);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(scrollEl);
+    return () => observer.disconnect();
+  }, [scrollEl]);
+  const perRow = cardsPerRow(winWidth);
   const folders = scoped === null && shown.depth !== undefined;
   const layout = useMemo(
-    () => archLayout(model, scoped ? { band: { layer: scoped.inner, perRow: bandPerRow(width) } } : folders ? { grid: perRow } : {}),
-    [model, scoped, folders, perRow, width],
+    () => archLayout(model, scoped ? { band: { layer: scoped.inner, perRow: bandPerRow(avail) } } : folders ? { grid: perRow } : {}),
+    [model, scoped, folders, perRow, avail],
   );
-  // A folder grid narrower than its cards' full row is drawn to the container's width, so every edge stays inside it.
-  const fitWidth = folders && perRow < FOLDER_GRID;
+  // A drawing wider than its container is drawn to the container's width, so every edge and column stays in view. The root
+  // folder grid does this when its cards do not fill a full row.
+  const scaled = scoped !== null ? layout.width > avail : folders && perRow < FOLDER_GRID;
   const [sel, setSel] = useState<Selection>(null);
   // The scope's folder (a file scope gives its folder), and how many cards lie inside it.
   const at = scoped?.scope ?? "";
@@ -107,43 +120,25 @@ function ArchDiagram({ id, scope, model: whole }: { id: string; scope: string; m
     openBox(box);
   };
 
-  const parts = at ? at.split("/") : [];
   return (
     <div className="arch">
       {scoped !== null && (
+        // The workspace's scope crumbs above the tab keep the Arch tab, so the scope is not repeated here.
         <div className="arch-scope-head">
-          <nav className="arch-crumbs" aria-label="Scope">
-            {parts.length === 0 ? (
-              <span aria-current="page">Project</span>
-            ) : (
-              <a href={hrefView(id, "arch")}>Project</a>
-            )}
-            {parts.map((seg, i) => {
-              const path = parts.slice(0, i + 1).join("/");
-              const current = i === parts.length - 1;
-              return (
-                <span key={path}>
-                  <span className="muted"> / </span>
-                  {current ? <span aria-current="page">{seg}</span> : <a href={hrefView(id, "arch", { scope: path })}>{seg}</a>}
-                </span>
-              );
-            })}
-          </nav>
-          <a className="arch-flow small" href={hrefView(id, "flow", { scope: at })}>
-            Open in Flow
-          </a>
-        </div>
-      )}
-      {scoped !== null && !empty && (
-        <p className="muted small arch-caption">
-          Inside {at}: {scoped.cards === "folders" ? `${plural(innerCount, "folder")} (cut at depth ${scoped.depth})` : plural(innerCount, "file")}.
-          Left: what imports it. Right: what it imports.
-          {scoped.fromFile !== undefined && " Scope is a file; showing its folder."}
+          <p className="muted small arch-caption">
+            Inside {at}: {scoped.cards === "folders" ? `${plural(innerCount, "folder")} (cut at depth ${scoped.depth})` : plural(innerCount, "file")}.
+            Left: what imports it. Right: what it imports.
+            {scoped.cards === "files" && scoped.other > 0 && ` ${plural(scoped.other, "file")} without code ${scoped.other === 1 ? "is" : "are"} not drawn.`}
+            {scoped.fromFile !== undefined && " Scope is a file; showing its folder."}
           {scoped.notDrawn > 0 &&
             ` ${scoped.notDrawn} cross-package ${scoped.notDrawn === 1 ? "link has" : "links have"} no import site and ${
               scoped.notDrawn === 1 ? "is" : "are"
             } not drawn.`}
-        </p>
+          </p>
+          <a className="arch-flow small" href={hrefView(id, "flow", { scope: at })}>
+            Open in Flow
+          </a>
+        </div>
       )}
       {scoped === null && shown.depth !== undefined && (
         <p className="muted small arch-caption">
@@ -152,12 +147,12 @@ function ArchDiagram({ id, scope, model: whole }: { id: string; scope: string; m
         </p>
       )}
       {empty && <p className="muted">No source files in {at}.</p>}
-      {!empty && <div className="arch-scroll">
+      {!empty && <div className="arch-scroll" ref={setScrollEl}>
         <svg
           className="arch-svg"
-          width={fitWidth ? undefined : layout.width}
-          height={fitWidth ? undefined : layout.height}
-          style={fitWidth ? { width: "100%", height: "auto" } : undefined}
+          width={scaled ? undefined : layout.width}
+          height={scaled ? undefined : layout.height}
+          style={scaled ? { width: "100%", height: "auto" } : undefined}
           viewBox={`0 0 ${layout.width} ${layout.height}`}
           role="img"
           aria-label="Package architecture"
@@ -219,7 +214,14 @@ function ArchDiagram({ id, scope, model: whole }: { id: string; scope: string; m
                 onKeyDown={(e) => boxKey(box, e)}
               >
                 <title>{`${box.pkg.path}: ${action.toLowerCase()}`}</title>
-                <rect x={box.x} y={box.y} width={box.w} height={box.h} rx={14} style={{ fill: `var(--band-${box.column % 6})` }} />
+                <rect
+                  x={box.x}
+                  y={box.y}
+                  width={box.w}
+                  height={box.h}
+                  rx={14}
+                  style={{ fill: `var(--band-${scoped ? layerBand(box.pkg.layer) : box.column % 6})` }}
+                />
                 <text className="arch-name" x={box.x + 14} y={box.y + 34}>
                   {fit(box.pkg.name, LABEL_CHARS)}
                 </text>

@@ -51,19 +51,23 @@ scope)` in `apps/web/src/arch/scoped.ts`, a pure function of the root model, so 
   package that contains it.
 - The middle band holds the cards inside the scope. They are the folders of its files that hold code, cut at the
   shallowest depth that gives at least three such folders, with the scope's own files as "(files)" beside its
-  subfolders. When fewer than three folders hold code and the scope has at most 60 files, each file is a card instead.
-  Folders without code are left out and counted under the diagram.
+  subfolders. When fewer than three folders hold code and the scope has at most 60 drawn files, each file is a card
+  instead. A file is drawn when it holds a function or an import reaches it, so a package.json or config file is not a
+  card. Folders without code are left out and counted under the diagram; files left out are counted in the caption.
 - The left column ("Imported by") holds what imports the scope. The right column ("Imports") holds what the scope
   imports. A card is a package, or for a file of the scope's own package, the sibling folder at the scope's depth. Each
   boundary card's line counts its imports over its arrows.
 - Arrows come from the file-level imports, and from the package edges for imports the IR could not resolve to a file
   (workspace specifiers). A package import site that is already a file import is not counted twice. Package edges with
   no import site (calls only) cannot be drawn, and the caption counts them.
-- The band is two columns wide on a desktop, one below 1200 px. The side panel also lists the scope's package's
-  external packages.
+- The band is two cards wide when the diagram's container (the centre pane) is at least 1400 px, one card otherwise. A
+  drawing wider than the container is scaled to fit, so no column is cut off. The cards are coloured by layer: the left,
+  the band and the right each keep one colour. The side panel also lists the scope's package's external packages.
 - A click on a folder or package card opens that scope in the Arch tab. A click on a file card opens its source. The
-  breadcrumb moves up the scope, and "Open in Flow" opens the scope in the Flow tab. At the root, a package or folder
-  click also opens Arch, at that scope.
+  workspace's scope crumbs keep the Arch tab, so the view adds no breadcrumb of its own. "Open in Flow" opens the scope in
+  the Flow tab. At the root, a package or folder click also opens Arch, at that scope.
+- A boundary card for the root package is named "project root". A sibling folder is named by its path inside the
+  package, and its full path is in the card's tooltip.
 
 ### What the diagram does not show
 

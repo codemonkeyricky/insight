@@ -1,4 +1,4 @@
-import type { ArchFile, ArchFileImport, ArchModel, ArchPackage, ArchUnresolved, ArchViolation } from "@insight/lens-dependencies";
+import type { ArchEdge, ArchFile, ArchFileImport, ArchModel, ArchPackage, ArchUnresolved, ArchViolation } from "@insight/lens-dependencies";
 import type { Span } from "../api";
 import { aggregateFolderEdges, chooseFolderDepth, folderOf, MIN_MODULES, type DiagramModel } from "./folders";
 
@@ -10,10 +10,14 @@ import { aggregateFolderEdges, chooseFolderDepth, folderOf, MIN_MODULES, type Di
 export const IMPORTED_BY = "Imported by";
 /** The layer of the cards on the right: packages (or folders) the scope imports. */
 export const IMPORTS = "Imports";
-/** Above this many inner files, a scope keeps its folder cards rather than one card per file. */
+/** Above this many drawn files, a scope keeps its folder cards rather than one card per file. */
 export const MAX_FILE_CARDS = 60;
+/** The container width (px) from which the middle band is two cards wide. Narrower, it is one. */
+export const WIDE_BAND_MIN = 1400;
 /** Where a package's entry file may be, in the order it is looked for, under the package directory. */
 const ENTRY_FILES = ["src/index.ts", "src/index.tsx", "index.ts", "src/index.js", "index.js", "src/main.ts"];
+/** The name of the root package's card. */
+const ROOT_NAME = "project root";
 
 /** A diagram of one scope. `cards` says whether the middle band holds folders or one card per file. */
 export interface ScopedDiagram extends DiagramModel {
@@ -28,11 +32,26 @@ export interface ScopedDiagram extends DiagramModel {
   inner: string;
   /** Package edges with no import sites at all (calls only), which the diagram cannot draw. */
   notDrawn: number;
+  /**
+   * What the diagram leaves out: with folder cards, the folders without code. With file cards, the files without code that
+   * no import reaches (the scope's files that have no card).
+   */
+  other: number;
+}
+
+/**
+ * The number of cards per row in the middle band: two when the container is wide enough, one below. The window's width is
+ * not used: a narrow centre pane gets one card per row even on a large screen.
+ */
+export function bandPerRow(containerWidth: number): number {
+  return containerWidth >= WIDE_BAND_MIN ? 2 : 1;
 }
 
 const spanKey = (s: Span): string => JSON.stringify(s);
 /** True when `path` lies under the folder `dir`, and is not `dir` itself. */
 const under = (path: string, dir: string): boolean => path.startsWith(`${dir}/`);
+/** The name of a package's card: the root package is "project root". */
+const packageName = (p: ArchPackage): string => (p.path === "." ? ROOT_NAME : p.name);
 
 /** The nearest package of a path: the one with the longest path that contains it. Undefined outside all packages. */
 function packageOf(path: string, packages: readonly ArchPackage[]): ArchPackage | undefined {
@@ -55,6 +74,35 @@ function countUnder(files: readonly ArchFile[], key: string, p: ArchPackage | un
   return files.filter((f) => key === "." || f.path === key || under(f.path, key)).length;
 }
 
+/** The entry file of a package, when it has one of the usual names. */
+function entryOf(pkg: ArchPackage, files: readonly ArchFile[]): string | undefined {
+  const candidates = ENTRY_FILES.map((c) => (pkg.path === "." ? c : `${pkg.path}/${c}`));
+  return candidates.find((c) => files.some((f) => f.path === c));
+}
+
+/** A package-edge import site that no file import already counts. */
+interface PackageSite {
+  edge: ArchEdge;
+  site: Span;
+  /** True when the importing package is the scope's package (the site is one of its files'). */
+  outgoing: boolean;
+}
+
+/**
+ * The package-edge sites that touch the scope's package and are not file imports. A site already counted as a file import
+ * is skipped, so nothing counts twice.
+ */
+function undrawnSites(model: ArchModel, pkg: ArchPackage, seen: ReadonlySet<string>): PackageSite[] {
+  const out: PackageSite[] = [];
+  for (const e of model.edges) {
+    const outgoing = e.from === pkg.id && e.to !== pkg.id;
+    const incoming = e.to === pkg.id && e.from !== pkg.id;
+    if (!outgoing && !incoming) continue;
+    for (const site of e.sites) if (!seen.has(spanKey(site))) out.push({ edge: e, site, outgoing });
+  }
+  return out;
+}
+
 /**
  * The diagram of a scope, derived from the root model. Null for the root scope, and for a file at the root (its folder is
  * the project), so the caller draws the whole project then.
@@ -68,7 +116,26 @@ export function scopedView(model: ArchModel, scope: string): ScopedDiagram | nul
   const pkg = packageOf(dir, model.packages);
   const inner = `Inside ${dir.split("/").pop() ?? dir}`;
   const innerFiles = model.files.filter((f) => under(f.path, dir));
-  // Card ids of the inner files, by their path relative to the scope. Files without a card are absent.
+
+  const seen = new Set<string>();
+  for (const i of model.fileImports) for (const s of i.sites) seen.add(spanKey(s));
+  const undrawn = pkg === undefined ? [] : undrawnSites(model, pkg, seen);
+  const entry = pkg === undefined ? undefined : entryOf(pkg, model.files);
+  const notDrawn = pkg === undefined ? 0 : model.edges.filter((e) => (e.from === pkg.id || e.to === pkg.id) && e.sites.length === 0).length;
+
+  // A file is drawn when it holds a function or an import reaches it. Other files (package.json, config) are not cards.
+  const linked = new Set<string>();
+  for (const i of model.fileImports) {
+    if (under(i.from, dir)) linked.add(i.from);
+    if (under(i.to, dir)) linked.add(i.to);
+  }
+  for (const u of undrawn) {
+    if (u.outgoing && under(u.site.file, dir)) linked.add(u.site.file);
+    if (!u.outgoing && entry !== undefined && under(entry, dir)) linked.add(entry);
+  }
+  const drawn = innerFiles.filter((f) => f.functions > 0 || linked.has(f.path));
+
+  // The inner cards: folders of the scope's files, or one card per drawn file when the folders are too few.
   const cardOfRel = new Map<string, string>();
   const cards = new Map<string, ArchPackage>();
   let kind: "folders" | "files" = "folders";
@@ -88,9 +155,9 @@ export function scopedView(model: ArchModel, scope: string): ScopedDiagram | nul
     }
     const anyCode = rel.some((f) => f.functions > 0);
     const kept = [...totals].filter(([, c]) => !anyCode || c.functions > 0);
-    other = totals.size - kept.length;
 
-    if (kept.length >= MIN_MODULES || innerFiles.length > MAX_FILE_CARDS) {
+    if (kept.length >= MIN_MODULES || drawn.length > MAX_FILE_CARDS) {
+      other = totals.size - kept.length;
       const keptIds = new Set(kept.map(([fd]) => fd));
       for (const [fd, c] of kept) {
         const id = fd === "." ? dir : `${dir}/${fd}`;
@@ -105,8 +172,8 @@ export function scopedView(model: ArchModel, scope: string): ScopedDiagram | nul
     } else {
       kind = "files";
       depth = undefined;
-      other = 0;
-      for (const f of innerFiles) {
+      other = innerFiles.length - drawn.length;
+      for (const f of drawn) {
         const id = f.path;
         cards.set(id, { id, name: id.split("/").pop() ?? id, path: id, layer: inner, fileCount: 1, functions: f.functions });
         cardOfRel.set(f.path.slice(dir.length + 1), id);
@@ -122,31 +189,32 @@ export function scopedView(model: ArchModel, scope: string): ScopedDiagram | nul
   };
 
   // Boundary cards. An outside file's end is its package, or for a file of the scope's own package, the sibling folder at the
-  // scope's depth. A file in no package is keyed by its top-level directory.
+  // scope's depth, named by its path inside the package. A file in no package is keyed by its top-level directory.
   const boundary = new Map<string, ArchPackage>();
   const depthOfDir = dir.split("/").length;
-  const boundaryCard = (layer: string, prefix: string, key: string, p: ArchPackage | undefined): string => {
+  const boundaryCard = (layer: string, prefix: string, key: string, name: string, p: ArchPackage | undefined): string => {
     const id = `${prefix}${key}`;
     if (!boundary.has(id)) {
-      boundary.set(id, { id, name: p?.name ?? key, path: key, layer, fileCount: countUnder(model.files, key, p) });
+      boundary.set(id, { id, name, path: key, layer, fileCount: countUnder(model.files, key, p) });
     }
     return id;
   };
-  const keyOf = (file: string): { key: string; pkg?: ArchPackage } => {
+  const keyOf = (file: string): { key: string; name: string; pkg?: ArchPackage } => {
     const p = packageOf(file, model.packages);
     if (pkg !== undefined && p?.id === pkg.id) {
       const dirs = file.split("/").slice(0, -1);
-      return { key: dirs.slice(0, depthOfDir).join("/") || "." };
+      const key = dirs.slice(0, depthOfDir).join("/") || ".";
+      const name = key === pkg.path ? "package root" : pkg.path === "." ? key : key.slice(pkg.path.length + 1);
+      return { key, name };
     }
-    if (p !== undefined) return { key: p.id, pkg: p };
+    if (p !== undefined) return { key: p.id, name: packageName(p), pkg: p };
     const segs = file.split("/");
-    return { key: segs.length > 1 ? (segs[0] as string) : "." };
+    const key = segs.length > 1 ? (segs[0] as string) : ".";
+    return { key, name: key === "." ? ROOT_NAME : key };
   };
 
   // The file-level imports at the ends of cards. Imports between two outside files are left out.
   const mapped: ArchFileImport[] = [];
-  const seen = new Set<string>();
-  for (const i of model.fileImports) for (const s of i.sites) seen.add(spanKey(s));
   for (const i of model.fileImports) {
     const fromIn = under(i.from, dir);
     const toIn = under(i.to, dir);
@@ -157,46 +225,31 @@ export function scopedView(model: ArchModel, scope: string): ScopedDiagram | nul
     } else if (fromIn) {
       const from = cardOf(i.from);
       if (from === undefined) continue;
-      const { key, pkg: p } = keyOf(i.to);
-      mapped.push({ ...i, from, to: boundaryCard(IMPORTS, "out:", key, p) });
+      const k = keyOf(i.to);
+      mapped.push({ ...i, from, to: boundaryCard(IMPORTS, "out:", k.key, k.name, k.pkg) });
     } else if (toIn) {
       const to = cardOf(i.to);
       if (to === undefined) continue;
-      const { key, pkg: p } = keyOf(i.from);
-      mapped.push({ ...i, from: boundaryCard(IMPORTED_BY, "in:", key, p), to });
+      const k = keyOf(i.from);
+      mapped.push({ ...i, from: boundaryCard(IMPORTED_BY, "in:", k.key, k.name, k.pkg), to });
     }
   }
 
-  // Package edges for imports the IR could not resolve to a file (workspace specifiers). A site already counted as a file
-  // import is skipped, so nothing counts twice. An edge with no sites at all cannot be drawn and is counted.
-  let notDrawn = 0;
-  if (pkg !== undefined) {
-    const entry = ENTRY_FILES.map((c) => (pkg.path === "." ? c : `${pkg.path}/${c}`)).find((c) => model.files.some((f) => f.path === c));
-    for (const e of model.edges) {
-      const outgoing = e.from === pkg.id && e.to !== pkg.id;
-      const incoming = e.to === pkg.id && e.from !== pkg.id;
-      if (!outgoing && !incoming) continue;
-      if (e.sites.length === 0) {
-        notDrawn++;
-        continue;
-      }
-      // A boundary card is made only when an edge is drawn from it, so no card is left without arrows.
-      if (outgoing) {
-        for (const site of e.sites) {
-          const from = seen.has(spanKey(site)) ? undefined : cardOf(site.file);
-          if (from === undefined) continue;
-          const to = boundaryCard(IMPORTS, "out:", e.to, model.packages.find((p) => p.id === e.to));
-          mapped.push({ from, to, imports: 1, confidence: e.confidence, sites: [site] });
-        }
-      } else {
-        const to = entry === undefined ? undefined : cardOf(entry);
-        if (to === undefined) continue;
-        for (const site of e.sites) {
-          if (seen.has(spanKey(site))) continue;
-          const from = boundaryCard(IMPORTED_BY, "in:", e.from, model.packages.find((p) => p.id === e.from));
-          mapped.push({ from, to, imports: 1, confidence: e.confidence, sites: [site] });
-        }
-      }
+  // Package-edge sites: the imports the IR could not resolve to a file (workspace specifiers). A boundary card is made only
+  // when an edge is drawn from it, so no card is left without arrows.
+  for (const u of undrawn) {
+    if (u.outgoing) {
+      const from = cardOf(u.site.file);
+      if (from === undefined) continue;
+      const target = model.packages.find((p) => p.id === u.edge.to);
+      const to = boundaryCard(IMPORTS, "out:", u.edge.to, target ? packageName(target) : u.edge.to, target);
+      mapped.push({ from, to, imports: 1, confidence: u.edge.confidence, sites: [u.site] });
+    } else {
+      const to = entry === undefined ? undefined : cardOf(entry);
+      if (to === undefined) continue;
+      const source = model.packages.find((p) => p.id === u.edge.from);
+      const from = boundaryCard(IMPORTED_BY, "in:", u.edge.from, source ? packageName(source) : u.edge.from, source);
+      mapped.push({ from, to, imports: 1, confidence: u.edge.confidence, sites: [u.site] });
     }
   }
 

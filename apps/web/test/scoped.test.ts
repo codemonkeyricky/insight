@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ArchEdge, ArchFile, ArchFileImport, ArchModel, ArchPackage } from "@insight/lens-dependencies";
-import { IMPORTED_BY, IMPORTS, scopedView } from "../src/arch/scoped.js";
+import { bandPerRow, IMPORTED_BY, IMPORTS, scopedView } from "../src/arch/scoped.js";
 
 const span = (file: string, line: number) => ({ file, start: [line, 0] as [number, number], end: [line, 10] as [number, number] });
 const pkg = (id: string, layer: string, fileCount: number): ArchPackage => ({ id, name: id.split("/").pop() ?? id, path: id, layer, fileCount });
@@ -213,5 +213,82 @@ describe("scopedView", () => {
     const edges = view?.model.edges ?? [];
     const sorted = [...edges].sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to));
     expect(edges.map((e) => [e.from, e.to])).toEqual(sorted.map((e) => [e.from, e.to]));
+  });
+});
+
+describe("scopedView names and non-code files", () => {
+  const flat: ArchModel = {
+    layers: ["lens"],
+    packages: [pkg("packages/flat", "lens", 5)],
+    edges: [],
+    unresolved: [],
+    externals: [],
+    violations: [],
+    files: [
+      { path: "packages/flat/package.json", functions: 0 },
+      { path: "packages/flat/tsconfig.json", functions: 0 },
+      { path: "packages/flat/src/a.ts", functions: 1 },
+      { path: "packages/flat/src/b.ts", functions: 1 },
+      { path: "packages/flat/src/index.ts", functions: 0 },
+    ],
+    // index.ts has no functions but imports a.ts, so it is drawn.
+    fileImports: [imp("packages/flat/src/index.ts", "packages/flat/src/a.ts", 1, "exact", [span("packages/flat/src/index.ts", 1)])],
+  };
+
+  it("draws no card for a file without code that no import reaches, and counts it", () => {
+    const view = scopedView(flat, "packages/flat");
+    expect(view?.cards).toBe("files");
+    expect(view?.model.packages.map((p) => p.id)).toEqual([
+      "packages/flat/src/a.ts",
+      "packages/flat/src/b.ts",
+      "packages/flat/src/index.ts",
+    ]);
+    expect(view?.other).toBe(2);
+  });
+
+  it("keeps a file without code that has an import edge", () => {
+    const view = scopedView(flat, "packages/flat");
+    expect(view?.model.edges.map((e) => [e.from, e.to])).toEqual([["packages/flat/src/index.ts", "packages/flat/src/a.ts"]]);
+  });
+
+  it("names the root package's boundary card 'project root'", () => {
+    const root: ArchModel = {
+      layers: ["app", "lens"],
+      packages: [
+        { id: ".", name: ".", path: ".", layer: "app", fileCount: 1 },
+        { id: "packages/x", name: "x", path: "packages/x", layer: "lens", fileCount: 2 },
+      ],
+      edges: [],
+      unresolved: [],
+      externals: [],
+      violations: [],
+      files: [
+        { path: "scripts/s.ts", functions: 1 },
+        { path: "packages/x/src/a.ts", functions: 1 },
+      ],
+      fileImports: [imp("scripts/s.ts", "packages/x/src/a.ts", 1, "exact", [span("scripts/s.ts", 1)])],
+    };
+    const view = scopedView(root, "packages/x");
+    expect(view?.model.packages.find((p) => p.id === "in:.")).toMatchObject({ name: "project root", layer: IMPORTED_BY });
+  });
+
+  it("names a sibling folder by its path inside the package, with the full path as its id", () => {
+    const view = scopedView(model, `${LENS}/src/sub`);
+    expect(view?.model.packages.find((p) => p.id === `out:${LENS}/src`)).toMatchObject({ name: "src", path: `${LENS}/src` });
+    expect(view?.model.packages.find((p) => p.id === `in:${LENS}/src/sub2`)).toMatchObject({ name: "src/sub2" });
+  });
+
+  it("names a boundary package by its name", () => {
+    const view = scopedView(model, LENS);
+    expect(view?.model.packages.find((p) => p.id === `out:${CORE}`)).toMatchObject({ name: "core" });
+  });
+});
+
+describe("bandPerRow", () => {
+  it("is two cards wide from 1400 px, one below it", () => {
+    expect(bandPerRow(1399)).toBe(1);
+    expect(bandPerRow(1400)).toBe(2);
+    expect(bandPerRow(846)).toBe(1);
+    expect(bandPerRow(0)).toBe(1);
   });
 });
