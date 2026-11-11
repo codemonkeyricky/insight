@@ -79,7 +79,7 @@ function Rows({ dir, links }: { dir: Dir; links: Links }) {
             >
               {d.name}
             </a>{" "}
-            <span className="count">{countFiles(d)}</span>
+            <span className="badge-count is-neutral">{countFiles(d)}</span>
           </summary>
           <div className="dir-kids">
             <Rows dir={d} links={links} />
@@ -96,7 +96,7 @@ function Rows({ dir, links }: { dir: Dir; links: Links }) {
           onClick={() => links.onFile(f.path)}
         >
           <span className="fname">{basename(f.path)}</span>
-          {f.findings > 0 && <span className="count warn" title={`${f.findings} findings`}>{f.findings}</span>}
+          {f.findings > 0 && <span className="badge-count is-warn" title={`${f.findings} findings`}>{f.findings}</span>}
         </a>
       ))}
     </>
@@ -152,7 +152,7 @@ export function Explorer({ id, tab, fileTab = tab, scope, files }: { id: string;
         onChange={(e) => setFilter(e.target.value)}
       />
       <a href={hrefView(id, tab)} className={scope === "" ? "node root on" : "node root"} aria-current={scope === "" ? "page" : undefined}>
-        All files <span className="count">{files.length}</span>
+        All files <span className="badge-count is-neutral">{files.length}</span>
       </a>
       <Rows dir={tree} links={links} />
       {shown.length === 0 && <p className="muted small">No file matches.</p>}

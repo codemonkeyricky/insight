@@ -43,7 +43,12 @@ export function LayersPanel({ shown, findingCount, onChange, onClose, roots }: P
       </label>
       <label className="sh-check">
         <input type="checkbox" checked={shown.findings} onChange={(e) => onChange("findings", e.target.checked)} /> Findings
-        {findingCount !== undefined && <span className="sh-count-inline"> {findingCount}</span>}
+        {findingCount !== undefined && (
+          <>
+            {" "}
+            <span className="badge-count is-warn">{findingCount}</span>
+          </>
+        )}
       </label>
       <label className="sh-check">
         <input type="checkbox" checked={shown.lambdas} onChange={(e) => onChange("lambdas", e.target.checked)} /> Lambdas

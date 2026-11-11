@@ -109,7 +109,7 @@ export function FarCards({ cards, pairs, area, shown, findingsOn, onOpen, onWhee
                 <span className="zm-far-name">{c.label}</span>
                 <span className="zm-far-count">{fns}</span>
                 {findingsOn && c.findings > 0 && (
-                  <span className="zm-far-pill" aria-label={`${c.findings} finding${c.findings === 1 ? "" : "s"}`}>
+                  <span className="zm-far-pill badge-count" aria-label={`${c.findings} finding${c.findings === 1 ? "" : "s"}`}>
                     {badgeText(c.findings)}
                   </span>
                 )}
