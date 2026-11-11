@@ -1,8 +1,14 @@
 import { RETIRED_LENSES } from "./scopeLenses";
 import { isRepoName } from "./hostedRepo";
 
-/** The tabs every project has. Any other tab id is a lens id. */
-export const BUILTIN_TABS = ["overview", "source", "flow", "arch", "findings", "compare", "review"] as const;
+/**
+ * The tabs every project has. Any other tab id is a lens id. The Source and Findings tabs are gone: their old URLs
+ * redirect to Overview (see redirectFor), and their links open the code pane instead.
+ */
+export const BUILTIN_TABS = ["overview", "flow", "arch", "compare", "review"] as const;
+
+/** The views that were tabs once and now redirect to Overview, keeping the scope and line of the link. */
+const RETIRED_VIEWS: readonly string[] = ["source", "findings"];
 
 export type Route =
   | { name: "projects" }
@@ -129,10 +135,14 @@ export function hrefView(id: string, tab: string, opts: ViewOptions = {}): strin
 /**
  * Where a route must be sent instead of shown, or undefined when it is shown as it is. A retired lens tab (the
  * execution lens) goes to the flow tab, whose canvas draws the same threads, coroutines and functions, for the same scope.
+ * The retired Source and Findings views go to Overview. The scope and line ride along, so a link to a file's line still
+ * opens that file in the code pane.
  */
 export function redirectFor(route: Route): string | undefined {
-  if (route.name !== "workspace" || !RETIRED_LENSES.includes(route.tab)) return undefined;
-  return hrefView(route.id, "flow", { scope: route.scope });
+  if (route.name !== "workspace") return undefined;
+  if (RETIRED_LENSES.includes(route.tab)) return hrefView(route.id, "flow", { scope: route.scope });
+  if (RETIRED_VIEWS.includes(route.tab)) return hrefView(route.id, "overview", { scope: route.scope, ...(route.line ? { line: route.line } : {}) });
+  return undefined;
 }
 
 export const hrefProject = (id: string) => `#/projects/${enc(id)}`;
@@ -140,9 +150,13 @@ export const hrefLens = (id: string, lensId: string, scope?: string) => hrefView
 export const hrefReview = (id: string) => hrefView(id, "review");
 export const hrefCompare = (id: string, base?: string, head?: string) => hrefView(id, "compare", { ...(base ? { base } : {}), ...(head ? { head } : {}) });
 
-/** A link to the source of a file, optionally at a line (1-based). */
-export const hrefFile = (id: string, path?: string, line?: number) =>
-  hrefView(id, "source", { ...(path ? { scope: path } : {}), ...(path && line ? { line } : {}) });
+/**
+ * A link to a file, optionally at a line (1-based). It opens the file in the code pane on the given tab, which is the flow
+ * tab unless a page (such as Arch) passes its own, so the link keeps that tab. The file is the scope, as it was for the old
+ * Source tab, and the line opens the code pane there.
+ */
+export const hrefFile = (id: string, path?: string, line?: number, tab = "flow") =>
+  hrefView(id, tab, { ...(path ? { scope: path } : {}), ...(path && line ? { line } : {}) });
 
 /** A link to the flow chart of a file, optionally opened on one function. */
 export const hrefFlow = (id: string, path: string, fn?: string) => hrefView(id, "flow", { scope: path, ...(fn ? { fn } : {}) });

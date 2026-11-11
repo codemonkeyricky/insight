@@ -35,3 +35,9 @@ export function targetPath(t: CodeTarget): string {
 export function scopeCodeTarget(scope: string, isFile: boolean, line?: number): CodeTarget | undefined {
   return isFile && scope !== "" ? fileTarget(scope, line) : undefined;
 }
+
+/**
+ * A link to a line (a file:line link, which the Arch and lens pages and the flow map use) opens the code pane at that line.
+ * A file scope with no line only sets what the pane shows.
+ */
+export const opensCodePane = (line?: number): boolean => line !== undefined && line > 0;
