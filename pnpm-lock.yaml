@@ -168,6 +168,18 @@ importers:
         specifier: ^4.0.3
         version: 4.0.3
 
+  packages/export:
+    dependencies:
+      '@insight/core':
+        specifier: workspace:*
+        version: link:../core
+      '@insight/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+      '@insight/server':
+        specifier: workspace:*
+        version: link:../../apps/server
+
   packages/flow:
     dependencies:
       '@insight/ir':
