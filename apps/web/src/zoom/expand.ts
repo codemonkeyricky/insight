@@ -24,7 +24,9 @@ const REVEAL_MARGIN = 16;
  * the chart of the expansion of `fnId`, with the step's rect in that chart's units (its top-left is the chart's origin
  * plus this rect's corner).
  */
-export type ExpandAnchor = { kind: "box"; nodeId: string; rect: Rect } | { kind: "step"; fnId: string; rect: Rect; stepId?: string };
+export type ExpandAnchor =
+  | { kind: "box"; nodeId: string; rect: Rect; /** The expansion replaces the card in its own slot (a roots-only card), instead of opening beside it. */ inPlace?: boolean }
+  | { kind: "step"; fnId: string; rect: Rect; stepId?: string };
 
 /** The kind of box a thread or process step opens: its header names the runtime ("Worker · print.worker"). */
 export interface ExpansionRuntime {
@@ -127,7 +129,9 @@ export function reflow(list: readonly Expansion[], view: Rect | undefined): Expa
     // A slotted map's expansions never shift the columns: the layout keeps their room, so the pivot is past every box.
     const pivotOf = (p: number) => (view === undefined ? Infinity : p);
     if (e.anchor.kind === "box") {
-      at = { ...placeOnBox(e.anchor.rect, view), pivot: pivotOf(e.anchor.rect.x + e.anchor.rect.w) };
+      // An in-place expansion takes the card's own top-left corner: it is the card, grown.
+      const where = e.anchor.inPlace === true ? { x: e.anchor.rect.x, y: e.anchor.rect.y } : placeOnBox(e.anchor.rect, view);
+      at = { ...where, pivot: pivotOf(e.anchor.rect.x + e.anchor.rect.w) };
     } else {
       const parent = byFn.get(e.anchor.fnId);
       const from = parent === undefined ? undefined : place(parent, hops + 1);
@@ -272,7 +276,8 @@ export function footprintOf(list: readonly Expansion[]): Map<string, { w: number
     if (hops > list.length) return undefined;
     let out: { x: number; y: number; root: string };
     if (e.anchor.kind === "box") {
-      out = { x: EXPAND_GAP, y: SLOT_TOP, root: e.anchor.nodeId };
+      // In place, the expansion starts at the card's own left edge and top, so it takes the card's slot and grows from it.
+      out = e.anchor.inPlace === true ? { x: -e.anchor.rect.w, y: 0, root: e.anchor.nodeId } : { x: EXPAND_GAP, y: SLOT_TOP, root: e.anchor.nodeId };
     } else {
       const parent = byFn.get(e.anchor.fnId);
       const from = parent === undefined ? undefined : place(parent, hops + 1);
@@ -289,7 +294,7 @@ export function footprintOf(list: readonly Expansion[]): Map<string, { w: number
     const cur = room.get(p.root) ?? { w: 0, h: 0 };
     room.set(p.root, { w: Math.max(cur.w, p.x + e.w), h: Math.max(cur.h, p.y + e.h) });
   }
-  for (const [root, r] of room) room.set(root, { w: r.w + SLOT_PAD, h: r.h + SLOT_PAD });
+  for (const [root, r] of room) room.set(root, { w: Math.max(0, r.w + SLOT_PAD), h: r.h + SLOT_PAD });
   return room;
 }
 
@@ -354,6 +359,8 @@ export interface CalloutGeometry {
  * expansion's left edge. Undefined when a step's parent expansion is not open.
  */
 export function calloutOf(e: Expansion, list: readonly Expansion[]): CalloutGeometry | undefined {
+  // An in-place expansion is the card itself: nothing hangs from it.
+  if (e.anchor.kind === "box" && e.anchor.inPlace === true) return undefined;
   const ex = e.x;
   const eyT = e.y + CALLOUT_INSET;
   const eyB = e.y + e.h - CALLOUT_INSET;
@@ -414,4 +421,9 @@ export function sceneCamera(scene: Rect, roomWidth: number, maxK: number, narrow
   const k = narrow ? Math.min(maxK, Math.max(fitW, READABLE_COLUMN_K)) : Math.min(maxK, fitW);
   const scale = Math.max(0.02, k);
   return { k: scale, x: pad - scene.x * scale, y: pad - scene.y * scale };
+}
+
+/** Whether the expansion replaces its card in the card's own slot. */
+export function isInPlace(e: Expansion): boolean {
+  return e.anchor.kind === "box" && e.anchor.inPlace === true;
 }
