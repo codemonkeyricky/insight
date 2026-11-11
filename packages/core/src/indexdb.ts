@@ -1,7 +1,16 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import Database from "better-sqlite3";
+import type Database from "better-sqlite3";
 import type { IRDocument } from "@insight/ir";
+
+/**
+ * Opens a SQLite database. better-sqlite3 is a native module, so it is imported here and nowhere else: a run that
+ * writes no index never loads it, and a bundle without it still works.
+ */
+async function openDatabase(file: string, options?: Database.Options): Promise<Database.Database> {
+  const { default: Driver } = await import("better-sqlite3");
+  return new Driver(file, options);
+}
 
 const SCHEMA = `
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -29,9 +38,9 @@ CREATE TABLE findings (
  * Rebuilds the SQLite index from a document. The database holds no state of its own: deleting
  * it and running again gives the same contents. Candidate edges get one row per candidate.
  */
-export function writeIndex(dbPath: string, doc: IRDocument, snapshot: string): void {
+export async function writeIndex(dbPath: string, doc: IRDocument, snapshot: string): Promise<void> {
   mkdirSync(dirname(dbPath), { recursive: true });
-  const db = new Database(dbPath);
+  const db = await openDatabase(dbPath);
   try {
     db.exec(
       "DROP TABLE IF EXISTS meta; DROP TABLE IF EXISTS nodes; DROP TABLE IF EXISTS edges; DROP TABLE IF EXISTS findings;",
@@ -75,11 +84,11 @@ export function writeIndex(dbPath: string, doc: IRDocument, snapshot: string): v
 }
 
 /** The snapshot id the database was last built from, or undefined when it is missing or unreadable. */
-export function readIndexedSnapshot(dbPath: string): string | undefined {
+export async function readIndexedSnapshot(dbPath: string): Promise<string | undefined> {
   if (!existsSync(dbPath)) return undefined;
   let db: Database.Database | undefined;
   try {
-    db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    db = await openDatabase(dbPath, { readonly: true, fileMustExist: true });
     const row = db.prepare("SELECT value FROM meta WHERE key = 'snapshot'").get() as { value: string } | undefined;
     return row?.value;
   } catch {

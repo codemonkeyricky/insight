@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { runIndex, type IndexOptions, type IndexPhase, type IndexReport } from "@insight/core";
+import { runIndex, type IndexLimits, type IndexOptions, type IndexPhase, type IndexReport } from "@insight/core";
 import { headOf, isDirty, syncCheckout } from "./git.js";
 import type { LastRun, ProjectRecord, ProjectRegistry } from "./registry.js";
 
@@ -43,12 +43,31 @@ export type JobEvent =
   | { type: "done"; projectId: string; last: LastRun; at: string }
   | { type: "failed"; projectId: string; error: string; at: string };
 
+/** How every run is set up. These are the core's indexing options, which a hosted server narrows. */
+export interface IndexingOptions {
+  /** Load the project's own `.insight/plugins` and lens settings. See IndexOptions. Defaults to true. */
+  projectPlugins?: boolean;
+  /** Write the SQLite index. Defaults to true. */
+  writeIndexDb?: boolean;
+  /** Caps on what a run reads. Unset means no caps. */
+  limits?: IndexLimits;
+  /** Snapshots kept per project. Defaults to the core default. */
+  keepSnapshots?: number;
+  /**
+   * Whether build tools may run at all. Defaults to true. False overrides any project that allows them, so the
+   * flag on a project record cannot re-enable them on a server that forbids them.
+   */
+  allowBuildTools?: boolean;
+}
+
 export interface JobRunnerOptions {
   registry: ProjectRegistry;
   /** Opt-in schedule that re-indexes every project. Zero, the default, means no schedule. */
   intervalMs?: number;
   /** The indexer. Tests pass a stub. */
   index?: IndexFn;
+  /** Passed to every run. See IndexingOptions. */
+  indexing?: IndexingOptions;
 }
 
 /** At most one `phase` event per project in this window, except for stage changes and the final update. */
@@ -188,11 +207,16 @@ export class JobRunner {
         // The snapshot reads the working tree, so uncommitted changes make the commit label incomplete.
         dirty = await isDirty(root);
       }
+      const indexing = this.opts.indexing ?? {};
       const report = await (this.opts.index ?? runIndex)({
         projectPath: root,
         stateDir: project.stateDir,
         full,
-        allowBuildTools: project.allowBuildTools,
+        allowBuildTools: project.allowBuildTools && indexing.allowBuildTools !== false,
+        projectPlugins: indexing.projectPlugins,
+        writeIndexDb: indexing.writeIndexDb,
+        limits: indexing.limits,
+        keepSnapshots: indexing.keepSnapshots,
         commit,
         onProgress: (line) => this.line(projectId, line),
         onPhase: (p) => this.advance(projectId, base, { ...p }),

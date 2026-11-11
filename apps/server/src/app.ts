@@ -1,10 +1,11 @@
+import { timingSafeEqual } from "node:crypto";
 import { existsSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import fastifyStatic from "@fastify/static";
 import { ProjectError, ProjectRegistry, insightHome, ownsStateDir, type ProjectRecord } from "./registry.js";
-import { JobRunner, type IndexFn, type JobEvent } from "./jobs.js";
+import { JobRunner, type IndexFn, type IndexingOptions, type JobEvent } from "./jobs.js";
 import {
   addAnnotation,
   checklist,
@@ -12,7 +13,9 @@ import {
   compareCommits,
   deleteAnnotation,
   InputError,
+  KEEP_SNAPSHOTS,
   keyedFindings,
+  type IndexLimits,
   listAnnotations,
   projectPaths,
   readReview,
@@ -23,6 +26,7 @@ import type { ProjectRoot } from "@insight/sdk";
 import {
   allFindings,
   analysisFor,
+  type ScopeReadOptions,
   fileFacts,
   fileFlow,
   flowSummary,
@@ -51,6 +55,28 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 /** The web app build, relative to the compiled server: apps/server/dist -> apps/web/dist. */
 export const DEFAULT_WEB_DIST = resolve(HERE, "..", "..", "web", "dist");
 
+/** The caps a hosted server applies to every run: 10,000 files, 1 MiB per file, 200 MiB in total. */
+export const HOSTED_LIMITS: IndexLimits = {
+  maxFiles: 10_000,
+  maxFileBytes: 1024 * 1024,
+  maxTotalBytes: 200 * 1024 * 1024,
+};
+
+const GITHUB_REPO_URL = /^https:\/\/github\.com\/([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))\/([A-Za-z0-9._-]{1,100})$/;
+
+/**
+ * The canonical form of a GitHub repository URL: `https://github.com/<owner>/<repo>`, with no trailing slash or `.git`.
+ * Anything else, including other hosts, ssh, file:// and `/tree/<ref>` links, is a 400.
+ */
+export function githubRepoUrl(raw: string): string {
+  const trimmed = raw.trim().replace(/\/+$/, "").replace(/\.git$/, "");
+  const m = GITHUB_REPO_URL.exec(trimmed);
+  if (!m || m[2] === "." || m[2] === "..") {
+    throw new ProjectError(400, "only https://github.com/<owner>/<repo> URLs are accepted on this server");
+  }
+  return `https://github.com/${m[1]}/${m[2]}`;
+}
+
 export interface ServerOptions {
   /** Registry and clone folder. Defaults to INSIGHT_HOME or ~/.insight. */
   home?: string;
@@ -62,6 +88,25 @@ export interface ServerOptions {
   webDist?: string | null;
   /** Arm the optional schedule on startup. Nothing is indexed at startup either way. Defaults to true. */
   autostart?: boolean;
+  /**
+   * Hosted mode, for a public server that indexes repositories it does not own. Defaults to `INSIGHT_MODE === "hosted"`.
+   * Hosted: only GitHub URLs are accepted as projects, a local path only with `allowPaths`; compare, review writes and
+   * annotation writes answer 405; DELETE needs the admin token; build tools are off; a project's own plugins and lens
+   * settings are not loaded (see `projectPlugins`); and the default caps are HOSTED_LIMITS.
+   */
+  hosted?: boolean;
+  /** Accept a local folder as a project (`path`). Defaults to true, except when hosted. */
+  allowPaths?: boolean;
+  /** The bearer token DELETE /api/projects/:id needs when hosted. Defaults to the ADMIN_TOKEN environment variable. */
+  adminToken?: string;
+  /** Load a project's own `.insight/plugins` and lens settings. Defaults to true, false when hosted. */
+  projectPlugins?: boolean;
+  /** Write the SQLite index. Defaults to true, false when hosted. */
+  writeIndexDb?: boolean;
+  /** Caps on what a run reads. Defaults to none, or HOSTED_LIMITS when hosted. */
+  limits?: IndexLimits;
+  /** Snapshots kept per project. Defaults to the core default, or 1 when hosted. */
+  keepSnapshots?: number;
 }
 
 export interface InsightServer {
@@ -88,8 +133,30 @@ function scopePathOf(raw: unknown): string {
 
 export async function buildServer(opts: ServerOptions = {}): Promise<InsightServer> {
   const home = opts.home ? resolve(opts.home) : insightHome();
+  const hosted = opts.hosted ?? process.env.INSIGHT_MODE === "hosted";
+  const allowPaths = opts.allowPaths ?? !hosted;
+  const adminToken = opts.adminToken ?? (process.env.ADMIN_TOKEN || undefined);
+  const indexing: IndexingOptions = {
+    projectPlugins: opts.projectPlugins ?? !hosted,
+    writeIndexDb: opts.writeIndexDb ?? !hosted,
+    limits: opts.limits ?? (hosted ? HOSTED_LIMITS : undefined),
+    keepSnapshots: opts.keepSnapshots ?? (hosted ? 1 : KEEP_SNAPSHOTS),
+    allowBuildTools: !hosted,
+  };
+  const scopeRead: ScopeReadOptions = { projectPlugins: indexing.projectPlugins };
   const registry = new ProjectRegistry(home);
-  const jobs = new JobRunner({ registry, intervalMs: opts.intervalMs, index: opts.index });
+  const jobs = new JobRunner({ registry, intervalMs: opts.intervalMs, index: opts.index, indexing });
+  /** Refuses a write that a hosted server does not offer. A local server offers every write. */
+  const refuseWhenHosted = (what: string): void => {
+    if (hosted) throw new ProjectError(405, `${what} is disabled on a hosted server`);
+  };
+  /** The admin token check for DELETE on a hosted server. Compared in constant time. */
+  const isAdmin = (header: string | undefined): boolean => {
+    if (!adminToken) return false;
+    const want = Buffer.from(`Bearer ${adminToken}`);
+    const got = Buffer.from(header ?? "");
+    return got.length === want.length && timingSafeEqual(got, want);
+  };
   const app = Fastify({ logger: false, bodyLimit: 64 * 1024 });
 
   app.setErrorHandler((err, _req, reply) => {
@@ -115,7 +182,11 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
   const rootFor = (p: ProjectRecord): string => registry.rootOf(p);
   /** The project's folder and its state folder. Reads of the index take this. */
   const pathsFor = (p: ProjectRecord) => projectPaths(rootFor(p), registry.stateOf(p));
-  const projectRoot = (p: ProjectRecord): ProjectRoot => ({ path: rootFor(p), name: p.name, allowBuildTools: p.allowBuildTools });
+  const projectRoot = (p: ProjectRecord): ProjectRoot => ({
+    path: rootFor(p),
+    name: p.name,
+    allowBuildTools: p.allowBuildTools && indexing.allowBuildTools !== false,
+  });
 
   app.get("/api/health", async () => ({ ok: true, version: SERVER_VERSION, home }));
 
@@ -125,11 +196,18 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
     "/api/projects",
     async (req, reply) => {
       const body = req.body ?? {};
+      let url = typeof body.url === "string" ? body.url : undefined;
+      if (hosted) {
+        if (body.path !== undefined && !allowPaths) {
+          throw new ProjectError(400, "local paths are not accepted on this server; give a GitHub URL");
+        }
+        if (url !== undefined && body.path === undefined) url = githubRepoUrl(url);
+      }
       const record = registry.add({
         path: typeof body.path === "string" ? body.path : undefined,
-        url: typeof body.url === "string" ? body.url : undefined,
+        url,
         name: typeof body.name === "string" ? body.name : undefined,
-        allowBuildTools: body.allowBuildTools === true,
+        allowBuildTools: !hosted && body.allowBuildTools === true,
       });
       if (body.index !== false) jobs.trigger(record.id);
       return reply.code(201).send({ project: publicProject(project(record.id), jobs) });
@@ -141,6 +219,9 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
   }));
 
   app.delete<{ Params: ProjectParams }>("/api/projects/:id", async (req, reply) => {
+    if (hosted && !isAdmin(req.headers.authorization)) {
+      throw new ProjectError(403, "deleting a project on a hosted server needs the admin token");
+    }
     const p = project(req.params.id);
     if (jobs.isIndexing(p.id)) throw new ProjectError(409, "project is indexing; try again when it finishes");
     registry.remove(p.id);
@@ -231,7 +312,7 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
     const path = scopePathOf(req.query.path);
     const snapshot = resolveSnapshot(pathsFor(p), req.query.snapshot);
     if (!snapshot) throw new ProjectError(404, "project has no snapshot yet");
-    const view = await scopeView(pathsFor(p), snapshot, path);
+    const view = await scopeView(pathsFor(p), snapshot, path, scopeRead);
     return {
       snapshot,
       scope: view.scope,
@@ -249,8 +330,13 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
       const path = scopePathOf(req.query.path);
       const snapshot = resolveSnapshot(pathsFor(p), req.query.snapshot);
       if (!snapshot) throw new ProjectError(404, "project has no snapshot yet");
-      const view = await scopeView(pathsFor(p), snapshot, path);
-      return { snapshot, scope: view.scope, kind: view.kind, lens: await runScopedLens(view, req.params.lensId, projectRoot(p), registry.stateOf(p)) };
+      const view = await scopeView(pathsFor(p), snapshot, path, scopeRead);
+      return {
+        snapshot,
+        scope: view.scope,
+        kind: view.kind,
+        lens: await runScopedLens(view, req.params.lensId, projectRoot(p), registry.stateOf(p), scopeRead),
+      };
     },
   );
 
@@ -404,6 +490,7 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
   };
 
   app.get<{ Params: ProjectParams; Querystring: { base?: string; head?: string } }>("/api/projects/:id/compare", async (req) => {
+    refuseWhenHosted("compare");
     const p = project(req.params.id);
     const { base, head } = req.query;
     if (!base || !head) throw new ProjectError(400, "base and head are required");
@@ -420,6 +507,7 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
   });
 
   app.post<{ Params: ProjectParams; Body: Record<string, unknown> }>("/api/projects/:id/annotations", async (req, reply) => {
+    refuseWhenHosted("annotations");
     const p = project(req.params.id);
     const body = req.body ?? {};
     const annotation = addAnnotation(pathsFor(p), { type: body.type, key: body.key, text: body.text });
@@ -429,6 +517,7 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
   app.patch<{ Params: ProjectParams & { annId: string }; Body: Record<string, unknown> }>(
     "/api/projects/:id/annotations/:annId",
     async (req) => {
+      refuseWhenHosted("annotations");
       const p = project(req.params.id);
       const annotation = updateAnnotation(pathsFor(p), req.params.annId, req.body?.text);
       if (!annotation) throw new ProjectError(404, `no annotation ${req.params.annId}`);
@@ -437,6 +526,7 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
   );
 
   app.delete<{ Params: ProjectParams & { annId: string } }>("/api/projects/:id/annotations/:annId", async (req, reply) => {
+    refuseWhenHosted("annotations");
     const p = project(req.params.id);
     if (!deleteAnnotation(pathsFor(p), req.params.annId)) throw new ProjectError(404, `no annotation ${req.params.annId}`);
     return reply.code(204).send();
@@ -451,6 +541,7 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
   });
 
   app.put<{ Params: ProjectParams; Body: Record<string, unknown> }>("/api/projects/:id/review", async (req) => {
+    refuseWhenHosted("review");
     const p = project(req.params.id);
     const body = req.body ?? {};
     const decision = setDecision(pathsFor(p), body.key, body.status, body.note);
@@ -458,6 +549,7 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
   });
 
   app.delete<{ Params: ProjectParams; Querystring: { key?: string } }>("/api/projects/:id/review", async (req, reply) => {
+    refuseWhenHosted("review");
     const p = project(req.params.id);
     const key = req.query.key;
     if (typeof key !== "string" || key.trim() === "") throw new ProjectError(400, "key is required");

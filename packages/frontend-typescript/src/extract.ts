@@ -1,5 +1,5 @@
 import { existsSync, realpathSync } from "node:fs";
-import { isAbsolute, join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import ts from "typescript";
 import type { IREdge, IRFinding, IRNode, IRRecord, NodeId, Provenance, Span, UnresolvedRef } from "@insight/ir";
 import type { IRBatch } from "@insight/sdk";
@@ -330,6 +330,34 @@ function htmlScriptEntries(html: Map<string, string>, rels: Set<string>): Set<st
 }
 
 /**
+ * A check that a path, once symlinks are followed, sits inside one of the folders. A path that does not exist is outside.
+ * Results are cached, since the compiler asks about the same paths many times.
+ */
+function confinedTo(...dirs: string[]): (file: string) => boolean {
+  const roots = dirs.map((d) => {
+    try {
+      return realpathSync(d);
+    } catch {
+      return d;
+    }
+  });
+  const memo = new Map<string, boolean>();
+  return (file) => {
+    const hit = memo.get(file);
+    if (hit !== undefined) return hit;
+    let inside = false;
+    try {
+      const real = realpathSync(file);
+      inside = roots.some((r) => real === r || real.startsWith(r + sep));
+    } catch {
+      inside = false;
+    }
+    memo.set(file, inside);
+    return inside;
+  };
+}
+
+/**
  * Parses every project source file into one program, so calls and imports resolve across files.
  * `texts` maps absolute paths to contents. Files are read once per extraction run.
  */
@@ -345,11 +373,13 @@ export function buildProject(
   const relOf = (file: string) => relative(root, file).split(sep).join("/");
   const cache = new Map<string, ts.SourceFile>();
   const orig = ts.createCompilerHost(options, true);
+  // The compiler falls back to disk for files it was not given. It may read only the project and the bundled lib files.
+  const readable = confinedTo(root, dirname(ts.getDefaultLibFilePath(options)));
   const host: ts.CompilerHost = {
     ...orig,
     getSourceFile(name, language, onError, shouldCreate) {
       const text = texts.get(name);
-      if (text === undefined) return orig.getSourceFile(name, language, onError, shouldCreate);
+      if (text === undefined) return readable(name) ? orig.getSourceFile(name, language, onError, shouldCreate) : undefined;
       let sf = cache.get(name);
       if (!sf) {
         sf = createSource(name, relOf(name), text);
@@ -357,8 +387,8 @@ export function buildProject(
       }
       return sf;
     },
-    fileExists: (f) => texts.has(f) || orig.fileExists(f),
-    readFile: (f) => texts.get(f) ?? orig.readFile(f),
+    fileExists: (f) => texts.has(f) || (readable(f) && orig.fileExists(f)),
+    readFile: (f) => texts.get(f) ?? (readable(f) ? orig.readFile(f) : undefined),
   };
   const roots = rels.map(abs);
   const program = ts.createProgram({ rootNames: roots, options, host });
