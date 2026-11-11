@@ -879,35 +879,43 @@ table.grid th { background: var(--faint); }
 
 /* Findings page: a revision table in glass. Rows are a grid; at phone width the cells stack, so the page never scrolls sideways. */
 .rv-page { display: grid; gap: 12px; }
-.revtable { background: linear-gradient(180deg, var(--sheen), transparent 32%), var(--glass-strong); border-radius: 18px; box-shadow: var(--rim), var(--float); -webkit-backdrop-filter: blur(44px) saturate(200%); backdrop-filter: blur(44px) saturate(200%); overflow: hidden; color: var(--ink); }
-.revhead, .revrow { display: grid; grid-template-columns: 96px minmax(0, 1.4fr) minmax(0, 1.3fr) minmax(0, 1fr) 150px; }
+.revtable { background: linear-gradient(180deg, var(--sheen), transparent 32%), var(--glass-strong); border-radius: 18px; box-shadow: var(--rim), var(--float); -webkit-backdrop-filter: blur(44px) saturate(200%); backdrop-filter: blur(44px) saturate(200%); overflow: hidden; color: var(--ink); container-type: inline-size; container-name: findings; }
+.revhead, .revrow { display: grid; grid-template-columns: 5rem minmax(14rem, 1.4fr) minmax(13rem, 1.2fr) minmax(11rem, 1fr) auto; }
 .revhead > span { padding: 12px 14px 8px; font-size: var(--t-xs); font-weight: 600; color: var(--muted); }
 .revrow { border-top: 1px solid var(--hair); }
 .rv-cell, .rv-examples { padding: 14px; min-width: 0; }
-.rv-examples { list-style: none; margin: 0; display: grid; gap: 6px; align-content: start; }
-.rv-examples li { min-width: 0; overflow-wrap: anywhere; }
+.rv-examples { display: block; }
+.rv-ex-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; align-content: start; min-width: 0; }
+.rv-ex-list li { min-width: 0; }
+.rv-ex { display: block; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rv-count { display: block; }
 .rv-num { font-size: 28px; font-weight: 700; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; line-height: 1; }
 .rv-msg { margin: 0 0 4px; font-size: var(--t-lg); font-weight: 600; line-height: 1.25; letter-spacing: -0.02em; overflow-wrap: anywhere; }
 .rv-finding p { margin: 0; }
 .rv-bars { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-.rv-bar { display: grid; grid-template-columns: minmax(0, 1fr) 72px 28px; gap: 8px; align-items: center; min-width: 0; font-size: var(--t-sm); }
-.rv-bar-file { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; font-size: 12px; }
+.rv-bar { display: grid; grid-template-columns: minmax(8rem, 1fr) 56px 2.5ch; gap: 8px; align-items: center; min-width: 0; font-size: var(--t-sm); }
+.rv-bar-file { display: flex; align-items: baseline; min-width: 0; overflow: hidden; white-space: nowrap; font-size: 12px; }
+.rv-dir { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--graphite); }
+.rv-base { flex: none; color: var(--ink); }
 .rv-bar-track { position: relative; height: 8px; border-radius: 4px; background: var(--faint); overflow: hidden; }
 .rv-bar-track i { position: absolute; inset: 0 auto 0 0; background: var(--red); border-radius: 4px; }
 .rv-bar-n { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
 a.btn { display: inline-flex; align-items: center; justify-content: center; min-height: 28px; padding: 4px 12px; border-radius: 8px; text-decoration: none; font-size: var(--t-sm); font-weight: 500; background: var(--btn-glass); color: var(--ink); box-shadow: var(--btn-rim); box-sizing: border-box; }
 a.btn.primary { background: linear-gradient(180deg, var(--gloss), transparent 52%), var(--accent); color: var(--on-accent); box-shadow: inset 0 1px 0 var(--gloss), 0 2px 10px color-mix(in srgb, var(--accent) 38%, transparent); }
-.rv-show { width: 100%; }
-@media (max-width: 720px) {
+/* Show in Flow is a ghost link: one filled primary per page at most, and the table has many of these. */
+a.btn.rv-show { width: 100%; min-height: 32px; padding: 0 12px; white-space: nowrap; background: transparent; box-shadow: none; border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); color: var(--accent-text, var(--accent)); }
+a.btn.rv-show:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+/* The table stacks into cards when its own width is narrow (a phone, or the centre column with both side panes open),
+   so the columns never squeeze and the page never scrolls sideways. */
+@container findings (max-width: 900px) {
   .revhead { display: none; }
   .revrow { grid-template-columns: minmax(0, 1fr); }
   .rv-cell[data-label]::before, .rv-examples[data-label]::before { content: attr(data-label); display: block; margin-bottom: 4px; font-size: var(--t-xs); font-weight: 600; color: var(--muted); }
   .rv-count { display: flex; align-items: baseline; gap: 8px; padding-bottom: 6px; }
   .rv-count::before { content: none; }
   .rv-count::after { content: "findings"; font-size: var(--t-sm); color: var(--muted); }
-  .rv-bar { grid-template-columns: minmax(0, 1fr) 56px 28px; }
-  .rv-show { width: auto; }
+  .rv-bar { grid-template-columns: minmax(0, 1fr) 56px 2.5ch; }
+  a.btn.rv-show { width: auto; }
 }
 
 /* Arch, folder view and phone. The diagram keeps its natural size and pans inside .arch-scroll, so the 23 px names stay
