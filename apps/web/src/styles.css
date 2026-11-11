@@ -1045,7 +1045,7 @@ button.add-submit:disabled { background: var(--faint); color: var(--graphite); b
 .sysv-zoom { display: inline-flex; gap: 4px; }
 .sysv-zoom button { padding: 3px 10px; }
 .sysv-body { min-width: 0; }
-.sysv-stage { position: relative; height: clamp(320px, 50vh, 760px); overflow: hidden; border-radius: 8px; background: var(--sheet); box-shadow: inset 0 0 0 0.5px var(--hair); cursor: grab; touch-action: none; user-select: none; }
+.sysv-stage { position: relative; height: max(60vh, 420px); overflow: hidden; border-radius: 8px; background: var(--sheet); box-shadow: inset 0 0 0 0.5px var(--hair); cursor: grab; touch-action: none; user-select: none; }
 .sysv-stage:active { cursor: grabbing; }
 .sysv-stage.stale { opacity: 0.6; }
 .sysv-svg { display: block; }
@@ -1067,7 +1067,7 @@ button.add-submit:disabled { background: var(--faint); color: var(--graphite); b
 .sysv-name { fill: var(--fg); font: 600 18px var(--font-ui); pointer-events: none; }
 .sysv-sub { fill: var(--muted); font: 14px var(--font-ui); pointer-events: none; }
 .sysv-chip rect { fill: var(--faint); }
-.sysv-chip text { fill: var(--fg); font: 12px var(--font-code); pointer-events: none; }
+.sysv-chip text { fill: var(--fg); font: 13px var(--font-code); pointer-events: none; }
 .sysv-edge { outline: none; }
 .sysv-line { fill: none; stroke: var(--muted); stroke-width: 1.4; }
 .sysv-edge.v-writes .sysv-line { stroke: var(--accent); stroke-width: 2; }
@@ -1080,7 +1080,7 @@ button.add-submit:disabled { background: var(--faint); color: var(--graphite); b
 .sysv-head.w { fill: var(--accent); }
 .sysv-pill { cursor: pointer; }
 .sysv-pill rect { fill: var(--chip-solid); stroke: var(--hair); stroke-width: 1; }
-.sysv-pill text { fill: var(--fg); font: 13px var(--font-ui); pointer-events: none; }
+.sysv-pill text { fill: var(--fg); font: 16px var(--font-ui); pointer-events: none; }
 .sysv-edge.v-writes .sysv-pill rect { stroke: var(--accent); }
 .sysv-edge.v-writes .sysv-pill text { fill: var(--accent-text); font-weight: 600; }
 .sysv-edge:focus-visible .sysv-pill rect, .sysv-edge.lit .sysv-pill rect, .sysv-edge.picked .sysv-pill rect { stroke: var(--accent); stroke-width: 1.6; }

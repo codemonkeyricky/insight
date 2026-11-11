@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { SystemComponent, SystemEdge, SystemModel } from "@insight/model";
 import { ARCH_MODE_KEY, readArchMode, writeArchMode } from "../src/arch/mode";
 import { layoutSystem, pillText, shortLabel, type SysBox } from "../src/arch/system-layout";
-import { fitCamera, SystemDiagram } from "../src/components/views/SystemView";
+import { FIT_MIN_K, fitCamera, PILL_LIMIT, SystemDiagram } from "../src/components/views/SystemView";
 import { ArchModeToggle } from "../src/components/views/ArchTab";
 
 const V = "svc/src/vercel.ts";
@@ -127,12 +127,111 @@ describe("layoutSystem", () => {
 
   it("fits a wide layout into the view without shrinking below readable text", () => {
     const cam = fitCamera({ width: 4000, height: 800 }, 1000, 600);
-    expect(cam.k).toBeGreaterThanOrEqual(0.12);
+    expect(cam.k).toBe(FIT_MIN_K);
+    expect(FIT_MIN_K * 18).toBeGreaterThanOrEqual(10);
     expect(fitCamera({ width: 500, height: 300 }, 1000, 600).k).toBeLessThanOrEqual(1.15);
   });
 });
 
+/** ~20 components in five stages and 60 edges, many of them spanning several columns, plus a few outside systems. */
+function dense(): SystemModel {
+  const ids = Array.from({ length: 20 }, (_, i) => `d/c${i}.ts`);
+  const stages = [ids.slice(0, 2), ids.slice(2, 7), ids.slice(7, 13), ids.slice(13, 18), ids.slice(18)];
+  const stageOf = (id: string) => stages.findIndex((st) => st.includes(id));
+  const externals = [
+    { id: "x:a", label: "GitHub API", category: "service" as const, host: "api.github.com" },
+    { id: "x:b", label: "Cloudflare KV", category: "store" as const, host: "api.cloudflare.com" },
+    { id: "x:c", label: "Filesystem", category: "filesystem" as const },
+    { id: "x:d", label: "git", category: "process" as const, command: "git" },
+  ];
+  const edges = new Map<string, SystemEdge>();
+  const verbs: SystemEdge["verb"][] = ["calls", "reads", "writes", "calls"];
+  let n = 0;
+  while (edges.size < 60) {
+    n++;
+    const from = ids[(n * 7) % 20] as string;
+    const pick = (n * 13 + (n >> 2)) % 24;
+    const to = pick < 20 ? (ids[pick] as string) : (externals[pick - 20]?.id as string);
+    if (from === to || (to.startsWith("d/") && stageOf(to) < stageOf(from))) continue;
+    const verb = to.startsWith("d/") ? "calls" : (verbs[n % 4] as SystemEdge["verb"]);
+    const e = edge(from, to, verb, verb === "calls" ? `calls ×${(n % 5) + 1}` : `GET /v${n}`);
+    edges.set(e.id, e);
+  }
+  return { scope: "d", components: ids.map((id, i) => comp(id, 1, i < 2)), routes: [], externals, edges: [...edges.values()], stages };
+}
+
+describe.each([
+  ["hosted-like", sample()],
+  ["dense", dense()],
+])("layout of the %s fixture", (name, sys) => {
+  const layout = layoutSystem(sys);
+
+  it("draws every edge", () => {
+    expect(layout.arrows).toHaveLength(sys.edges.length);
+    if (name === "dense") {
+      expect(sys.components).toHaveLength(20);
+      expect(sys.edges.length).toBeGreaterThan(PILL_LIMIT);
+    }
+  });
+
+  it("puts no two verb pills on top of each other", () => {
+    const rect = (a: (typeof layout.arrows)[number]) => ({ x: a.pill.x - a.pill.w / 2, y: a.pill.y - a.pill.h / 2, w: a.pill.w, h: a.pill.h });
+    const bad: string[] = [];
+    for (let i = 0; i < layout.arrows.length; i++) {
+      for (let j = i + 1; j < layout.arrows.length; j++) {
+        const p = rect(layout.arrows[i] as (typeof layout.arrows)[number]);
+        const q = rect(layout.arrows[j] as (typeof layout.arrows)[number]);
+        if (p.x < q.x + q.w && q.x < p.x + p.w && p.y < q.y + q.h && q.y < p.y + p.h) bad.push(`${layout.arrows[i]?.id} / ${layout.arrows[j]?.id}`);
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+
+  it("keeps verb pills off every card", () => {
+    for (const a of layout.arrows) {
+      const p = { x: a.pill.x - a.pill.w / 2, y: a.pill.y - a.pill.h / 2, w: a.pill.w, h: a.pill.h };
+      for (const b of layout.boxes) expect(p.x < b.x + b.w && b.x < p.x + p.w && p.y < b.y + b.h && b.y < p.y + p.h).toBe(false);
+    }
+  });
+
+  it("routes no edge through a card that is not one of its ends", () => {
+    const bad: string[] = [];
+    for (const a of layout.arrows) {
+      expect(a.samples.length).toBeGreaterThan(10);
+      for (const b of layout.boxes) {
+        if (b.id === a.from || b.id === a.to) continue;
+        if (a.samples.some((q) => q.x > b.x && q.x < b.x + b.w && q.y > b.y && q.y < b.y + b.h)) bad.push(`${a.id} through ${b.id}`);
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+
+  it("keeps every edge sample and pill inside the canvas", () => {
+    for (const a of layout.arrows) {
+      for (const q of a.samples) {
+        expect(q.x).toBeGreaterThanOrEqual(0);
+        expect(q.y).toBeGreaterThanOrEqual(0);
+        expect(q.x).toBeLessThanOrEqual(layout.width);
+        expect(q.y).toBeLessThanOrEqual(layout.height);
+      }
+    }
+  });
+
+  if (name === "dense") {
+    it("sends the edges that would cross a card along a lane", () => {
+      expect(layout.arrows.some((a) => a.lane !== undefined)).toBe(true);
+    });
+  }
+});
+
 describe("SystemDiagram", () => {
+  it("shows pills for a small system and none for a dense one until a node is picked", () => {
+    const small = renderToStaticMarkup(<SystemDiagram id="p" sys={sample()} tests={false} onTests={() => {}} />);
+    expect((small.match(/class="sysv-pill"/g) ?? []).length).toBe(sample().edges.length);
+    const big = renderToStaticMarkup(<SystemDiagram id="p" sys={dense()} tests={false} onTests={() => {}} />);
+    expect(big).not.toContain("sysv-pill");
+  });
+
   it("renders cards, verbs and the route chip from a small model", () => {
     const html = renderToStaticMarkup(<SystemDiagram id="p" sys={sample()} tests={false} onTests={() => {}} />);
     expect(html).toContain("svc/src/vercel.ts");

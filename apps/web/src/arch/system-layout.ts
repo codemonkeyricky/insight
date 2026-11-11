@@ -15,10 +15,13 @@ export const SYS_COMP_H = 64;
 export const SYS_CHIP_H = 20;
 export const SYS_EXT_H = 60;
 export const SYS_GROUP_H = 30;
-export const SYS_PILL_H = 20;
+export const SYS_PILL_H = 24;
 /** Route chips drawn on a card; the rest are counted in a "+N more" chip. */
 export const SYS_MAX_CHIPS = 4;
 const PORT_INSET = 16;
+/** The first lane sits this far above (below) the cards; the next ones are a step further out. */
+const LANE_FIRST = 20;
+const LANE_STEP = 12;
 
 export const CATEGORY_ORDER: ReadonlyArray<SystemExternal["category"]> = ["service", "store", "api", "process", "filesystem", "config", "worker"];
 export const CATEGORY_TITLES: Record<SystemExternal["category"], string> = {
@@ -72,6 +75,10 @@ export interface SysArrow {
   to: string;
   /** SVG path data, from a side of the source card to a side of the target card. */
   d: string;
+  /** Points along the path, for hit tests. */
+  samples: Array<{ x: number; y: number }>;
+  /** Set when the edge runs along a lane above or below the cards instead of straight between its columns. */
+  lane?: "top" | "bottom";
   /** The verb pill: its centre, size and text. */
   pill: { x: number; y: number; w: number; h: number; text: string };
   /** runs and spawns are drawn dashed. */
@@ -81,6 +88,8 @@ export interface SysArrow {
 }
 
 export interface SysLayout {
+  /** Where a clamped (panned) view starts: the vertical centre of the first column of cards. */
+  focusY: number;
   width: number;
   height: number;
   columns: SysColumn[];
@@ -125,7 +134,7 @@ function externalSub(e: SystemExternal): string {
   return e.host ?? e.command ?? "";
 }
 
-const pillWidth = (text: string): number => Math.round(text.length * 6.8 + 16);
+const pillWidth = (text: string): number => Math.round(text.length * 8.2 + 20);
 
 /** The label of a component card: its path under the scope (or under the folder the scope passed through), cut at a segment. */
 function cardTitle(c: SystemComponent, base: string): string {
@@ -141,7 +150,7 @@ interface Port {
 }
 
 export function layoutSystem(sys: SystemModel): SysLayout {
-  const empty: SysLayout = { width: 0, height: 0, columns: [], groups: [], boxes: [], arrows: [] };
+  const empty: SysLayout = { focusY: 0, width: 0, height: 0, columns: [], groups: [], boxes: [], arrows: [] };
   if (sys.components.length === 0) return empty;
 
   const base = sys.via !== undefined ? (sys.scope === "" ? sys.via : `${sys.scope}/${sys.via}`) : sys.scope;
@@ -241,7 +250,7 @@ export function layoutSystem(sys: SystemModel): SysLayout {
   }
 
   const width = x - SYS_GAP_X + SYS_PAD + 56;
-  const height = top + tallest + SYS_PAD;
+  const bottom = top + tallest;
   const byId = new Map(boxes.map((b) => [b.id, b]));
   const cy = (b: SysBox): number => b.y + b.h / 2;
 
@@ -272,78 +281,164 @@ export function layoutSystem(sys: SystemModel): SysLayout {
     list.forEach((p, i) => portY.set(`${key}|${p.arrow}`, box.y + PORT_INSET + ((box.h - 2 * PORT_INSET) * (i + 1)) / (list.length + 1)));
   }
 
+  // Paths. An edge between neighbouring columns (or inside one) is one curve that stays in the gap. A longer edge whose
+  // straight curve would cross a card instead leaves into the gap, runs along a lane above or below every card and
+  // enters the gap before its target.
   const loopCount = new Map<string, number>();
-  const raw = live.map((e, i) => {
+  interface Geo {
+    segs: number[][];
+    lane?: "top" | "bottom";
+  }
+  const geos: Array<Geo | undefined> = live.map(() => undefined);
+  const ends = live.map((_, i) => {
     const { a, b, mode } = sides[i] as (typeof sides)[number];
     const sa = mode === "back" ? "l" : "r";
     const sb = mode === "fwd" ? "l" : "r";
-    const y1 = portY.get(`${a.id}|${sa}|${i}`) as number;
-    const y2 = portY.get(`${b.id}|${sb}|${i}`) as number;
-    const x1 = sa === "l" ? a.x : a.x + a.w;
-    const x2 = sb === "l" ? b.x : b.x + b.w;
-    let d: string;
-    let pts: (t: number) => { x: number; y: number };
+    return {
+      x1: sa === "l" ? a.x : a.x + a.w,
+      y1: portY.get(`${a.id}|${sa}|${i}`) as number,
+      x2: sb === "l" ? b.x : b.x + b.w,
+      y2: portY.get(`${b.id}|${sb}|${i}`) as number,
+    };
+  });
+  const pending: Array<{ i: number; span: number }> = [];
+  live.forEach((_, i) => {
+    const { a, b, mode } = sides[i] as (typeof sides)[number];
+    const { x1, y1, x2, y2 } = ends[i] as (typeof ends)[number];
     if (mode === "loop") {
       const k = loopCount.get(a.id) ?? 0;
       loopCount.set(a.id, k + 1);
-      const bulge = 46 + 12 * k;
-      const p = [x1, y1, x1 + bulge, y1, x2 + bulge, y2, x2, y2] as const;
-      d = `M${p[0]} ${p[1]} C${p[2]} ${p[3]} ${p[4]} ${p[5]} ${p[6]} ${p[7]}`;
-      pts = (t) => bezier(p, t);
-    } else {
-      const dx = Math.max(48, Math.abs(x2 - x1) * 0.5) * (mode === "fwd" ? 1 : -1);
-      const p = [x1, y1, x1 + dx, y1, x2 - dx, y2, x2, y2] as const;
-      d = `M${p[0]} ${p[1]} C${p[2]} ${p[3]} ${p[4]} ${p[5]} ${p[6]} ${p[7]}`;
-      pts = (t) => bezier(p, t);
+      const bulge = Math.min(46 + 12 * k, SYS_GAP_X - 30);
+      geos[i] = { segs: [[x1, y1, x1 + bulge, y1, x2 + bulge, y2, x2, y2]] };
+      return;
     }
-    return { e: live[i] as SystemEdge, d, pts };
+    const dx = Math.max(48, Math.abs(x2 - x1) * 0.5) * (mode === "fwd" ? 1 : -1);
+    const segs = [[x1, y1, x1 + dx, y1, x2 - dx, y2, x2, y2]];
+    const span = Math.abs(a.column - b.column);
+    if (span > 1 && polyline(segs).some((q) => boxes.some((o) => o.id !== a.id && o.id !== b.id && inside(q, o, 4)))) pending.push({ i, span });
+    else geos[i] = { segs };
   });
+  pending.sort((p, q) => p.span - q.span || p.i - q.i);
+  let nTop = 0;
+  let nBot = 0;
+  for (const { i } of pending) {
+    const { x1, y1, x2, y2 } = ends[i] as (typeof ends)[number];
+    const dir = x2 > x1 ? 1 : -1;
+    const lane: "top" | "bottom" = (y1 + y2) / 2 < (top + bottom) / 2 ? "top" : "bottom";
+    const ly = lane === "top" ? top - LANE_FIRST - nTop++ * LANE_STEP : bottom + LANE_FIRST + nBot++ * LANE_STEP;
+    const xa = x1 + dir * SYS_GAP_X * 0.4;
+    const xb = x2 - dir * SYS_GAP_X * 0.4;
+    const k = SYS_GAP_X * 0.2;
+    geos[i] = {
+      lane,
+      segs: [
+        [x1, y1, x1 + dir * k, y1, xa - dir * k, ly, xa, ly],
+        [xa, ly, xa + (xb - xa) / 3, ly, xa + (2 * (xb - xa)) / 3, ly, xb, ly],
+        [xb, ly, xb + dir * k, ly, x2 - dir * k, y2, x2, y2],
+      ],
+    };
+  }
+  // Room for the lanes: everything moves down by what the top lanes need, and the canvas grows for the bottom ones.
+  const dy = nTop > 0 ? Math.max(0, 54 - (top - LANE_FIRST - (nTop - 1) * LANE_STEP)) : 0;
+  const height = dy + bottom + (nBot > 0 ? LANE_FIRST + (nBot - 1) * LANE_STEP : 0) + SYS_PAD;
+  if (dy > 0) {
+    for (const bx of boxes) bx.y += dy;
+    for (const g of groups) g.y += dy;
+    for (const geo of geos) for (const seg of geo?.segs ?? []) for (let j = 1; j < 8; j += 2) seg[j] = (seg[j] as number) + dy;
+  }
+  const num = (n: number): string => String(Math.round(n * 10) / 10);
 
-  // Pills sit on their curve, moved along it until they touch no card and no other pill.
+  // Pills sit on their curve, slid along it (t 0.3 to 0.7) and then offset off it until they touch no card and no other pill.
   const taken: Array<{ x: number; y: number; w: number; h: number }> = boxes.map((b) => ({ x: b.x - 4, y: b.y - 4, w: b.w + 8, h: b.h + 8 }));
   const arrows: SysArrow[] = [];
-  const NUDGES = [0, 22, -22, 44, -44, 66, -66];
-  const TS = [0.5, 0.42, 0.58, 0.34, 0.66, 0.26, 0.74, 0.18, 0.82];
-  for (const { e, d, pts } of raw) {
+  const NUDGES = [0, 26, -26, 52, -52, 78, -78, 104, -104, 130, -130, 156, -156, 182, -182, 208, -208];
+  const TS = [0.5, 0.45, 0.55, 0.4, 0.6, 0.35, 0.65, 0.3, 0.7];
+  const WIDE_TS = [0.5, 0.4, 0.6, 0.3, 0.7, 0.2, 0.8, 0.12, 0.88];
+  live.forEach((e, i) => {
+    const geo = geos[i] as Geo;
+    const samples = polyline(geo.segs);
+    const at = arcPoint(samples);
     const text = pillText(e);
     const w = pillWidth(text);
     let chosen: { x: number; y: number } | undefined;
-    // On the curve first, then nudged along it, then moved off it up or down, so two pills never overlap.
-    for (const dy of NUDGES) {
-      for (const t of TS) {
-        const c = pts(t);
-        const r = { x: c.x - w / 2, y: c.y + dy - SYS_PILL_H / 2, w, h: SYS_PILL_H };
-        if (!taken.some((o) => overlaps(r, o))) {
-          chosen = { x: c.x, y: c.y + dy };
-          break;
+    for (const ts of [TS, WIDE_TS]) {
+      for (const off of NUDGES) {
+        for (const t of ts) {
+          const c = at(t);
+          const r = { x: c.x - w / 2, y: c.y + off - SYS_PILL_H / 2, w, h: SYS_PILL_H };
+          if (!taken.some((o) => overlaps(r, o))) {
+            chosen = { x: c.x, y: c.y + off };
+            break;
+          }
         }
+        if (chosen !== undefined) break;
       }
       if (chosen !== undefined) break;
     }
-    const c = chosen ?? pts(0.5);
+    const c = chosen ?? at(0.5);
     taken.push({ x: c.x - w / 2, y: c.y - SYS_PILL_H / 2, w, h: SYS_PILL_H });
+    const d = `M${num(geo.segs[0]?.[0] ?? 0)} ${num(geo.segs[0]?.[1] ?? 0)} ${geo.segs.map((s) => `C${num(s[2] as number)} ${num(s[3] as number)} ${num(s[4] as number)} ${num(s[5] as number)} ${num(s[6] as number)} ${num(s[7] as number)}`).join(" ")}`;
     arrows.push({
       id: e.id,
       edge: e,
       from: e.from,
       to: e.to,
       d,
+      samples,
+      ...(geo.lane !== undefined ? { lane: geo.lane } : {}),
       pill: { x: c.x, y: c.y, w, h: SYS_PILL_H, text },
       dashed: e.verb === "runs" || e.verb === "spawns",
       inferred: e.confidence === "inferred",
     });
-  }
+  });
 
-  return { width, height, columns, groups, boxes, arrows };
+  const first = boxes.filter((b) => b.column === 0);
+  const focusY = first.length === 0 ? height / 2 : first.reduce((sum, b) => sum + b.y + b.h / 2, 0) / first.length;
+  return { focusY, width, height, columns, groups, boxes, arrows };
 }
 
-function bezier(p: readonly [number, number, number, number, number, number, number, number], t: number): { x: number; y: number } {
+type Pt = { x: number; y: number };
+
+function bezier(p: readonly number[], t: number): Pt {
   const u = 1 - t;
   const a = u * u * u;
   const b = 3 * u * u * t;
   const c = 3 * u * t * t;
   const d = t * t * t;
-  return { x: a * p[0] + b * p[2] + c * p[4] + d * p[6], y: a * p[1] + b * p[3] + c * p[5] + d * p[7] };
+  return {
+    x: a * (p[0] as number) + b * (p[2] as number) + c * (p[4] as number) + d * (p[6] as number),
+    y: a * (p[1] as number) + b * (p[3] as number) + c * (p[5] as number) + d * (p[7] as number),
+  };
+}
+
+/** Points along a path of cubic segments, about 24 per segment. */
+function polyline(segs: number[][]): Pt[] {
+  const out: Pt[] = [];
+  segs.forEach((s, k) => {
+    for (let j = k === 0 ? 0 : 1; j <= 24; j++) out.push(bezier(s, j / 24));
+  });
+  return out;
+}
+
+/** The point at a fraction of the length of a polyline. */
+function arcPoint(pts: Pt[]): (t: number) => Pt {
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++) cum.push((cum[i - 1] as number) + Math.hypot((pts[i] as Pt).x - (pts[i - 1] as Pt).x, (pts[i] as Pt).y - (pts[i - 1] as Pt).y));
+  const total = cum[cum.length - 1] as number;
+  return (t) => {
+    const target = total * t;
+    let i = 1;
+    while (i < cum.length - 1 && (cum[i] as number) < target) i++;
+    const span = (cum[i] as number) - (cum[i - 1] as number);
+    const f = span === 0 ? 0 : (target - (cum[i - 1] as number)) / span;
+    const p = pts[i - 1] as Pt;
+    const q = pts[i] as Pt;
+    return { x: p.x + (q.x - p.x) * f, y: p.y + (q.y - p.y) * f };
+  };
+}
+
+function inside(p: Pt, b: { x: number; y: number; w: number; h: number }, margin = 0): boolean {
+  return p.x > b.x - margin && p.x < b.x + b.w + margin && p.y > b.y - margin && p.y < b.y + b.h + margin;
 }
 
 function overlaps(a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }): boolean {

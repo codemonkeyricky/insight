@@ -12,7 +12,10 @@ type Selection = { kind: "node" | "edge"; id: string } | null;
 
 const MIN_K = 0.1;
 const MAX_K = 2.5;
-const FIT_MIN_K = 0.12;
+/** The smallest scale a fit settles on: a card title is 18 px, so it stays at 10 px or more. A wider graph is panned. */
+export const FIT_MIN_K = 0.56;
+/** Edges above this count show a verb pill only on the edges of the hovered or selected node. */
+export const PILL_LIMIT = 30;
 const FIT_MAX_K = 1.15;
 /** Room kept along the bottom of the stage for the legend, in px. */
 const LEGEND_H = 40;
@@ -24,11 +27,12 @@ interface Camera {
 }
 
 /** The camera that shows the whole layout in a view of `w` by `h`. Expanding the view gives a wide diagram room to be read. */
-export function fitCamera(layout: Pick<SysLayout, "width" | "height">, w: number, h: number): Camera {
+export function fitCamera(layout: Pick<SysLayout, "width" | "height"> & { focusY?: number }, w: number, h: number): Camera {
   if (layout.width === 0 || layout.height === 0 || w <= 0 || h <= 0) return { k: 1, x: 0, y: 0 };
   const k = Math.max(FIT_MIN_K, Math.min(FIT_MAX_K, (w - 16) / layout.width, (h - 16) / layout.height));
   const cx = layout.width * k <= w ? (w - layout.width * k) / 2 : 8;
-  const cyy = layout.height * k <= h ? (h - layout.height * k) / 2 : 8;
+  // A diagram taller than the view starts on its first column, not on the middle of the canvas.
+  const cyy = layout.height * k <= h ? (h - layout.height * k) / 2 : Math.min(8, Math.max(h - layout.height * k - 8, h / 2 - (layout.focusY ?? layout.height / 2) * k));
   return { k, x: cx, y: cyy };
 }
 
@@ -77,7 +81,7 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false }: System
   const [hover, setHover] = useState<string | null>(null);
   const [cam, setCam] = useState<Camera>({ k: 1, x: 0, y: 0 });
   const [expanded, setExpanded] = useState(false);
-  /** The stage's height in px: as tall as the fitted diagram, up to a cap. Null while expanded (the view fills the window). */
+  /** The stage's height in px: the room the window leaves, at least 60vh. Null while expanded (the view fills the window). */
   const [stageH, setStageH] = useState<number | null>(null);
   const stage = useRef<HTMLDivElement>(null);
   const drag = useRef<{ x: number; y: number; cx: number; cy: number; moved: boolean } | null>(null);
@@ -85,11 +89,12 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false }: System
   const fit = useCallback(() => {
     const el = stage.current;
     const w = el?.clientWidth ?? 900;
-    const cap = expanded ? (el?.clientHeight ?? 700) : Math.min(760, Math.max(420, (typeof window === "undefined" ? 800 : window.innerHeight) * 0.66));
-    // The legend sits along the bottom edge, so the diagram is fitted above it.
-    const k = fitCamera(layout, w, cap - LEGEND_H).k;
-    const h = expanded ? cap : Math.min(cap, Math.max(320, layout.height * k + 32 + LEGEND_H));
+    const vh = typeof window === "undefined" ? 900 : window.innerHeight;
+    // As tall as the window leaves room for below the stage's top edge, and at least 60% of the window.
+    const room = el ? vh - el.getBoundingClientRect().top - 12 : 0;
+    const h = expanded ? (el?.clientHeight ?? 700) : Math.max(420, vh * 0.6, room);
     setStageH(expanded ? null : h);
+    // The legend sits along the bottom edge, so the diagram is fitted above it.
     setCam(fitCamera(layout, w, h - LEGEND_H));
   }, [layout, expanded]);
   // Fits when a layout arrives (a new scope, the tests flag) or the view expands, and clears the selection of the old layout.
@@ -291,6 +296,7 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false }: System
                     .filter(Boolean)
                     .join(" ");
                   const pill = a.pill;
+                  const showPill = arrows.length <= PILL_LIMIT || on;
                   return (
                     <g
                       key={a.id}
@@ -307,12 +313,14 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false }: System
                     >
                       <path className="sysv-line" d={a.d} markerEnd={a.edge.verb === "writes" ? "url(#sysv-head-w)" : "url(#sysv-head)"} />
                       <path className="sysv-hit" d={a.d} onClick={() => pickEdge(a)} />
-                      <g className="sysv-pill" onClick={() => pickEdge(a)}>
-                        <rect x={pill.x - pill.w / 2} y={pill.y - pill.h / 2} width={pill.w} height={pill.h} rx={pill.h / 2} />
-                        <text x={pill.x} y={pill.y} textAnchor="middle" dy="0.35em">
-                          {pill.text}
-                        </text>
-                      </g>
+                      {showPill && (
+                        <g className="sysv-pill" onClick={() => pickEdge(a)}>
+                          <rect x={pill.x - pill.w / 2} y={pill.y - pill.h / 2} width={pill.w} height={pill.h} rx={pill.h / 2} />
+                          <text x={pill.x} y={pill.y} textAnchor="middle" dy="0.35em">
+                            {pill.text}
+                          </text>
+                        </g>
+                      )}
                     </g>
                   );
                 })}
@@ -347,7 +355,7 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false }: System
                       </text>
                       {b.chips.map((chip, i) => (
                         <g key={chip + i} className="sysv-chip">
-                          <rect x={b.x + 14} y={b.y + 56 + i * 20} width={Math.min(b.w - 28, chip.length * 7.3 + 14)} height={16} rx={8} />
+                          <rect x={b.x + 14} y={b.y + 56 + i * 20} width={Math.min(b.w - 28, chip.length * 8 + 14)} height={16} rx={8} />
                           <text x={b.x + 21} y={b.y + 64 + i * 20} dy="0.35em">
                             {chip}
                           </text>
