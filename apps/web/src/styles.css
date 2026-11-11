@@ -52,6 +52,9 @@
   --band-3: color-mix(in srgb, var(--thread) 16%, var(--sheet));
   --band-4: color-mix(in srgb, var(--red) 14%, var(--sheet));
   --band-5: color-mix(in srgb, var(--graphite) 14%, var(--sheet));
+  --card-top: #FFFFFF; --card-bot: #F6F6F9;
+  --node-fill: color-mix(in srgb, var(--ink) 3%, var(--sheet));
+  --node-line: color-mix(in srgb, var(--ink) 13%, transparent);
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -66,6 +69,7 @@
     --btn-glass-hover: linear-gradient(180deg, rgba(255, 255, 255, 0.26), rgba(255, 255, 255, 0.11));
     --btn-rim: inset 0 1px 0 rgba(255, 255, 255, 0.24), inset 0 0 0 0.5px rgba(255, 255, 255, 0.08), 0 1px 3px rgba(0, 0, 0, 0.4);
     --zone-fill: rgba(28, 28, 30, 0.66);
+    --card-top: #2A2A2E; --card-bot: #1F1F22;
     --ambient: none;
     --float: 0 0 0 0.5px rgba(255, 255, 255, 0.09), 0 2px 6px rgba(0, 0, 0, 0.3), 0 14px 36px rgba(0, 0, 0, 0.5);
     color-scheme: dark;
@@ -82,6 +86,7 @@
   --btn-glass-hover: linear-gradient(180deg, rgba(255, 255, 255, 0.26), rgba(255, 255, 255, 0.11));
   --btn-rim: inset 0 1px 0 rgba(255, 255, 255, 0.24), inset 0 0 0 0.5px rgba(255, 255, 255, 0.08), 0 1px 3px rgba(0, 0, 0, 0.4);
   --zone-fill: rgba(28, 28, 30, 0.66);
+  --card-top: #2A2A2E; --card-bot: #1F1F22;
   --ambient: none;
   --float: 0 0 0 0.5px rgba(255, 255, 255, 0.09), 0 2px 6px rgba(0, 0, 0, 0.3), 0 14px 36px rgba(0, 0, 0, 0.5);
   color-scheme: dark;
@@ -260,6 +265,21 @@ a.flow-node:hover :is(rect, polygon, circle) { stroke: var(--accent); stroke-wid
 .flow-node.resolves :is(rect, polygon) { stroke: color-mix(in srgb, var(--accent) 55%, var(--rule)); stroke-width: 1; }
 .flow-node.resolves .flow-text { fill: var(--accent); }
 .flow-mark { fill: var(--warn); font: 700 12px system-ui, sans-serif; }
+/* CFG restyle: crisp nodes on a soft tint, role colour on the outline, chevron arrows. These follow the rules above. */
+.flow-node :is(rect, polygon, circle) { fill: var(--node-fill); stroke: var(--node-line); stroke-width: 1; transition: stroke 140ms ease-out, fill 140ms ease-out; }
+.flow-node.terminator rect { fill: transparent; stroke: color-mix(in srgb, var(--ink) 18%, transparent); }
+.flow-node.terminator.role-start rect { fill: color-mix(in srgb, var(--accent) 12%, var(--sheet)); stroke: color-mix(in srgb, var(--accent) 40%, transparent); }
+.flow-node.terminator.role-start .flow-text { fill: var(--accent); font-weight: 600; }
+.flow-node.terminator.role-end .flow-text { fill: var(--graphite); }
+.flow-node.decision polygon { fill: color-mix(in srgb, var(--thread) 7%, var(--sheet)); stroke: color-mix(in srgb, var(--thread) 40%, transparent); }
+.flow-node.loop polygon { fill: color-mix(in srgb, var(--switch-on) 7%, var(--sheet)); stroke: color-mix(in srgb, var(--switch-on) 45%, transparent); }
+.flow-node.resolves :is(rect, polygon) { fill: color-mix(in srgb, var(--accent) 7%, var(--sheet)); stroke: color-mix(in srgb, var(--accent) 45%, transparent); }
+.flow-node.selected :is(rect, polygon, circle) { stroke: var(--accent); stroke-width: 1.5; fill: color-mix(in srgb, var(--accent) 10%, var(--sheet)); }
+.flow-call-bar { display: none; }
+.flow-text { fill: color-mix(in srgb, var(--ink) 88%, transparent); }
+.flow-edge path { stroke: color-mix(in srgb, var(--graphite) 55%, transparent); stroke-width: 1.4; stroke-linecap: round; }
+.flow-arrow { fill: none; stroke: color-mix(in srgb, var(--graphite) 75%, transparent); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+a.flow-node:hover :is(rect, polygon, circle) { stroke: var(--accent); }
 
 /* The Arch tab: a column per layer, a box per package, an arrow per import. Colours are the same tokens as the flow chart. */
 .arch { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
@@ -418,26 +438,45 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 .zm-line-coroutine .zm-frame-body, .zm-line-coroutine .zm-box-body { stroke: color-mix(in srgb, var(--coroutine) 55%, var(--hair)); stroke-width: 1; stroke-dasharray: 4 3; }
 .zm-line-none .zm-frame-body, .zm-line-none .zm-box-body { stroke: var(--hair); stroke-width: 1; stroke-dasharray: 1 3; stroke-linecap: round; }
 .zm-line-process .zm-frame-head, .zm-line-thread .zm-frame-head, .zm-line-coroutine .zm-frame-head, .zm-line-none .zm-frame-head { stroke: none; }
+/* Frames: a lit body, an uppercase graphite header with a runtime dot (the dot carries the line colour). */
+.zm-frame-body { fill: color-mix(in srgb, var(--ink) 1.5%, transparent); stroke: var(--hair); }
+.zm-line-thread .zm-frame-body { fill: color-mix(in srgb, var(--thread) 4%, transparent); stroke: color-mix(in srgb, var(--thread) 26%, var(--hair)); stroke-dasharray: none; }
+.zm-line-coroutine .zm-frame-body { fill: color-mix(in srgb, var(--coroutine) 4%, transparent); }
+.zm-frame .zm-label { font-size: calc(10.5px * var(--zinv, 1)); font-weight: 650; letter-spacing: 0.08em; text-transform: uppercase; fill: var(--graphite); }
+.zm-frame-dot { font-size: 0.85em; fill: var(--graphite); }
+.zm-line-thread .zm-frame-dot { fill: var(--thread); }
+.zm-line-coroutine .zm-frame-dot { fill: var(--coroutine); }
+.zm-line-process .zm-frame-dot { fill: var(--ink); }
+.zm-count { font-variant-numeric: tabular-nums; fill: color-mix(in srgb, var(--graphite) 70%, transparent); }
 .zm-cfg-body { fill: var(--sheet); stroke: var(--hair); stroke-width: 1; }
 .zm-expansion-body { fill: var(--sheet); stroke: var(--hair); stroke-width: 1; vector-effect: non-scaling-stroke; filter: drop-shadow(0 8px 24px var(--shadow)) drop-shadow(0 1px 2px var(--shadow)); }
 .zm-expansion-head { fill: transparent; stroke: none; }
 /* Motion on the map: a detail opens on the shared curve (see zoom/tween.ts) and its callout follows once the edge reads. */
-.zm-expansion-motion { transform-box: fill-box; transform-origin: 0% 50%; animation: zm-expansion-in 260ms cubic-bezier(0.2, 0, 0, 1) both; }
+.zm-expansion-motion { transform-box: fill-box; transform-origin: 0% 50%; animation: zm-expansion-in 380ms cubic-bezier(0.34, 1.3, 0.64, 1) 60ms backwards; }
 /* A closing detail shrinks and fades over 200 ms, the reverse of its entrance; it takes no pointer while it leaves. */
 .zm-expansion-group.is-leaving { pointer-events: none; }
 .zm-expansion-group.is-leaving .zm-expansion-motion { animation: zm-expansion-out 200ms cubic-bezier(0.4, 0, 1, 1) both; }
 @keyframes zm-expansion-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: scale(0.94); } }
-@keyframes zm-expansion-in { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: none; } }
+@keyframes zm-expansion-in { from { opacity: 0; transform: translateX(-14px) scale(0.92); } }
 @keyframes zm-fade-in { from { opacity: 0; } to { opacity: 1; } }
 .zm-expansion-close { cursor: pointer; }
 .zm-expansion-close-hit { fill: transparent; }
 .zm-expansion-close text { fill: var(--muted); font-size: calc(16px * var(--zinv, 1)); pointer-events: none; }
 .zm-expansion-close:hover text { fill: var(--fg); }
+.zm-expansion-body { filter: drop-shadow(0 18px 40px color-mix(in srgb, var(--shadow) 80%, transparent)) drop-shadow(0 2px 4px var(--shadow)); }
+.zm-expansion-rule { stroke: var(--hair); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.zm-expansion-close-bg { fill: transparent; transition: fill 120ms ease-out; }
+.zm-expansion-close:hover .zm-expansion-close-bg { fill: var(--faint); }
 /* The connector from a call step (or box) to the detail it opened: a solid accent line, drawn in on open (240 ms) and
  * retracted on close (160 ms). Its width is set inline, in map units, so it stays 1.5 px on screen. The head fades in last. */
 .zm-callout { fill: color-mix(in srgb, var(--accent) 9%, transparent); stroke: color-mix(in srgb, var(--accent) 45%, transparent); stroke-width: 1; vector-effect: non-scaling-stroke; stroke-linejoin: round; pointer-events: none; }
+/* The beam: a curved ribbon from the anchor to the detail, a soft accent wash fading toward the detail (see calloutD). */
+.zm-beam-g0 { stop-color: var(--accent); stop-opacity: 0.24; }
+.zm-beam-g1 { stop-color: var(--accent); stop-opacity: 0.05; }
+.zm-callout { fill: var(--beam-fill, color-mix(in srgb, var(--accent) 9%, transparent)); stroke: color-mix(in srgb, var(--accent) 28%, transparent); }
 .zm-expansion-accent { fill: var(--accent); pointer-events: none; }
-.zm-connector-group.is-opening .zm-callout { animation: zm-fade-in 240ms linear both; }
+.zm-connector-group.is-opening .zm-callout { transform-box: fill-box; transform-origin: 0% 50%; animation: zm-beam-in 280ms cubic-bezier(0.2, 0, 0, 1) both; }
+@keyframes zm-beam-in { from { opacity: 0; transform: scaleX(0.2); } to { opacity: 1; transform: none; } }
 .zm-connector-group.is-closing .zm-callout { animation: zm-fade-out 160ms linear both; }
 .zm-connector-group.is-fade { animation: zm-fade-in 240ms linear both; }
 @keyframes zm-fade-out { from { opacity: 1; } to { opacity: 0; } }
@@ -447,6 +486,42 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 .zm-box.zm-card .zm-box-body { stroke-dasharray: none; }
 .zm-box.zm-card.zm-line-none .zm-box-body { stroke: var(--hair); stroke-width: 1; stroke-linecap: butt; }
 .zm-box.zm-card.expanded .zm-box-body { stroke: var(--accent); stroke-width: 1.5; fill: color-mix(in srgb, var(--accent) 6%, var(--sheet)); }
+/* Root cards: an elevated face with a gradient fill (--card-fill is set on the map's svg), a hairline, and a soft shadow. */
+.zm-card-g0 { stop-color: var(--card-top); }
+.zm-card-g1 { stop-color: var(--card-bot); }
+.zm-box.zm-card .zm-box-body { fill: var(--card-fill, var(--sheet)); stroke: var(--hair); stroke-width: 1;
+  filter: drop-shadow(0 1px 1px var(--shadow)) drop-shadow(0 6px 14px color-mix(in srgb, var(--shadow) 55%, transparent));
+  transition: stroke 160ms ease-out, filter 200ms ease-out; }
+.zm-box.zm-card:hover .zm-box-body { stroke: color-mix(in srgb, var(--accent) 60%, var(--hair)); stroke-width: 1.25; }
+.zm-box.zm-card.expanded .zm-box-body { stroke: var(--accent); stroke-width: 1.5; fill: color-mix(in srgb, var(--accent) 8%, var(--sheet));
+  filter: drop-shadow(0 0 10px color-mix(in srgb, var(--accent) 32%, transparent)) drop-shadow(0 6px 14px color-mix(in srgb, var(--shadow) 55%, transparent)); }
+/* The function glyph (ƒ) leads a card's name and an expansion's title; its colour follows the runtime line. */
+.zm-card-glyph { fill: var(--accent); font-style: italic; font-weight: 500; font-family: Georgia, "Times New Roman", serif; }
+.zm-line-thread .zm-card-glyph { fill: var(--thread); }
+.zm-line-coroutine .zm-card-glyph { fill: var(--coroutine); }
+/* Mount-only motion on the map (nothing here blocks a click). Frames fade in; root cards pop in, staggered by reading order
+   (--d is set per card in ZoomMap.tsx from popDelay). The pop sits on the card's inner group, not the one that slides. */
+.zm-pop { transform-box: fill-box; transform-origin: 50% 50%; animation: zm-pop 420ms cubic-bezier(0.34, 1.45, 0.64, 1) var(--d, 0ms) backwards; }
+@keyframes zm-pop { from { opacity: 0; transform: translateY(6px) scale(0.9); } }
+.zm-box.zm-card:active .zm-pop { transform: scale(0.97); transition: transform 90ms ease-out; }
+.zm-frame { animation: zm-fade-in 240ms ease-out backwards; }
+/* The anchor card's ring bursts once when its chart opens, then settles to the expanded glow. */
+.zm-box.zm-card.expanded .zm-box-body { animation: zm-ring 600ms ease-out; }
+@keyframes zm-ring {
+  0%   { filter: drop-shadow(0 0 0 color-mix(in srgb, var(--accent) 70%, transparent)); }
+  40%  { filter: drop-shadow(0 0 16px color-mix(in srgb, var(--accent) 45%, transparent)); }
+  100% { filter: drop-shadow(0 0 10px color-mix(in srgb, var(--accent) 32%, transparent)) drop-shadow(0 6px 14px color-mix(in srgb, var(--shadow) 55%, transparent)); }
+}
+/* The CFG cascade when a chart opens: nodes rise in reading order, each edge draws on after its source node (--d is set in FlowChart.tsx). */
+.zm-expansion .flow-node { transform-box: fill-box; transform-origin: 50% 50%; animation: zm-node-in 300ms cubic-bezier(0.2, 0, 0, 1) var(--d, 0ms) backwards; }
+@keyframes zm-node-in { from { opacity: 0; transform: translateY(4px) scale(0.96); } }
+.zm-expansion .flow-edge:not(.exception) > path:first-child { stroke-dasharray: 1; animation: zm-draw 320ms cubic-bezier(0.4, 0, 0.2, 1) var(--d, 0ms) backwards; }
+@keyframes zm-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+.zm-expansion .flow-edge .flow-label { animation: zm-fade-in 200ms ease-out calc(var(--d, 0ms) + 200ms) backwards; }
+.zm-expansion .flow-edge path.flow-march { animation: flow-march 0.4s linear infinite, zm-fade-in 240ms ease-out calc(var(--d, 0ms) + 320ms) backwards; }
+/* The live thread's dot breathes, so a running thread reads as live. */
+.zm-line-thread .zm-frame-dot { animation: zm-breathe 3.2s ease-in-out infinite; }
+@keyframes zm-breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 @media (prefers-reduced-motion: reduce) {
   .flow-march, .flow-pulse, .flow-token { display: none; }
   .zm-connector-group.is-opening .zm-callout, .zm-connector-group.is-closing .zm-callout { animation: none; }
@@ -624,7 +699,12 @@ table.grid th { background: var(--faint); }
 .sh-page-head h1 { margin: 0; font-size: var(--t-xl); }
 
 /* The sheet: the map fills the stage at the height of the window under the bar. */
-.sh-sheet { position: relative; flex: 1 1 auto; min-height: 360px; margin: 0; overflow: hidden; background: var(--film); background-image: radial-gradient(circle, color-mix(in srgb, var(--graphite) 22%, transparent) 1px, transparent 1.2px); background-size: 22px 22px; }
+.sh-sheet { position: relative; flex: 1 1 auto; min-height: 360px; margin: 0; overflow: hidden; background-color: var(--film);
+  background-image:
+    radial-gradient(1100px 680px at 28% -12%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 70%),
+    radial-gradient(900px 620px at 105% 112%, color-mix(in srgb, var(--thread) 8%, transparent), transparent 70%),
+    radial-gradient(circle, color-mix(in srgb, var(--graphite) 20%, transparent) 1px, transparent 1.3px);
+  background-size: auto, auto, 24px 24px; }
 .sh-canvas { position: absolute; inset: 0; }
 .sh-canvas .zm-stage { position: absolute; inset: 0; height: auto; border: 0; border-radius: 0; background: transparent; }
 .sh-slot:empty { display: none; }
@@ -841,3 +921,8 @@ a.btn.primary { background: linear-gradient(180deg, var(--gloss), transparent 52
   .arch-name { font-size: 21px; }
 }
 .arch-other { flex: 1 1 100%; margin: 0; }
+/* Reduced motion: the map's entrances and the chart cascade are cut; the state they land on is shown at once. */
+@media (prefers-reduced-motion: reduce) {
+  .zm-pop, .zm-frame, .zm-box.zm-card.expanded .zm-box-body, .zm-expansion-motion, .zm-connector-group .zm-callout,
+  .zm-expansion .flow-node, .zm-expansion .flow-edge > path, .zm-expansion .flow-edge .flow-label, .zm-frame-dot { animation: none !important; }
+}

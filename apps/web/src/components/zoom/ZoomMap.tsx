@@ -13,11 +13,13 @@ import { hrefView } from "../../router";
 import { CHART_MIN_PX } from "../../zoom/chart";
 import { anchoredTo, calloutOf, closeExpansion, footprintOf, openExpansion, refresh, revealCamera, rootBoxOf, sameFootprint, SLOT_PAD, shiftAt, type Expansion, type ExpandAnchor } from "../../zoom/expand";
 import { calloutD } from "../../zoom/connector";
+import { popDelay } from "../../zoom/pop";
 import { displayName } from "../../zoom/names";
 import { releaseVelocity, type DragSample } from "../../zoom/spring";
 import { useCameraSpring } from "../../zoom/useCameraSpring";
 import { motionFor, progressAt, TWEEN_MS } from "../../zoom/tween";
 import { pickBox } from "../../zoom/gesture";
+import { clampTop } from "../../zoom/clampTop";
 import { edgeClass, edgeKey, edgeTitle, edgeWidth, lineClass, runtimeLine, type MapBuild, type MapEdge, type MapNode, type MapSelected, type MapSource, type RuntimeLine } from "../../zoom/source";
 import { bucketScale, FAR_TILE_PX, fitLabel, headerLabels, labelChars, lodBucket, MID_TILE_PX } from "../../zoom/lod";
 import { badgeText, cloudPath, markerAnchors, MARKER_BADGE_R, MARKER_TRIANGLE } from "../../zoom/findingsLayer";
@@ -65,6 +67,9 @@ const union = (a: Rect, b: Rect): Rect => {
   const y = Math.min(a.y, b.y);
   return { x, y, w: Math.max(a.x + a.w, b.x + b.w) - x, h: Math.max(a.y + a.h, b.y + b.h) - y };
 };
+
+/** The rectangle `rect` grown to hold every open expansion in `list`. */
+const unionWith = (rect: Rect, list: readonly Expansion[]): Rect => list.reduce((r, e) => union(r, { x: e.x, y: e.y, w: e.w, h: e.h }), rect);
 
 const toCamera = (t: ZoomTransform): Camera => ({ k: t.k, x: t.x, y: t.y });
 const toTransform = (c: Camera): ZoomTransform => zoomIdentity.translate(c.x, c.y).scale(c.k);
@@ -482,10 +487,12 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   };
 
   /** The camera that fits the build's node in the stage's room (a function with a chart is capped, see fitChartCamera). */
-  const fitTarget = (b: MapBuild): Camera | undefined => {
-    const rect = b.placed.rects.get(b.nodeId);
-    if (!rect || !svgRef.current || !zoomRef.current) return undefined;
+  const fitTarget = (b: MapBuild, list: readonly Expansion[] = []): Camera | undefined => {
+    const focus = b.placed.rects.get(b.nodeId);
+    if (!focus || !svgRef.current || !zoomRef.current) return undefined;
     const room = roomOf();
+    // The focus and its open expansions are fitted together, so an opened detail is framed with its card.
+    const rect = unionWith(focus, list);
     const opens = b.placed.items.some((i) => i.id === b.nodeId && i.kind === "frame");
     // A roots-only grid fits at 1x when it fits: the cards are never enlarged past their size.
     let c = opens || b.node(b.nodeId)?.chart !== undefined ? fitChartCamera(rect, room, CHART_MIN_PX) : fitCamera(rect, room, flat ? { maxK: 1 } : {});
@@ -496,7 +503,14 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
       const prect = first !== undefined ? b.placed.rects.get(first.id) : undefined;
       if (prect !== undefined) c = fitCamera(prect, room, { minK: READABLE_FIT_K });
     }
-    return { ...c, x: c.x + leftRef.current, y: c.y + TOP_RESERVE };
+    const placed = { ...c, x: c.x + leftRef.current, y: c.y + TOP_RESERVE };
+    // No empty band above the scene: the scene's top edge lands at the reserve, unless that would push the focus's bottom
+    // above the room's top edge. The scene is what is drawn (the items); the rects also hold the undrawn project node at the top.
+    let sceneTop = Infinity;
+    for (const i of b.placed.items) sceneTop = Math.min(sceneTop, i.rect.y);
+    if (!Number.isFinite(sceneTop)) return placed;
+    const clamped = clampTop(placed, sceneTop, TOP_RESERVE + 8);
+    return clamped.y + (focus.y + focus.h) * clamped.k >= TOP_RESERVE ? clamped : placed;
   };
 
   /**
@@ -507,7 +521,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     if (bottomRef.current <= 0 || list.length === 0) return undefined;
     const rect = b.placed.rects.get(b.nodeId);
     if (!rect) return undefined;
-    const all = list.reduce((r, e) => union(r, { x: e.x, y: e.y, w: e.w, h: e.h }), rect);
+    const all = unionWith(rect, list);
     // The scale stays at the mid tier's floor, so the boxes stay out of the far tier while the details scale down.
     const boxH = medianOf(b.placed.items.filter((i) => i.kind === "box").map((i) => i.rect.h));
     const c = fitCamera(all, roomOf(), { minK: boxH > 0 ? MID_TILE_PX / boxH : undefined });
@@ -604,7 +618,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     // desktop. On a phone, a detail that opens is fitted with the sheet over the map: the one move that is allowed there.
     const fit = !(toggle && holds) || (bottomRef.current > 0 && list.length > openBefore);
     if (fit) {
-      const target = fitDetails(b, list) ?? fitTarget(b);
+      const target = fitDetails(b, list) ?? fitTarget(b, list);
       if (target !== undefined) moveTo(target, animate);
     } else if (list.length > openBefore) {
       // A detail opened off the stage's edge is panned into view; a camera that already shows it does not move.
@@ -868,7 +882,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
       if (b?.selected !== undefined && (force || changed)) {
         // The refit keeps the newest expansion in view too: the source panel opening narrows the stage under it.
         const newest = expRef.current[expRef.current.length - 1];
-        const fit = fitDetails(b, expRef.current) ?? fitTarget(b);
+        const fit = fitDetails(b, expRef.current) ?? fitTarget(b, expRef.current);
         const target = fit === undefined ? undefined : newest === undefined || bottomRef.current > 0 ? fit : revealOf(fit, newest);
         // A forced fit (a sheet opening) glides; a resize cuts, as it always has.
         if (target !== undefined) moveTo(target, force);
@@ -1067,6 +1081,11 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     flipRef.current = next;
   }, [live]);
   const drawn = (kind: PlacedItem["kind"]) => (live ? live.items.filter((i) => i.kind === kind) : []);
+  /** A root card's entrance rank: its place in reading order (rect y, then x), so the first cards on the map pop first. */
+  const cardRank = useMemo(() => {
+    const boxes = (live?.items ?? []).filter((i) => i.kind === "box").slice().sort((a, b) => a.rect.y - b.rect.y || a.rect.x - b.rect.x);
+    return new Map(boxes.map((it, i) => [it.id, i] as const));
+  }, [live]);
   /** The camera scale of the labels' bucket: labels are fitted to the boxes' width on screen at this scale. */
   const labelScale = bucketScale(shown.lod);
   /**
@@ -1219,7 +1238,13 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
         aria-describedby={hint ? hintId : undefined}
         onKeyDown={onKey}
       >
-        <svg ref={svgRef} className="zm-svg" width="100%" height="100%">
+        <svg
+          ref={svgRef}
+          className="zm-svg"
+          width="100%"
+          height="100%"
+          style={{ ["--card-fill" as string]: `url(#${arrowId}-card)`, ["--beam-fill" as string]: `url(#${arrowId}-beam)` }}
+        >
           <defs>
             <marker
               id={arrowId}
@@ -1233,6 +1258,14 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
             >
               <path d="M0,0 L10,5 L0,10 z" className="zm-arrow" />
             </marker>
+            <linearGradient id={`${arrowId}-card`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" className="zm-card-g0" />
+              <stop offset="1" className="zm-card-g1" />
+            </linearGradient>
+            <linearGradient id={`${arrowId}-beam`} x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0" className="zm-beam-g0" />
+              <stop offset="1" className="zm-beam-g1" />
+            </linearGradient>
           </defs>
           <g ref={worldRef} className={far ? "zm-world zm-far" : mid ? "zm-world zm-mid" : "zm-world"}>
             {!flat && <ZoneGrid path={zonePath} />}
@@ -1268,6 +1301,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
                   bare={mid && it.rect.h * labelScale < TILE_LABEL_PX}
                   small={mid}
                   card={flat}
+                  rank={cardRank.get(it.id) ?? 0}
                 />
               );
             })}
@@ -1427,12 +1461,12 @@ export function FrameShape({
   return (
     <g className={`zm-frame${node ? ` zm-${node.kind}` : ""} ${lineClass(line)}`} data-sx={rect.x} data-fid={item.id}>
       <title>{node?.title || (node ? (node.detail ? `${node.label} (${node.detail})` : node.label) : item.id)}</title>
-      <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={12} className="zm-frame-body" />
+      <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={16} className="zm-frame-body" />
       <g className="zm-hit" onClick={() => onOpen(item.id)}>
-        <rect x={rect.x} y={rect.y} width={rect.w} height={head} rx={12} className="zm-frame-head" />
+        <rect x={rect.x} y={rect.y} width={rect.w} height={head} rx={16} className="zm-frame-head" />
         {text.label !== null && (
           <text x={rect.x + 12} y={rect.y + head / 2} dominantBaseline="central" className="zm-label">
-            {text.label}
+            <tspan className="zm-frame-dot">●</tspan>{" "}{text.label}
           </text>
         )}
         {text.detail !== null && (
@@ -1458,6 +1492,7 @@ function BoxShape({
   bare = false,
   small = false,
   card = false,
+  rank = 0,
 }: {
   item: PlacedItem;
   node: MapNode;
@@ -1471,6 +1506,8 @@ function BoxShape({
   small?: boolean;
   /** A roots-only card: its name, and its file line under it when the box is tall enough (see roots-grid.ts). */
   card?: boolean;
+  /** The card's place in reading order, which sets its pop-in delay (see zoom/pop.ts). */
+  rank?: number;
 }) {
   const { rect } = item;
   // The function's display name on the map (the full name stays in the tooltip).
@@ -1481,16 +1518,20 @@ function BoxShape({
   const holdsChart = node.chart !== undefined;
   if (card && !small && !bare) {
     // A card: its name alone, centred vertically, fitted to the card's width on screen.
-    const name = fitLabel(shown, labelChars(rect.w * k, 8, 20));
+    // Two characters of the budget go to the leading function glyph (ƒ), so the name stays inside the card.
+    const name = fitLabel(shown, Math.max(1, labelChars(rect.w * k, 8, 20) - 2));
     return (
       <g className={`zm-box zm-${node.kind} zm-card ${lineClass(line)}${holdsChart ? " zm-has-chart" : ""}${chartOpen ? " expanded" : ""}`} data-sx={rect.x} data-fid={item.id} onClick={() => onOpen(item.id)}>
         <title>{node.detail !== undefined ? `${node.label} (${node.detail})` : node.title || node.label}</title>
-        <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={10} className="zm-box-body" />
-        {name !== null && (
-          <text x={rect.x + 12} y={rect.y + rect.h / 2} dominantBaseline="central" className="zm-label">
-            {name}
-          </text>
-        )}
+        {/* The pop-in sits on this inner group: the outer one carries the slide transform (writeShift and the FLIP). */}
+        <g className="zm-pop" style={{ ["--d" as string]: `${popDelay(rank)}ms` }}>
+          <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={12} className="zm-box-body" />
+          {name !== null && (
+            <text x={rect.x + 12} y={rect.y + rect.h / 2} dominantBaseline="central" className="zm-label">
+              <tspan className="zm-card-glyph">ƒ</tspan>{" "}{name}
+            </text>
+          )}
+        </g>
       </g>
     );
   }
