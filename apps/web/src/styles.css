@@ -732,8 +732,9 @@ table.grid th { background: var(--faint); }
 .sh-layer-head { margin: 12px 0 4px; font-size: var(--t-xs); font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
 .sh-check { display: flex; align-items: center; gap: 8px; font-size: var(--t-sm); padding: 3px 0; }
 
-.sh-title { position: absolute; right: var(--sh-gap); bottom: var(--sh-gap); z-index: 5; width: min(360px, calc(100% - 2 * var(--sh-gap))); padding: 12px 14px; transition: right .3s ease; }
-.sh-title.emph { width: min(420px, calc(100% - 2 * var(--sh-gap))); }
+/* The status pill is one compact line: it sizes to its text, at most 360 px and half the canvas, so it covers little of the map. */
+.sh-title { position: absolute; right: var(--sh-gap); bottom: var(--sh-gap); z-index: 5; width: max-content; max-width: min(360px, 50%); padding: 12px 14px; transition: right .3s ease; }
+.sh-title.emph { max-width: min(420px, 50%); }
 .sh-title-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px 14px; margin: 0; }
 .sh-title-grid .wide { grid-column: 1 / -1; }
 .sh-title-grid dt { font-size: var(--t-xs); color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }

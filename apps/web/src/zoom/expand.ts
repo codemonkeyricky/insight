@@ -292,18 +292,42 @@ function shift(start: number, size: number, room: number): number {
   return 0;
 }
 
+/** The smallest scale a reveal zooms out to. A detail too large for the room at this scale is aligned to the room's corner. */
+export const REVEAL_MIN_K = 0.5;
+
 /**
  * The camera that shows an expansion `rect` (world units) whose chart is `chartW` wide. A chart narrower than `minPx` on
  * screen is zoomed in, at most 1.5 times the current scale, about the expansion's top-left corner, which stays where it
- * was. Then the camera pans the least that brings the expansion inside `room`; one larger than the room is aligned to its
- * top-left. A camera that already shows it is returned unchanged.
+ * was. An expansion that does not fit the room at that scale is zoomed out until it fits, but not below REVEAL_MIN_K. Then
+ * the camera pans the least that brings the expansion inside `room`, and one still larger than the room is aligned to its
+ * top-left, so its left and top edges stay visible. A camera that already shows it is returned unchanged.
  */
 export function revealCamera(cam: Camera, rect: Rect, chartW: number, room: { width: number; height: number }, minPx: number): Camera {
   let k = cam.k;
   if (chartW * k < minPx) k = Math.min(minPx / chartW, cam.k * CHART_FIT_MAX_K);
+  const fitK = Math.min((room.width - 2 * REVEAL_MARGIN) / Math.max(rect.w, 1), (room.height - 2 * REVEAL_MARGIN) / Math.max(rect.h, 1));
+  if (fitK < k) k = Math.min(k, Math.max(REVEAL_MIN_K, fitK));
   let x = cam.x + rect.x * (cam.k - k);
   let y = cam.y + rect.y * (cam.k - k);
   x += shift(rect.x * k + x, rect.w * k, room.width);
   y += shift(rect.y * k + y, rect.h * k, room.height);
   return { k, x, y };
+}
+
+/** A narrow viewport (a phone) shows the first column at least this large, so its text stays readable. */
+export const READABLE_COLUMN_K = 0.6;
+/** The viewport width at or below which the whole-project view favours one readable column over the whole width. */
+export const NARROW_VIEW_PX = 600;
+
+/**
+ * The camera for the whole project on the first view: the scene (world units) is scaled down, never above `maxK`, until its
+ * width fits the room's width with `pad` to spare, and aligned to the room's top-left, so no frame is clipped on the right.
+ * Its height is not fitted: the map is panned down it. On a narrow viewport the scale is at least READABLE_COLUMN_K (capped at
+ * `maxK`), so one column reads, and its left edge stays visible. Returned in the room's own coordinates.
+ */
+export function sceneCamera(scene: Rect, roomWidth: number, maxK: number, narrow: boolean, pad = REVEAL_MARGIN): Camera {
+  const fitW = (roomWidth - 2 * pad) / Math.max(scene.w, 1);
+  const k = narrow ? Math.min(maxK, Math.max(fitW, READABLE_COLUMN_K)) : Math.min(maxK, fitW);
+  const scale = Math.max(0.02, k);
+  return { k: scale, x: pad - scene.x * scale, y: pad - scene.y * scale };
 }
