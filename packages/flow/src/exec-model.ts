@@ -625,14 +625,22 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
   }
   const importedFiles = new Set<string>();
   const importsOf = new Map<string, string[]>();
+  // The imports that run code when the importing file loads: every import but a type-only one (`import type`), which the
+  // frontend marks. A dynamic import counts, since its code runs when the import is reached.
+  const runtimeImportsOf = new Map<string, string[]>();
   for (const e of edges) {
     if (e.kind !== "packaging.import" && e.kind !== "packaging.re-export") continue;
+    const typeOnly = e.attrs?.typeOnly === true;
     for (const to of edgeTargets(e).nodes) {
       if (to === e.from) continue;
       importedFiles.add(to);
       push(importsOf, e.from, to);
+      if (!typeOnly) push(runtimeImportsOf, e.from, to);
     }
   }
+  // A file's module entry, by file, for the module-entry seeds of a thread.
+  const moduleOfFile = new Map<string, string>();
+  for (const f of fns.values()) if (f.module && f.file !== undefined) moduleOfFile.set(f.file, f.id);
   const entryFns = [...fns.values()].filter(
     (f) => f.module && f.inScope && f.file !== undefined && !isNoisePath(f.file) && !f.file.endsWith(".d.ts") && !scriptFiles.has(f.file),
   );
@@ -686,15 +694,42 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
           .map((f) => f.id),
         ...fallbackEntryModules,
       ].sort(byText);
-  const planOf = (kind: ExecThreadKind, id: string, roots: string[], spawn?: ExecSpawn): Plan => ({
-    kind,
-    id,
-    ...(spawn !== undefined ? { spawn } : {}),
-    roots,
-    reach: reachBy(roots, neighbours),
-    plain: reachBy(roots, plainNeighbours),
-    coroutines: coroutinesOf(roots),
-  });
+  /**
+   * The module entries a thread runs when it loads: the module of each file its roots lie in, and of each file those files
+   * import at runtime, transitively. A module's top-level code runs on every thread whose files import it, so these are
+   * seeds of the thread, like its roots. The spawn's script file is a seed too, when it has no function. Visited files
+   * are kept in a set, so an import cycle ends and the cost stays linear in the files reached.
+   */
+  const threadModules = (roots: readonly string[], script: string | undefined): string[] => {
+    const seeds = new Set<string>();
+    if (script !== undefined && script !== "") seeds.add(script);
+    for (const r of roots) {
+      const file = fns.get(r)?.file;
+      if (file !== undefined) seeds.add(file);
+    }
+    const out: string[] = [];
+    for (const file of reachBy([...seeds], (f) => runtimeImportsOf.get(f) ?? [])) {
+      const mod = moduleOfFile.get(file);
+      if (mod !== undefined) out.push(mod);
+      // A file with no module entry keeps its top-level code's edges under the file's own id (the frontend names no
+      // entity for code that is not executable). The file id is a seed only to start those edges; it is no function.
+      else if (callOut.has(file) || closureOut.has(file) || dispatchOut.has(file)) out.push(file);
+    }
+    return out.sort(byText);
+  };
+  // A thread's seeds are its roots and those module entries. The roots stay as they are for grounding and naming.
+  const planOf = (kind: ExecThreadKind, id: string, roots: string[], spawn?: ExecSpawn): Plan => {
+    const seeds = [...new Set([...roots, ...threadModules(roots, spawn?.script)])];
+    return {
+      kind,
+      id,
+      ...(spawn !== undefined ? { spawn } : {}),
+      roots,
+      reach: reachBy(seeds, neighbours),
+      plain: reachBy(seeds, plainNeighbours),
+      coroutines: coroutinesOf(seeds),
+    };
+  };
   // The general main thread exists only without entries. Each program has its own main thread: from its `main` function,
   // or from its entry modules.
   const plans: Plan[] = entryMode ? [] : [planOf("main", "main", mainRoots)];
@@ -831,7 +866,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       grounded,
       ...(p.spawn !== undefined ? { spawn: p.spawn } : {}),
       roots,
-      reach: p.reach.size,
+      reach: [...p.reach].filter((id) => fns.has(id)).length,
       reached,
       coroutines,
       coroutineOnly,

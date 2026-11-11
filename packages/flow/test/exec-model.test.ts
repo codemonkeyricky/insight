@@ -477,11 +477,12 @@ describe("execModel: anonymous functions and runtime", () => {
     expect(model.threads[0]).toMatchObject({ roots: [`${file}#main`], reach: 1 });
     expect(model.functions.find((f) => f.id === anonId(file, 6))).toMatchObject({ anonymous: true, runtime: "none" });
     expect(model.unthreaded).toEqual([anonId(file, 6)]);
-    // Module-level code that hands it to a timer lists it, and it runs on no thread.
+    // Module-level code of the file that main is in hands it to a timer. That file loads on main's thread, so the
+    // timer runs there too: the lambda is threaded, and it still starts no thread of its own.
     const timed = execModel(nodes, [dispatchEdge(file, anonId(file, 6), "timer", file, 7)], "", LAMBDAS);
     expect(timed.threads[0]?.roots).toEqual([`${file}#main`]);
-    expect(timed.functions.find((f) => f.id === anonId(file, 6))).toMatchObject({ anonymous: true, parent: file, runtime: "none" });
-    expect(timed.stats).toMatchObject({ functionsInScope: 2, functionsThreaded: 1, functionsUnthreaded: 1 });
+    expect(timed.functions.find((f) => f.id === anonId(file, 6))).toMatchObject({ anonymous: true, parent: file, runtime: "thread" });
+    expect(timed.stats).toMatchObject({ functionsInScope: 2, functionsThreaded: 2, functionsUnthreaded: 0 });
   });
 
   it("runs a lambda created inside a spawned lambda on that spawn's thread", () => {
@@ -589,13 +590,15 @@ describe("execModel: canvas fields", () => {
     expect(runtimeIn(model, at("both"))).toBe("thread");
   });
 
-  it("lists a function called only from module-level code as unthreaded, with runtime none", () => {
+  it("runs a function called only from the top level of a file a thread loads, on that thread", () => {
+    // The file holds main, so its top-level code runs on main's thread before main does: f runs there too. Module-level
+    // code still starts no thread of its own. See exec-modules.test.ts for a file no thread loads.
     const nodes = [fnNode("src/m.ts", "main", 0), fnNode("src/m.ts", "f", 4)];
     const model = execModel(nodes, [callEdge("src/m.ts", "src/m.ts#f", "src/m.ts", 10)], "src");
     expect(model.threads[0]?.roots).toEqual(["src/m.ts#main"]);
-    expect(model.unthreaded).toEqual(["src/m.ts#f"]);
-    expect(model.functions.find((f) => f.id === "src/m.ts#f")).toMatchObject({ inScope: true, runtime: "none" });
-    expect(model.stats).toMatchObject({ functionsUnthreaded: 1 });
+    expect(model.unthreaded).toEqual([]);
+    expect(model.functions.find((f) => f.id === "src/m.ts#f")).toMatchObject({ inScope: true, runtime: "thread" });
+    expect(model.stats).toMatchObject({ functionsUnthreaded: 0 });
   });
 
   it("leaves unthreaded test functions out unless the scope is the test file or folder", () => {
@@ -653,10 +656,11 @@ describe("execModel: canvas fields", () => {
     const file = "src/m.ts";
     const at = (name: string) => `${file}#${name}`;
     const nodes = ["main", "a", "u1", "u2"].map((n, i) => fnNode(file, n, i * 4));
+    // u1 and u2 are called from the top level of src/s.ts, a file no thread loads, so neither runs on a thread.
     const edges = [
       callEdge(at("main"), at("a"), file, 1),
-      callEdge(file, at("u1"), file, 20),
-      callEdge(file, at("u2"), file, 21),
+      callEdge("src/s.ts", at("u1"), "src/s.ts", 20),
+      callEdge("src/s.ts", at("u2"), "src/s.ts", 21),
       callEdge(at("u1"), at("u2"), file, 9),
     ];
     const full = execModel(nodes, edges, "src");
@@ -966,9 +970,9 @@ describe("execModel: locks and channels", () => {
   });
 
   it("lists a lock used only by a function no thread runs, with no threads", () => {
-    // helper is called only from module-level code of the file, so no thread runs it.
+    // helper is called only from module-level code of src/s.ts, a file no thread loads, so no thread runs it.
     const nodes = [fnNode("src/m.ts", "main", 0), fnNode("src/m.ts", "helper", 6), lockNode("src/m.ts", 7, "src/m.ts#helper", "m")];
-    const model = execModel(nodes, [callEdge("src/m.ts", "src/m.ts#helper", "src/m.ts", 9)], "src");
+    const model = execModel(nodes, [callEdge("src/s.ts", "src/m.ts#helper", "src/s.ts", 9)], "src");
     expect(model.unthreaded).toEqual(["src/m.ts#helper"]);
     expect(model.resources).toMatchObject([{ id: "lock:m", threads: [], sites: [{ fn: "src/m.ts#helper" }] }]);
   });
