@@ -151,11 +151,27 @@ function exportName(callee: ts.Expression, imports: Map<string, ImportBinding>, 
   return undefined;
 }
 
+/** How many same-file consts a path may be followed through before the search gives up. */
+const MAX_CONST_HOPS = 8;
+
+/** `fileURLToPath(import.meta.url)`: the path of the file that holds the call. */
+function isFileUrlOfMeta(e: ts.Expression, imports: Map<string, ImportBinding>): boolean {
+  if (!ts.isCallExpression(e) || exportName(e.expression, imports, ["url"]) !== "fileURLToPath") return false;
+  return e.arguments.length === 1 && e.arguments[0] !== undefined && isImportMetaUrl(e.arguments[0]);
+}
+
 /**
  * The file-relative path an expression names: `new URL(p, import.meta.url)`, `fileURLToPath` of one,
- * `join` or `resolve` of `__dirname` with literal segments, or a template of `__dirname` and a literal tail.
+ * `join` or `resolve` of `__dirname` (or `dirname(fileURLToPath(import.meta.url))`) with literal segments, or a template
+ * of `__dirname` and a literal tail. An identifier is followed to the same-file `const` it names, and a join or resolve
+ * may start from such a path, so `join(REPO_ROOT, "apps")` works when `REPO_ROOT` is a file-relative path too.
  */
-function fileRelativePath(e: ts.Expression, imports: Map<string, ImportBinding>): string | undefined {
+function fileRelativePath(e: ts.Expression, imports: Map<string, ImportBinding>, env: WorkerEnv = {}, hops = 0): string | undefined {
+  if (hops > MAX_CONST_HOPS) return undefined;
+  if (ts.isIdentifier(e)) {
+    const init = env.constOf?.(e);
+    return init === undefined ? undefined : fileRelativePath(init, imports, env, hops + 1);
+  }
   if (ts.isNewExpression(e)) {
     if (!ts.isIdentifier(e.expression) || e.expression.text !== "URL") return undefined;
     const [path, base] = e.arguments ?? [];
@@ -173,25 +189,56 @@ function fileRelativePath(e: ts.Expression, imports: Map<string, ImportBinding>)
   if (!ts.isCallExpression(e)) return undefined;
   if (exportName(e.expression, imports, ["url"]) === "fileURLToPath") {
     const [only] = e.arguments;
-    return e.arguments.length === 1 && only ? fileRelativePath(only, imports) : undefined;
+    return e.arguments.length === 1 && only ? fileRelativePath(only, imports, env, hops + 1) : undefined;
   }
   const fn = exportName(e.expression, imports, ["path"]);
-  const [dir, ...rest] = e.arguments;
-  if ((fn !== "join" && fn !== "resolve") || !dir || !isDirArg(dir, imports) || rest.length === 0) return undefined;
+  const [first, ...rest] = e.arguments;
+  if (fn === "dirname") return first !== undefined && rest.length === 0 && isFileUrlOfMeta(first, imports) ? "." : undefined;
+  if ((fn !== "join" && fn !== "resolve") || !first || rest.length === 0) return undefined;
+  const base = isDirArg(first, imports) ? "." : fileRelativePath(first, imports, env, hops + 1);
+  if (base === undefined) return undefined;
   const segments = rest.map((a) => (ts.isStringLiteralLike(a) ? a.text : undefined));
   if (!segments.every((s): s is string => s !== undefined && isRelativePath(s))) return undefined;
-  return [".", ...segments].join("/");
+  return [base, ...segments].join("/");
 }
 
 /**
  * The script a spawn argument names, when it names one statically. A plain relative literal is cwd-relative;
- * the forms `fileRelativePath` accepts are file-relative. A variable, an absolute path or a URL with another base names none.
+ * the forms `fileRelativePath` accepts are file-relative. An identifier is followed to its same-file `const` when
+ * `env` says where that is; a variable it cannot follow, an absolute path or a URL with another base names none.
  */
-export function scriptPath(arg: ts.Expression | undefined, imports: Map<string, ImportBinding>): ScriptPath | undefined {
-  if (!arg) return undefined;
+export function scriptPath(arg: ts.Expression | undefined, imports: Map<string, ImportBinding>, env: WorkerEnv = {}, hops = 0): ScriptPath | undefined {
+  if (!arg || hops > MAX_CONST_HOPS) return undefined;
+  if (ts.isIdentifier(arg)) {
+    const init = env.constOf?.(arg);
+    return init === undefined ? undefined : scriptPath(init, imports, env, hops + 1);
+  }
   if (ts.isStringLiteralLike(arg)) return isRelativePath(arg.text) ? { base: "cwd", path: arg.text } : undefined;
-  const path = fileRelativePath(arg, imports);
+  const path = fileRelativePath(arg, imports, env);
   return path === undefined ? undefined : { base: "file", path };
+}
+
+/** Child-process calls whose second argument is the argument vector, so that a Node binary runs its first entry as a script. */
+const NODE_ARGV_APIS = new Set(["child_process.spawn", "child_process.spawnSync", "child_process.execFile", "child_process.execFileSync"]);
+
+/**
+ * The script a Node child process runs: the first entry of `spawn(process.execPath, [script, ...])` and the same calls
+ * from `child_process` that take a file and an argument vector. Undefined for any other command, such as `git`.
+ */
+export function nodeScriptArgument(call: ts.CallExpression, api: string, imports: Map<string, ImportBinding>): ts.Expression | undefined {
+  if (!NODE_ARGV_APIS.has(api)) return undefined;
+  const [file, argv] = call.arguments;
+  const isExecPath =
+    file !== undefined &&
+    ts.isPropertyAccessExpression(file) &&
+    file.name.text === "execPath" &&
+    ts.isIdentifier(file.expression) &&
+    file.expression.text === "process" &&
+    !imports.has("process");
+  if (!isExecPath || argv === undefined) return undefined;
+  let list: ts.Expression = argv;
+  while (ts.isParenthesizedExpression(list) || ts.isAsExpression(list)) list = list.expression;
+  return ts.isArrayLiteralExpression(list) ? list.elements[0] : undefined;
 }
 
 /**
