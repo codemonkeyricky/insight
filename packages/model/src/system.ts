@@ -245,7 +245,7 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
         continue;
       }
       const label = `${method ?? "*"} ${path}`;
-      const id = ensureExternal({ id: `api:${label}`, label: "This app's API", category: "api" });
+      const id = ensureExternal({ id: `api:${label}`, label, category: "api" });
       addFact(comp, id, "requests", label, site, exact);
       continue;
     }

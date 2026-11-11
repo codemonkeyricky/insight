@@ -181,7 +181,7 @@ describe("systemModel rules", () => {
     expect(toRoute[0]?.count).toBe(2);
     expect(toRoute[0]?.from).toBe("apps/web");
     const api = sys.externals.find((e) => e.id === "api:GET /api/unknown");
-    expect(api).toMatchObject({ label: "This app's API", category: "api" });
+    expect(api).toMatchObject({ label: "GET /api/unknown", category: "api" });
     expect(sys.edges.find((e) => e.to === api?.id)?.verb).toBe("requests");
   });
 

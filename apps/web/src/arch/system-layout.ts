@@ -224,7 +224,7 @@ export function layoutSystem(sys: SystemModel): SysLayout {
           y: 0,
           w: SYS_EXT_W,
           h: SYS_EXT_H,
-          title: cut(e.label, 24),
+          title: cut(e.label, 19),
           sub: cut(externalSub(e), 30),
           chips: [],
           category,
