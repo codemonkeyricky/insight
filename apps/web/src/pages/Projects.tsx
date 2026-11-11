@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api, ApiError, IS_DEMO, type Project } from "../api";
+import { IndexProgress } from "../components/IndexProgress";
 import { hrefProject } from "../router";
 
 export function ProjectsPage() {
@@ -7,11 +8,18 @@ export function ProjectsPage() {
   const [error, setError] = useState<string | null>(null);
   const load = () => api.projects().then(setProjects).catch((e: Error) => setError(e.message));
 
+  // Polled rather than streamed per card: every second while a project is indexing, otherwise every four seconds.
+  const anyIndexing = projects?.some((p) => p.status === "indexing") ?? false;
+
   useEffect(() => {
     void load();
-    const timer = IS_DEMO ? undefined : setInterval(() => void load(), 4000);
-    return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (IS_DEMO) return;
+    const timer = setInterval(() => void load(), anyIndexing ? 1000 : 4000);
+    return () => clearInterval(timer);
+  }, [anyIndexing]);
 
   return (
     <section>
@@ -41,6 +49,7 @@ export function ProjectsPage() {
                 </span>
               )}
             </div>
+            {p.status === "indexing" && <IndexProgress progress={p.progress} compact />}
             {p.error && <div className="error small">{p.error}</div>}
           </li>
         ))}

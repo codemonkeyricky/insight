@@ -10,7 +10,8 @@ import { LensPage } from "../pages/LensPage";
 import { ProjectOverview } from "../pages/ProjectOverview";
 import { ReviewPage } from "../pages/Review";
 import { StatusBadge } from "../pages/Projects";
-import { useProjectEvents, type RunEvent } from "../useEvents";
+import { useIndexProgress } from "../useIndexProgress";
+import { FirstIndex, IndexStrip } from "./IndexStrip";
 import { ScopeNote, scopeKind } from "./ScopeNote";
 import { CodePane } from "./sheet/CodePane";
 import { FileTree } from "./sheet/FileTree";
@@ -118,7 +119,8 @@ export function Workspace({ id, tab, scope, line, fn, roots = true, base, head, 
     if (redirect !== undefined) window.location.replace(redirect);
   }, [redirect]);
 
-  useProjectEvents(id, (event: RunEvent) => {
+  // The run's progress, for the strip and the first-index state. The overview reloads when a run starts, ends or fails.
+  const run = useIndexProgress(id, loaded?.overview.project.progress, (event) => {
     if (event.type === "done" || event.type === "failed" || event.type === "status") void load();
   });
 
@@ -198,6 +200,8 @@ export function Workspace({ id, tab, scope, line, fn, roots = true, base, head, 
   const sourceText = p.source.kind === "path" ? p.source.path : p.source.url;
   const kind = scopeKind(scope, files);
   const content: ShellContent = contentOf(tab, kind, full);
+  // A project with no snapshot yet has nothing to chart, so its views give way to the first index's progress.
+  const noSnapshot = overview.snapshot === null;
   const lensTabs = listing ? tabbedLenses(listing.lenses).map((row) => lensTab(row, !IS_DEMO)) : [];
   // The banner's numbers belong to one scope. A listing for another scope is not shown while the new one loads.
   const stats = listing && listing.scope === canonicalScope(scope) ? listing.stats : null;
@@ -334,7 +338,10 @@ export function Workspace({ id, tab, scope, line, fn, roots = true, base, head, 
         <Splitter side="left" label="Resize the files pane" width={treeW} shown={treeShown && !narrow} onResize={setTreeW} />
         <section className="sh-center">
           <LayerTabs links={layers} />
-          {content === "flow" ? (
+          <IndexStrip id={id} project={p} snapshot={overview.snapshot} run={run} onRequested={() => void load()} />
+          {noSnapshot && content !== "overview" ? (
+            <FirstIndex name={p.name} run={run} running={run.running || p.status === "indexing"} />
+          ) : content === "flow" ? (
             <div className="sh-stage sh-stage-flow">
               {error && <p className="error" role="alert">{error}</p>}
               <FlowView

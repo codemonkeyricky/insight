@@ -1,13 +1,17 @@
-import { IS_DEMO } from "./api";
+import { IS_DEMO, type RunProgress } from "./api";
 import { useEffect, useRef } from "react";
 
 export interface RunEvent {
-  type: "status" | "progress" | "done" | "failed";
+  type: "status" | "phase" | "progress" | "done" | "failed";
   projectId: string;
   status?: string;
   queued?: boolean;
   line?: string;
   error?: string;
+  /** A phase event's progress. */
+  progress?: RunProgress;
+  /** A progress line replayed on connect (the run's recent lines), not a live one. */
+  replay?: boolean;
   at: string;
 }
 
@@ -19,14 +23,14 @@ export function useProjectEvents(projectId: string | undefined, onEvent: (event:
   useEffect(() => {
     if (!projectId || IS_DEMO || typeof EventSource === "undefined") return;
     const source = new EventSource(`/api/projects/${encodeURIComponent(projectId)}/events`);
-    const listen = (type: RunEvent["type"]) => (message: MessageEvent<string>) => {
+    const listen = () => (message: MessageEvent<string>) => {
       try {
         handler.current(JSON.parse(message.data) as RunEvent);
       } catch {
         /* a malformed event is ignored; the next full read corrects the view */
       }
     };
-    const listeners = (["status", "progress", "done", "failed"] as const).map((t) => [t, listen(t)] as const);
+    const listeners = (["status", "phase", "progress", "done", "failed"] as const).map((t) => [t, listen()] as const);
     for (const [t, fn] of listeners) source.addEventListener(t, fn);
     return () => {
       for (const [t, fn] of listeners) source.removeEventListener(t, fn);
