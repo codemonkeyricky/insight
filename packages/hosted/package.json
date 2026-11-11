@@ -14,9 +14,15 @@
     "./vercel": {
       "types": "./dist/vercel.d.ts",
       "import": "./dist/vercel.js"
+    },
+    "./vercel-node": {
+      "types": "./dist/vercel-node.d.ts",
+      "import": "./dist/vercel-node.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -24,6 +30,16 @@
   },
   "dependencies": {
     "@insight/export": "workspace:*",
+    "@insight/frontend-bazel": "workspace:*",
+    "@insight/frontend-cpp": "workspace:*",
+    "@insight/frontend-typescript": "workspace:*",
+    "@insight/lens-calls": "workspace:*",
+    "@insight/lens-concurrency-map": "workspace:*",
+    "@insight/lens-dependencies": "workspace:*",
+    "@insight/lens-effects": "workspace:*",
+    "@insight/lens-execution": "workspace:*",
+    "@insight/lens-flow-complexity": "workspace:*",
+    "@insight/lens-lock-order": "workspace:*",
     "@vercel/functions": "^3.11.1",
     "aws4fetch": "^1.0.20",
     "tar": "^7.5.22"

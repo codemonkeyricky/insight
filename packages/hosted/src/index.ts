@@ -2,4 +2,5 @@
 export * from "./storage.js";
 export * from "./github.js";
 export * from "./indexer.js";
+export * from "./r2Cors.js";
 export { buildDeps, storageFromEnv } from "./env.js";
