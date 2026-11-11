@@ -661,7 +661,6 @@ table.grid th { background: var(--faint); }
   .fn rect, .zone-box, .cfg-node, .arch-box, .detail-bg, .zm-box-body { stroke: var(--ink); }
   .graph, .graph-scroll, .arch-scroll, .flow-scroll { box-shadow: 0 0 0 1.5px var(--ink); }
 }
-.top .theme-switch { margin-left: auto; }
 
 /* ---- Sheet shell (phase 2): glass top bar, full-height stage, overlays. Tokens only; dark follows the theme tokens. ---- */
 :root { --sh-top: 56px; --side-w: 380px; --sh-gap: 16px; }
@@ -973,4 +972,31 @@ a.btn.rv-show:hover { background: color-mix(in srgb, var(--accent) 12%, transpar
   .idx-bar.is-uncounted::after { animation: none; transform: none; opacity: 0.5; }
   .idx-rest { animation: none; }
   .idx-strip.is-done .idx-done { animation: none; }
+}
+
+/* ---- Home (project list): the same glass bar as the workspace, over a 1200px column of glass cards. ---- */
+.app.home { max-width: none; margin: 0; padding: 0 0 48px; }
+.app > .sh-page-top { margin: 0 -16px 16px; }
+.app.home > .sh-page-top { margin: 0; }
+.sh-server { font-size: var(--t-xs); color: var(--muted); white-space: nowrap; }
+.home { max-width: 1200px; margin: 0 auto; padding: 24px 24px 0; }
+.home h1 { font-size: 1.375rem; font-weight: 600; margin: 0 0 16px; }
+.home .add-panel { max-width: 560px; margin: 0 0 24px; padding: 18px; border: 1px solid var(--hair); border-radius: 14px; background: var(--glass-strong); box-shadow: var(--float); }
+.home .add-panel h2 { font-size: var(--t-lg); font-weight: 600; margin: 0; }
+button.add-submit { background: var(--accent-fill, var(--accent)); color: var(--on-accent); box-shadow: 0 2px 10px color-mix(in srgb, var(--accent) 38%, transparent); }
+button.add-submit:disabled { background: var(--faint); color: var(--graphite); box-shadow: none; opacity: 1; cursor: default; }
+.home .cards { grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); gap: 16px; padding: 0; margin: 0; }
+.home .project-card { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 16px; border: 1px solid var(--hair); border-radius: 14px; background: var(--glass-strong); box-shadow: var(--float); }
+.project-name { color: var(--accent-text, var(--accent)); font-weight: 600; font-size: var(--t-md); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-path { font-family: var(--font-code); font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.project-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; font-size: var(--t-sm); min-width: 0; }
+.project-meta .badge { border: 1px solid var(--hair); font-size: var(--t-xs); padding: 1px 8px; }
+.project-stats { font-variant-numeric: tabular-nums; }
+@media (max-width: 600px) {
+  .home { padding: 16px 16px 0; }
+}
+@media (max-width: 520px) {
+  /* The home header keeps one row and its mark: it has no crumbs to make room for. The workspace's 92px row stays its own. */
+  .sh-top.sh-page-top { height: 56px; flex-wrap: nowrap; padding-top: 0; padding-bottom: 0; row-gap: 0; }
+  .sh-top.sh-page-top .sh-mark { display: inline-flex; }
 }

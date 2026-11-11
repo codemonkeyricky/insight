@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { api, ApiError, IS_DEMO, type Project } from "../api";
 import { IndexProgress } from "../components/IndexProgress";
 import { hrefProject } from "../router";
+import { projectFindingsTotal } from "../projectFindings";
 
 export function ProjectsPage() {
   const [projects, setProjects] = useState<Project[] | null>(null);
@@ -22,10 +23,10 @@ export function ProjectsPage() {
   }, [anyIndexing]);
 
   return (
-    <section>
+    <section className="home">
       <h1>Projects</h1>
       {IS_DEMO ? (
-        <p className="panel muted">
+        <p className="panel muted add-panel">
           This demo shows one fixed project: Insight analysing its own latest commit. Run Insight locally to add your own projects.
         </p>
       ) : (
@@ -36,16 +37,18 @@ export function ProjectsPage() {
       {projects?.length === 0 && <p className="muted">No projects yet. Add a folder or a git URL above.</p>}
       <ul className="cards">
         {projects?.map((p) => (
-          <li key={p.id} className="card">
-            <a href={hrefProject(p.id)}>
-              <strong>{p.name}</strong>
+          <li key={p.id} className="card project-card">
+            <a className="project-name" href={hrefProject(p.id)}>
+              {p.name}
             </a>
-            <div className="mono muted small">{p.source.kind === "path" ? p.source.path : p.source.url}</div>
-            <div className="row small">
+            <div className="project-path" title={p.source.kind === "path" ? p.source.path : p.source.url}>
+              {p.source.kind === "path" ? p.source.path : p.source.url}
+            </div>
+            <div className="project-meta">
               <StatusBadge project={p} />
               {p.last && (
-                <span className="muted">
-                  {p.last.nodes} nodes, {p.last.findings} findings{p.last.commit ? `, ${p.last.commit.slice(0, 7)}` : ""}
+                <span className="muted project-stats">
+                  {p.last.nodes} nodes, {projectFindingsTotal(p.last)} findings{p.last.commit ? `, ${p.last.commit.slice(0, 7)}` : ""}
                 </span>
               )}
             </div>
@@ -94,7 +97,7 @@ function AddProject({ onAdded }: { onAdded: () => void }) {
   };
 
   return (
-    <form className="panel add" onSubmit={submit}>
+    <form className="panel add add-panel" onSubmit={submit}>
       <h2>Add a project</h2>
       <div className="row" role="radiogroup" aria-label="Source type">
         <label>
@@ -122,7 +125,7 @@ function AddProject({ onAdded }: { onAdded: () => void }) {
         Allow build tools (bazel, cmake) to run. Off by default.
       </label>
       <div className="row">
-        <button type="submit" disabled={busy || value.trim() === ""}>
+        <button type="submit" className="add-submit" disabled={busy || value.trim() === ""}>
           {busy ? "Adding" : "Add and index"}
         </button>
       </div>
