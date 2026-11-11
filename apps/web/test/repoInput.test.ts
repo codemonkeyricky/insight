@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canRetry, hrefHosted, indexErrorText, isRepoName, parseRepoInput, relativeTime } from "../src/hostedRepo";
+import { canRetry, hrefHosted, indexErrorText, isRepoName, parseRepoInput, phaseLabel, relativeTime } from "../src/hostedRepo";
 
 describe("repository input", () => {
   const cases: [string, string | null][] = [
@@ -83,5 +83,28 @@ describe("relative time", () => {
   it("is blank for a time it cannot read, and just now for a moment ago", () => {
     expect(relativeTime("not a date", now)).toBe("");
     expect(relativeTime("2026-11-11T11:59:30Z", now)).toBe("just now");
+  });
+});
+
+describe("hosted status contract", () => {
+  it("labels every phase the hosted job and the core pipeline write", () => {
+    expect(phaseLabel("queued")).toBe("Queued");
+    expect(phaseLabel("download")).toBe("Downloading the source");
+    expect(phaseLabel("scan")).toBe("Scanning files");
+    expect(phaseLabel("link")).toBe("Linking the code");
+    expect(phaseLabel("analyze")).toBe("Analyzing the code");
+    expect(phaseLabel("save")).toBe("Saving the index");
+    expect(phaseLabel(undefined)).toBe("Starting");
+    expect(phaseLabel("something-new")).toBe("something-new");
+  });
+
+  it("has a readable message for every error code the server returns", () => {
+    expect(indexErrorText("index_failed", "owner/repo", "fallback")).toBe("fallback");
+    for (const code of ["not_found", "too_large", "rate_limited", "bad_request", "upstream_error", "timeout"]) {
+      const text = indexErrorText(code, "owner/repo", "fallback");
+      expect(text).not.toBe("fallback");
+      expect(text.length).toBeGreaterThan(10);
+    }
+    expect(indexErrorText("upstream_error", "owner/repo")).toMatch(/GitHub/);
   });
 });

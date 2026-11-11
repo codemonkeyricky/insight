@@ -39,6 +39,27 @@ export function hrefHosted(owner: string, repo: string, sha?: string): string {
   return `#/gh/${owner}/${repo}${sha ? `@${sha}` : ""}`;
 }
 
+/** What a run's phase is called on the page. The names are the ones the hosted job and the core pipeline write to status.json. */
+const PHASE_LABELS: Record<string, string> = {
+  queued: "Queued",
+  download: "Downloading the source",
+  fetch: "Downloading the source",
+  extract: "Unpacking the source",
+  scan: "Scanning files",
+  link: "Linking the code",
+  analyze: "Analyzing the code",
+  index: "Indexing the code",
+  export: "Indexing the code",
+  upload: "Saving the index",
+  save: "Saving the index",
+};
+
+/** The label of a run's phase. A phase the page does not know is shown as the server named it, and no phase is "Starting". */
+export function phaseLabel(phase: string | undefined): string {
+  if (!phase) return "Starting";
+  return PHASE_LABELS[phase] ?? phase;
+}
+
 /** What the user reads when an index did not finish, by the error code the server or the page gave. */
 export function indexErrorText(code: string, repo: string, fallback?: string): string {
   switch (code) {
@@ -50,6 +71,8 @@ export function indexErrorText(code: string, repo: string, fallback?: string): s
       return "Too many indexing requests right now. Try again in a little while.";
     case "bad_request":
       return "That is not a GitHub repository this page can index.";
+    case "upstream_error":
+      return "GitHub did not answer the request. Try again in a little while.";
     case "timeout":
       return `Indexing ${repo} took longer than the time limit and was stopped.`;
     case "network":

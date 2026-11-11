@@ -308,3 +308,51 @@ describe("handleHealth and the environment wiring", () => {
     expect(buildDeps({ INSIGHT_STORAGE_DIR: "/tmp/x" }).tmpRoot).toBe("/tmp/insight");
   });
 });
+
+describe("handleIndex: contract shapes", () => {
+  it("answers 400 bad_request for a body that is not JSON, or a repo that is not a string", async () => {
+    const h = await harness({ "acme/widget": {} });
+    const broken = new Request("https://insight.test/api/index", { method: "POST", body: "not json" });
+    const res = await handleIndex(broken, h.deps);
+    expect(res.status).toBe(400);
+    expect((await json(res)).error.code).toBe("bad_request");
+    const typed = await handleIndex(submit(42), h.deps);
+    expect(typed.status).toBe(400);
+    expect((await json(typed)).error.code).toBe("bad_request");
+    expect(h.jobs).toHaveLength(0);
+  });
+
+  it("answers 502 upstream_error when GitHub fails (not a 404)", async () => {
+    const h = await harness({ "acme/widget": {} }, {
+      fetch: async () => new Response("boom", { status: 500 }),
+    });
+    const res = await handleIndex(submit("acme/widget"), h.deps);
+    expect(res.status).toBe(502);
+    expect((await json(res)).error.code).toBe("upstream_error");
+    expect(h.jobs).toHaveLength(0);
+  });
+
+  it("writes the initial status as running with phase queued before the job starts", async () => {
+    const h = await harness({ "acme/widget": {} });
+    const res = await handleIndex(submit("acme/widget"), h.deps);
+    expect(res.status).toBe(202);
+    const { sha } = await json(res);
+    const status = await h.storage.getJson<IndexStatus>(`gh/acme/widget/${sha}/status.json`);
+    expect(status).toMatchObject({ state: "running", phase: "queued", repo: "acme/widget", sha });
+    await Promise.all(h.jobs);
+  });
+
+  it("writes latest.json and recent.json gzipped, with recent.json an array", async () => {
+    const h = await harness({ "acme/widget": {} });
+    await handleIndex(submit("acme/widget"), h.deps);
+    await Promise.all(h.jobs);
+    for (const key of ["gh/acme/widget/latest.json", "meta/recent.json"]) {
+      const meta = JSON.parse(readFileSync(join(h.dir, "storage", `${key}.meta.json`), "utf8"));
+      expect(meta).toMatchObject({ contentType: "application/json", cacheControl: "public, max-age=60", contentEncoding: "gzip" });
+      expect(gunzipSync(readFileSync(join(h.dir, "storage", key))).length).toBeGreaterThan(0);
+    }
+    const recent = await h.storage.getJson<unknown[]>("meta/recent.json");
+    expect(Array.isArray(recent)).toBe(true);
+    expect(recent).toHaveLength(1);
+  });
+});

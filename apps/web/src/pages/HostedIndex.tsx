@@ -1,26 +1,14 @@
 import { useEffect, useState } from "react";
 import { hrefView } from "../router";
 import { IndexRequestError, projectIdOf, readLatest, readStatus, requestIndex, storageRoot, type HostedRef } from "../hostedApi";
-import { canRetry, indexErrorText } from "../hostedRepo";
+import { canRetry, indexErrorText, phaseLabel } from "../hostedRepo";
 import { watchIndex, type PollStatus } from "../indexPoll";
 
 type View = { kind: "checking" } | { kind: "running"; status: PollStatus } | { kind: "failed"; code: string; message: string };
 
-/** What a run's phase is called on the page. A phase the page does not know is shown as the server named it. */
-const PHASE_LABELS: Record<string, string> = {
-  download: "Downloading the source",
-  fetch: "Downloading the source",
-  extract: "Unpacking the source",
-  scan: "Scanning files",
-  index: "Indexing the code",
-  export: "Indexing the code",
-  upload: "Saving the index",
-  save: "Saving the index",
-};
-
 /** The progress of a run: its phase, and a bar when the run counts its work. */
 function RunProgress({ status }: { status: PollStatus }) {
-  const phase = status.phase ? (PHASE_LABELS[status.phase] ?? status.phase) : "Starting";
+  const phase = phaseLabel(status.phase);
   const hasCount = status.total !== undefined && status.total > 0;
   const pct = hasCount ? Math.min(100, Math.round(((status.done ?? 0) / status.total!) * 100)) : undefined;
   return (
