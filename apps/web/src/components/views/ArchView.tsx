@@ -310,7 +310,7 @@ function Violations({ id, model }: { id: string; model: ArchModel }) {
                   {v.from} -&gt; {v.to}
                 </div>
                 {first && (
-                  <a className="mono small" href={hrefFile(id, first.file, siteLine(first))}>
+                  <a className="mono small" href={hrefFile(id, first.file, siteLine(first), "arch")}>
                     {first.file}:{siteLine(first)}
                   </a>
                 )}
@@ -349,7 +349,7 @@ function Sites({ id, sites }: { id: string; sites: Span[] }) {
     <ul className="arch-list">
       {sites.map((s, i) => (
         <li key={`${s.file}\0${s.start[0]}\0${s.start[1]}\0${i}`}>
-          <a className="mono small" href={hrefFile(id, s.file, siteLine(s))}>
+          <a className="mono small" href={hrefFile(id, s.file, siteLine(s), "arch")}>
             {s.file}:{siteLine(s)}
           </a>
         </li>
@@ -375,7 +375,7 @@ function Unresolved({ id, model }: { id: string; model: ArchModel }) {
               {u.span && (
                 <>
                   {" "}
-                  <a className="mono small" href={hrefFile(id, u.span.file, siteLine(u.span))}>
+                  <a className="mono small" href={hrefFile(id, u.span.file, siteLine(u.span), "arch")}>
                     {u.span.file}:{siteLine(u.span)}
                   </a>
                 </>

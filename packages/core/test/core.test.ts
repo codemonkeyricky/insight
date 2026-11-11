@@ -158,6 +158,35 @@ describe("plugin loader", () => {
   });
 });
 
+describe("plugin loader, nested folders", () => {
+  it("loads a plugin one folder down inside packages/ (packages/lens/<name>)", async () => {
+    const builtin = join(SCRATCH, "nested-builtin");
+    write(builtin, "packages/lens/nested/insight-plugin.json", JSON.stringify({
+      id: "nested",
+      version: "0.1.0",
+      irVersion: "^1.0",
+      provides: ["structure"],
+      roles: { frontend: "index.mjs" },
+    }));
+    write(builtin, "packages/lens/nested/index.mjs", "export default { id: 'nested', version: '0.1.0', provides: ['structure'], async detect() { return { reason: 'always' }; }, async *extract() {} };\n");
+    write(builtin, "packages/direct/insight-plugin.json", JSON.stringify({
+      id: "direct",
+      version: "0.1.0",
+      irVersion: "^1.0",
+      provides: ["structure"],
+      roles: { frontend: "index.mjs" },
+    }));
+    write(builtin, "packages/direct/index.mjs", "export default { id: 'direct', version: '0.1.0', provides: ['structure'], async detect() { return { reason: 'always' }; }, async *extract() {} };\n");
+    const loaded = await loadPlugins({
+      projectPath: join(SCRATCH, "nested-project"),
+      builtinRoot: builtin,
+      userPluginDir: join(SCRATCH, "no-user-plugins"),
+    });
+    expect(loaded.frontends.map((f) => f.frontend.id)).toEqual(["direct", "nested"]);
+    expect(loaded.disabled).toEqual([]);
+  });
+});
+
 describe("pipeline with a fake frontend", () => {
   it("records a file that fails extraction as failed and keeps the other files", async () => {
     const project = join(SCRATCH, "pipeline-project");

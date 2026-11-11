@@ -495,7 +495,7 @@ const scopeArchs = new Map<string, ScopeArchView>();
 let coreRegistry: KindRegistry | undefined;
 
 /**
- * The package-level architecture of a project (see packages/lens-dependencies/src/arch.ts). It reads the whole
+ * The package-level architecture of a project (see packages/lens/dependencies/src/arch.ts). It reads the whole
  * snapshot, not the cut, since packages and the imports between them lie outside any one scope. A snapshot never
  * changes, so each scope's answer is kept until enough other scopes push it out.
  */

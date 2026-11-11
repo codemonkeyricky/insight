@@ -248,6 +248,8 @@ export function nodeScriptArgument(call: ts.CallExpression, api: string, imports
 export interface WorkerEnv {
   constOf?: (id: ts.Identifier) => ts.Expression | undefined;
   declared?: (id: ts.Identifier) => boolean;
+  /** The single expression a same-file function returns (`=> e` or `{ return e }`), when the identifier names one. */
+  fnBody?: (id: ts.Identifier) => ts.Expression | undefined;
 }
 
 /**
@@ -329,4 +331,402 @@ export function matchSchedule(call: ts.CallExpression, imports: Map<string, Impo
     return { how: "microtask", callbacks: [0] };
   }
   return undefined;
+}
+
+/** The expression with every wrapper removed: parentheses, `as`, `<T>` and `!`. */
+function unwrapAll(e: ts.Expression): ts.Expression {
+  let inner = e;
+  while (ts.isParenthesizedExpression(inner) || ts.isAsExpression(inner) || ts.isTypeAssertionExpression(inner) || ts.isNonNullExpression(inner)) {
+    inner = inner.expression;
+  }
+  return inner;
+}
+
+/** A placeholder for a template substitution inside a URL or route path while the text is being built. */
+const SUB = "￼";
+/** What a substitution becomes in a route path or URL path. */
+const PARAM = ":param";
+
+/** `process.env.NAME` or `import.meta.env.NAME`, read as a property access. Returns the name. */
+function envVarOf(e: ts.Expression, imports: Map<string, ImportBinding>): string | undefined {
+  if (!ts.isPropertyAccessExpression(e)) return undefined;
+  const inner = e.expression;
+  if (!ts.isPropertyAccessExpression(inner) || inner.name.text !== "env") return undefined;
+  if (ts.isIdentifier(inner.expression) && inner.expression.text === "process" && !imports.has("process")) return e.name.text;
+  if (ts.isMetaProperty(inner.expression) && inner.expression.keywordToken === ts.SyntaxKind.ImportKeyword) return e.name.text;
+  return undefined;
+}
+
+/**
+ * The first env variable read anywhere inside a node. With `follow`, an identifier is followed once to the same-file const
+ * it names, and that const's initializer is searched too (not followed further).
+ */
+function findEnv(node: ts.Node, imports: Map<string, ImportBinding>, env: WorkerEnv, follow: boolean): string | undefined {
+  if (ts.isExpression(node)) {
+    const name = envVarOf(node, imports);
+    if (name !== undefined) return name;
+  }
+  if (follow && ts.isIdentifier(node)) {
+    const init = env.constOf?.(node);
+    if (init !== undefined) return findEnv(init, imports, env, false);
+  }
+  let found: string | undefined;
+  ts.forEachChild(node, (child) => {
+    found = findEnv(child, imports, env, follow);
+    return found !== undefined;
+  });
+  return found;
+}
+
+/** The initializer of a same-file const an identifier names, if it has one. */
+function constInit(e: ts.Expression, env: WorkerEnv): ts.Expression | undefined {
+  return ts.isIdentifier(e) ? env.constOf?.(e) : undefined;
+}
+
+/** A URL as written: its text with substitutions as SUB, and whether it begins with one that is an env read. */
+export interface UrlText {
+  text: string;
+  leadEnv: boolean;
+  /** The env variable the URL reads, when a hooked substitution carried one. */
+  env?: string;
+}
+
+/** Resolves an expression the caller binds (a wrapper's parameter) to a URL; undefined leaves it to the normal rules. */
+export type UrlHook = (e: ts.Expression) => UrlText | undefined;
+
+/** How far a URL evaluation follows same-file consts before it gives up. */
+const MAX_URL_HOPS = 6;
+/** How many same-file helper calls (`url(key)`) a URL evaluation enters, counted along one path. */
+const MAX_URL_CALLS = 2;
+
+/**
+ * The text of a URL expression. An identifier is followed to its const (`follow`), through any enclosing scope of the same
+ * file; a same-file helper call is entered once its body is a single expression, so `url(key)` reads as the expression it
+ * returns with its parameters as :param. A substitution's env read is found by the caller, so the text only needs the shape.
+ */
+export function urlText(e0: ts.Expression, imports: Map<string, ImportBinding>, env: WorkerEnv, follow: boolean, hook?: UrlHook): UrlText | undefined {
+  return urlTextAt(e0, imports, env, follow, hook, 0, 0);
+}
+
+function urlTextAt(
+  e0: ts.Expression,
+  imports: Map<string, ImportBinding>,
+  env: WorkerEnv,
+  follow: boolean,
+  hook: UrlHook | undefined,
+  hops: number,
+  calls: number,
+): UrlText | undefined {
+  const e = unwrapAll(e0);
+  const hooked = hook?.(e);
+  if (hooked !== undefined) return hooked;
+  if (ts.isStringLiteralLike(e)) return { text: e.text, leadEnv: false };
+  if (ts.isNoSubstitutionTemplateLiteral(e)) return { text: e.text, leadEnv: false };
+  if (ts.isTemplateExpression(e)) {
+    let text = e.head.text;
+    let hitEnv: string | undefined;
+    let leadHit: UrlText | undefined;
+    e.templateSpans.forEach((span, i) => {
+      const hit = hook?.(unwrapAll(span.expression));
+      if (hit !== undefined) {
+        if (i === 0) leadHit = hit;
+        if (hitEnv === undefined) hitEnv = hit.env;
+        text += hit.text + span.literal.text;
+        return;
+      }
+      // A substituted same-file const that holds a string is written in place, so `${KV_API}/x` reads as its host.
+      const str = constString(span.expression, env);
+      if (str !== undefined) {
+        text += str + span.literal.text;
+        return;
+      }
+      // A substituted same-file const or helper call that holds a URL is spliced in, so `${base}/values/${k}` reads whole.
+      const spliced = hops < MAX_URL_HOPS ? urlTextAt(span.expression, imports, env, true, undefined, hops + 1, calls) : undefined;
+      text += (spliced?.text ?? SUB) + span.literal.text;
+    });
+    const first = e.templateSpans[0];
+    const leadEnv =
+      e.head.text === "" && first !== undefined
+        ? leadHit !== undefined
+          ? leadHit.leadEnv
+          : envOf(first.expression, imports, env) !== undefined
+        : false;
+    return hitEnv === undefined ? { text, leadEnv } : { text, leadEnv, env: hitEnv };
+  }
+  if (ts.isNewExpression(e)) {
+    if (!ts.isIdentifier(e.expression) || e.expression.text !== "URL") return undefined;
+    const [first] = e.arguments ?? [];
+    return first === undefined ? undefined : urlTextAt(first, imports, env, follow, hook, hops, calls);
+  }
+  if (ts.isIdentifier(e) && follow && hops < MAX_URL_HOPS) {
+    const init = constInit(e, env);
+    return init === undefined ? undefined : urlTextAt(init, imports, env, true, hook, hops + 1, calls);
+  }
+  if (ts.isCallExpression(e)) {
+    const callee = unwrapAll(e.expression);
+    if (!ts.isIdentifier(callee) || calls >= MAX_URL_CALLS || hops >= MAX_URL_HOPS) return undefined;
+    const body = env.fnBody?.(callee);
+    return body === undefined ? undefined : urlTextAt(body, imports, env, true, undefined, hops + 1, calls + 1);
+  }
+  return undefined;
+}
+
+/** The string a substitution names: a string literal, or a same-file const whose initializer is one. */
+function constString(e0: ts.Expression, env: WorkerEnv): string | undefined {
+  const e = unwrapAll(e0);
+  if (ts.isStringLiteralLike(e)) return e.text;
+  const init = constInit(e, env);
+  return init !== undefined && ts.isStringLiteralLike(unwrapAll(init)) ? (unwrapAll(init) as ts.StringLiteralLike).text : undefined;
+}
+
+/** The env variable an expression reads: anywhere inside it, or inside the one-hop const each identifier in it names. */
+function envOf(e: ts.Expression, imports: Map<string, ImportBinding>, env: WorkerEnv): string | undefined {
+  return findEnv(e, imports, env, true);
+}
+
+/** A URL path: the query and fragment dropped, substitutions as :param. Undefined when nothing is left. */
+function urlPath(s: string): string | undefined {
+  const p = s.split(/[?#]/)[0] ?? "";
+  if (p === "") return undefined;
+  return p.split(SUB).join(PARAM);
+}
+
+export interface FetchMatch {
+  kind: "effects.net.connect";
+  attrs: Record<string, unknown>;
+}
+
+const GLOBAL_FETCH_BASES = new Set(["globalThis", "window", "self"]);
+
+/**
+ * A `fetch`-like call: the global fetch (exact), or any callee whose name contains `fetch` (any case) with at least one
+ * argument (inferred, e.g. `deps.fetch(url)`, `fetchFn(url)`, `fetchImpl(url)`). Its URL is read from the first argument, its method from the second.
+ */
+export interface FetchHooks {
+  /** Gives the URL an argument-bound name stands for. */
+  url?: UrlHook;
+  /** Gives the object literal an argument-bound options name stands for (the caller's `{ method: ... }`). */
+  options?: (e: ts.Expression) => ts.Expression | undefined;
+  /** Gives the method an argument-bound name stands for, when the argument is a string. */
+  method?: (e: ts.Expression) => string | undefined;
+}
+
+export function matchFetch(call: ts.CallExpression, imports: Map<string, ImportBinding>, env: WorkerEnv = {}, hooks: FetchHooks = {}): FetchMatch | undefined {
+  const callee = unwrapAll(call.expression) as ts.Expression;
+  let name: string | undefined;
+  let exact = false;
+  if (ts.isIdentifier(callee)) {
+    name = callee.text;
+    exact = name === "fetch" && !imports.has("fetch") && !env.declared?.(callee);
+  } else if (ts.isPropertyAccessExpression(callee)) {
+    name = callee.name.text;
+    const base = callee.expression;
+    exact =
+      name === "fetch" &&
+      ts.isIdentifier(base) &&
+      GLOBAL_FETCH_BASES.has(base.text) &&
+      !imports.has(base.text) &&
+      !env.declared?.(base);
+  }
+  if (name === undefined) return undefined;
+  if (!exact && !/fetch/i.test(name)) return undefined;
+  const [urlArg, opts] = call.arguments;
+  if (urlArg === undefined) return undefined;
+
+  const attrs: Record<string, unknown> = { api: callee.getText().slice(0, 40) };
+  const found = urlText(urlArg, imports, env, true, hooks.url);
+  const envName = found?.env ?? envOf(urlArg, imports, env);
+  if (found === undefined) {
+    attrs.host = DYNAMIC;
+  } else {
+    const text = found.text;
+    if (text.startsWith(SUB)) {
+      const rest = text.slice(1);
+      if (found.leadEnv) {
+        attrs.host = DYNAMIC;
+        const path = rest.startsWith("/") ? urlPath(rest) : undefined;
+        if (path !== undefined) attrs.path = path;
+      } else if (rest.startsWith("/") && !rest.startsWith("//")) {
+        attrs.relative = true;
+        attrs.path = urlPath(rest);
+      } else {
+        attrs.host = DYNAMIC;
+      }
+    } else if (/^https?:\/\//.test(text)) {
+      const m = /^https?:\/\/([^/?#]*)([\s\S]*)$/.exec(text);
+      const authority = m?.[1] ?? "";
+      attrs.host = authority === "" || authority.includes(SUB) ? DYNAMIC : authority;
+      const path = urlPath(m?.[2] ?? "");
+      if (path !== undefined) attrs.path = path;
+    } else if (text.startsWith("/") && !text.startsWith("//")) {
+      attrs.relative = true;
+      attrs.path = urlPath(text);
+    } else {
+      attrs.host = DYNAMIC;
+    }
+  }
+  if (attrs.path === undefined) delete attrs.path;
+  if (envName !== undefined) attrs.env = envName;
+
+  // The method: the second argument's `method` string, GET when the options object omits it, and absent when it is not literal.
+  if (opts === undefined) {
+    attrs.method = "GET";
+  } else {
+    let o = unwrapAll(opts);
+    if (!ts.isObjectLiteralExpression(o)) {
+      const bound = hooks.options?.(o);
+      if (bound !== undefined) o = unwrapAll(bound);
+    }
+    if (ts.isObjectLiteralExpression(o)) {
+      const hasSpread = o.properties.some((p) => ts.isSpreadAssignment(p));
+      // `method: x` and the shorthand `{ method }` both name a value; the shorthand's name is the value.
+      const prop = o.properties.find(
+        (p): p is ts.PropertyAssignment | ts.ShorthandPropertyAssignment =>
+          (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) && p.name.text === "method",
+      );
+      if (prop === undefined) {
+        if (!hasSpread) attrs.method = "GET";
+      } else {
+        const value = ts.isShorthandPropertyAssignment(prop) ? prop.name : unwrapAll(prop.initializer);
+        if (ts.isStringLiteralLike(value)) attrs.method = value.text.toUpperCase();
+        else {
+          const m = hooks.method?.(value);
+          if (m !== undefined) attrs.method = m;
+        }
+      }
+    }
+  }
+  attrs.confidence = exact ? "exact" : "inferred";
+  return { kind: "effects.net.connect", attrs };
+}
+
+export interface ServeMatch {
+  kind: "effects.net.serve";
+  attrs: Record<string, unknown>;
+}
+
+const ROUTE_METHODS = new Set(["get", "post", "put", "delete", "patch", "head", "options", "all"]);
+const ROUTER_NAMES = new Set(["app", "server", "router", "fastify", "api"]);
+const HTTP_EXPORTS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]);
+
+/** The server framework a file imports, if any. */
+export function serverFramework(imports: Map<string, ImportBinding>): string | undefined {
+  for (const b of imports.values()) {
+    const m = b.module;
+    if (m === "fastify" || m.startsWith("@fastify/")) return "fastify";
+    if (m === "express") return "express";
+    if (m === "hono" || m.startsWith("hono/")) return "hono";
+    if (m === "koa-router" || m === "@koa/router") return "koa-router";
+  }
+  return undefined;
+}
+
+/** A route path as written: a string or template literal, with substitutions as :param. Undefined for anything else. */
+function routePath(e0: ts.Expression): string | undefined {
+  const e = unwrapAll(e0);
+  if (ts.isStringLiteralLike(e)) return e.text;
+  if (ts.isTemplateExpression(e)) {
+    let text = e.head.text;
+    for (const span of e.templateSpans) text += PARAM + span.literal.text;
+    return text;
+  }
+  return undefined;
+}
+
+/** The name of a handler argument when it is obvious: an identifier, or the property a member access names. */
+function handlerName(e0: ts.Expression): string | undefined {
+  const e = unwrapAll(e0);
+  if (ts.isIdentifier(e)) return e.text;
+  if (ts.isPropertyAccessExpression(e)) return e.name.text;
+  return undefined;
+}
+
+/**
+ * An HTTP route registered on a server object: `X.get|post|…(path, …handler)` and `X.route({method, url|path})`. The call
+ * counts when the file imports a server framework, or when X is named like a server and is not an import.
+ */
+export function matchServe(call: ts.CallExpression, imports: Map<string, ImportBinding>): ServeMatch | undefined {
+  const callee = call.expression;
+  if (!ts.isPropertyAccessExpression(callee) || !ts.isIdentifier(callee.expression)) return undefined;
+  const base = callee.expression.text;
+  const name = callee.name.text;
+  const framework = serverFramework(imports);
+  const named = !imports.has(base) && ROUTER_NAMES.has(base);
+  if (framework === undefined && !named) return undefined;
+  const serving = framework ?? "http";
+
+  if (ROUTE_METHODS.has(name)) {
+    const [pathArg, ...rest] = call.arguments;
+    if (pathArg === undefined || rest.length === 0) return undefined;
+    const path = routePath(pathArg);
+    if (path === undefined || !path.startsWith("/")) return undefined;
+    const last = rest[rest.length - 1];
+    const handler = last === undefined ? undefined : handlerName(last);
+    return {
+      kind: "effects.net.serve",
+      attrs: {
+        framework: serving,
+        method: name === "all" ? "ALL" : name.toUpperCase(),
+        path,
+        ...(handler !== undefined ? { handler } : {}),
+      },
+    };
+  }
+
+  if (name === "route") {
+    const [opts] = call.arguments;
+    const o = opts === undefined ? undefined : unwrapAll(opts);
+    if (o === undefined || !ts.isObjectLiteralExpression(o)) return undefined;
+    const str = (key: string): string | undefined => {
+      const p = o.properties.find(
+        (q): q is ts.PropertyAssignment => ts.isPropertyAssignment(q) && ts.isIdentifier(q.name) && q.name.text === key,
+      );
+      if (p === undefined) return undefined;
+      const v = unwrapAll(p.initializer);
+      return ts.isStringLiteralLike(v) ? v.text : undefined;
+    };
+    const method = str("method");
+    const path = str("url") ?? str("path");
+    if (method === undefined || path === undefined || !path.startsWith("/")) return undefined;
+    return { kind: "effects.net.serve", attrs: { framework: serving, method: method.toUpperCase(), path } };
+  }
+  return undefined;
+}
+
+/**
+ * A route a file exports under an HTTP verb name: `export function POST` or `export const GET`. The URL comes from the
+ * deployment, not the code, so the path is empty and the framework is "export".
+ */
+export function matchExportRoute(node: ts.Node): ServeMatch[] {
+  const exported = (n: ts.Node): boolean => ts.canHaveModifiers(n) && (ts.getModifiers(n) ?? []).some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
+  // `export { handler as POST }`: the exported name is the verb, whatever the local function is called.
+  if (ts.isExportDeclaration(node) && node.moduleSpecifier === undefined && node.exportClause && ts.isNamedExports(node.exportClause)) {
+    return node.exportClause.elements
+      .filter((el) => HTTP_EXPORTS.has(el.name.text))
+      .map((el) => ({ kind: "effects.net.serve" as const, attrs: { framework: "export", method: el.name.text, path: "" } }));
+  }
+  // `export default { fetch(req) {...} }` or `export default { async fetch }`: a Worker, which answers every path.
+  if (ts.isExportAssignment(node) && !node.isExportEquals) {
+    const o = unwrapAll(node.expression);
+    const hasFetch = ts.isObjectLiteralExpression(o) && o.properties.some(
+      (p) =>
+        (ts.isMethodDeclaration(p) || ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) &&
+        (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) &&
+        p.name.text === "fetch",
+    );
+    return hasFetch ? [{ kind: "effects.net.serve", attrs: { framework: "worker", method: "*", path: "/*" } }] : [];
+  }
+  if (ts.isFunctionDeclaration(node) && node.name !== undefined && exported(node) && HTTP_EXPORTS.has(node.name.text)) {
+    return [{ kind: "effects.net.serve", attrs: { framework: "export", method: node.name.text, path: "" } }];
+  }
+  if (ts.isVariableStatement(node) && exported(node)) {
+    const out: ServeMatch[] = [];
+    for (const d of node.declarationList.declarations) {
+      if (ts.isIdentifier(d.name) && HTTP_EXPORTS.has(d.name.text)) {
+        out.push({ kind: "effects.net.serve", attrs: { framework: "export", method: d.name.text, path: "" } });
+      }
+    }
+    return out;
+  }
+  return [];
 }

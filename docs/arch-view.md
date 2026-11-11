@@ -8,7 +8,7 @@ package it draws that scope, as described under "Scoped view" below.
 
 ### Data flow
 
-- The model is built by `archModel(view)` in `packages/lens-dependencies/src/arch.ts`. It reads an `IRView` over the whole
+- The model is built by `archModel(view)` in `packages/lens/dependencies/src/arch.ts`. It reads an `IRView` over the whole
   snapshot and returns plain JSON: `layers`, `packages`, `edges`, `unresolved`, `externals` and `violations`.
 - The server builds it in `scopeArchOf` (`apps/server/src/reader.ts`) and serves it at
   `GET /api/projects/:id/scope/arch?path=`. The path is required and names a scope as the other scope routes do. The
@@ -22,7 +22,7 @@ package it draws that scope, as described under "Scoped view" below.
 ### What the diagram shows
 
 - Columns, left to right, one per layer in `model.layers` that holds packages. The layers come from the path of each
-  package (`defaultLayerOf`: `frontend-*` and `plugins/frontend-*`, `lens-*`, `ir`/`sdk`/`core`, and `apps/*`), and
+  package (`defaultLayerOf`: `frontend-*` and `plugins/frontend-*`, `packages/lens/*` (and `lens-*`), `ir`/`sdk`/`core`, and `apps/*`), and
   any other package is in "other".
 - Packages come from `package.json` files among the indexed files, or from `structure.package` nodes when a frontend
   emits them. A file belongs to its nearest package root. Each box shows the file count.

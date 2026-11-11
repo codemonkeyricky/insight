@@ -4,7 +4,7 @@ import type { FileEntry } from "../src/api";
 import { CodeTargetContext, fileTarget, scopeCodeTarget, targetPath, type CodeTarget } from "../src/codeTarget";
 import { Explorer } from "../src/components/Explorer";
 import { CodePane } from "../src/components/sheet/CodePane";
-import { LayerTabs, LensPopover, type LayerLink } from "../src/components/sheet/LayerTabs";
+import { LayerTabs, type LayerLink } from "../src/components/sheet/LayerTabs";
 import type { ZoomStore } from "../src/zoom/scene";
 
 // Static markup only: the vitest setup has no DOM, so effects and click handlers are not run here. The explorer's click
@@ -35,60 +35,43 @@ describe("code target", () => {
 describe("LayerTabs", () => {
   const links: LayerLink[] = [
     { id: "overview", title: "Overview", href: "#/o", current: true, group: "page" },
-    { id: "findings", title: "Findings", href: "#/f", current: false, group: "page", count: 7 },
+    { id: "flow", title: "Flow", href: "#/fl", current: false, group: "page" },
     { id: "lens-a", title: "Lens A", href: "#/l", current: false, group: "lens" },
     { id: "lens-b", title: "Lens B", href: "#/m", current: false, group: "lens", dim: true, reason: "Not run yet" },
   ];
 
-  it("renders a tablist with the page tabs and one Lenses tab that opens the menu", () => {
+  it("renders one tab per page and per lens, in one tablist, with no Lenses menu", () => {
     const html = renderToStaticMarkup(<LayerTabs links={links} />);
     expect(html).toContain('role="tablist"');
-    // Two page tabs and the Lenses trigger; the lens tabs themselves are in the menu, not the strip.
-    expect(html.match(/role="tab"/g)?.length).toBe(3);
+    expect(html.match(/role="tab"/g)?.length).toBe(4);
     expect(html).toMatch(/aria-selected="true"[^>]*>Overview/);
-    expect(html).toMatch(/aria-selected="false"[^>]*>Findings/);
-    expect(html).toContain('aria-haspopup="menu"');
-    expect(html).toMatch(/>Lenses<svg/);
+    expect(html).toMatch(/href="#\/l"[^>]*class="sh-tab"[^>]*>Lens A</);
+    expect(html).toMatch(/href="#\/m"[^>]*class="sh-tab dim"[^>]*>Lens B</);
+    expect(html).not.toContain("aria-haspopup");
     expect(html).not.toContain('role="menu"');
+    expect(html).not.toContain("Lenses");
+    expect(html).not.toContain("badge-count");
   });
 
-  it("shows a count only when it is above zero, and a separator before the Lenses tab", () => {
-    const html = renderToStaticMarkup(<LayerTabs links={links} />);
-    expect(html).toContain('class="badge-count"');
-    expect(html).toContain(">7</span>");
-    expect(html).toContain("sh-tab-sep");
-    const zero = renderToStaticMarkup(<LayerTabs links={[{ ...links[1]!, count: 0 }]} />);
-    expect(zero).not.toContain("badge-count");
-    // Without any lens there is no Lenses tab and no separator.
-    const pagesOnly = renderToStaticMarkup(<LayerTabs links={links.slice(0, 2)} />);
-    expect(pagesOnly).not.toContain("Lenses");
-    expect(pagesOnly).not.toContain("sh-tab-sep");
-  });
-
-  it("names the Lenses tab after the open lens, and selects it while a lens is open", () => {
+  it("selects the open lens, and keeps the lens order it was given", () => {
     const lensOpen = links.map((l) => ({ ...l, current: l.id === "lens-a" }));
     const html = renderToStaticMarkup(<LayerTabs links={lensOpen} />);
-    expect(html).toMatch(/>Lenses: Lens A<svg/);
-    expect(html).toMatch(/aria-selected="true"[^>]*aria-haspopup="menu"/);
+    expect(html).toMatch(/aria-selected="true"[^>]*>Lens A</);
     expect(html).toMatch(/aria-selected="false"[^>]*>Overview/);
+    expect(html.indexOf(">Lens A<")).toBeLessThan(html.indexOf(">Lens B<"));
   });
 
-  it("renders one menu item per lens with its link, dim state and reason", () => {
-    const lensOnly = links.filter((l) => l.group === "lens");
-    const html = renderToStaticMarkup(<LensPopover lenses={lensOnly} />);
-    expect(html.match(/role="menuitem"/g)?.length).toBe(2);
-    expect(html).toContain('href="#/l"');
-    expect(html).toContain('href="#/m"');
-    expect(html).toMatch(/href="#\/l" class="sh-menu-item"/);
-    expect(html).toContain('class="sh-menu-item dim"');
+  it("shows the reason of a dim lens as its tooltip", () => {
+    const html = renderToStaticMarkup(<LayerTabs links={links} />);
     expect(html).toContain('title="Not run yet"');
   });
 
-  it("marks the current lens in the menu with aria-current", () => {
-    const lensOnly = links.filter((l) => l.group === "lens").map((l) => ({ ...l, current: l.id === "lens-b" }));
-    const html = renderToStaticMarkup(<LensPopover lenses={lensOnly} />);
-    expect(html).toMatch(/aria-current="page"[^>]*href="#\/m"|href="#\/m"[^>]*aria-current="page"/);
-    expect(html).not.toMatch(/aria-current="page"[^>]*href="#\/l"|href="#\/l"[^>]*aria-current="page"/);
+  it("separates the lens tabs from the pages, and has no separator without a lens", () => {
+    const html = renderToStaticMarkup(<LayerTabs links={links} />);
+    expect(html).toContain("sh-tab-sep");
+    const pagesOnly = renderToStaticMarkup(<LayerTabs links={links.slice(0, 2)} />);
+    expect(pagesOnly).not.toContain("sh-tab-sep");
+    expect(pagesOnly.match(/role="tab"/g)?.length).toBe(2);
   });
 });
 
@@ -121,8 +104,8 @@ describe("Explorer", () => {
   const files = [file("src/a.ts"), file("src/b.ts", 2), file("README.md")];
 
   it("renders each file as a link to its scope, with the scope's file marked on", () => {
-    const html = renderToStaticMarkup(<Explorer id="p" tab="source" scope="src/a.ts" files={files} />);
-    expect(html).toContain('href="#/projects/p/view/source?scope=src%2Fa.ts"');
+    const html = renderToStaticMarkup(<Explorer id="p" tab="flow" scope="src/a.ts" files={files} />);
+    expect(html).toContain('href="#/projects/p/view/flow?scope=src%2Fa.ts"');
     expect(html).toMatch(/class="file on"/);
     expect(html).toContain('class="file"');
   });
@@ -130,14 +113,14 @@ describe("Explorer", () => {
   it("shows the file the code pane holds as shown, when it is not the scope", () => {
     const html = renderToStaticMarkup(
       <CodeTargetContext.Provider value={{ target: fileTarget("src/b.ts"), showCode: () => {} }}>
-        <Explorer id="p" tab="source" scope="" files={files} />
+        <Explorer id="p" tab="flow" scope="" files={files} />
       </CodeTargetContext.Provider>,
     );
     expect(html).toMatch(/class="file shown"[^>]*title="src\/b\.ts"/);
   });
 
   it("shows the findings count on a file that has findings", () => {
-    const html = renderToStaticMarkup(<Explorer id="p" tab="source" scope="" files={files} />);
+    const html = renderToStaticMarkup(<Explorer id="p" tab="flow" scope="" files={files} />);
     expect(html).toContain('title="2 findings"');
   });
 });

@@ -73,9 +73,20 @@ function builtinPlugins() {
   for (const base of ["packages", "plugins"]) {
     const root = join(repo, base);
     if (!existsSync(root)) continue;
+    // A group folder (no manifest, no package.json), such as packages/lens/, holds plugins one level down.
     for (const name of readdirSync(root).sort()) {
       const dir = join(root, name);
-      if (existsSync(join(dir, "insight-plugin.json"))) found.push({ base, name, dir });
+      if (!statSync(dir).isDirectory()) continue;
+      if (existsSync(join(dir, "insight-plugin.json"))) {
+        found.push({ base, name, dir });
+      } else if (!existsSync(join(dir, "package.json"))) {
+        for (const sub of readdirSync(dir).sort()) {
+          const subDir = join(dir, sub);
+          if (statSync(subDir).isDirectory() && existsSync(join(subDir, "insight-plugin.json"))) {
+            found.push({ base, name: `${name}/${sub}`, dir: subDir });
+          }
+        }
+      }
     }
   }
   return found;

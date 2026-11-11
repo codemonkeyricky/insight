@@ -1035,6 +1035,79 @@ button.add-submit:disabled { background: var(--faint); color: var(--graphite); b
 @media (prefers-reduced-motion: reduce) { .index-bar-fill.indeterminate { animation: none; width: 100%; opacity: .5; } }
 .index-error .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 
+/* Arch tab: System view. A pannable canvas of cards (components, outside systems) joined by curves with verb pills, and a side
+ * panel of the selection. Writes use the accent, reads and calls the neutral tone, runs and spawns are dashed, inferred are faded. */
+.arch-tab { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.arch-mode { align-self: flex-start; }
+.sysv { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.sysv-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+.sysv-scope { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.sysv-tests { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.sysv-zoom { display: inline-flex; gap: 4px; }
+.sysv-zoom button { padding: 3px 10px; }
+.sysv-body { min-width: 0; }
+.sysv-stage { position: relative; height: max(60vh, 420px); overflow: hidden; border-radius: 8px; background: var(--sheet); box-shadow: inset 0 0 0 0.5px var(--hair); cursor: grab; touch-action: none; user-select: none; }
+.sysv-stage:active { cursor: grabbing; }
+.sysv-stage.stale { opacity: 0.6; }
+.sysv-svg { display: block; }
+.sysv-fade { position: absolute; top: 0; right: 0; bottom: 0; width: 56px; pointer-events: none; background: linear-gradient(to right, transparent, var(--sheet)); }
+.sysv-hint { position: absolute; right: 12px; bottom: 8px; padding: 3px 10px; border-radius: 8px; background: var(--chip-solid); box-shadow: 0 0 0 0.5px var(--hair); pointer-events: none; }
+.sysv-empty { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; padding: 24px; gap: 4px; max-width: 460px; margin: 0 auto; }
+.sysv-empty p { margin: 0; }
+.sysv-col, .sysv-group { fill: var(--muted); font: 600 13px var(--font-ui); letter-spacing: 0; font-kerning: none; text-rendering: geometricPrecision; text-transform: uppercase; }
+.sysv-col { font-size: 15px; }
+.sysv-node { cursor: pointer; outline: none; }
+.sysv-card { fill: var(--card-top); stroke: var(--hair); stroke-width: 1; filter: drop-shadow(0 2px 6px var(--shadow)); }
+.sysv-node.external .sysv-card { fill: var(--box); }
+.sysv-node:hover .sysv-card, .sysv-node:focus-visible .sysv-card, .sysv-node.picked .sysv-card { stroke: var(--accent); stroke-width: 2; }
+.sysv-tab { fill: var(--accent); }
+.sysv-node.external .sysv-tab { fill: var(--graphite); }
+.sysv-node.c-store .sysv-tab { fill: var(--switch-on); }
+.sysv-node.c-service .sysv-tab { fill: var(--accent); }
+.sysv-node.c-api .sysv-tab, .sysv-node.c-worker .sysv-tab { fill: var(--thread); }
+.sysv-node.c-process .sysv-tab { fill: var(--coroutine); }
+.sysv-node.dim { opacity: 0.35; }
+.sysv-name { fill: var(--fg); font: 600 18px var(--font-ui); pointer-events: none; }
+.sysv-sub { fill: var(--muted); font: 14px var(--font-ui); pointer-events: none; }
+.sysv-chip rect { fill: var(--faint); }
+.sysv-chip text { fill: var(--fg); font: 13px var(--font-code); pointer-events: none; }
+.sysv-edge { outline: none; }
+.sysv-line { fill: none; stroke: var(--muted); stroke-width: 1.4; }
+.sysv-edge.v-writes .sysv-line { stroke: var(--accent); stroke-width: 2; }
+.sysv-edge.dashed .sysv-line { stroke-dasharray: 7 5; }
+.sysv-edge.inferred .sysv-line { stroke-dasharray: 3 5; opacity: 0.55; }
+.sysv-edge.lit .sysv-line, .sysv-edge.picked .sysv-line { stroke: var(--accent); stroke-width: 2.4; opacity: 1; }
+.sysv-edge.dim { opacity: 0.12; }
+.sysv-hit { fill: none; stroke: transparent; stroke-width: 12px; cursor: pointer; }
+.sysv-head { fill: var(--muted); }
+.sysv-head.w { fill: var(--accent); }
+.sysv-pill { cursor: pointer; }
+.sysv-pill rect { fill: var(--chip-solid); stroke: var(--hair); stroke-width: 1; }
+.sysv-pill text { fill: var(--fg); font: 16px var(--font-ui); pointer-events: none; }
+.sysv-edge.v-writes .sysv-pill rect { stroke: var(--accent); }
+.sysv-edge.v-writes .sysv-pill text { fill: var(--accent-text); font-weight: 600; }
+.sysv-edge:focus-visible .sysv-pill rect, .sysv-edge.lit .sysv-pill rect, .sysv-edge.picked .sysv-pill rect { stroke: var(--accent); stroke-width: 1.6; }
+.sysv-panel { position: absolute; top: 10px; right: 10px; width: min(330px, calc(100% - 20px)); max-height: calc(100% - 20px); overflow: auto; padding: 12px 14px; border-radius: 10px; background: var(--chip-solid); box-shadow: 0 0 0 0.5px var(--hair), var(--float); cursor: auto; user-select: text; }
+.sysv-close { position: absolute; top: 6px; right: 8px; padding: 0 8px; font-size: 18px; line-height: 1.3; }
+.sysv-panel h2 { padding-right: 26px; }
+.sysv-panel h2 { font-size: var(--t-lg); margin: 0 0 6px; overflow-wrap: anywhere; }
+.sysv-panel h3 { font-size: var(--t-md); margin: 14px 0 4px; }
+.sysv-sites { margin-top: 4px; }
+.sysv-verb { display: inline-block; padding: 1px 8px; border-radius: var(--r-pill); background: var(--faint); font-size: var(--t-sm); }
+.sysv-verb.v-writes { color: var(--accent-text); font-weight: 600; }
+.sysv-open { padding: 4px 14px; }
+.sysv-legend { position: absolute; left: 10px; bottom: 8px; list-style: none; margin: 0; padding: 4px 10px; display: flex; flex-wrap: wrap; gap: 4px 14px; border-radius: 8px; background: var(--chip-solid); box-shadow: 0 0 0 0.5px var(--hair); pointer-events: none; }
+.sysv-legend .sw { display: inline-block; width: 26px; height: 0; border-top: 2px solid var(--muted); vertical-align: middle; margin-right: 6px; }
+.sysv-legend .sw.w { border-top-color: var(--accent); }
+.sysv-legend .sw.dashed { border-top-style: dashed; }
+.sysv-legend .sw.inferred { border-top-style: dotted; opacity: 0.6; }
+.sysv.expanded { position: fixed; inset: 0; z-index: 60; padding: 12px 16px; background: var(--sheet); }
+.sysv.expanded .sysv-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.sysv.expanded .sysv-stage { flex: 1 1 auto; height: auto; min-height: 0; }
+@media (max-width: 1000px) {
+  .sysv-panel { width: calc(100% - 20px); max-height: 55%; top: auto; bottom: 10px; }
+}
+
 /* Sign-in: the header chip (signed out: a link; signed in: the avatar, @login and a sign-out), the sign-in error line, and the
    signed-in user's repositories on the home. */
 .auth-chip { display: inline-flex; align-items: center; gap: 6px; font-size: var(--t-sm); white-space: nowrap; }

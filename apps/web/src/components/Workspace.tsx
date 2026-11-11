@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { api, NO_SERVER, type FileEntry, type Overview, type ScopeLenses } from "../api";
-import { CodeTargetContext, scopeCodeTarget, type CodeTarget, type CodeTargetValue } from "../codeTarget";
-import { contentOf, flowScopeOf, type ShellContent } from "./sheet/shell";
+import { CodeTargetContext, opensCodePane, scopeCodeTarget, type CodeTarget, type CodeTargetValue } from "../codeTarget";
+import { contentOf, flowScopeOf, layerLinks, type ShellContent } from "./sheet/shell";
 import { hrefView, redirectFor } from "../router";
 import { canonicalScope } from "../scopeKey";
 import { lensTab, tabbedLenses } from "../scopeLenses";
@@ -16,16 +16,14 @@ import { ScopeNote, scopeKind } from "./ScopeNote";
 import { CodePane } from "./sheet/CodePane";
 import { FileTree } from "./sheet/FileTree";
 import { FindPalette } from "./sheet/FindPalette";
-import { LayerTabs, type LayerLink } from "./sheet/LayerTabs";
+import { LayerTabs } from "./sheet/LayerTabs";
 import { CODE_KEY, COMPACT_CODE_W, COMPACT_TREE_W, TREE_KEY, isNarrow, useCompactPanes, useNarrow, usePaneWidth } from "./sheet/panes";
 import { Splitter } from "./sheet/Splitter";
 import { TopBar, type Crumb } from "./sheet/TopBar";
 import type { TitleFacts } from "./sheet/TitleBlock";
 import { shortCommit } from "./sheet/TitleBlock";
-import { ArchView } from "./views/ArchView";
-import { FindingsView } from "./views/FindingsView";
+import { ArchTab } from "./views/ArchTab";
 import { FlowView } from "./views/FlowView";
-import { SourceView } from "./views/SourceView";
 import { ZoomStore } from "../zoom/scene";
 
 /** Tabs that cover the whole project. The explorer scope does not narrow them. */
@@ -95,6 +93,25 @@ export function Workspace({ id, tab, scope, line, fn, roots = true, base, head, 
       setCodeDrawer(true);
       setFilesOpen(false);
     } else {
+      autoCodeCollapse.current = false;
+      setCodeCollapsed(false);
+    }
+  }, []);
+  // The System view wants the width: while it is shown and no code is open, the code pane starts collapsed. Opening code (a
+  // file:line link) or the Code button brings it back, and leaving System restores it.
+  const autoCodeCollapse = useRef(false);
+  const codeCollapsedNow = useRef(codeCollapsed);
+  codeCollapsedNow.current = codeCollapsed;
+  const targetNow = useRef(target);
+  targetNow.current = target;
+  const onSystemActive = useCallback((on: boolean) => {
+    if (on) {
+      if (!isNarrow() && !codeCollapsedNow.current && targetNow.current === undefined) {
+        autoCodeCollapse.current = true;
+        setCodeCollapsed(true);
+      }
+    } else if (autoCodeCollapse.current) {
+      autoCodeCollapse.current = false;
       setCodeCollapsed(false);
     }
   }, []);
@@ -114,8 +131,8 @@ export function Workspace({ id, tab, scope, line, fn, roots = true, base, head, 
     void load();
   }, [load]);
 
-  // A retired lens tab (the execution lens) is the flow tab now, so its link is replaced by the flow tab's.
-  const redirect = redirectFor({ name: "workspace", id, tab, scope });
+  // A retired tab is replaced by its new home: the execution lens by the flow tab, and Source and Findings by Overview.
+  const redirect = redirectFor({ name: "workspace", id, tab, scope, ...(line !== undefined ? { line } : {}) });
   useEffect(() => {
     if (redirect !== undefined) window.location.replace(redirect);
   }, [redirect]);
@@ -186,12 +203,15 @@ export function Workspace({ id, tab, scope, line, fn, roots = true, base, head, 
   }, [id, scope, listingKey]);
 
   // A file scope (a link, a finding, the Find palette, a tree click) shows that file in the code pane. A folder or the project
-  // sets nothing, so the pane keeps the code it shows. The line rides along for a link to a line.
+  // sets nothing, so the pane keeps the code it shows. A link to a line opens the code pane at that line; a file scope with no
+  // line shows its code without opening a closed pane.
   const fileScope = loaded !== null && scopeKind(scope, loaded.files) === "file";
   useEffect(() => {
     const next = scopeCodeTarget(scope, fileScope, line);
-    if (next !== undefined) setTarget(next);
-  }, [scope, fileScope, line]);
+    if (next === undefined) return;
+    if (opensCodePane(line)) showCode(next);
+    else setTarget(next);
+  }, [scope, fileScope, line, showCode]);
 
   if (redirect !== undefined) return null;
   if (!loaded) return error ? <p className="error" role="alert">{error}</p> : <p className="muted">Loading</p>;
@@ -206,14 +226,16 @@ export function Workspace({ id, tab, scope, line, fn, roots = true, base, head, 
   const lensTabs = listing ? tabbedLenses(listing.lenses).map((row) => lensTab(row, !NO_SERVER)) : [];
   // The banner's numbers belong to one scope. A listing for another scope is not shown while the new one loads.
   const stats = listing && listing.scope === canonicalScope(scope) ? listing.stats : null;
-  // The tree picks flow for the flow view, and source for the project-wide pages, so a picked file opens its flow or source.
-  const explorerTab = content === "flow" ? "flow" : PROJECT_WIDE.has(tab) ? "source" : tab;
+  // The tree picks flow for the flow view and the project-wide pages (a picked file opens its flow, with its code in the pane),
+  // and the lens's own tab for a lens.
+  const explorerTab = content === "flow" || (PROJECT_WIDE.has(tab) && tab !== "arch") ? "flow" : tab;
   // Views remount when the snapshot, view or scope changes, so no state from the last one carries over. The flow map
   // follows the scope and function in place, so a scope change animates the camera rather than remounting the map.
   const viewKey = `${overview.snapshot?.id ?? "none"}|${content}|${content === "flow" || tab === "arch" ? "" : scope}|${base ?? ""}|${head ?? ""}|${full}`;
 
   const parts = scope ? scope.split("/") : [];
-  const crumbTab = content === "flow" ? "flow" : content === "findings" || content === "arch" ? content : "source";
+  // A crumb keeps the tab the reader is on (Arch, a lens) and otherwise goes to Flow, so a folder crumb always has a view.
+  const crumbTab = content === "flow" ? "flow" : content === "arch" || content === "lens" ? tab : "flow";
   const crumbs: Crumb[] = [
     { label: p.name, href: hrefView(id, "overview"), current: parts.length === 0 },
     ...parts.map((seg, i): Crumb => {
@@ -222,32 +244,7 @@ export function Workspace({ id, tab, scope, line, fn, roots = true, base, head, 
     }),
   ];
 
-  const pageLink = (t: string, title: string, current: boolean, opts: { full?: boolean } = {}): LayerLink => ({
-    id: t,
-    title,
-    href: hrefView(id, t, { scope, ...(opts.full ? { full: true } : {}) }),
-    current,
-    group: "page",
-  });
-  // The Overview tab is current on the overview route, whether it shows the flow root or the full page. Flow is the flow tab
-  // on any other route.
-  const layers: LayerLink[] = [
-    pageLink("overview", "Overview", tab === "overview", { full: true }),
-    pageLink("source", "Source", content === "source"),
-    pageLink("flow", "Flow", content === "flow" && tab !== "overview"),
-    pageLink("arch", "Arch", content === "arch"),
-    { ...pageLink("findings", "Findings", content === "findings"), count: overview.findings.total },
-    ...(NO_SERVER ? [] : [pageLink("compare", "Compare", content === "compare"), pageLink("review", "Triage", content === "triage")]),
-    ...lensTabs.map((t): LayerLink => ({
-      id: t.id,
-      title: t.title,
-      href: hrefView(id, t.id, { scope }),
-      current: t.id === tab,
-      group: "lens",
-      ...(t.dim ? { dim: true } : {}),
-      ...(t.reason ? { reason: t.reason } : {}),
-    })),
-  ];
+  const layers = layerLinks({ id, tab, scope, content, noServer: NO_SERVER, lenses: lensTabs });
 
   const facts: Omit<TitleFacts, "selected"> = {
     project: p.name,
@@ -285,6 +282,7 @@ export function Workspace({ id, tab, scope, line, fn, roots = true, base, head, 
       setCodeDrawer(!codeDrawer);
       setFilesOpen(false);
     } else {
+      autoCodeCollapse.current = false;
       setCodeCollapsed(!codeCollapsed);
     }
   };
@@ -293,12 +291,8 @@ export function Workspace({ id, tab, scope, line, fn, roots = true, base, head, 
     switch (content) {
       case "overview":
         return <ProjectOverview id={id} />;
-      case "source":
-        return <SourceView id={id} files={files} scope={scope} line={line} />;
       case "arch":
-        return <ArchView id={id} scope={scope} />;
-      case "findings":
-        return <FindingsView id={id} scope={scope} />;
+        return <ArchTab id={id} scope={scope} onSystemActive={onSystemActive} />;
       case "compare":
         return <ComparePage id={id} base={base} head={head} />;
       case "triage":
@@ -374,9 +368,9 @@ export function Workspace({ id, tab, scope, line, fn, roots = true, base, head, 
                   Lenses unavailable
                 </p>
               )}
-              {PROJECT_WIDE.has(tab) ? (
+              {tab === "arch" ? null : PROJECT_WIDE.has(tab) ? (
                 <p className="muted small scope-note">
-                  This page covers the whole project, so the scope does not narrow it. Pick a file in the tree to open its source.
+                  This page covers the whole project, so the scope does not narrow it. Pick a file in the tree to see its flow and code.
                 </p>
               ) : (
                 <ScopeNote id={id} tab={tab} scope={scope} kind={kind} files={files} trail />

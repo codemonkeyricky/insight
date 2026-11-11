@@ -40,9 +40,7 @@ function pageItems(id: string): FindItem[] {
   return [
     page("Overview", hrefView(id, "overview", { full: true })),
     page("Flow", hrefView(id, "flow")),
-    page("Source", hrefView(id, "source")),
     page("Arch", hrefView(id, "arch")),
-    page("Findings", hrefView(id, "findings")),
     page("Compare", hrefView(id, "compare")),
     page("Triage", hrefView(id, "review")),
   ];
