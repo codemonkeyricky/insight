@@ -64,7 +64,9 @@ export function phaseLabel(phase: string | undefined): string {
 export function indexErrorText(code: string, repo: string, fallback?: string): string {
   switch (code) {
     case "not_found":
-      return `No public GitHub repository named ${repo}. Check the spelling; private repositories cannot be indexed.`;
+      return `No public GitHub repository named ${repo}. Check the spelling. A private one needs sign-in and the Insight app installed on it.`;
+    case "auth_required":
+      return `${repo} is private. Sign in with GitHub to index it.`;
     case "too_large":
       return `${repo} is too large to index on the free hosted tier.`;
     case "rate_limited":
@@ -80,6 +82,14 @@ export function indexErrorText(code: string, repo: string, fallback?: string): s
     default:
       return fallback ?? `Indexing ${repo} failed on the server.`;
   }
+}
+
+/** The code of a failed sign-in, from the `auth_error=<code>` query of the hash the callback returns to, or undefined. */
+export function authErrorOf(hash: string): string | undefined {
+  const at = hash.indexOf("?");
+  if (at === -1) return undefined;
+  const code = new URLSearchParams(hash.slice(at + 1)).get("auth_error");
+  return code !== null && /^[a-z_]{1,40}$/i.test(code) ? code : undefined;
 }
 
 /** Whether a failed index can be asked for again from the page. Other failures are kept for an hour on the server. */
