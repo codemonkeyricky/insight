@@ -71,11 +71,24 @@ function childDirs(dir: string): string[] {
     .sort();
 }
 
+/**
+ * Lists the plugin folders of a built-in root: each direct child, and the children of a group folder. A group folder
+ * is a child with neither a manifest nor a package.json, such as packages/lens/, which holds the lens packages.
+ */
+function builtinDirs(dir: string): string[] {
+  const out: string[] = [];
+  for (const child of childDirs(dir)) {
+    out.push(child);
+    if (!existsSync(join(child, MANIFEST_FILE)) && !existsSync(join(child, "package.json"))) out.push(...childDirs(child));
+  }
+  return out;
+}
+
 function scanCandidates(opts: LoadOptions): { candidates: Candidate[]; disabled: DisabledPlugin[] } {
   const builtin = opts.builtinRoot ?? repoRoot();
   const dirs: string[] = [];
   if (builtin) {
-    dirs.push(...childDirs(join(builtin, "packages")), ...childDirs(join(builtin, "plugins")));
+    dirs.push(...builtinDirs(join(builtin, "packages")), ...builtinDirs(join(builtin, "plugins")));
   }
   dirs.push(...childDirs(opts.userPluginDir ?? join(homedir(), ".insight", "plugins")));
   if (opts.projectPlugins !== false) dirs.push(...childDirs(projectPaths(opts.projectPath).localPlugins));

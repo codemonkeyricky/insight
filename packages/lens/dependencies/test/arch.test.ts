@@ -128,3 +128,30 @@ describe("archModel: bare specifiers", () => {
     expect(model.fileImports).toEqual([{ from: "src/a.ts", to: "src/b.ts", imports: 1, confidence: "exact", sites: [site] }]);
   });
 });
+
+describe("archModel with lenses under packages/lens/", () => {
+  it("gives packages/lens/<name> the lens layer, and reports a lens importing a frontend", () => {
+    const site = fx.span("packages/lens/calls/src/a.ts", 3, 0, 3, 40);
+    const view = fx.view({
+      nodes: [
+        pkg("packages/lens/calls"),
+        file("packages/lens/calls/src/a.ts"),
+        pkg("packages/frontend-typescript"),
+        file("packages/frontend-typescript/src/b.ts"),
+      ],
+      edges: [
+        fx.edge("packages/lens/calls/src/a.ts", "packages/frontend-typescript/src/b.ts", "packaging", "packaging.import", { span: site }),
+      ],
+    });
+    const model = archModel(view);
+    expect(model.packages.find((p) => p.path === "packages/lens/calls")?.layer).toBe("lens");
+    expect(model.violations).toEqual([
+      {
+        from: "packages/lens/calls",
+        to: "packages/frontend-typescript",
+        rule: "frontends and lenses never import each other",
+        sites: [site],
+      },
+    ]);
+  });
+});

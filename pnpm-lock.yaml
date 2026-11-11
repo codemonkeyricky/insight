@@ -41,7 +41,7 @@ importers:
         version: link:../../packages/ir
       '@insight/lens-dependencies':
         specifier: workspace:*
-        version: link:../../packages/lens-dependencies
+        version: link:../../packages/lens/dependencies
       '@insight/model':
         specifier: workspace:*
         version: link:../../packages/model
@@ -97,7 +97,7 @@ importers:
         version: link:../../packages/flow
       '@insight/lens-dependencies':
         specifier: workspace:*
-        version: link:../../packages/lens-dependencies
+        version: link:../../packages/lens/dependencies
       '@insight/model':
         specifier: workspace:*
         version: link:../../packages/model
@@ -249,25 +249,25 @@ importers:
         version: link:../frontend-typescript
       '@insight/lens-calls':
         specifier: workspace:*
-        version: link:../lens-calls
+        version: link:../lens/calls
       '@insight/lens-concurrency-map':
         specifier: workspace:*
-        version: link:../lens-concurrency-map
+        version: link:../lens/concurrency-map
       '@insight/lens-dependencies':
         specifier: workspace:*
-        version: link:../lens-dependencies
+        version: link:../lens/dependencies
       '@insight/lens-effects':
         specifier: workspace:*
-        version: link:../lens-effects
+        version: link:../lens/effects
       '@insight/lens-execution':
         specifier: workspace:*
-        version: link:../lens-execution
+        version: link:../lens/execution
       '@insight/lens-flow-complexity':
         specifier: workspace:*
-        version: link:../lens-flow-complexity
+        version: link:../lens/flow-complexity
       '@insight/lens-lock-order':
         specifier: workspace:*
-        version: link:../lens-lock-order
+        version: link:../lens/lock-order
       '@vercel/functions':
         specifier: ^3.11.1
         version: 3.11.1
@@ -288,32 +288,32 @@ importers:
         specifier: ^16.0.0
         version: 16.0.0
 
-  packages/lens-calls:
+  packages/lens/calls:
     dependencies:
       '@insight/ir':
         specifier: workspace:*
-        version: link:../ir
+        version: link:../../ir
       '@insight/sdk':
         specifier: workspace:*
-        version: link:../sdk
+        version: link:../../sdk
 
-  packages/lens-concurrency-map:
+  packages/lens/concurrency-map:
     dependencies:
       '@insight/ir':
         specifier: workspace:*
-        version: link:../ir
+        version: link:../../ir
       '@insight/sdk':
         specifier: workspace:*
-        version: link:../sdk
+        version: link:../../sdk
 
-  packages/lens-dependencies:
+  packages/lens/dependencies:
     dependencies:
       '@insight/ir':
         specifier: workspace:*
-        version: link:../ir
+        version: link:../../ir
       '@insight/sdk':
         specifier: workspace:*
-        version: link:../sdk
+        version: link:../../sdk
       picomatch:
         specifier: ^4.0.7
         version: 4.0.7
@@ -322,14 +322,14 @@ importers:
         specifier: ^4.0.3
         version: 4.0.3
 
-  packages/lens-effects:
+  packages/lens/effects:
     dependencies:
       '@insight/ir':
         specifier: workspace:*
-        version: link:../ir
+        version: link:../../ir
       '@insight/sdk':
         specifier: workspace:*
-        version: link:../sdk
+        version: link:../../sdk
       picomatch:
         specifier: ^4.0.7
         version: 4.0.7
@@ -338,32 +338,32 @@ importers:
         specifier: ^4.0.3
         version: 4.0.3
 
-  packages/lens-execution:
+  packages/lens/execution:
     dependencies:
       '@insight/ir':
         specifier: workspace:*
-        version: link:../ir
+        version: link:../../ir
       '@insight/sdk':
         specifier: workspace:*
-        version: link:../sdk
+        version: link:../../sdk
 
-  packages/lens-flow-complexity:
+  packages/lens/flow-complexity:
     dependencies:
       '@insight/ir':
         specifier: workspace:*
-        version: link:../ir
+        version: link:../../ir
       '@insight/sdk':
         specifier: workspace:*
-        version: link:../sdk
+        version: link:../../sdk
 
-  packages/lens-lock-order:
+  packages/lens/lock-order:
     dependencies:
       '@insight/ir':
         specifier: workspace:*
-        version: link:../ir
+        version: link:../../ir
       '@insight/sdk':
         specifier: workspace:*
-        version: link:../sdk
+        version: link:../../sdk
 
   packages/model:
     dependencies:

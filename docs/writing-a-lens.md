@@ -17,7 +17,7 @@ interface Lens {
 
 ## Where it lives
 
-Lenses are plugins, found the same way as frontends (see the frontend guide, "Where it lives"). `packages/lens-*` is the usual place. The manifest:
+Lenses are plugins, found the same way as frontends (see the frontend guide, "Where it lives"). `packages/lens/*` is the usual place. The manifest:
 
 ```json
 {
@@ -125,7 +125,7 @@ Give each view an `id` that is unique within the lens. The lens page draws graph
 
 ## Example: the lock-order lens
 
-`packages/lens-lock-order/src/index.ts` is a good model. It:
+`packages/lens/lock-order/src/index.ts` is a good model. It:
 
 - requires `structure`, `sync`, `concurrency` and `calls`, and reads `effects` as optional;
 - builds held-before edges from `sync.lock-acquire` and `sync.lock-release` nodes, in source order within each function;
@@ -179,7 +179,7 @@ Build IR in the test with `irFixtures` from `@insight/sdk`, not by running a fro
 - `irFixtures.finding(message, { severity, nodes, span })`
 - `irFixtures.view({ nodes, edges, findings })`
 
-Then call `lens.run(view, ctx)` directly and assert on the findings, their ids and the metrics. `packages/lens-lock-order/test/lock-order.test.ts` does this with a small hand-built fixture, including a deliberate cycle, an inferred cross-call edge and a case with no cycle. Cover those three cases in any lens that has them, and check the `requires` path too: the lens should report unavailable when a required facet is missing.
+Then call `lens.run(view, ctx)` directly and assert on the findings, their ids and the metrics. `packages/lens/lock-order/test/lock-order.test.ts` does this with a small hand-built fixture, including a deliberate cycle, an inferred cross-call edge and a case with no cycle. Cover those three cases in any lens that has them, and check the `requires` path too: the lens should report unavailable when a required facet is missing.
 
 For the end to end check, index a real project with the CLI and open the lens page:
 
