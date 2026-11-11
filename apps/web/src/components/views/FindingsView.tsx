@@ -54,6 +54,12 @@ export function FindingsView({ id, scope }: { id: string; scope: string }) {
 
 const lensTitle = (lens: string): string => lens.replace(/^lens-/, "");
 
+/** A path split at its last slash: the directory (with its slash) and the basename, which the table never truncates. */
+export function splitFile(file: string): { dir: string; base: string } {
+  const slash = file.lastIndexOf("/");
+  return slash === -1 ? { dir: "", base: file } : { dir: file.slice(0, slash + 1), base: file.slice(slash + 1) };
+}
+
 /** Where an example points: its function in Flow when it names one, else its line in the source. */
 function exampleHref(id: string, kind: string, e: FindingExample): string | undefined {
   if (e.fn !== undefined && e.file !== undefined) return hrefView(id, "flow", { scope: e.file, fn: e.fn, kind });
@@ -61,7 +67,7 @@ function exampleHref(id: string, kind: string, e: FindingExample): string | unde
   return undefined;
 }
 
-function RevRow({ id, group: g }: { id: string; group: FindingGroup }) {
+export function RevRow({ id, group: g }: { id: string; group: FindingGroup }) {
   const max = Math.max(1, ...g.topFiles.map((t) => t.count));
   const flowHref = hrefView(id, "flow", {
     ...(g.flowFile !== undefined ? { scope: g.flowFile } : {}),
@@ -87,7 +93,15 @@ function RevRow({ id, group: g }: { id: string; group: FindingGroup }) {
             {g.topFiles.map((t) => (
               <li key={t.file} className="rv-bar">
                 <span className="rv-bar-file mono" title={t.file}>
-                  {t.file}
+                  {(() => {
+                    const { dir, base } = splitFile(t.file);
+                    return (
+                      <>
+                        {dir !== "" && <span className="rv-dir">{dir}</span>}
+                        <span className="rv-base">{base}</span>
+                      </>
+                    );
+                  })()}
                 </span>
                 <span className="rv-bar-track" aria-hidden="true">
                   <i style={{ width: `${(t.count / max) * 100}%` }} />
@@ -98,25 +112,29 @@ function RevRow({ id, group: g }: { id: string; group: FindingGroup }) {
           </ul>
         )}
       </div>
-      <ul className="rv-cell rv-examples" role="cell" data-label="Examples">
-        {g.examples.map((e, i) => {
-          const href = exampleHref(id, g.kind, e);
-          const where = e.file === undefined ? "project" : e.line === undefined ? e.file : `${e.file}:${e.line}`;
-          return (
-            <li key={`${e.file ?? ""}\0${e.fn ?? ""}\0${i}`}>
-              {href === undefined ? (
-                <span className="mono small">{where}</span>
-              ) : (
-                <a className="mono small" href={href} title={e.message}>
-                  {where}
-                </a>
-              )}
-            </li>
-          );
-        })}
-      </ul>
+      <div className="rv-examples" role="cell" data-label="Examples">
+        <ul className="rv-ex-list">
+          {g.examples.map((e, i) => {
+            const href = exampleHref(id, g.kind, e);
+            const where = e.file === undefined ? "project" : e.line === undefined ? e.file : `${e.file}:${e.line}`;
+            return (
+              <li key={`${e.file ?? ""}\0${e.fn ?? ""}\0${i}`}>
+                {href === undefined ? (
+                  <span className="mono small rv-ex" title={where}>
+                    {where}
+                  </span>
+                ) : (
+                  <a className="mono small rv-ex" href={href} title={`${where} · ${e.message}`}>
+                    {where}
+                  </a>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </div>
       <div className="rv-cell rv-act" role="cell" data-label="Flow">
-        <a className="btn primary rv-show" href={flowHref}>
+        <a className="btn rv-show" href={flowHref}>
           Show in Flow
         </a>
       </div>
