@@ -243,6 +243,37 @@ describe("revealCamera fit", () => {
     const e = edges(cam, rect);
     expect(e.left).toBeCloseTo(margin, 6);
   });
+
+  it("a tall expansion is fitted to its width, not its height: the scale is the width-fit, not the 0.5 floor", () => {
+    const room = { width: 1000, height: 700 };
+    const rect = { x: 100, y: 100, w: 800, h: 3000 };
+    const cam = revealCamera({ k: 2, x: 0, y: -400 }, rect, 800, room, 0);
+    expect(cam.k).toBeCloseTo((room.width - 2 * margin) / rect.w, 6);
+    expect(cam.k).toBeGreaterThan(0.5);
+    const e = edges(cam, rect);
+    expect(e.top).toBeCloseTo(margin, 6);
+    expect(e.left).toBeCloseTo(margin, 6);
+  });
+
+  it("a tall expansion's header is placed at the room's top, never above it", () => {
+    const room = { width: 1000, height: 700 };
+    const rect = { x: 0, y: 0, w: 400, h: 2500 };
+    const cam = revealCamera({ k: 3, x: 0, y: 200 }, rect, 400, room, 0);
+    expect(cam.k).toBeCloseTo((room.width - 2 * margin) / rect.w, 6);
+    const e = edges(cam, rect);
+    expect(e.top).toBeCloseTo(margin, 6);
+    expect(e.left).toBeCloseTo(margin, 6);
+  });
+
+  it("a small expansion that fits the room keeps its scale and is fully visible", () => {
+    const room = { width: 1000, height: 700 };
+    const rect = { x: 300, y: 200, w: 250, h: 300 };
+    const cam = revealCamera({ k: 1, x: 0, y: 0 }, rect, 250, room, 0);
+    expect(cam).toEqual({ k: 1, x: 0, y: 0 });
+    const e = edges(cam, rect);
+    expect(e.top).toBeGreaterThanOrEqual(margin);
+    expect(e.bottom).toBeLessThanOrEqual(room.height - margin);
+  });
 });
 
 describe("sceneCamera", () => {

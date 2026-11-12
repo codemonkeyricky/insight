@@ -389,14 +389,16 @@ export const REVEAL_MIN_K = 0.5;
 /**
  * The camera that shows an expansion `rect` (world units) whose chart is `chartW` wide. A chart narrower than `minPx` on
  * screen is zoomed in, at most 1.5 times the current scale, about the expansion's top-left corner, which stays where it
- * was. An expansion that does not fit the room at that scale is zoomed out until it fits, but not below REVEAL_MIN_K. Then
- * the camera pans the least that brings the expansion inside `room`, and one still larger than the room is aligned to its
+ * was. The scale fits the expansion's WIDTH into the room (zoomed out only when it is wider than the room at the current
+ * scale, but not below REVEAL_MIN_K). The height never sets the scale: an expansion taller than the room keeps the
+ * width-fit scale and is aligned to the room's top, so its header stays in view and its chart stays readable. Then the
+ * camera pans the least that brings the expansion inside `room`, and one still larger than the room is aligned to its
  * top-left, so its left and top edges stay visible. A camera that already shows it is returned unchanged.
  */
 export function revealCamera(cam: Camera, rect: Rect, chartW: number, room: { width: number; height: number }, minPx: number): Camera {
   let k = cam.k;
   if (chartW * k < minPx) k = Math.min(minPx / chartW, cam.k * CHART_FIT_MAX_K);
-  const fitK = Math.min((room.width - 2 * REVEAL_MARGIN) / Math.max(rect.w, 1), (room.height - 2 * REVEAL_MARGIN) / Math.max(rect.h, 1));
+  const fitK = (room.width - 2 * REVEAL_MARGIN) / Math.max(rect.w, 1);
   if (fitK < k) k = Math.min(k, Math.max(REVEAL_MIN_K, fitK));
   let x = cam.x + rect.x * (cam.k - k);
   let y = cam.y + rect.y * (cam.k - k);
