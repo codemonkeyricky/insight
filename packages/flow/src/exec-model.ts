@@ -296,6 +296,8 @@ interface Fn {
   htmlEntry: boolean;
   /** A module entry of a Node script (see the frontend's nodeEntry). Only an entry when no project file imports it. */
   nodeEntry: boolean;
+  /** A module a workspace package names as a program. It is an entry even when a spawn also runs it (see the frontend's packageEntry). */
+  packageEntry: boolean;
 }
 
 interface Dispatch {
@@ -429,6 +431,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       module: n.attrs?.module === true,
       htmlEntry: n.attrs?.htmlEntry === true,
       nodeEntry: n.attrs?.nodeEntry === true,
+      packageEntry: n.attrs?.packageEntry === true,
     });
   }
 
@@ -619,6 +622,8 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
   // Entry programs. A TS project has no build targets, so its programs come from its entries. Every index.html script is
   // a page script of ONE browser program, and each Node script that no project file imports is a program of its own. A
   // program's files are what its entries import, transitively. Test, fixture and sample files are never entries.
+  // Entries are found over the whole project, whatever the scope: a program whose code lies outside the scope still
+  // starts the threads that run in-scope functions (see `shownPrograms` below).
   const scriptFiles = new Set<string>();
   for (const { e, ids } of keyed) {
     if (e.kind === "concurrency.spawns") for (const id of ids) scriptFiles.add(fileOf(id) ?? id);
@@ -642,7 +647,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
   const moduleOfFile = new Map<string, string>();
   for (const f of fns.values()) if (f.module && f.file !== undefined) moduleOfFile.set(f.file, f.id);
   const entryFns = [...fns.values()].filter(
-    (f) => f.module && f.inScope && f.file !== undefined && !isNoisePath(f.file) && !f.file.endsWith(".d.ts") && !scriptFiles.has(f.file),
+    (f) => f.module && f.file !== undefined && !isNoisePath(f.file) && !f.file.endsWith(".d.ts") && (f.packageEntry || !scriptFiles.has(f.file)),
   );
   const browserFns = entryFns.filter((f) => f.htmlEntry);
   const nodeFns = entryFns
@@ -780,8 +785,19 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     plans.push(planOf(how, n.id, rootList, spawn));
   }
 
+  // The programs shown at this scope: one with a file in the scope, or whose main thread reaches a function in it. A program
+  // outside the scope that starts an in-scope function is shown, so the function is on its thread. Thread membership is
+  // computed over the whole project (every plan below), and only the shown programs and threads are listed.
+  const shownPrograms = programs.filter(
+    (p) => p.files.some((f) => insideScope(f, scope)) || [...(programPlans.get(p.id)?.reach ?? [])].some((id) => fns.get(id)?.inScope === true),
+  );
+  const shownPlanIds = new Set<string>(entryMode ? [] : ["main"]);
+  for (const p of shownPrograms) {
+    const plan = programPlans.get(p.id);
+    if (plan !== undefined) shownPlanIds.add(plan.id);
+  }
   // A program's threads: its main thread, and each spawn that lies in one of its files or in a function its main reaches.
-  for (const prog of programs) {
+  for (const prog of shownPrograms) {
     const own = programPlans.get(prog.id);
     const inFiles = new Set(prog.files);
     const threadIds: string[] = own !== undefined ? [own.id] : [];
@@ -845,7 +861,9 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     return true;
   };
 
-  const threads: ExecThread[] = plans.map((p) => {
+  const threads: ExecThread[] = plans
+    .filter((p) => p.spawn !== undefined || shownPlanIds.has(p.id))
+    .map((p) => {
     const roots = p.roots.filter(take);
     const reached = [...p.reach].sort(byText).filter(take);
     // A subset of `reached`, so every id was already offered to the table: filter by it instead of taking again.
@@ -946,7 +964,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     truncated,
     functions: [...table.values()],
     threads,
-    programs,
+    programs: shownPrograms,
     dispatches,
     calls,
     unthreaded,
@@ -954,7 +972,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     stats: {
       threads: threads.length,
       spawns: spawned.length,
-      programs: programs.length,
+      programs: shownPrograms.length,
       resolved: countStatus("resolved"),
       outside: countStatus("outside"),
       unresolved: countStatus("unresolved"),

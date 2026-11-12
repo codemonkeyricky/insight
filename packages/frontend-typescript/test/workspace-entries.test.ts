@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { IREdge, IRNode } from "@insight/ir";
 import type { IRBatch } from "@insight/sdk";
 import frontend from "../src/index.js";
-import { isWorkspaceManifest, workspacePackages, workspaceSource } from "../src/packages.js";
+import { isWorkspaceManifest, packageTargetSource, scriptRunFiles, workspacePackages, workspaceProgramFiles, workspaceSource } from "../src/packages.js";
 
 /**
  * A workspace with no node_modules, as the hosted indexer sees a GitHub tarball. `@scope/a` names its build output as
@@ -144,5 +144,38 @@ describe("bare imports of workspace packages without node_modules", () => {
       if (e.kind !== "packaging.import") continue;
       expect(typeof e.to === "string" || "candidates" in (e.to as object) || "unresolved" in (e.to as object)).toBe(true);
     }
+  });
+});
+
+describe("program entries from workspace packages", () => {
+  it("reads the files a script runs with node, tsx, ts-node or bun, skipping flags and other commands", () => {
+    expect(scriptRunFiles("node dist/main.js")).toEqual(["dist/main.js"]);
+    expect(scriptRunFiles("tsx watch src/index.ts --port 1")).toEqual(["src/index.ts"]);
+    expect(scriptRunFiles("node --enable-source-maps dist/a.js && node scripts/b.mjs")).toEqual(["dist/a.js", "scripts/b.mjs"]);
+    expect(scriptRunFiles("ts-node ./tools/x.ts")).toEqual(["tools/x.ts"]);
+    expect(scriptRunFiles("tsc -p tsconfig.json")).toEqual([]);
+    expect(scriptRunFiles("vitest run")).toEqual([]);
+  });
+
+  it("maps a build output inside a nested path to its source, and leaves out a target with no source", () => {
+    const rels = new Set(["packages/cli/src/cli.ts", "src/gen.ts"]);
+    expect(packageTargetSource("packages/cli", "./dist/cli.js", rels)).toBe("packages/cli/src/cli.ts");
+    expect(packageTargetSource("", "packages/cli/dist/cli.js", rels)).toBe("packages/cli/src/cli.ts");
+    expect(packageTargetSource("", "src/gen.ts", rels)).toBe("src/gen.ts");
+    expect(packageTargetSource("packages/cli", "./dist/missing.js", rels)).toBeUndefined();
+  });
+
+  it("makes the bin and script programs of every workspace package, and no library main", () => {
+    const manifests = new Map<string, string>([
+      ["packages/cli/package.json", json({ name: "@scope/cli", bin: { scope: "./dist/cli.js" } })],
+      ["packages/cli/src/cli.ts", ""],
+      ["packages/server/package.json", json({ name: "@scope/server", scripts: { start: "node dist/main.js", test: "vitest run" } })],
+      ["packages/server/src/main.ts", ""],
+      ["packages/lib/package.json", json({ name: "@scope/lib", main: "dist/index.js" })],
+      ["packages/lib/src/index.ts", ""],
+      ["packages/lib/test/fixtures/x/package.json", json({ name: "@scope/fixture", bin: "./dist/f.js" })],
+    ]);
+    const rels = new Set(["packages/cli/src/cli.ts", "packages/server/src/main.ts", "packages/lib/src/index.ts"]);
+    expect([...workspaceProgramFiles(manifests, rels)].sort()).toEqual(["packages/cli/src/cli.ts", "packages/server/src/main.ts"]);
   });
 });

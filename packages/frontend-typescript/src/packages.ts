@@ -219,3 +219,86 @@ export function workspaceSource(packages: Map<string, WorkspacePackage>, spec: s
 export function workspaceManifestPaths(manifests: Map<string, string>): string[] {
   return [...manifests.keys()].filter(isWorkspaceManifest).sort();
 }
+
+/** The runners whose first file argument is the program a package script starts. */
+const RUNNERS: ReadonlySet<string> = new Set(["node", "tsx", "ts-node", "bun"]);
+/** A file a runner may start: JavaScript or TypeScript, not a declaration or a style or data file. */
+const RUN_FILE = /\.(?:[cm]?js|ts)$/;
+
+/**
+ * The file names a shell command starts with a runner (node, tsx, ts-node, bun), in order. Each command in a chain
+ * (`a && b`, `a | b`) is read on its own. Within one, the first non-flag argument that is a script file is the one run:
+ * `tsx watch src/index.ts` runs src/index.ts, `node --enable-source-maps dist/main.js` runs dist/main.js.
+ */
+export function scriptRunFiles(command: string): string[] {
+  const out: string[] = [];
+  for (const segment of command.split(/&&|\|\||[;|&]/)) {
+    const tokens = segment
+      .trim()
+      .split(/\s+/)
+      .map((t) => t.replace(/^["']|["']$/g, ""));
+    const at = tokens.findIndex((t) => RUNNERS.has(t.split("/").pop() ?? t));
+    if (at < 0) continue;
+    const file = tokens.slice(at + 1).find((t) => !t.startsWith("-") && RUN_FILE.test(t));
+    if (file !== undefined) out.push(file.replace(/^\.\//, ""));
+  }
+  return out;
+}
+
+/**
+ * The indexed source file a package target names, mapped from build output to source. Every `dist|build|out|lib`
+ * segment is tried as `src` in its place, leftmost first, so `dist/cli.js` and `packages/cli/dist/cli.js` both reach
+ * their source. The target itself is the last try. Undefined when no indexed source file matches.
+ */
+export function packageTargetSource(pkgDir: string, target: string, rels: Set<string>): string | undefined {
+  const inner = normalizeRel(target);
+  if (inner === undefined || inner === "") return undefined;
+  const segs = inner.split("/");
+  const bases: string[] = [];
+  segs.forEach((seg, i) => {
+    if (BUILD_DIRS.has(seg)) bases.push(stripSuffix(segs.map((s, j) => (j === i ? "src" : s)).join("/")));
+  });
+  bases.push(stripSuffix(inner));
+  const candidates: string[] = [];
+  for (const base of bases) {
+    for (const ext of SOURCE_EXTS) candidates.push(joinRel(pkgDir, base + ext));
+    for (const ext of SOURCE_EXTS) candidates.push(joinRel(pkgDir, `${base}/index${ext}`));
+  }
+  candidates.push(joinRel(pkgDir, inner));
+  return firstSource(candidates, rels);
+}
+
+/**
+ * The indexed source files that the workspace packages run as programs: every `bin` target (a path, or each path of a
+ * map) and every file a `scripts` command starts with node, tsx, ts-node or bun. A package's `main`, `exports` and
+ * other library fields are not programs. Each target is mapped to its source (packageTargetSource); a target with no
+ * source file is left out. Test and declaration files are left to the caller. `manifests` is keyed like workspacePackages.
+ */
+export function workspaceProgramFiles(manifests: Map<string, string>, rels: Set<string>): Set<string> {
+  const out = new Set<string>();
+  for (const manifest of manifests.keys()) {
+    if (!isWorkspaceManifest(manifest)) continue;
+    let json: unknown;
+    try {
+      json = JSON.parse(manifests.get(manifest) ?? "");
+    } catch {
+      continue;
+    }
+    if (typeof json !== "object" || json === null) continue;
+    const fields = json as { bin?: unknown; scripts?: unknown };
+    const dir = manifest === "package.json" ? "" : manifest.slice(0, -"/package.json".length);
+    const targets: string[] = [];
+    if (typeof fields.bin === "string") targets.push(fields.bin);
+    else if (typeof fields.bin === "object" && fields.bin !== null) targets.push(...Object.values(fields.bin).filter((v): v is string => typeof v === "string"));
+    if (typeof fields.scripts === "object" && fields.scripts !== null) {
+      for (const command of Object.values(fields.scripts)) {
+        if (typeof command === "string") targets.push(...scriptRunFiles(command));
+      }
+    }
+    for (const target of targets) {
+      const hit = packageTargetSource(dir, target, rels);
+      if (hit !== undefined) out.add(hit);
+    }
+  }
+  return out;
+}
