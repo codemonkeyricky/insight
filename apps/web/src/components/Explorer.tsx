@@ -1,7 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { FileEntry } from "../api";
 import { hrefView } from "../router";
 import { fileTarget, targetPath, useCodeTarget } from "../codeTarget";
+import { fuzzyScore, rankFiles } from "./sheet/fuzzy";
+
+/** Most files a filter lists. */
+const RESULT_LIMIT = 100;
 
 /** A folder in the explorer: its subfolders and files, sorted by name. */
 export interface Dir {
@@ -66,6 +70,21 @@ function fileClass(path: string, links: Links): string {
   return path === links.shownPath ? "file shown" : "file";
 }
 
+/** Text with the characters at the indices in `at` wrapped in a mark. */
+function Marked({ text, at }: { text: string; at: Set<number> }) {
+  const parts: ReactNode[] = [];
+  let i = 0;
+  while (i < text.length) {
+    const hit = at.has(i);
+    let j = i + 1;
+    while (j < text.length && at.has(j) === hit) j++;
+    const chunk = text.slice(i, j);
+    parts.push(hit ? <mark key={i}>{chunk}</mark> : <Fragment key={i}>{chunk}</Fragment>);
+    i = j;
+  }
+  return <>{parts}</>;
+}
+
 function Rows({ dir, links }: { dir: Dir; links: Links }) {
   return (
     <>
@@ -126,20 +145,55 @@ export function Explorer({ id, tab, fileTab = tab, scope, files }: { id: string;
     });
   }, [scope]);
 
-  const shown = useMemo(() => (needle ? files.filter((f) => f.path.toLowerCase().includes(needle)) : files), [files, needle]);
-  const tree = useMemo(() => buildTree(shown), [shown]);
+  const tree = useMemo(() => buildTree(files), [files]);
   const onPath = useMemo(() => new Set(prefixesOf(scope)), [scope]);
+  const results = useMemo(() => rankFiles(files, filter, RESULT_LIMIT), [files, filter]);
+  // Every file that matches, so the note under a full list can say how many there are.
+  const total = useMemo(() => (needle ? files.filter((f) => fuzzyScore(needle, f.path) !== undefined).length : 0), [files, needle]);
+  const [active, setActive] = useState(0);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  // Keeps the highlighted result in view while the arrow keys move it.
+  useEffect(() => {
+    listRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: "nearest" });
+  }, [active, results]);
 
   const links: Links = {
     id,
     tab,
     fileTab,
     scope,
-    // A filter opens every folder so the matches are visible.
-    isOpen: (dir) => needle !== "" || (toggled[dir.path] ?? (!dir.path.includes("/") || onPath.has(dir.path))),
+    isOpen: (dir) => toggled[dir.path] ?? (!dir.path.includes("/") || onPath.has(dir.path)),
     setOpen: (path, open) => setToggled((prev) => (prev[path] === open ? prev : { ...prev, [path]: open })),
     ...(shownPath !== undefined ? { shownPath } : {}),
     onFile: (path) => showCode(fileTarget(path)),
+  };
+
+  // Opens a result the way clicking its row does: shows the file in the code pane, then sets the scope.
+  const open = (path: string) => {
+    links.onFile(path);
+    window.location.href = hrefView(id, fileTab, { scope: path });
+  };
+
+  const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      setFilter("");
+      setActive(0);
+      return;
+    }
+    if (needle === "") return;
+    const last = results.length - 1;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActive((i) => Math.max(0, Math.min(i + 1, last)));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActive((i) => Math.max(0, Math.min(i - 1, last)));
+    } else if (e.key === "Enter" && results[active]) {
+      e.preventDefault();
+      open(results[active].file.path);
+    }
   };
 
   return (
@@ -149,13 +203,50 @@ export function Explorer({ id, tab, fileTab = tab, scope, files }: { id: string;
         placeholder={`Filter ${files.length} files`}
         aria-label="Filter files"
         value={filter}
-        onChange={(e) => setFilter(e.target.value)}
+        onChange={(e) => {
+          setFilter(e.target.value);
+          setActive(0);
+        }}
+        onKeyDown={onKeyDown}
       />
       <a href={hrefView(id, tab)} className={scope === "" ? "node root on" : "node root"} aria-current={scope === "" ? "page" : undefined}>
         All files <span className="badge-count is-neutral">{files.length}</span>
       </a>
-      <Rows dir={tree} links={links} />
-      {shown.length === 0 && <p className="muted small">No file matches.</p>}
+      {needle === "" ? (
+        <Rows dir={tree} links={links} />
+      ) : (
+        <div className="fuzzy-results" role="listbox" aria-label="Matching files" ref={listRef}>
+          {results.map(({ file, positions }, i) => {
+            const slash = file.path.lastIndexOf("/");
+            const nameStart = slash + 1;
+            const nameAt = new Set(positions.filter((p) => p >= nameStart).map((p) => p - nameStart));
+            const dirAt = new Set(positions.filter((p) => p < slash));
+            return (
+              <a
+                key={file.path}
+                role="option"
+                aria-selected={i === active}
+                href={hrefView(id, fileTab, { scope: file.path })}
+                className={fileClass(file.path, links)}
+                title={file.path}
+                onClick={() => links.onFile(file.path)}
+              >
+                <span className="fname">
+                  <Marked text={file.path.slice(nameStart)} at={nameAt} />
+                </span>
+                {slash >= 0 && (
+                  <span className="fdir">
+                    <Marked text={file.path.slice(0, slash)} at={dirAt} />
+                  </span>
+                )}
+                {file.findings > 0 && <span className="badge-count is-warn" title={`${file.findings} findings`}>{file.findings}</span>}
+              </a>
+            );
+          })}
+        </div>
+      )}
+      {total > results.length && <p className="muted small">{`Showing top ${RESULT_LIMIT} of ${total} matches`}</p>}
+      {(needle === "" ? files.length === 0 : results.length === 0) && <p className="muted small">No file matches.</p>}
     </nav>
   );
 }
