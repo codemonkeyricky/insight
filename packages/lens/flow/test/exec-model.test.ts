@@ -339,14 +339,17 @@ describe("execModel across nested scopes", () => {
     }
   });
 
-  it("shows a spawn thread with the same roots, reach and coroutines in every scope that holds its spawn", () => {
+  it("shows a spawn thread with the same grounding in every scope that holds its spawn, and no more functions in a narrower one", () => {
     for (const [narrow, wide] of nested) {
       const inner = execModel(NODES, EDGES, narrow);
       const outer = execModel(NODES, EDGES, wide);
       for (const t of inner.threads.filter((x) => x.spawn !== undefined)) {
         const same = outer.threads.find((x) => x.id === t.id);
         expect(same, `thread ${t.id} of ${narrow} is missing from ${wide || "the project"}`).toBeDefined();
-        expect(same).toMatchObject({ roots: t.roots, reach: t.reach, reached: t.reached, coroutines: t.coroutines });
+        // Membership and grounding are the whole project's. A narrower scope lists only its in-scope functions.
+        expect(same).toMatchObject({ grounded: t.grounded, kind: t.kind });
+        expect(t.reach).toBeLessThanOrEqual(same?.reach ?? 0);
+        expect(same?.reached).toEqual(expect.arrayContaining(t.reached));
       }
     }
   });
@@ -357,7 +360,11 @@ describe("execModel across nested scopes", () => {
       const outer = execModel(NODES, EDGES, wide);
       expect(inner.stats.spawns, `${narrow} vs ${wide}`).toBeLessThanOrEqual(outer.stats.spawns);
       expect(inner.stats.functionsInScope, `${narrow} vs ${wide}`).toBeLessThanOrEqual(outer.stats.functionsInScope);
-      expect(outer.dispatches).toEqual(expect.arrayContaining(inner.dispatches));
+      // A narrower scope lists the same dispatch sites, with only its in-scope targets.
+      for (const d of inner.dispatches) {
+        expect(outer.dispatches).toContainEqual(expect.objectContaining({ from: d.from, how: d.how, file: d.file, line: d.line }));
+        for (const target of d.targets) expect(outer.functions.some((f) => f.id === target)).toBe(true);
+      }
     }
   });
 
@@ -532,8 +539,8 @@ describe("execModel: anonymous functions and runtime", () => {
     const project = execModel(nodes, edges, "");
     expect(project.threads[0]).toMatchObject({ roots: ["src/a.ts#main"], reach: 2 });
     expect(runtimes(project)).toEqual({ "src/a.ts#main": "thread", "src/a.ts#run": "thread" });
-    // In the test folder the test is the root, and what it calls is reached from it.
-    expect(execModel(nodes, edges, "tests").threads[0]).toMatchObject({ roots: ["tests/a.test.ts#it"], reach: 3 });
+    // In the test folder the test is the root, and what it calls is reached from it. Only in-scope functions are counted.
+    expect(execModel(nodes, edges, "tests").threads[0]).toMatchObject({ roots: ["tests/a.test.ts#it"], reach: 1 });
   });
 
   it("pins the known gap: a function only a wider scope's module-level code calls runs on no thread there", () => {

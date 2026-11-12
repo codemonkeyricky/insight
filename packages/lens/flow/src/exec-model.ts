@@ -296,6 +296,8 @@ interface Fn {
   htmlEntry: boolean;
   /** A module entry of a Node script (see the frontend's nodeEntry). Only an entry when no project file imports it. */
   nodeEntry: boolean;
+  /** A module a workspace package names as a program. It is an entry even when a spawn also runs it (see the frontend's packageEntry). */
+  packageEntry: boolean;
 }
 
 interface Dispatch {
@@ -429,6 +431,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       module: n.attrs?.module === true,
       htmlEntry: n.attrs?.htmlEntry === true,
       nodeEntry: n.attrs?.nodeEntry === true,
+      packageEntry: n.attrs?.packageEntry === true,
     });
   }
 
@@ -480,11 +483,17 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
   // count, so a function the scope's own code never calls is a root of the scope even when another folder calls it.
   // Test, fixture and sample code counts only in a noise scope, as its functions are roots only there.
   const referenced = new Set<string>();
+  // A function some out-of-scope caller calls, references or dispatches. An in-scope function that only such code reaches
+  // is a root of the scope's view of its thread, since the caller that starts it lies outside the scope.
+  const calledOutside = new Set<string>();
 
   for (const { e, ids, candidates } of keyed) {
     const from = foldId(e.from);
     const local = inScopeId(from);
     const counted = local && (scopeNoise || !noiseId(from));
+    if (!local && (e.kind === "calls.call" || e.kind === "calls.reference" || e.kind === "concurrency.dispatches")) {
+      for (const to of ids) calledOutside.add(to);
+    }
     if (e.kind === "calls.call" || e.kind === "calls.reference") {
       const closure = e.kind === "calls.reference" && strAttr(e.attrs, "how") === "closure";
       const out = closure ? closureOut : callOut;
@@ -619,6 +628,8 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
   // Entry programs. A TS project has no build targets, so its programs come from its entries. Every index.html script is
   // a page script of ONE browser program, and each Node script that no project file imports is a program of its own. A
   // program's files are what its entries import, transitively. Test, fixture and sample files are never entries.
+  // Entries are found over the whole project, whatever the scope: a program whose code lies outside the scope still
+  // starts the threads that run in-scope functions (see `shownPrograms` below).
   const scriptFiles = new Set<string>();
   for (const { e, ids } of keyed) {
     if (e.kind === "concurrency.spawns") for (const id of ids) scriptFiles.add(fileOf(id) ?? id);
@@ -642,7 +653,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
   const moduleOfFile = new Map<string, string>();
   for (const f of fns.values()) if (f.module && f.file !== undefined) moduleOfFile.set(f.file, f.id);
   const entryFns = [...fns.values()].filter(
-    (f) => f.module && f.inScope && f.file !== undefined && !isNoisePath(f.file) && !f.file.endsWith(".d.ts") && !scriptFiles.has(f.file),
+    (f) => f.module && f.file !== undefined && !isNoisePath(f.file) && !f.file.endsWith(".d.ts") && (f.packageEntry || !scriptFiles.has(f.file)),
   );
   const browserFns = entryFns.filter((f) => f.htmlEntry);
   const nodeFns = entryFns
@@ -780,8 +791,19 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     plans.push(planOf(how, n.id, rootList, spawn));
   }
 
+  // The programs shown at this scope: one with a file in the scope, or whose main thread reaches a function in it. A program
+  // outside the scope that starts an in-scope function is shown, so the function is on its thread. Thread membership is
+  // computed over the whole project (every plan below), and only the shown programs and threads are listed.
+  const shownPrograms = programs.filter(
+    (p) => p.files.some((f) => insideScope(f, scope)) || [...(programPlans.get(p.id)?.reach ?? [])].some((id) => fns.get(id)?.inScope === true),
+  );
+  const shownPlanIds = new Set<string>(entryMode ? [] : ["main"]);
+  for (const p of shownPrograms) {
+    const plan = programPlans.get(p.id);
+    if (plan !== undefined) shownPlanIds.add(plan.id);
+  }
   // A program's threads: its main thread, and each spawn that lies in one of its files or in a function its main reaches.
-  for (const prog of programs) {
+  for (const prog of shownPrograms) {
     const own = programPlans.get(prog.id);
     const inFiles = new Set(prog.files);
     const threadIds: string[] = own !== undefined ? [own.id] : [];
@@ -845,18 +867,26 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     return true;
   };
 
-  const threads: ExecThread[] = plans.map((p) => {
-    const roots = p.roots.filter(take);
-    const reached = [...p.reach].sort(byText).filter(take);
+  // The scope's view of each shown thread. Membership and grounding are the whole project's (the plans above); what is
+  // listed is only the in-scope functions the thread runs. Its roots are its in-scope roots, plus the in-scope functions
+  // it runs that only out-of-scope code starts, so no out-of-scope function is a card or counted in a frame.
+  const inScopeFn = (id: string): boolean => fns.get(id)?.inScope === true;
+  const threads: ExecThread[] = plans
+    .filter((p) => p.spawn !== undefined || shownPlanIds.has(p.id))
+    .map((p) => {
+    const extraRoots = [...p.reach].filter((id) => inScopeFn(id) && calledOutside.has(id) && !referenced.has(id) && !p.roots.includes(id));
+    const roots = [...p.roots.filter(inScopeFn), ...extraRoots.sort(byText)].filter(take);
+    const reachIn = [...p.reach].filter(inScopeFn).sort(byText);
+    const reached = reachIn.filter(take);
     // A subset of `reached`, so every id was already offered to the table: filter by it instead of taking again.
     const coroutineOnly = [...p.reach]
-      .filter((id) => !p.plain.has(id))
+      .filter((id) => !p.plain.has(id) && inScopeFn(id))
       .sort(byText)
       .filter((id) => table.has(id));
     const coroutines: ExecCoroutine[] = [];
     for (const co of p.coroutines) {
-      if (!take(co.target)) continue;
-      coroutines.push({ ...co, callees: co.callees.filter(take) });
+      if (!inScopeFn(co.target) || !take(co.target)) continue;
+      coroutines.push({ ...co, callees: co.callees.filter((id) => inScopeFn(id) && take(id)) });
     }
     // A main thread is grounded when a root is a program's main, a function named `main`, or a module entry; a spawn always is.
     const grounded = p.kind !== "main" || p.roots.some((r) => programMains.has(r) || fns.get(r)?.name === "main" || fns.get(r)?.module === true);
@@ -866,7 +896,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       grounded,
       ...(p.spawn !== undefined ? { spawn: p.spawn } : {}),
       roots,
-      reach: [...p.reach].filter((id) => fns.has(id)).length,
+      reach: reachIn.length,
       reached,
       coroutines,
       coroutineOnly,
@@ -876,7 +906,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
   const dispatches: ExecDispatch[] = dispatchSites.map((d) => ({
     from: d.from,
     how: d.how,
-    targets: d.targets.filter(take),
+    targets: d.targets.filter((id) => inScopeFn(id) && take(id)),
     candidates: d.candidates,
     file: d.file,
     line: d.line,
@@ -946,7 +976,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     truncated,
     functions: [...table.values()],
     threads,
-    programs,
+    programs: shownPrograms,
     dispatches,
     calls,
     unthreaded,
@@ -954,7 +984,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     stats: {
       threads: threads.length,
       spawns: spawned.length,
-      programs: programs.length,
+      programs: shownPrograms.length,
       resolved: countStatus("resolved"),
       outside: countStatus("outside"),
       unresolved: countStatus("unresolved"),

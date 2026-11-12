@@ -6,6 +6,7 @@ import type { IRBatch } from "@insight/sdk";
 import { importBindings, matchCall, matchEnvRead, matchExportRoute, matchFetch, matchSchedule, matchServe, matchWorker, nodeScriptArgument, scriptPath, urlText, type ImportBinding, type ScriptPath, type UrlText, type WorkerEnv } from "./effects.js";
 import { scriptKind } from "./digest.js";
 import { dispatchFor, MAX_DISPATCH_TARGETS, propName } from "./dispatch.js";
+import { workspaceManifestPaths, workspacePackages, workspaceProgramFiles, workspaceSource, type WorkspacePackage } from "./packages.js";
 
 export const FRONTEND_ID = "frontend-typescript";
 export const SOURCE_RE = /\.(?:[mc]?[jt]sx?)$/;
@@ -30,6 +31,11 @@ type Entity =
       htmlEntry?: true;
       /** Set for a module that is a Node script: under scripts/ or bin/ with a shebang or process.argv, or named by package.json. */
       nodeEntry?: true;
+      /**
+       * Set for a module that a workspace package.json names as a program (a bin, or a script's node, tsx, ts-node or bun
+       * file). Unlike other Node scripts, it is a program even when some spawn also runs it, as a server a CLI starts.
+       */
+      packageEntry?: true;
     };
 
 export interface Decl {
@@ -59,6 +65,13 @@ export interface Project {
    * Undefined for any other node, and when no indexed source file defines it.
    */
   sourceOf(node: ts.Node): Decl | undefined;
+  /**
+   * The project file a module specifier names from a file, or undefined when it names none in the project. A bare
+   * specifier of a workspace package resolves to that package's source first; the compiler's own resolution is the fallback.
+   */
+  resolveModule(spec: string, fromAbs: string): string | undefined;
+  /** Project-relative paths of every workspace package.json. A bare import's answer depends on each of them. */
+  manifestRels: string[];
 }
 
 const isFnInit = (n: ts.Expression): boolean => ts.isArrowFunction(n) || ts.isFunctionExpression(n);
@@ -195,7 +208,7 @@ function moduleSpan(rel: string, sf: ts.SourceFile): Span {
 }
 
 /** Assigns IDs to every declaration in a file: <file>#<qualified name>, with ~N for repeats. */
-function assignDecls(rel: string, sf: ts.SourceFile, out: Map<ts.Node, Decl>, htmlEntry: boolean, nodeEntry: boolean): void {
+function assignDecls(rel: string, sf: ts.SourceFile, out: Map<ts.Node, Decl>, htmlEntry: boolean, nodeEntry: boolean, packageEntry: boolean): void {
   // The module entry is keyed by the source file itself. Its name is not a container, so declarations keep their ids.
   if (runsAtLoad(sf)) {
     const entity: Entity = {
@@ -208,6 +221,7 @@ function assignDecls(rel: string, sf: ts.SourceFile, out: Map<ts.Node, Decl>, ht
       module: true,
       ...(htmlEntry ? { htmlEntry: true as const } : {}),
       ...(nodeEntry ? { nodeEntry: true as const } : {}),
+      ...(packageEntry ? { packageEntry: true as const } : {}),
     };
     out.set(sf, { id: `${rel}#${MODULE_NAME}`, rel, qname: MODULE_NAME, entity, node: sf });
   }
@@ -234,6 +248,12 @@ function assignDecls(rel: string, sf: ts.SourceFile, out: Map<ts.Node, Decl>, ht
     });
   };
   visit(sf, undefined);
+}
+
+/** The compiler extension of a file name: the longest known suffix, so `a.d.ts` is `.d.ts`, not `.ts`. */
+function extensionOf(file: string): ts.Extension {
+  const exts = (Object.values(ts.Extension) as string[]).sort((a, b) => b.length - a.length);
+  return (exts.find((e) => file.endsWith(e)) ?? ts.Extension.Ts) as ts.Extension;
 }
 
 function createSource(abs: string, rel: string, text: string): ts.SourceFile {
@@ -288,11 +308,14 @@ function manifestScripts(text: string): Set<string> {
 
 /**
  * The Node script entries: a module file, not a test, that is under scripts/ or bin/ with a shebang or a read of
- * process.argv, or that a package.json "bin" or "scripts" entry names. `texts` is keyed by absolute path.
+ * process.argv, or that a package.json "bin" or "scripts" entry names (the root's by name, every workspace package's
+ * through its build-to-source map). `texts` is keyed by absolute path.
  */
-function nodeEntryFiles(root: string, rels: string[], texts: Map<string, string>, manifests: Map<string, string>): Set<string> {
+function nodeEntryFiles(root: string, rels: string[], texts: Map<string, string>, manifests: Map<string, string>, packageEntries: Set<string>): Set<string> {
   const named = new Set<string>();
   for (const text of manifests.values()) for (const f of manifestScripts(text)) named.add(f);
+  // Every workspace package's bin and script targets, mapped from build output to source (see workspaceProgramFiles).
+  for (const f of packageEntries) named.add(f);
   const out = new Set<string>();
   for (const rel of rels) {
     if (TEST_PATH.test(rel) || rel.endsWith(".d.ts")) continue;
@@ -367,6 +390,7 @@ export function buildProject(
   texts: Map<string, string>,
   html: Map<string, string> = new Map(),
   manifests: Map<string, string> = new Map(),
+  packageJsons: Map<string, string> = new Map(),
 ): Project {
   const options = compilerOptions(root);
   const abs = (rel: string) => join(root, rel);
@@ -375,8 +399,29 @@ export function buildProject(
   const orig = ts.createCompilerHost(options, true);
   // The compiler falls back to disk for files it was not given. It may read only the project and the bundled lib files.
   const readable = confinedTo(root, dirname(ts.getDefaultLibFilePath(options)));
+  const packages = workspacePackages(packageJsons);
+  const manifestRels = workspaceManifestPaths(packageJsons);
+  const relSet = new Set(rels);
+  /** The project file a specifier names from a file: a workspace package's source first, else the compiler's answer inside the project. */
+  const resolveModule = (spec: string, fromAbs: string): string | undefined => {
+    const ws = workspaceSource(packages, spec, relSet);
+    if (ws !== undefined) return ws;
+    const resolved = ts.resolveModuleName(spec, fromAbs, options, host).resolvedModule;
+    return resolved && !resolved.isExternalLibraryImport ? relative(root, resolved.resolvedFileName).split(sep).join("/") : undefined;
+  };
   const host: ts.CompilerHost = {
     ...orig,
+    // Answers the checker's module lookups with resolveModule, so calls and types follow a workspace import into its source.
+    resolveModuleNameLiterals(literals, containingFile) {
+      return literals.map((literal) => {
+        const hit = workspaceSource(packages, literal.text, relSet);
+        if (hit !== undefined) {
+          const file = abs(hit);
+          return { resolvedModule: { resolvedFileName: file, extension: extensionOf(file), isExternalLibraryImport: false } };
+        }
+        return ts.resolveModuleName(literal.text, containingFile, options, host);
+      });
+    },
     getSourceFile(name, language, onError, shouldCreate) {
       const text = texts.get(name);
       if (text === undefined) return readable(name) ? orig.getSourceFile(name, language, onError, shouldCreate) : undefined;
@@ -394,12 +439,13 @@ export function buildProject(
   const program = ts.createProgram({ rootNames: roots, options, host });
   const checker = program.getTypeChecker();
   const decls = new Map<ts.Node, Decl>();
-  const relSet = new Set(rels);
   const htmlEntries = htmlScriptEntries(html, relSet);
-  const nodeEntries = nodeEntryFiles(root, rels, texts, manifests);
+  // The programs the workspace packages name, as source files. A test or declaration file is never a program.
+  const packageEntries = new Set([...workspaceProgramFiles(packageJsons, relSet)].filter((f) => !TEST_PATH.test(f) && !f.endsWith(".d.ts")));
+  const nodeEntries = nodeEntryFiles(root, rels, texts, manifests, packageEntries);
   for (const rel of rels) {
     const sf = program.getSourceFile(abs(rel));
-    if (sf) assignDecls(rel, sf, decls, htmlEntries.has(rel), nodeEntries.has(rel));
+    if (sf) assignDecls(rel, sf, decls, htmlEntries.has(rel), nodeEntries.has(rel), packageEntries.has(rel));
   }
   const moduleIds = new Map<string, NodeId>();
   for (const d of decls.values()) {
@@ -417,6 +463,8 @@ export function buildProject(
     sourceFor: (rel) => program.getSourceFile(abs(rel)),
     mapOutput: outputMapper(root, options, rels),
     sourceOf: declarationSources(root, relSet, decls),
+    resolveModule,
+    manifestRels,
   };
 }
 
@@ -1157,9 +1205,8 @@ export function emitFile(project: Project, rel: string): IRBatch {
   };
 
   const emitModule = (from: string, spec: string, specNode: ts.Node, typeOnly: boolean, dynamic: boolean, kind: "packaging.import" | "packaging.re-export") => {
-    const resolved = ts.resolveModuleName(spec, sf.fileName, project.options, project.host).resolvedModule;
+    const target = project.resolveModule(spec, sf.fileName);
     let to: NodeId | UnresolvedRef;
-    const target = resolved && !resolved.isExternalLibraryImport ? relative(project.root, resolved.resolvedFileName).split(sep).join("/") : undefined;
     if (target !== undefined && project.rels.has(target)) {
       to = target;
       dependOn(target);
@@ -1169,6 +1216,8 @@ export function emitFile(project: Project, rel: string): IRBatch {
         for (const c of importCandidates(rel, spec)) deps.add(c);
       }
     }
+    // A bare specifier may name a workspace package, whose package.json decides its source. Any manifest change re-extracts.
+    if (!spec.startsWith(".") && !spec.startsWith("/")) for (const m of project.manifestRels) dependOn(m);
     const attrs: Record<string, unknown> = kind === "packaging.import" ? { specifier: spec, typeOnly, dynamic } : { specifier: spec };
     pushEdge({ from, to, facet: "packaging", kind, attrs, span: spanOf(rel, sf, specNode), provenance: PROV });
   };
@@ -1207,6 +1256,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
             ...(decl.entity.module ? { module: true } : {}),
             ...(decl.entity.htmlEntry ? { htmlEntry: true } : {}),
             ...(decl.entity.nodeEntry ? { nodeEntry: true } : {}),
+            ...(decl.entity.packageEntry ? { packageEntry: true } : {}),
           },
           span,
           provenance: PROV,
