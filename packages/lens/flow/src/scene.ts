@@ -49,6 +49,8 @@ export interface SceneNode {
    * has no functions. It is a leaf, drawn as a plain chip with no function glyph, and it opens nothing when clicked.
    */
   external?: boolean;
+  /** The tooltip of a frame's header or a box, when it is not the note: a program's entry file path. */
+  title?: string;
 }
 
 /**
