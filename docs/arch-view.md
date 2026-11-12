@@ -22,7 +22,7 @@ package it draws that scope, as described under "Scoped view" below.
 ### What the diagram shows
 
 - Columns, left to right, one per layer in `model.layers` that holds packages. The layers come from the path of each
-  package (`defaultLayerOf`: `frontend-*` and `plugins/frontend-*`, `packages/lens/*` (and `lens-*`), `ir`/`sdk`/`core`, and `apps/*`), and
+  package (`defaultLayerOf`: `frontend-*` or `frontend/*` under `packages/` or `plugins/`, `packages/lens/*` (and `lens-*`), `ir`/`sdk`/`core`, and `apps/*`), and
   any other package is in "other".
 - Packages come from `package.json` files among the indexed files, or from `structure.package` nodes when a frontend
   emits them. A file belongs to its nearest package root. Each box shows the file count.

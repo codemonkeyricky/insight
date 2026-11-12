@@ -37,6 +37,22 @@ describe("archModel", () => {
     expect(() => JSON.parse(JSON.stringify(model))).not.toThrow();
   });
 
+  it("puts frontends grouped under packages/frontend/ in the frontend layer", () => {
+    const view = fx.view({
+      nodes: [
+        pkg("packages/frontend/typescript"),
+        file("packages/frontend/typescript/src/a.ts"),
+        pkg("packages/frontend/cpp"),
+        file("packages/frontend/cpp/src/a.ts"),
+      ],
+    });
+    const layerOf = Object.fromEntries(archModel(view).packages.map((p) => [p.path, p.layer]));
+    expect(layerOf).toEqual({
+      "packages/frontend/typescript": "frontend",
+      "packages/frontend/cpp": "frontend",
+    });
+  });
+
   it("reports a lens importing a frontend as one violation with its site", () => {
     const site = fx.span("packages/lens-calls/src/a.ts", 3, 0, 3, 40);
     const view = fx.view({
