@@ -13,6 +13,7 @@ import {
   refresh,
   reflow,
   detailLetter,
+  expandCamera,
   revealCamera,
   sceneCamera,
   shiftAt,
@@ -152,6 +153,60 @@ describe("revealCamera", () => {
   });
 });
 
+describe("expandCamera (minimal pan on click)", () => {
+  const stage: Rect = { x: 0, y: 0, w: 1000, h: 600 };
+  // The room of the tests: the stage itself, so a position is a screen position.
+  const lim = { readK: 0, fitMinK: 0.5, headH: 30 };
+  const margin = 16;
+
+  it("a box already inside the room gives an identical camera", () => {
+    const cam = { k: 0.93, x: -59.3, y: -84.5 };
+    const box = { x: 300, y: 120, w: 250, h: 200 };
+    expect(expandCamera(cam, box, stage, lim)).toEqual(cam);
+  });
+
+  it("a box partly below the room is translated by only its overflow, and k is kept", () => {
+    const box = { x: 100, y: 500, w: 200, h: 200 };
+    // The bottom sits at 700 and the room's bottom edge (less the margin) at 584: 116 up, nothing else.
+    expect(expandCamera({ k: 1, x: 0, y: 0 }, box, stage, lim)).toEqual({ k: 1, x: 0, y: -116 });
+  });
+
+  it("a tall box whose header is in view does not move", () => {
+    const box = { x: 100, y: 50, w: 300, h: 1000 };
+    expect(expandCamera({ k: 1, x: 0, y: 0 }, box, stage, lim)).toEqual({ k: 1, x: 0, y: 0 });
+  });
+
+  it("a tall box with its header cut off at the bottom moves up by the least that puts the header in view", () => {
+    const box = { x: 100, y: 700, w: 300, h: 1000 };
+    expect(expandCamera({ k: 1, x: 0, y: 0 }, box, stage, lim)).toEqual({ k: 1, x: 0, y: 600 - margin - 30 - 700 });
+  });
+
+  it("a tall box above the room is aligned with its header at the room's top, with k kept when the width fits", () => {
+    const box = { x: 100, y: -200, w: 300, h: 1000 };
+    const cam = expandCamera({ k: 1, x: 0, y: 0 }, box, stage, lim);
+    expect(cam.k).toBe(1);
+    expect(cam.y).toBe(margin + 200);
+  });
+
+  it("a box wider than the room takes the width-fit scale and is aligned left", () => {
+    const box = { x: 900, y: 50, w: 700, h: 200 };
+    const cam = expandCamera({ k: 1, x: 0, y: 0 }, box, { x: 0, y: 0, w: 400, h: 600 }, lim);
+    expect(cam.k).toBeCloseTo((400 - 2 * margin) / 700, 9);
+    expect(box.x * cam.k + cam.x).toBeCloseTo(margin, 6);
+  });
+
+  it("a box too wide even at the floor is fitted at the floor scale", () => {
+    const cam = expandCamera({ k: 1, x: 0, y: 0 }, { x: 900, y: 50, w: 1000, h: 200 }, { x: 0, y: 0, w: 400, h: 600 }, lim);
+    expect(cam.k).toBe(0.5);
+  });
+
+  it("a scale below the readable floor is raised to it, at most 1.5 times, and no lower bound applies with readK 0", () => {
+    const box = { x: 100, y: 100, w: 60, h: 40 };
+    expect(expandCamera({ k: 0.3, x: 0, y: 0 }, box, stage, { ...lim, readK: 0.6 }).k).toBeCloseTo(0.45, 9);
+    expect(expandCamera({ k: 0.3, x: 0, y: 0 }, box, stage, lim).k).toBe(0.3);
+  });
+});
+
 describe("the side shift", () => {
   it("moves an item right of the pivot by the detail's width plus the gap, and leaves one at or left of it", () => {
     expect(shiftOf({ x: 500 }, 300, 200)).toBe(200 + EXPAND_GAP);
@@ -242,6 +297,37 @@ describe("revealCamera fit", () => {
     expect(cam.k).toBe(1);
     const e = edges(cam, rect);
     expect(e.left).toBeCloseTo(margin, 6);
+  });
+
+  it("a tall expansion is fitted to its width, not its height: the scale is the width-fit, not the 0.5 floor", () => {
+    const room = { width: 1000, height: 700 };
+    const rect = { x: 100, y: 100, w: 800, h: 3000 };
+    const cam = revealCamera({ k: 2, x: 0, y: -400 }, rect, 800, room, 0);
+    expect(cam.k).toBeCloseTo((room.width - 2 * margin) / rect.w, 6);
+    expect(cam.k).toBeGreaterThan(0.5);
+    const e = edges(cam, rect);
+    expect(e.top).toBeCloseTo(margin, 6);
+    expect(e.left).toBeCloseTo(margin, 6);
+  });
+
+  it("a tall expansion's header is placed at the room's top, never above it", () => {
+    const room = { width: 1000, height: 700 };
+    const rect = { x: 0, y: 0, w: 400, h: 2500 };
+    const cam = revealCamera({ k: 3, x: 0, y: 200 }, rect, 400, room, 0);
+    expect(cam.k).toBeCloseTo((room.width - 2 * margin) / rect.w, 6);
+    const e = edges(cam, rect);
+    expect(e.top).toBeCloseTo(margin, 6);
+    expect(e.left).toBeCloseTo(margin, 6);
+  });
+
+  it("a small expansion that fits the room keeps its scale and is fully visible", () => {
+    const room = { width: 1000, height: 700 };
+    const rect = { x: 300, y: 200, w: 250, h: 300 };
+    const cam = revealCamera({ k: 1, x: 0, y: 0 }, rect, 250, room, 0);
+    expect(cam).toEqual({ k: 1, x: 0, y: 0 });
+    const e = edges(cam, rect);
+    expect(e.top).toBeGreaterThanOrEqual(margin);
+    expect(e.bottom).toBeLessThanOrEqual(room.height - margin);
   });
 });
 
