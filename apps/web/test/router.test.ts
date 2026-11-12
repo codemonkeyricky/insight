@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { contentOf, flowScopeOf } from "../src/components/sheet/shell.js";
-import { fuzzyScore, rankFuzzy } from "../src/components/sheet/fuzzy.js";
+import { fuzzyPositions, fuzzyScore, rankFiles, rankFuzzy } from "../src/components/sheet/fuzzy.js";
 import { BUILTIN_TABS, hrefCompare, hrefFile, hrefFlow, hrefLens, hrefProject, hrefReview, hrefView, inScope, parseRoute, redirectFor } from "../src/router.js";
 
 describe("hash router", () => {
@@ -285,6 +285,48 @@ describe("fuzzy matcher", () => {
   it("ranks the best match first and keeps the first items for an empty query", () => {
     expect(rankFuzzy(["freedom", "place"], "pl", (s) => s)[0]).toBe("place");
     expect(rankFuzzy(["one", "two", "three"], "", (s) => s, 2)).toEqual(["one", "two"]);
+  });
+
+  it("gives the indices of the matched characters, and undefined when there is no match", () => {
+    expect(fuzzyPositions("ab", "xaxb")).toEqual([1, 3]);
+    expect(fuzzyPositions("pa", "planAssembly")).toEqual([0, 2]);
+    expect(fuzzyPositions("zz", "planAssembly")).toBeUndefined();
+    expect(fuzzyPositions("", "planAssembly")).toEqual([]);
+  });
+
+  it("keeps fuzzyScore's values: ab in xaxb scores 1.6 less 0.04 for the length", () => {
+    expect(fuzzyScore("ab", "xaxb")).toBeCloseTo(1.56, 10);
+    expect(fuzzyScore("zz", "xaxb")).toBeUndefined();
+    expect(fuzzyScore("", "xaxb")).toBe(0);
+  });
+});
+
+describe("rankFiles", () => {
+  it("ranks a file-name match above a directory-only match", () => {
+    const files = [{ path: "src/explain/notes.ts" }, { path: "src/components/Explorer.tsx" }];
+    const ranked = rankFiles(files, "exp");
+    expect(ranked.map((r) => r.file.path)).toEqual(["src/components/Explorer.tsx", "src/explain/notes.ts"]);
+  });
+
+  it("gives positions as offsets into the full path, for a name match and a path match", () => {
+    const files = [{ path: "src/explain/notes.ts" }, { path: "src/components/Explorer.tsx" }];
+    const ranked = rankFiles(files, "exp");
+    // "src/components/" is 15 characters, so the name's e, x, p sit at 15, 16, 17.
+    expect(ranked[0]!.positions).toEqual([15, 16, 17]);
+    // Only the path matches: e, x, p at 4, 5, 6 in "src/explain/notes.ts".
+    expect(ranked[1]!.positions).toEqual([4, 5, 6]);
+  });
+
+  it("drops files that match neither, and an empty or blank query gives nothing", () => {
+    const files = [{ path: "a/b.ts" }, { path: "readme.md" }];
+    expect(rankFiles(files, "qqq")).toEqual([]);
+    expect(rankFiles(files, "")).toEqual([]);
+    expect(rankFiles(files, "   ")).toEqual([]);
+  });
+
+  it("keeps the input order for equal scores and stops at the limit", () => {
+    const files = [{ path: "x/a.ts" }, { path: "y/a.ts" }, { path: "z/a.ts" }];
+    expect(rankFiles(files, "a", 2).map((r) => r.file.path)).toEqual(["x/a.ts", "y/a.ts"]);
   });
 });
 

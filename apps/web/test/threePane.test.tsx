@@ -123,4 +123,13 @@ describe("Explorer", () => {
     const html = renderToStaticMarkup(<Explorer id="p" tab="flow" scope="" files={files} />);
     expect(html).toContain('title="2 findings"');
   });
+
+  // The filter's typing and keys run in the browser; with no filter typed, the static markup is the tree and no result list.
+  it("shows the tree, the filter placeholder and no result list when nothing is typed", () => {
+    const html = renderToStaticMarkup(<Explorer id="p" tab="flow" scope="" files={files} />);
+    expect(html).toContain('placeholder="Filter 3 files"');
+    expect(html).toContain('class="dir"');
+    expect(html).not.toContain("fuzzy-results");
+    expect(html).not.toContain("Showing top");
+  });
 });
