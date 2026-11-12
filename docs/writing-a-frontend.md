@@ -142,7 +142,7 @@ When a dependency changes, dependents are re-extracted unless the dependency's *
 
 Each check returns `ok` and a list of problems, so a failing check says what to fix.
 
-Use it in the package's tests, the way `packages/frontend-bazel/test/frontend.test.ts` does:
+Use it in the package's tests, the way `packages/frontend/bazel/test/frontend.test.ts` does:
 
 ```ts
 import { runFrontendConformance } from "@insight/sdk";
@@ -158,7 +158,7 @@ const report = await runFrontendConformance({
 expect(report.checks.filter((c) => !c.ok)).toEqual([]);
 ```
 
-Add golden tests on a small fixture as well: the conformance kit checks shape, not whether your facts are right. `packages/frontend-cpp/test/golden` and `packages/frontend-bazel/test/golden` hold golden IR files for this.
+Add golden tests on a small fixture as well: the conformance kit checks shape, not whether your facts are right. `packages/frontend/cpp/test/golden` and `packages/frontend/bazel/test/golden` hold golden IR files for this.
 
 ## Check it on a real project
 

@@ -133,7 +133,7 @@ A run always checks the hash.
 
 ## Flow and call resolution by scope
 
-`summarizeScope(nodes, edges, scopeFiles)` in `packages/flow/src/scope.ts` turns a scope's cut
+`summarizeScope(nodes, edges, scopeFiles)` in `packages/lens/flow/src/scope.ts` turns a scope's cut
 document into its call flow. It is pure: it reads the nodes and edges that `scopeDoc` keeps and
 returns plain data, with nothing laid out. The server passes `scopeFiles`, the scope's
 `structure.file` nodes that are not stubs.
@@ -374,7 +374,7 @@ change, so a kept result is never stale. The errors are the same as the lens rou
 `GET /api/projects/:id/scope/exec?path=<scope>`
 
 The `ExecModel` of the scope, with `snapshot` and `kind` in front. `execModel` in
-`packages/flow/src/exec-model.ts` computes it from the calls, references, spawns and dispatches the
+`packages/lens/flow/src/exec-model.ts` computes it from the calls, references, spawns and dispatches the
 flow view reads. The shape is exact. The values are the `src` folder of the route test's fixture,
 which has no spawns, and `functions` is in the order the threads list them.
 

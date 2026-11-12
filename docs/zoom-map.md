@@ -9,9 +9,9 @@ The Flow tab draws the execution canvas of the scope: program, threads, coroutin
   place. A `mode` parameter from the old views is ignored.
 - Roots only: a checkbox above the canvas writes `roots=1`. Each grounded thread then shows only the functions it starts
   in, and the plain code flow shows only the functions nothing in the flow calls (`execRootsOnly` in
-  `packages/flow/src/scene-filter.ts`). The layout of that cut is solved in the browser.
+  `packages/lens/flow/src/scene-filter.ts`). The layout of that cut is solved in the browser.
 - A function's control-flow chart is drawn in an expansion beside its box, not inside it. The exec model gives each
-  function the chart's size (`ExecFunctionRef.chart`, from `layoutFunction` in `packages/flow/src/layout.ts`), and the
+  function the chart's size (`ExecFunctionRef.chart`, from `layoutFunction` in `packages/lens/flow/src/layout.ts`), and the
   scene node keeps it (`SceneNode.chart`). A function box with a chart is always compact: a box just wide enough for
   its name (`SceneNode.compact`, 36 px high), and that is the size it is laid out at. Opening an expansion never
   changes the layout, so the layout depends only on the scene and the containers open (`layoutCovers`, `layoutScene`).
@@ -74,7 +74,7 @@ The Flow tab draws the execution canvas of the scope: program, threads, coroutin
   stays for the CLI.
 
 The sections below are the history of the scope map and the entry view. Their code is removed, except the renderer
-(`ZoomMap`) and the scene engine in `packages/flow`, which the canvas uses.
+(`ZoomMap`) and the scene engine in `packages/lens/flow`, which the canvas uses.
 
 The zoom map replaces the Flow tab's hand-drawn call graph with one camera over the project. Zooming in moves from
 the project to a folder, from a folder to its files, from a file to its functions, and from a function to its
@@ -100,7 +100,7 @@ inside a worker the check takes over `onmessage` and exports nothing (`_Worker i
 
 ### M2: scene model (commit 415c3f5)
 
-The scene model is React-free and lives in `packages/flow/src/scope-map.ts`:
+The scene model is React-free and lives in `packages/lens/flow/src/scope-map.ts`:
 
 - `buildScopeTree` turns the per-scope flows into one tree of project, folder, file and function nodes.
 - `mergeCalls` merges calls across scopes into links, and `mapEdges` picks which links are drawn for an open set.
@@ -110,7 +110,7 @@ The scene model is React-free and lives in `packages/flow/src/scope-map.ts`:
   at least `COLLAPSE_PX` (200).
 - `fileBands` assigns each file a colour band.
 
-`packages/flow/src/zoom-layout.ts` builds the ELK graph per container (`layoutGraphOf`), keys it (`layoutKey`), reads
+`packages/lens/flow/src/zoom-layout.ts` builds the ELK graph per container (`layoutGraphOf`), keys it (`layoutKey`), reads
 the solved positions back (`readLayout`), places the scene (`placeScene`), and places the edges (`placeEdges`). Slots
 for expanded frames are reserved in the layout, so an opened container does not overlap its siblings. Stubs for
 calls that leave the open scope are dashed (`stubsFor`).
@@ -147,9 +147,9 @@ Replaced and removed: `CallGraph.tsx`, `flowGraph.ts` and `flowGraph.test.ts` ar
 
 ## Retired views
 
-The entry-point view (`EntryMap.tsx`, `packages/flow/src/entry-map.ts`) and the hierarchy map's source
+The entry-point view (`EntryMap.tsx`, `packages/lens/flow/src/entry-map.ts`) and the hierarchy map's source
 (`scopeSource.ts`, `ZoomStore.build` and its layout cache) are removed. The hierarchy's camera and open-set rules
-remain in `packages/flow/src/scope-map.ts` and `zoom-layout.ts`, which the scene engine and the tests still use.
+remain in `packages/lens/flow/src/scope-map.ts` and `zoom-layout.ts`, which the scene engine and the tests still use.
 The entry view's design, camera and checks are in the git history before the Phase 4 change.
 
 ## Verification
@@ -241,14 +241,14 @@ Milestone 3 changed these files:
   `apps/web/src/components/ScopeNote.tsx`, `apps/web/src/components/FlowChart.tsx`
 - `apps/web/src/styles.css`
 - `apps/web/src/flowTargets.ts` (new) with `apps/web/test/flowTargets.test.ts` (new)
-- `packages/flow/src/index.ts`, `packages/flow/src/zoom-layout.ts` (new) with
-  `packages/flow/test/zoom-layout.test.ts` (new)
+- `packages/lens/flow/src/index.ts`, `packages/lens/flow/src/zoom-layout.ts` (new) with
+  `packages/lens/flow/test/zoom-layout.test.ts` (new)
 - `packages/ir/src/schemas.ts` and `packages/ir/src/index.ts`: `schemaDir()` replaces a module-level
   `fileURLToPath` call, which crashed the browser bundle
 
 Milestones 2 and 3 changed these files:
 
-- `packages/flow/src/scope-map.ts` (new), `apps/web/src/zoom/scene.ts` (new), `apps/web/src/zoom/elk.ts` (new)
+- `packages/lens/flow/src/scope-map.ts` (new), `apps/web/src/zoom/scene.ts` (new), `apps/web/src/zoom/elk.ts` (new)
 
 Removed:
 
@@ -266,19 +266,19 @@ It is the Flow tab's view since Phase 4 (see `.claude/plans/execution-canvas.md`
 
 - `ZoomMap` reads a `MapSource` (`apps/web/src/zoom/source.ts`): `resolve`, `ensureFocus`, `build`, `url` and
   `focusOf`. The canvas's source is `ExecStore`.
-- The canvas uses the generic engine in `packages/flow/src/scene.ts` and `scene-layout.ts`: the whole scene is laid
+- The canvas uses the generic engine in `packages/lens/flow/src/scene.ts` and `scene-layout.ts`: the whole scene is laid
   out once, and zoom only changes which containers draw open, so nothing moves as the camera goes in.
-- The hierarchy is project ▸ process ▸ thread ▸ coroutine ▸ function (`buildExecScene`, `packages/flow/src/exec-scene.ts`).
+- The hierarchy is project ▸ process ▸ thread ▸ coroutine ▸ function (`buildExecScene`, `packages/lens/flow/src/exec-scene.ts`).
   The project is the root. A process box (kind `program`, labelled "Process" on screen) holds the threads of one build
   target or spawned process. A function is drawn once in each thread or coroutine it runs in.
 - Runtime boxes are drawn only where grounded. A thread is grounded when its existence rests on evidence in the IR
-  (`ExecThread.grounded` in `packages/flow/src/exec-model.ts`): every spawn is, and a main thread is when one of its
+  (`ExecThread.grounded` in `packages/lens/flow/src/exec-model.ts`): every spawn is, and a main thread is when one of its
   roots is a program's `main` or a function named `main`. A main thread inferred only from the scope's unreferenced
   entry functions is not grounded, and gets no thread box.
 - Plain code flow: the functions of an ungrounded thread, and the functions no thread runs, sit flat on the project, with
   their call edges and no wrapper box. The project's note says "Code flow, no runtime context found in this scope." when
   no thread is grounded. There are no file nodes and no "no runtime" group.
 - A container past `LAYERED_MAX_CHILDREN` (150) children is laid out in call columns (`callColumns` in
-  `packages/flow/src/scene-layout.ts`), not by ELK's layered algorithm, which takes seconds past a few hundred.
+  `packages/lens/flow/src/scene-layout.ts`), not by ELK's layered algorithm, which takes seconds past a few hundred.
 - The demo capture saves each scope's layout as `scope/<key>/exec-layout.json`; the page uses it when it covers the
   scene, else it solves in the elkjs worker.

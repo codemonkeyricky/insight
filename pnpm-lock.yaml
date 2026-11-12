@@ -35,7 +35,7 @@ importers:
         version: link:../../packages/core
       '@insight/flow':
         specifier: workspace:*
-        version: link:../../packages/flow
+        version: link:../../packages/lens/flow
       '@insight/ir':
         specifier: workspace:*
         version: link:../../packages/ir
@@ -94,7 +94,7 @@ importers:
     devDependencies:
       '@insight/flow':
         specifier: workspace:*
-        version: link:../../packages/flow
+        version: link:../../packages/lens/flow
       '@insight/lens-dependencies':
         specifier: workspace:*
         version: link:../../packages/lens/dependencies
@@ -181,39 +181,23 @@ importers:
         specifier: workspace:*
         version: link:../../apps/server
 
-  packages/flow:
+  packages/frontend/bazel:
     dependencies:
       '@insight/ir':
         specifier: workspace:*
-        version: link:../ir
+        version: link:../../ir
       '@insight/sdk':
         specifier: workspace:*
-        version: link:../sdk
-    devDependencies:
-      '@insight/frontend-typescript':
-        specifier: workspace:*
-        version: link:../frontend-typescript
-      elkjs:
-        specifier: 0.12.0
-        version: 0.12.0
+        version: link:../../sdk
 
-  packages/frontend-bazel:
+  packages/frontend/cpp:
     dependencies:
       '@insight/ir':
         specifier: workspace:*
-        version: link:../ir
+        version: link:../../ir
       '@insight/sdk':
         specifier: workspace:*
-        version: link:../sdk
-
-  packages/frontend-cpp:
-    dependencies:
-      '@insight/ir':
-        specifier: workspace:*
-        version: link:../ir
-      '@insight/sdk':
-        specifier: workspace:*
-        version: link:../sdk
+        version: link:../../sdk
       tree-sitter-cpp:
         specifier: 0.23.4
         version: 0.23.4
@@ -221,14 +205,14 @@ importers:
         specifier: 0.27.2
         version: 0.27.2
 
-  packages/frontend-typescript:
+  packages/frontend/typescript:
     dependencies:
       '@insight/ir':
         specifier: workspace:*
-        version: link:../ir
+        version: link:../../ir
       '@insight/sdk':
         specifier: workspace:*
-        version: link:../sdk
+        version: link:../../sdk
       typescript:
         specifier: 5.9.3
         version: 5.9.3
@@ -240,13 +224,13 @@ importers:
         version: link:../export
       '@insight/frontend-bazel':
         specifier: workspace:*
-        version: link:../frontend-bazel
+        version: link:../frontend/bazel
       '@insight/frontend-cpp':
         specifier: workspace:*
-        version: link:../frontend-cpp
+        version: link:../frontend/cpp
       '@insight/frontend-typescript':
         specifier: workspace:*
-        version: link:../frontend-typescript
+        version: link:../frontend/typescript
       '@insight/lens-calls':
         specifier: workspace:*
         version: link:../lens/calls
@@ -347,6 +331,22 @@ importers:
         specifier: workspace:*
         version: link:../../sdk
 
+  packages/lens/flow:
+    dependencies:
+      '@insight/ir':
+        specifier: workspace:*
+        version: link:../../ir
+      '@insight/sdk':
+        specifier: workspace:*
+        version: link:../../sdk
+    devDependencies:
+      '@insight/frontend-typescript':
+        specifier: workspace:*
+        version: link:../../frontend/typescript
+      elkjs:
+        specifier: 0.12.0
+        version: 0.12.0
+
   packages/lens/flow-complexity:
     dependencies:
       '@insight/ir':
@@ -369,7 +369,7 @@ importers:
     dependencies:
       '@insight/flow':
         specifier: workspace:*
-        version: link:../flow
+        version: link:../lens/flow
       '@insight/ir':
         specifier: workspace:*
         version: link:../ir
