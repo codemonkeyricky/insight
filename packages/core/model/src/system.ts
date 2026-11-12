@@ -70,7 +70,7 @@ const NOT_A_PACKAGE = /(^|\/)(node_modules|test|tests|fixtures|__fixtures__|samp
 
 const EMPTY_LABEL = "(scope)";
 
-interface Comp {
+export interface Comp {
   id: string;
   label: string;
   path: string;
@@ -428,7 +428,7 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
 }
 
 /** The component of one file in a scope: the outermost package strictly under the scope that holds it, else the scope's child. */
-function componentOf(file: string, scope: string, packages: string[], scopeIsFile: boolean): Comp {
+export function componentOf(file: string, scope: string, packages: string[], scopeIsFile: boolean): Comp {
   let pkg: string | undefined;
   for (const root of packages) {
     if (root === scope) continue;
@@ -446,7 +446,7 @@ function componentOf(file: string, scope: string, packages: string[], scopeIsFil
 }
 
 /** The package roots of the project: the folders of its package.json files, outside fixture folders. The root package is not a root here. */
-function packageRoots(files: string[]): string[] {
+export function packageRoots(files: string[]): string[] {
   const roots = new Set<string>();
   for (const file of files) {
     const slash = file.lastIndexOf("/");
