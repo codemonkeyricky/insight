@@ -33,6 +33,6 @@ export function PipelineView({ id, scope }: { id: string; scope: string }) {
 
 /** The diagram of one Pipeline model: its System-shaped layout with the column titles, and the Pipeline side panel. */
 export function PipelineDiagram({ id, pipeline, tests, onTests, stale = false }: { id: string; pipeline: PipelineModel; tests: boolean; onTests: (on: boolean) => void; stale?: boolean }) {
-  const { sys, titles } = useMemo(() => pipelineSystem(pipeline), [pipeline]);
-  return <SystemDiagram id={id} sys={sys} titles={titles} pipeline={pipeline} tests={tests} onTests={onTests} stale={stale} />;
+  const { sys, layout } = useMemo(() => pipelineSystem(pipeline), [pipeline]);
+  return <SystemDiagram id={id} sys={sys} layoutOptions={layout} pipeline={pipeline} tests={tests} onTests={onTests} stale={stale} />;
 }

@@ -1,5 +1,5 @@
 import type { PipelineModel } from "@insight/model";
-import { pipelineRows } from "../../arch/pipeline-layout";
+import { hostCalls, pipelineRows } from "../../arch/pipeline-layout";
 
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
 
@@ -9,6 +9,7 @@ const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n =
  */
 export function PipelineSummary({ pipeline }: { pipeline: PipelineModel }) {
   const rows = pipelineRows(pipeline);
+  const calls = hostCalls(pipeline);
   return (
     <section className="pipe-summary" aria-label="Pipeline">
       <div className="pipe-head">
@@ -22,6 +23,11 @@ export function PipelineSummary({ pipeline }: { pipeline: PipelineModel }) {
           {plural(pipeline.omitted, "component")} not in the pipeline · {plural(pipeline.dropped, "extension point")} of other hosts
         </span>
       </div>
+      {calls.length > 0 && (
+        <p className="small muted pipe-calls">
+          Host calls (inside the host's column, not drawn): <span className="mono">{calls.join(", ")}</span>
+        </p>
+      )}
       {rows.length === 0 ? (
         <p className="small muted">No extension points.</p>
       ) : (

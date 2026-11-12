@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import type { PipelineModel, Site, SystemEdge, SystemModel } from "@insight/model";
+import type { LayoutOptions } from "../../arch/system-layout";
 import { api } from "../../api";
 import { fileTarget, useCodeTarget } from "../../codeTarget";
 import { layoutSystem, pillText, routeText, type SysArrow, type SysBox, type SysLayout } from "../../arch/system-layout";
@@ -73,15 +74,15 @@ export interface SystemDiagramProps {
   tests: boolean;
   onTests: (on: boolean) => void;
   stale?: boolean;
-  /** Column titles, left to right (the Pipeline view's columns). Without them the System view's own titles are drawn. */
-  titles?: readonly string[];
+  /** Layout options: the Pipeline view's column titles and host note. */
+  layoutOptions?: LayoutOptions;
   /** The Pipeline model `sys` was converted from: its side panel shows when nothing is selected, and its reason fills the empty state. */
   pipeline?: PipelineModel;
 }
 
 /** The diagram, its toolbar and its side panel for one System model. Pure of data loading, so it renders from a model alone. */
-export function SystemDiagram({ id, sys, tests, onTests, stale = false, titles, pipeline }: SystemDiagramProps) {
-  const layout = useMemo(() => layoutSystem(sys, titles), [sys, titles]);
+export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOptions, pipeline }: SystemDiagramProps) {
+  const layout = useMemo(() => layoutSystem(sys, layoutOptions), [sys, layoutOptions]);
   const [sel, setSel] = useState<Selection>(null);
   const [hover, setHover] = useState<string | null>(null);
   const [cam, setCam] = useState<Camera>({ k: 1, x: 0, y: 0 });
@@ -312,7 +313,8 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, titles, 
                     .filter(Boolean)
                     .join(" ");
                   const pill = a.pill;
-                  const showPill = arrows.length <= PILL_LIMIT || on;
+                  // A Pipeline's pills show for the hovered or selected edges only; a large System graph does the same above PILL_LIMIT.
+                  const showPill = pipeline !== undefined ? on : arrows.length <= PILL_LIMIT || on;
                   return (
                     <g
                       key={a.id}
@@ -402,7 +404,7 @@ function Legend({ pipeline }: { pipeline: boolean }) {
           <span className="sw w" /> produces
         </li>
         <li>
-          <span className="sw" /> feeds, calls
+          <span className="sw" /> feeds
         </li>
       </ul>
     );

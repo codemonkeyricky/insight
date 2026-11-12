@@ -100,12 +100,15 @@ page by `api.getPipeline` like the System view, and drawn by the same `layoutSys
   producer: nothing in the model says which way the data flows, so the order is the assumption.
 - **Columns**, left to right: the source's implementers, the host with the components it calls exactly (`calls`, not candidates),
   then each sink's implementers. A component is drawn in the first column that claims it, so a point whose implementers are all
-  drawn in an earlier column gets no column (the panel says "shown under ..."). Column titles: `Frontends ×3` (the point's label and
-  its component count), `Host · indexer` for the host's package.
-- **Edges.** A source's implementer produces into the host (`produces`, labelled with the point's members: `detect, extract`), the
-  host feeds each sink's implementer (`feeds`, labelled with the members: `run`), and the host calls its middle components
-  (`calls`, or `calls ×N`). Produces edges are accent coloured, feeds and calls are plain. Pipeline edges are drawn solid even
-  though their confidence is inferred: they are the point of the view. The edge's sites are the call sites of the point.
+  drawn in an earlier column gets no column (the panel says "shown under ..."). Column titles: `Frontends ×3 · detect, extract` (the
+  point's label, its component count and its members), `Host · indexer` for the host's package.
+- **Edges.** A source's implementer produces into the host (`produces`, labelled with the point's members: `detect, extract`), and
+  the host feeds each sink's implementer (`feeds`, labelled with the members: `run`). Produces edges are accent coloured, feeds are
+  plain, and both are drawn solid even though their confidence is inferred: they are the point of the view. Verb pills show only
+  for the hovered or selected edge. The edge's sites are the call sites of the point.
+- **Same-column calls are not drawn.** The host's calls to components in its own column would loop back through a gap, so they
+  are not edges. They become a note on the host card (`uses ir, model, sdk`) and a "Host calls" line in the side panel
+  (`packages/ir, packages/sdk`, with `×N` for several sites). The model keeps them as `calls` edges.
 - **Side panel** with nothing selected (under the diagram): the driver ("Driven by runIndex"), each point in order with its role, its
   members and its component count, and the counts "N components not in the pipeline" (omitted) and "N extension points of other
   hosts" (dropped). Clicking an edge or a card works as in System: the sites open in the Code pane, and a function links to its
@@ -119,7 +122,7 @@ Limits:
   is drawn the same way, with its arrows in the order of the driver.
 - A point whose implementers are all drawn in earlier columns gets no column of its own, so it appears only in the panel.
 - Points are interface dispatch only. A pipeline made of plain function calls, or of routes, is not drawn.
-- The feeds labels of many sinks stack at the host's right side in a dense graph. Pick a narrower scope or hover a card to read them.
+- The feeds arrows of many sinks run close together at the host's right side in a dense graph. Hover a card to read its arrows.
 
 Tests: `apps/web/test/pipelineLayout.test.tsx` (column titles and order, verbs and styles, rows and the summary, the empty model and
 its message, the mode toggle) and `packages/core/model/test/pipeline*.test.ts`.

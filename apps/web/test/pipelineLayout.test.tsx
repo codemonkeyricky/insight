@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { PipelineEdge, PipelineModel, PipelinePoint, SystemComponent } from "@insight/model";
 import { ARCH_MODE_KEY, readArchMode, writeArchMode } from "../src/arch/mode";
 import { layoutSystem } from "../src/arch/system-layout";
-import { pipelineRows, pipelineSystem, pipelineTitles } from "../src/arch/pipeline-layout";
+import { hostCalls, pipelineRows, pipelineSystem, pipelineTitles } from "../src/arch/pipeline-layout";
 import { PipelineDiagram } from "../src/components/views/PipelineView";
 import { PipelineSummary } from "../src/components/views/PipelineSummary";
 import { ArchModeToggle } from "../src/components/views/ArchTab";
@@ -74,18 +74,18 @@ const EMPTY: PipelineModel = { scope: "packages/lens", points: [], columns: [], 
 
 describe("pipeline titles and columns", () => {
   it("names the columns: points by label and count, the host by its package", () => {
-    expect(pipelineTitles(sample())).toEqual(["Frontends ×3", "Host · indexer", "Lenses ×2"]);
-    const { titles, sys } = pipelineSystem(sample());
-    expect(titles).toEqual(["Frontends ×3", "Host · indexer", "Lenses ×2"]);
+    expect(pipelineTitles(sample())).toEqual(["Frontends ×3 · detect, extract", "Host · indexer", "Lenses ×2 · run"]);
+    const { layout, sys } = pipelineSystem(sample());
+    expect(layout.titles).toEqual(["Frontends ×3 · detect, extract", "Host · indexer", "Lenses ×2 · run"]);
     expect(sys.stages).toEqual(sample().columns);
     expect(sys.routes).toEqual([]);
     expect(sys.externals).toEqual([]);
   });
 
   it("lays the columns out left to right in the order Frontends, Host, Lenses", () => {
-    const { sys, titles } = pipelineSystem(sample());
-    const layout = layoutSystem(sys, titles);
-    expect(layout.columns.map((c) => c.title)).toEqual(["Frontends ×3", "Host · indexer", "Lenses ×2"]);
+    const { sys, layout: opts } = pipelineSystem(sample());
+    const layout = layoutSystem(sys, opts);
+    expect(layout.columns.map((c) => c.title)).toEqual(["Frontends ×3 · detect, extract", "Host · indexer", "Lenses ×2 · run"]);
     expect(layout.columns[0]?.x).toBeLessThan(layout.columns[1]?.x as number);
     expect(layout.columns[1]?.x).toBeLessThan(layout.columns[2]?.x as number);
     const colOf = (id: string) => layout.boxes.find((b) => b.id === id)?.column;
@@ -99,19 +99,34 @@ describe("pipeline titles and columns", () => {
 });
 
 describe("pipeline edges", () => {
-  it("keeps the verbs, and draws produces accent and solid, feeds and calls solid or dotted by confidence", () => {
+  it("keeps the verbs, and draws produces and feeds solid even when inferred", () => {
     const { sys } = pipelineSystem(sample());
     const layout = layoutSystem(sys);
     const verbs = new Set(layout.arrows.map((a) => a.edge.verb));
-    expect([...verbs].sort()).toEqual(["calls", "feeds", "produces"]);
+    expect([...verbs].sort()).toEqual(["feeds", "produces"]);
     const produces = layout.arrows.filter((a) => a.edge.verb === "produces");
     expect(produces).toHaveLength(3);
     // The pipeline's produces and feeds edges are facts of the view, so they are solid even when inferred.
     expect(produces.every((a) => !a.inferred && !a.dashed)).toBe(true);
     expect(layout.arrows.filter((a) => a.edge.verb === "feeds").every((a) => !a.inferred)).toBe(true);
-    // A call that is only a candidate keeps the dotted, faded style.
-    expect(layout.arrows.find((a) => a.edge.id === `${H}>calls>${SDK}`)?.inferred).toBe(true);
-    expect(layout.arrows.find((a) => a.edge.id === `${H}>calls>${IR}`)?.inferred).toBe(false);
+  });
+
+  it("draws no edge whose two ends share a column, and folds the host's calls into its note", () => {
+    const { sys, layout: opts } = pipelineSystem(sample());
+    expect(sys.edges.some((e) => e.verb === "calls")).toBe(false);
+    const layout = layoutSystem(sys, opts);
+    for (const a of layout.arrows) expect(a.from === H || a.to === H).toBe(true);
+    const host = layout.boxes.find((b) => b.id === H);
+    expect(host?.chips).toEqual(["uses ir, sdk"]);
+    // The model keeps the calls; only the drawing leaves them out.
+    expect(sample().edges.filter((e) => e.verb === "calls")).toHaveLength(2);
+  });
+
+  it("lists the host's same-column calls in the summary", () => {
+    expect(hostCalls(sample())).toEqual(["packages/ir", "packages/sdk"]);
+    const html = renderToStaticMarkup(<PipelineSummary pipeline={sample()} />);
+    expect(html).toContain("Host calls");
+    expect(html).toContain("packages/ir, packages/sdk");
   });
 
   it("draws the produces arrows from the frontends into the host, and the feeds arrows from the host into the lenses", () => {
@@ -147,11 +162,11 @@ describe("pipeline rows", () => {
 
 describe("pipeline empty state", () => {
   it("converts to an empty System model and draws nothing", () => {
-    const { sys, titles } = pipelineSystem(EMPTY);
+    const { sys, layout } = pipelineSystem(EMPTY);
     expect(sys.components).toEqual([]);
     expect(sys.edges).toEqual([]);
-    expect(titles).toEqual([]);
-    expect(layoutSystem(sys, titles).boxes).toEqual([]);
+    expect(layout.titles).toEqual([]);
+    expect(layoutSystem(sys, layout).boxes).toEqual([]);
   });
 
   it("shows the parent-scope message when the model gives a reason", () => {
@@ -162,9 +177,9 @@ describe("pipeline empty state", () => {
   it("draws the pipeline legend and the summary panel with nothing selected", () => {
     const html = renderToStaticMarkup(<PipelineDiagram id="p" pipeline={sample()} tests={false} onTests={() => {}} />);
     expect(html).toContain("produces");
-    expect(html).toContain("Frontends ×3");
+    expect(html).toContain("Frontends ×3 · detect, extract");
     expect(html).toContain("Host · indexer");
-    expect(html).toContain("Lenses ×2");
+    expect(html).toContain("Lenses ×2 · run");
   });
 });
 
