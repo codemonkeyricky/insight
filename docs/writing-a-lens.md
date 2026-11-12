@@ -2,7 +2,7 @@
 
 A lens reads the IR and reports findings and views. It sees only `IRView`, never a parser object, and it never reads source files directly. Frontends make the IR (see [writing-a-frontend.md](writing-a-frontend.md)); lenses analyse it.
 
-The contract is the `Lens` interface in `packages/sdk/src/types.ts`:
+The contract is the `Lens` interface in `packages/core/sdk/src/types.ts`:
 
 ```ts
 interface Lens {
@@ -171,7 +171,7 @@ Note that a function with no callers may still be an entry point. A lens that re
 
 ## Testing
 
-Build IR in the test with `irFixtures` from `@insight/sdk`, not by running a frontend:
+Build IR in the test with the fixtures at `@insight/sdk/testing`, not by running a frontend. Import them as a namespace, `import * as irFixtures from "@insight/sdk/testing"`:
 
 - `irFixtures.span(file, startLine, startCol, endLine, endCol)`
 - `irFixtures.node(id, facet, kind, { attrs, parent, span, confidence })`
@@ -185,5 +185,5 @@ For the end to end check, index a real project with the CLI and open the lens pa
 
 ```sh
 pnpm -r build
-node packages/cli/dist/cli.js index /path/to/project
+node apps/cli/dist/cli.js index /path/to/project
 ```

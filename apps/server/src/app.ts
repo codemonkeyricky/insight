@@ -21,7 +21,7 @@ import {
   readReview,
   setDecision,
   updateAnnotation,
-} from "@insight/core";
+} from "@insight/indexer";
 import type { ProjectRoot } from "@insight/sdk";
 import {
   allFindings,

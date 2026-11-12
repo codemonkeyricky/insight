@@ -1,0 +1,48 @@
+{
+  "name": "@insight/hosted",
+  "version": "0.1.0",
+  "description": "Insight hosted indexer: the POST /api/index and GET /api/health handlers, the storage adapters (R2, local folder) and the GitHub tarball fetch",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./vercel": {
+      "types": "./dist/vercel.d.ts",
+      "import": "./dist/vercel.js"
+    },
+    "./vercel-node": {
+      "types": "./dist/vercel-node.d.ts",
+      "import": "./dist/vercel-node.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@insight/export": "workspace:*",
+    "@insight/frontend-bazel": "workspace:*",
+    "@insight/frontend-cmake": "workspace:*",
+    "@insight/frontend-cpp": "workspace:*",
+    "@insight/frontend-typescript": "workspace:*",
+    "@insight/lens-calls": "workspace:*",
+    "@insight/lens-concurrency-map": "workspace:*",
+    "@insight/lens-dependencies": "workspace:*",
+    "@insight/lens-effects": "workspace:*",
+    "@insight/lens-execution": "workspace:*",
+    "@insight/lens-flow-complexity": "workspace:*",
+    "@insight/lens-lock-order": "workspace:*",
+    "@vercel/functions": "^3.11.1",
+    "aws4fetch": "^1.0.20",
+    "tar": "^7.5.22"
+  }
+}

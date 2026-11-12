@@ -1,4 +1,4 @@
-import type { ArchEdge, ArchModel, ArchPackage } from "@insight/lens-dependencies";
+import type { ArchEdge, ArchModel, ArchPackage } from "@insight/model";
 
 // Pure geometry for the Arch tab. The view draws what archLayout returns and keeps no sizes of its own.
 

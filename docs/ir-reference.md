@@ -6,7 +6,7 @@ The IR is the only thing frontends and lenses share. It is JSON, described by JS
 - `{"edge": IREdge}`
 - `{"finding": IRFinding}`
 
-The schemas live in `packages/ir/schema/`. `core.schema.json` holds the record shapes, `facets/<facet>.schema.json` holds the attribute schemas for each facet's base kinds, `core.kinds.json` declares the base kinds, and `kind-definition.schema.json` is the format for kinds declared by plugins.
+The schemas live in `packages/core/ir/schema/`. `core.schema.json` holds the record shapes, `facets/<facet>.schema.json` holds the attribute schemas for each facet's base kinds, `core.kinds.json` declares the base kinds, and `kind-definition.schema.json` is the format for kinds declared by plugins.
 
 ## Records
 

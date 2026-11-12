@@ -8,7 +8,7 @@ package it draws that scope, as described under "Scoped view" below.
 
 ### Data flow
 
-- The model is built by `archModel(view)` in `packages/lens/dependencies/src/arch.ts`. It reads an `IRView` over the whole
+- The model is built by `archModel(view)` in `packages/core/model/src/arch/arch.ts`. It reads an `IRView` over the whole
   snapshot and returns plain JSON: `layers`, `packages`, `edges`, `unresolved`, `externals` and `violations`.
 - The server builds it in `scopeArchOf` (`apps/server/src/reader.ts`) and serves it at
   `GET /api/projects/:id/scope/arch?path=`. The path is required and names a scope as the other scope routes do. The
@@ -22,14 +22,14 @@ package it draws that scope, as described under "Scoped view" below.
 ### What the diagram shows
 
 - Columns, left to right, one per layer in `model.layers` that holds packages. The layers come from the path of each
-  package (`defaultLayerOf`: `frontend-*` or `frontend/*` under `packages/` or `plugins/`, `packages/lens/*` (and `lens-*`, except the library `packages/lens/flow`), `ir`/`sdk`/`core`, and `apps/*`), and
+  package (`defaultLayerOf`: `frontend-*` or `frontend/*` under `packages/` or `plugins/`, `packages/lens/*` (and `lens-*`), `packages/core/*` (the kernel group: ir, sdk, model, flow, indexer; layer `ir`), and `apps/*`), and
   any other package is in "other".
 - Packages come from `package.json` files among the indexed files, or from `structure.package` nodes when a frontend
   emits them. A file belongs to its nearest package root. Each box shows the file count.
 - An arrow for each pair of packages with at least one import or call between them. The label is the import count, or
   the call count with a "c" when the IR saw no import. The width grows with the count, from 1 to 4 px. A dashed arrow
   means the weakest confidence of its evidence is not exact.
-- Workspace imports. The IR cannot resolve `@insight/core` (it points into the package's build output), so such an
+- Workspace imports. The IR cannot resolve `@insight/indexer` (it points into the package's build output), so such an
   import is matched by name: a scoped specifier whose name is exactly one package's directory name becomes an import
   edge to that package, with confidence "inferred" unless calls already link the two. Any other bare specifier (an npm
   package or a Node built-in) is an external dependency, counted per package and listed when the package is selected.

@@ -2,7 +2,7 @@
 
 A frontend turns one language or build system into IR (see [ir-reference.md](ir-reference.md)). It declares which facets it fills, reads project files, and emits NDJSON-shaped records. It never imports a lens, and lenses never see parser objects.
 
-The contract is the `Frontend` interface in `packages/sdk/src/types.ts`:
+The contract is the `Frontend` interface in `packages/core/sdk/src/types.ts`:
 
 ```ts
 interface Frontend {
@@ -18,9 +18,9 @@ interface Frontend {
 
 ## Where it lives
 
-Frontends are plugins. The loader (`packages/core/src/loader.ts`) finds every folder that has an `insight-plugin.json` in:
+Frontends are plugins. The loader (`packages/core/indexer/src/loader.ts`) finds every folder that has an `insight-plugin.json` in:
 
-- `packages/*` and `plugins/*` in the repository (`plugins/frontend-cmake` is an example of the second),
+- `packages/*` in the repository, with the group folders looked into one level (`packages/frontend/*` and `packages/lens/*`; the cmake frontend is `packages/frontend/cmake`), and `plugins/*` at the repository root if that folder exists,
 - `~/.insight/plugins`, and
 - `.insight/plugins` inside the project being indexed (scanned last).
 
@@ -96,7 +96,7 @@ If one file throws, only that file fails. The run records it under `failed` and 
 Records are `{ node }`, `{ edge }` or `{ finding }`. The full shapes are in [ir-reference.md](ir-reference.md). The rules that matter most:
 
 - **Ids are stable.** Derive a node id from the file and the name, for example `src/a.ex#render`. The review checklist, annotations and diffs all key on node ids and finding ids. Nothing in an id should depend on a line number that moves when someone edits above it. (The complexity lens's `@line` ids are the known exception, and they go stale when lines move.)
-- **Attributes match the facet schema.** Every `attrs` object is checked against `packages/ir/schema/facets/<facet>.schema.json`. A `structure.function` needs a non-empty `name`, for example. A record that breaks the schema fails IR validation for the run.
+- **Attributes match the facet schema.** Every `attrs` object is checked against `packages/core/ir/schema/facets/<facet>.schema.json`. A `structure.function` needs a non-empty `name`, for example. A record that breaks the schema fails IR validation for the run.
 - **Containment uses `parent`.** Package > module > file > function > block. A child's `parent` is the id of the node that contains it.
 - **Spans are zero-based.** `span.start` and `span.end` are `[line, column]` from 0. The web app shows them 1-based.
 - **Provenance is honest.** Use `exact` for what the parser proved, `inferred` for what follows from a rule, `heuristic` for a guess. A lens can show the confidence to the user.
@@ -166,7 +166,7 @@ After the package builds, index a project and look at the coverage table and the
 
 ```sh
 pnpm -r build
-node packages/cli/dist/cli.js index /path/to/project
+node apps/cli/dist/cli.js index /path/to/project
 ```
 
 Coverage shows files scanned, files with records and files with errors for each facet. Parse errors and frontend findings are listed under "Index" on the project overview, not under a lens. Messages a frontend logs with `ctx.log` go to the run log.

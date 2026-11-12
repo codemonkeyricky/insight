@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ArchFile, ArchFileImport, ArchModel } from "@insight/lens-dependencies";
+import type { ArchFile, ArchFileImport, ArchModel } from "@insight/model";
 import { aggregateFolderEdges, chooseFolderDepth, diagramModel, folderOf, folderView } from "../src/arch/folders";
 import { ARCH_LOOP_ROOM, archLayout, arrowWidth } from "../src/arch/layout";
 

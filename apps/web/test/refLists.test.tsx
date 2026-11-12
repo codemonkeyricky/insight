@@ -22,13 +22,13 @@ const row = (over: Partial<RefRow>): RefRow => ({
 
 const refs: Refs = {
   calledBy: [
-    row({ id: "packages/model/src/scope.ts#inScope", name: "inScope", file: "packages/model/src/scope.ts", line: 71 }),
+    row({ id: "packages/core/model/src/scope.ts#inScope", name: "inScope", file: "packages/core/model/src/scope.ts", line: 71 }),
     row({ id: "packages/core/test/scope.test.ts#caller", name: "caller", file: "packages/core/test/scope.test.ts", line: 9, inScope: false }),
   ],
   calls: [],
 };
 
-const html = renderToStaticMarkup(<RefLists id="p1" scope="packages/model" roots={false} refs={refs} />);
+const html = renderToStaticMarkup(<RefLists id="p1" scope="packages/core/model" roots={false} refs={refs} />);
 
 describe("reverse reference lists", () => {
   it("renders each function row as one link with the ref-row class", () => {
@@ -40,7 +40,7 @@ describe("reverse reference lists", () => {
     const href = html.match(/<a class="ref-row" href="([^"]+)"/)?.[1]?.replace(/&amp;/g, "&");
     expect(href).toBeDefined();
     const route = parseRoute(href ?? "");
-    expect(route).toMatchObject({ name: "workspace", tab: "flow", scope: "packages/model", fn: "packages/model/src/scope.ts#inScope" });
+    expect(route).toMatchObject({ name: "workspace", tab: "flow", scope: "packages/core/model", fn: "packages/core/model/src/scope.ts#inScope" });
   });
 
   it("an outside row switches the scope to its file and selects its function", () => {
@@ -58,7 +58,7 @@ describe("reverse reference lists", () => {
 describe("reverse reference lists: message edges", () => {
   it("labels a dispatch row with how message as message", () => {
     const msg = renderToStaticMarkup(
-      <RefLists id="p1" scope="packages/model" roots={false} refs={{ calledBy: [], calls: [row({ kind: "dispatch", how: "message", name: "onPageMsg" })] }} />,
+      <RefLists id="p1" scope="packages/core/model" roots={false} refs={{ calledBy: [], calls: [row({ kind: "dispatch", how: "message", name: "onPageMsg" })] }} />,
     );
     expect(msg).toContain('<span class="kind dispatch">message</span>');
   });

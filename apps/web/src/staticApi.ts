@@ -1,5 +1,5 @@
 // The static builds have no server. This module answers the same calls as `api` from the JSON files an export wrote:
-// the demo (scripts/capture-demo.mjs, into /demo/: one fixed project) and each hosted index (packages/export, under the
+// the demo (scripts/capture-demo.mjs, into /demo/: one fixed project) and each hosted index (apps/export, under the
 // storage base). makeStaticApi takes where a project's files live; the demo and hostedApi.ts each supply one.
 import { ApiError } from "./apiError";
 import type {

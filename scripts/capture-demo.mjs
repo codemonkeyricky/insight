@@ -22,10 +22,10 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildServer, loadSnapshot, resolveSnapshot } from "../apps/server/dist/index.js";
-import { projectPaths } from "../packages/core/dist/index.js";
-import { edgeTargets } from "../packages/sdk/dist/index.js";
-import { buildExecScene, buildFileFlow, execDefaultOpen, layoutScene, summarizeFlows } from "../packages/lens/flow/dist/index.js";
-import { serializeModel } from "../packages/model/dist/index.js";
+import { projectPaths } from "../packages/core/indexer/dist/index.js";
+import { edgeTargets } from "../packages/core/sdk/dist/index.js";
+import { buildExecScene, buildFileFlow, execDefaultOpen, layoutScene, summarizeFlows } from "../packages/core/flow/dist/index.js";
+import { serializeModel } from "../packages/core/model/dist/index.js";
 import { scopeKey } from "../apps/web/src/scopeKey.ts";
 import { resultHasContent } from "../apps/web/src/scopeLenses.ts";
 // The same functions the browser runs to answer /scope/flow and /scope/exec, so the layouts match what the page would solve.
@@ -40,7 +40,7 @@ const MAX_FILE_BYTES = 256 * 1024;
  * too. The project scope always keeps every lens.
  */
 const MAX_DEMO_BYTES = 40 * 1024 * 1024;
-// lens-execution is not here: the execution canvas replaced its tab, and its links redirect to the flow tab.
+// The budget picks lenses by id, since a manifest has no property saying which ones a demo keeps on file scopes.
 const KEEP_FILE_LENSES = new Set(["lens-flow-complexity"]);
 /** How far the budget trims: 0 keeps everything, 1 trims file scopes, 2 trims folder scopes too. */
 const TRIM_LEVELS = ["none", "file scopes", "file and folder scopes"];

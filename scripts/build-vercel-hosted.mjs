@@ -7,7 +7,7 @@
 //                                                      /api/auth/*, /api/private/* (self-contained Node bundle; the route comes from ?route=)
 //
 // The Function holds node_modules from `pnpm deploy --prod` (hoisted linker, so no symlinks), the hosted dist, the built-in
-// plugins under packages/ and plugins/, and a pnpm-workspace.yaml marker at its root. Core finds built-in plugins by walking
+// plugins under packages/ (frontends and lenses; cmake is packages/frontend/cmake), and a pnpm-workspace.yaml marker at its root. Core finds built-in plugins by walking
 // up from its own file to pnpm-workspace.yaml, so the marker makes that root the bundle, not the repository.
 // better-sqlite3 is dropped: the hosted export never opens index.sqlite (writeIndexDb is false), and it is imported lazily.
 //
@@ -22,7 +22,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const FUNCTION_LIMIT_BYTES = 250 * 1024 * 1024;
-/** One Function serves every API route (see packages/hosted/src/vercel.ts). */
+/** One Function serves every API route (see apps/hosted/src/vercel.ts). */
 const FUNCTIONS = [{ dir: "functions/api/index.func" }];
 /** The API paths the rewrites send to the Function, each with its route name. */
 const API_ROUTES = [
@@ -70,7 +70,7 @@ function treeSize(dir) {
 /** The workspace packages that carry an insight-plugin.json: the built-in plugins, found the way core finds them. */
 function builtinPlugins() {
   const found = [];
-  for (const base of ["packages", "plugins"]) {
+  for (const base of ["packages"]) {
     const root = join(repo, base);
     if (!existsSync(root)) continue;
     // A group folder (no manifest, no package.json), such as packages/lens/, holds plugins one level down.
@@ -129,21 +129,16 @@ try {
     cpSync(join(deployDir, "dist"), join(dest, "dist"), { recursive: true });
     cpSync(join(deployDir, "package.json"), join(dest, "package.json"));
 
-    // Built-in plugins: packages/<dir> from the deployed copy (their dependencies resolve from node_modules above),
-    // plugins/<dir> straight from the repository (no dependencies).
+    // Built-in plugins: packages/<dir> from the deployed copy (their dependencies resolve from node_modules above).
     for (const plugin of plugins) {
       const target = join(dest, plugin.base, plugin.name);
       mkdirSync(dirname(target), { recursive: true });
-      if (plugin.base === "packages") {
-        const pkg = JSON.parse(readFileSync(join(plugin.dir, "package.json"), "utf8")).name;
-        const source = join(modules, ...pkg.split("/"));
-        if (!existsSync(source)) fail(`${pkg} is not in the deployed node_modules; add it to packages/hosted dependencies`);
-        cpSync(source, target, { recursive: true, dereference: true });
-      } else {
-        cpSync(plugin.dir, target, { recursive: true, dereference: true });
-      }
+      const pkg = JSON.parse(readFileSync(join(plugin.dir, "package.json"), "utf8")).name;
+      const source = join(modules, ...pkg.split("/"));
+      if (!existsSync(source)) fail(`${pkg} is not in the deployed node_modules; add it to apps/hosted dependencies`);
+      cpSync(source, target, { recursive: true, dereference: true });
     }
-    writeFileSync(join(dest, "pnpm-workspace.yaml"), "# Marks this bundle as the root for built-in plugin discovery (packages/, plugins/).\npackages: []\n");
+    writeFileSync(join(dest, "pnpm-workspace.yaml"), "# Marks this bundle as the root for built-in plugin discovery (packages/).\npackages: []\n");
 
     writeFileSync(
       join(dest, "handler.mjs"),

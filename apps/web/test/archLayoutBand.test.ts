@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ArchModel, ArchPackage } from "@insight/lens-dependencies";
+import type { ArchModel, ArchPackage } from "@insight/model";
 import { ARCH_BOX_H, ARCH_BOX_W, ARCH_COL_GAP, ARCH_HEADER_H, ARCH_PAD, archLayout, arrowKey } from "../src/arch/layout.js";
 
 const pkg = (id: string, layer: string): ArchPackage => ({ id, name: id, path: id, layer, fileCount: 1 });

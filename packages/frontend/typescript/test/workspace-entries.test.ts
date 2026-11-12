@@ -158,24 +158,24 @@ describe("program entries from workspace packages", () => {
   });
 
   it("maps a build output inside a nested path to its source, and leaves out a target with no source", () => {
-    const rels = new Set(["packages/cli/src/cli.ts", "src/gen.ts"]);
-    expect(packageTargetSource("packages/cli", "./dist/cli.js", rels)).toBe("packages/cli/src/cli.ts");
-    expect(packageTargetSource("", "packages/cli/dist/cli.js", rels)).toBe("packages/cli/src/cli.ts");
+    const rels = new Set(["apps/cli/src/cli.ts", "src/gen.ts"]);
+    expect(packageTargetSource("apps/cli", "./dist/cli.js", rels)).toBe("apps/cli/src/cli.ts");
+    expect(packageTargetSource("", "apps/cli/dist/cli.js", rels)).toBe("apps/cli/src/cli.ts");
     expect(packageTargetSource("", "src/gen.ts", rels)).toBe("src/gen.ts");
-    expect(packageTargetSource("packages/cli", "./dist/missing.js", rels)).toBeUndefined();
+    expect(packageTargetSource("apps/cli", "./dist/missing.js", rels)).toBeUndefined();
   });
 
   it("makes the bin and script programs of every workspace package, and no library main", () => {
     const manifests = new Map<string, string>([
-      ["packages/cli/package.json", json({ name: "@scope/cli", bin: { scope: "./dist/cli.js" } })],
-      ["packages/cli/src/cli.ts", ""],
+      ["apps/cli/package.json", json({ name: "@scope/cli", bin: { scope: "./dist/cli.js" } })],
+      ["apps/cli/src/cli.ts", ""],
       ["packages/server/package.json", json({ name: "@scope/server", scripts: { start: "node dist/main.js", test: "vitest run" } })],
       ["packages/server/src/main.ts", ""],
       ["packages/lib/package.json", json({ name: "@scope/lib", main: "dist/index.js" })],
       ["packages/lib/src/index.ts", ""],
       ["packages/lib/test/fixtures/x/package.json", json({ name: "@scope/fixture", bin: "./dist/f.js" })],
     ]);
-    const rels = new Set(["packages/cli/src/cli.ts", "packages/server/src/main.ts", "packages/lib/src/index.ts"]);
-    expect([...workspaceProgramFiles(manifests, rels)].sort()).toEqual(["packages/cli/src/cli.ts", "packages/server/src/main.ts"]);
+    const rels = new Set(["apps/cli/src/cli.ts", "packages/server/src/main.ts", "packages/lib/src/index.ts"]);
+    expect([...workspaceProgramFiles(manifests, rels)].sort()).toEqual(["apps/cli/src/cli.ts", "packages/server/src/main.ts"]);
   });
 });

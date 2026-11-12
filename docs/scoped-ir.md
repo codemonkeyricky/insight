@@ -28,7 +28,7 @@ A node belongs to a file when:
 
 A node with no file at all (for example some packaging nodes) is local to the project scope only.
 
-Scope strings are checked by `normalizeScope` in `packages/core/src/scope.ts`. Backslashes become
+Scope strings are checked by `normalizeScope` in `packages/core/indexer/src/scope.ts`. Backslashes become
 forward slashes, `.` and empty segments are dropped, and a trailing slash is removed. An absolute
 path, or any `..` segment, is refused with an input error.
 
@@ -108,7 +108,7 @@ no spawns) and of lens-dependencies (the `modules` and `externalModules` metrics
 
 ## Caching
 
-`runLensOnScope` (in `packages/core/src/scoped-analysis.ts`) runs one lens on one scope. It first
+`runLensOnScope` (in `packages/core/indexer/src/scoped-analysis.ts`) runs one lens on one scope. It first
 runs the lenses named in the target's `after` list, each through the same cache.
 
 Only `ok` results are stored, under the project's analysis folder:
@@ -133,7 +133,7 @@ A run always checks the hash.
 
 ## Flow and call resolution by scope
 
-`summarizeScope(nodes, edges, scopeFiles)` in `packages/lens/flow/src/scope.ts` turns a scope's cut
+`summarizeScope(nodes, edges, scopeFiles)` in `packages/core/flow/src/scope.ts` turns a scope's cut
 document into its call flow. It is pure: it reads the nodes and edges that `scopeDoc` keeps and
 returns plain data, with nothing laid out. The server passes `scopeFiles`, the scope's
 `structure.file` nodes that are not stubs.
@@ -178,7 +178,7 @@ module-level code.
 
 ## Project model
 
-One snapshot has one whole-project model, `buildProjectModel(doc)` in `packages/model` (`@insight/model`).
+One snapshot has one whole-project model, `buildProjectModel(doc)` in `packages/core/model` (`@insight/model`).
 It is pure TypeScript with no `node:` imports, and it depends only on `@insight/ir` and `@insight/sdk`. The
 server builds it once per loaded snapshot (`LoadedSnapshot.model`, built on first use). A scope is a view of
 that model, not a cut that is recomputed per request.
@@ -194,13 +194,13 @@ that model, not a cut that is recomputed per request.
 - `out` indexes relations by `from`, and `in` by `to`. `in` is the reverse-reference index: who calls or references
   a function.
 
-A scope is a view of the model: `scopeView(model, scope)` (`packages/model/src/view.ts`) returns
+A scope is a view of the model: `scopeView(model, scope)` (`packages/core/model/src/view.ts`) returns
 - `kind`: `project`, `folder` or `file`, and `has(id)`, which tells whether a node is in the scope;
 - `files()` and `functions()`, the scope's files and functions;
 - `callers(id)` and `callees(id)`, the relations into and out of `id` across the whole project. Each one carries
   `inScope`, which says whether the other end is in the view. A project-wide "called by" list is `callers` in the
   root view, and in a folder view it splits into "in this scope" and "outside this scope";
-- `toDoc(opts)`, the scoped IR with the same stub and finding rules as before. `scopeDoc` in `@insight/core` is
+- `toDoc(opts)`, the scoped IR with the same stub and finding rules as before. `scopeDoc` in `@insight/indexer` is
   now `scopeView(buildProjectModel(doc), scope).toDoc(opts)`, and its tests are unchanged.
 
 For example, with `src/a.ts` (function `a`) calling `lib/b.ts` (function `b`): in view `src`,
@@ -212,7 +212,7 @@ root view both are `inScope: true`.
 
 ### Serialized model and client-side views
 
-`serializeModel(model, snapshot)` and `loadModel(json)` (`packages/model/src/serialize.ts`) move the model
+`serializeModel(model, snapshot)` and `loadModel(json)` (`packages/core/model/src/serialize.ts`) move the model
 across the wire. The file is `{ schema, snapshot, doc: { nodes, edges, findings } }` with `schema` set to
 `MODEL_SCHEMA` (1). The IR document is the source of truth, so the file holds no derived index: `loadModel`
 checks the schema and calls `buildProjectModel` again. A different schema number, or a missing `doc` array, throws.
@@ -374,7 +374,7 @@ change, so a kept result is never stale. The errors are the same as the lens rou
 `GET /api/projects/:id/scope/exec?path=<scope>`
 
 The `ExecModel` of the scope, with `snapshot` and `kind` in front. `execModel` in
-`packages/lens/flow/src/exec-model.ts` computes it from the calls, references, spawns and dispatches the
+`packages/core/flow/src/exec-model.ts` computes it from the calls, references, spawns and dispatches the
 flow view reads. The shape is exact. The values are the `src` folder of the route test's fixture,
 which has no spawns, and `functions` is in the order the threads list them.
 
@@ -485,7 +485,7 @@ model covers the whole snapshot, so the same response serves every scope.
 `GET /api/projects/:id/refs?id=<node>&path=<scope>&snapshot=<id>` lists what refers to a node and what it
 refers to. The result is `{ "snapshot", "scope", "kind", "id", "calledBy": RefRow[], "calls": RefRow[] }`.
 `calledBy` holds the nodes with a relation into `id`, and `calls` the nodes `id` has a relation to. It is
-computed by `refsOf` in `packages/model/src/refs.ts` from the project model, not from the scope's cut, so
+computed by `refsOf` in `packages/core/model/src/refs.ts` from the project model, not from the scope's cut, so
 callers outside the scope are listed.
 
 Each row has `id`, `name`, `file`, `line`, `isFunction`, `kind`, `candidate`, `count`, `inScope`, and `how`

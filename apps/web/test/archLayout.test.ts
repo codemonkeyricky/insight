@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ArchModel } from "@insight/lens-dependencies";
+import type { ArchModel } from "@insight/model";
 import { ARCH_PAD, arrowKey, arrowsOf, arrowWidth, archLayout } from "../src/arch/layout.js";
 
 const LAYERS = ["project", "frontend", "ir", "lens", "app"];
@@ -9,15 +9,15 @@ const model: ArchModel = {
   layers: LAYERS,
   packages: [
     { id: "apps/web", name: "web", path: "apps/web", layer: "app", fileCount: 10 },
-    { id: "packages/ir", name: "ir", path: "packages/ir", layer: "ir", fileCount: 5 },
+    { id: "packages/core/ir", name: "ir", path: "packages/core/ir", layer: "ir", fileCount: 5 },
     { id: "packages/lens-a", name: "lens-a", path: "packages/lens-a", layer: "lens", fileCount: 3 },
     { id: "packages/lens-b", name: "lens-b", path: "packages/lens-b", layer: "lens", fileCount: 2 },
     { id: "packages/frontend-x", name: "frontend-x", path: "packages/frontend-x", layer: "frontend", fileCount: 4 },
   ],
   edges: [
-    { from: "apps/web", to: "packages/ir", imports: 4, calls: 0, confidence: "exact", sites: [] },
-    { from: "packages/lens-a", to: "packages/ir", imports: 1, calls: 2, confidence: "inferred", sites: [] },
-    { from: "packages/ir", to: "packages/lens-a", imports: 8, calls: 0, confidence: "exact", sites: [] },
+    { from: "apps/web", to: "packages/core/ir", imports: 4, calls: 0, confidence: "exact", sites: [] },
+    { from: "packages/lens-a", to: "packages/core/ir", imports: 1, calls: 2, confidence: "inferred", sites: [] },
+    { from: "packages/core/ir", to: "packages/lens-a", imports: 8, calls: 0, confidence: "exact", sites: [] },
     { from: "packages/lens-a", to: "packages/lens-b", imports: 2, calls: 0, confidence: "exact", sites: [] },
     { from: "packages/frontend-x", to: "packages/lens-a", imports: 1, calls: 0, confidence: "exact", sites: [] },
   ],
@@ -64,22 +64,22 @@ describe("archLayout", () => {
   it("gives one arrow per edge whose two packages exist, with the import count as its width and label", () => {
     const layout = archLayout(model);
     expect(layout.arrows).toHaveLength(model.edges.length);
-    expect(arrowOf(layout, "apps/web", "packages/ir").width).toBe(arrowWidth(4));
+    expect(arrowOf(layout, "apps/web", "packages/core/ir").width).toBe(arrowWidth(4));
     expect(arrowOf(layout, "packages/lens-a", "packages/lens-b").width).toBe(arrowWidth(2));
-    expect(arrowOf(layout, "apps/web", "packages/ir").edge.imports).toBe(4);
+    expect(arrowOf(layout, "apps/web", "packages/core/ir").edge.imports).toBe(4);
   });
 
   it("starts an arrow on the box it leaves and ends it on the box it enters", () => {
     const layout = archLayout(model);
-    const ir = boxOf(layout, "packages/ir");
+    const ir = boxOf(layout, "packages/core/ir");
     const web = boxOf(layout, "apps/web");
     // A forward arrow (ir column to lens column) leaves the right side of the importing box and enters the left side of the imported one.
-    const forward = points(arrowOf(layout, "packages/ir", "packages/lens-a").d);
+    const forward = points(arrowOf(layout, "packages/core/ir", "packages/lens-a").d);
     const lensA = boxOf(layout, "packages/lens-a");
     expect(forward[0]).toBe(ir.x + ir.w);
     expect(forward[6]).toBe(lensA.x);
     // A back edge (app column to ir column) leaves the left side of web and enters the right side of ir.
-    const back = points(arrowOf(layout, "apps/web", "packages/ir").d);
+    const back = points(arrowOf(layout, "apps/web", "packages/core/ir").d);
     expect(back[0]).toBe(web.x);
     expect(back[6]).toBe(ir.x + ir.w);
   });
@@ -97,16 +97,16 @@ describe("archLayout", () => {
 
   it("bends each of two opposite arrows to its own side, so they do not overlap", () => {
     const layout = archLayout(model);
-    const up = arrowOf(layout, "packages/ir", "packages/lens-a");
-    const down = arrowOf(layout, "packages/lens-a", "packages/ir");
+    const up = arrowOf(layout, "packages/core/ir", "packages/lens-a");
+    const down = arrowOf(layout, "packages/lens-a", "packages/core/ir");
     expect(up.label.y).not.toBe(down.label.y);
     expect(up.d).not.toBe(down.d);
   });
 
   it("draws an arrow dashed unless its import is exact, and marks the arrow that breaks a rule", () => {
     const layout = archLayout(model);
-    expect(arrowOf(layout, "packages/lens-a", "packages/ir").dashed).toBe(true);
-    expect(arrowOf(layout, "apps/web", "packages/ir").dashed).toBe(false);
+    expect(arrowOf(layout, "packages/lens-a", "packages/core/ir").dashed).toBe(true);
+    expect(arrowOf(layout, "apps/web", "packages/core/ir").dashed).toBe(false);
     expect(arrowOf(layout, "packages/frontend-x", "packages/lens-a").violation).toBe(true);
     expect(layout.arrows.filter((a) => a.violation).map((a) => a.key)).toEqual([arrowKey("packages/frontend-x", "packages/lens-a")]);
   });
@@ -121,7 +121,7 @@ describe("archLayout", () => {
   });
 
   it("leaves out an edge whose package is not in the model", () => {
-    const layout = archLayout({ ...model, edges: [...model.edges, { from: "packages/gone", to: "packages/ir", imports: 1, calls: 0, confidence: "exact", sites: [] }] });
+    const layout = archLayout({ ...model, edges: [...model.edges, { from: "packages/gone", to: "packages/core/ir", imports: 1, calls: 0, confidence: "exact", sites: [] }] });
     expect(layout.arrows).toHaveLength(model.edges.length);
   });
 
@@ -136,7 +136,7 @@ describe("archLayout", () => {
 
 describe("arrowsOf", () => {
   it("lists the arrows into and out of one package, in the model's edge order", () => {
-    const { incoming, outgoing } = arrowsOf(model, "packages/ir");
+    const { incoming, outgoing } = arrowsOf(model, "packages/core/ir");
     expect(incoming.map((e) => e.from)).toEqual(["apps/web", "packages/lens-a"]);
     expect(outgoing.map((e) => e.to)).toEqual(["packages/lens-a"]);
   });

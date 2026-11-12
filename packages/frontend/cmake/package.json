@@ -1,0 +1,7 @@
+{
+  "name": "@insight/frontend-cmake",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Insight plugin: CMake targets read statically from CMakeLists.txt. No dependencies; loaded by @insight/indexer.",
+  "type": "module"
+}

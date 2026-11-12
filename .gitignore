@@ -1,7 +1,8 @@
 node_modules
 dist
 *.tsbuildinfo
-.insight/
+.insight/*
+!.insight/lenses/
 .DS_Store
 
 # scratch space for package tests (created and removed by the tests)

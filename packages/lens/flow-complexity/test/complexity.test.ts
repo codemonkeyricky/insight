@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { irFixtures as fx, type LensResult } from "@insight/sdk";
+import * as fx from "@insight/sdk/testing";
+import { type LensResult } from "@insight/sdk";
 import { lensFlowComplexity, measureFunctions } from "../src/index.js";
 
 const ctx = (config?: unknown) => ({

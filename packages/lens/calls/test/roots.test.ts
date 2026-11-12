@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { irFixtures as fx } from "@insight/sdk";
+import * as fx from "@insight/sdk/testing";
 import { lensCalls } from "../src/index.js";
 
 const ctx = () => ({

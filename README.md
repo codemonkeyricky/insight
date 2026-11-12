@@ -37,6 +37,10 @@ re-index on its own: nothing runs at startup or on a timer.
 - A local folder that was indexed before this layout keeps its state in `<folder>/.insight`.
 - Per-project plugins (`<folder>/.insight/plugins`) and lens settings (`<folder>/.insight/lenses`) are read from the folder.
 
+## Repository layout
+
+The kernel is in `packages/core`, frontends in `packages/frontend`, lenses in `packages/lens`, and deployables in `apps/`. The rules and how to add a plugin are in [docs/layout.md](docs/layout.md).
+
 ## CLI
 
 ```sh

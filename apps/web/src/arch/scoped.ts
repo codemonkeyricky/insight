@@ -1,4 +1,4 @@
-import type { ArchEdge, ArchFile, ArchFileImport, ArchModel, ArchPackage, ArchUnresolved, ArchViolation } from "@insight/lens-dependencies";
+import type { ArchEdge, ArchFile, ArchFileImport, ArchModel, ArchPackage, ArchUnresolved, ArchViolation } from "@insight/model";
 import type { Span } from "../api";
 import { aggregateFolderEdges, chooseFolderDepth, folderOf, MIN_MODULES, type DiagramModel } from "./folders";
 

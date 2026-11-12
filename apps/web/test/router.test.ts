@@ -166,12 +166,18 @@ describe("hash router", () => {
     });
   });
 
-  it("sends the retired execution lens to the flow tab with the same scope, from both lens URLs", () => {
+  it("sends a hidden lens to the flow tab with the same scope, from both lens URLs", () => {
+    const hidden = ["lens-execution"];
     const fromView = parseRoute("#/projects/p1/view/lens-execution?scope=src%2Fcore");
     const fromLenses = parseRoute("#/projects/p1/lenses/lens-execution");
-    expect(redirectFor(fromView)).toBe("#/projects/p1/view/flow?scope=src%2Fcore");
-    expect(redirectFor(fromLenses)).toBe("#/projects/p1/view/flow");
-    expect(redirectFor(parseRoute("#/projects/p1/view/lens-execution"))).toBe("#/projects/p1/view/flow");
+    expect(redirectFor(fromView, hidden)).toBe("#/projects/p1/view/flow?scope=src%2Fcore");
+    expect(redirectFor(fromLenses, hidden)).toBe("#/projects/p1/view/flow");
+    expect(redirectFor(parseRoute("#/projects/p1/view/lens-execution"), hidden)).toBe("#/projects/p1/view/flow");
+  });
+
+  it("leaves a lens alone until the loaded rows say it is hidden", () => {
+    expect(redirectFor(parseRoute("#/projects/p1/view/lens-execution"))).toBeUndefined();
+    expect(redirectFor(parseRoute("#/projects/p1/view/lens-calls"), ["lens-execution"])).toBeUndefined();
   });
 
   it("does not redirect any other route", () => {

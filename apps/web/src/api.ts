@@ -1,5 +1,5 @@
 import type { ExecFunctionRef, ExecModel, FileFlow, FileFlowSummary, SceneLayout, ScopeFlow } from "@insight/flow";
-import type { ArchModel } from "@insight/lens-dependencies";
+import type { ArchModel } from "@insight/model";
 import { ApiError } from "./apiError";
 import type { SerializedModel, SystemModel } from "@insight/model";
 import { refsFor, scopeCallersFor, scopeExecFor, scopeFlowFor, systemFor, type ScopeRefsPayload } from "./model/payloads";
@@ -9,7 +9,7 @@ import { hostedApi } from "./hostedApi";
 
 // Types only: the flow package is not bundled, its charts are drawn by components/FlowChart.tsx.
 // The architecture model is plain data from the lens package; the Arch tab draws it in components/views/ArchView.tsx.
-export type { ArchEdge, ArchModel, ArchPackage, ArchUnresolved, ArchViolation } from "@insight/lens-dependencies";
+export type { ArchEdge, ArchModel, ArchPackage, ArchUnresolved, ArchViolation } from "@insight/model";
 export type {
   ExecCoroutine,
   ExecDispatch,
@@ -219,6 +219,8 @@ export interface ScopeLensRow {
   findings: number | null;
   /** Demo captures only: false when the lens has no views or findings for the scope, so its tab is dimmed. */
   hasContent?: boolean;
+  /** A lens with no tab (its manifest's `hidden` flag). It still runs, and its results stay available. */
+  hidden?: boolean;
 }
 
 export interface ScopeLenses {

@@ -12,8 +12,8 @@
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
-    "insight": "node packages/cli/dist/cli.js",
-    "start": "node packages/cli/dist/cli.js serve",
+    "insight": "node apps/cli/dist/cli.js",
+    "start": "node apps/cli/dist/cli.js serve",
     "demo": "pnpm -r build && node scripts/capture-demo.mjs && pnpm --filter @insight/web build:demo"
   },
   "devDependencies": {

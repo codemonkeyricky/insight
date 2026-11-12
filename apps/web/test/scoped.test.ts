@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ArchEdge, ArchFile, ArchFileImport, ArchModel, ArchPackage } from "@insight/lens-dependencies";
+import type { ArchEdge, ArchFile, ArchFileImport, ArchModel, ArchPackage } from "@insight/model";
 import { bandPerRow, IMPORTED_BY, IMPORTS, scopedView, withoutCodeText } from "../src/arch/scoped.js";
 
 const span = (file: string, line: number) => ({ file, start: [line, 0] as [number, number], end: [line, 10] as [number, number] });
@@ -22,7 +22,7 @@ const edge = (from: string, to: string, imports: number, confidence: ArchEdge["c
 
 const LENS = "packages/lens-dependencies";
 const CORE = "packages/core";
-const MODEL = "packages/model";
+const MODEL = "packages/core/model";
 const WEB = "apps/web";
 
 const files: ArchFile[] = [
@@ -165,8 +165,8 @@ describe("scopedView", () => {
     // out:model is the workspace import in b.ts (line 9). out:core is not here: a.ts is not in this scope.
     expect(view?.model.packages.map((p) => p.id)).toEqual([
       `in:${LENS}/src/sub2`,
-      `out:${LENS}/src`,
       `out:${MODEL}`,
+      `out:${LENS}/src`,
       `${LENS}/src/sub/b.ts`,
     ]);
     expect(view?.model.layers).toEqual([IMPORTED_BY, "Inside sub", IMPORTS]);

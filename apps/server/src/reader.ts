@@ -18,7 +18,7 @@ import {
   type LensStatus,
   type LoadedPlugins,
   type ScopeStats,
-} from "@insight/core";
+} from "@insight/indexer";
 import {
   buildFileFlow,
   execModel,
@@ -32,8 +32,9 @@ import {
 } from "@insight/flow";
 import { buildProjectModel, refsOf as modelRefsOf, scopeView as modelScopeView, serializeModel, type ProjectModel, type Refs, type SerializedModel } from "@insight/model";
 import { edgeTargets, IRView, isExternal, type ProjectRoot } from "@insight/sdk";
-import { createCoreRegistry, type IREdge, type IRDocument, type IRFinding, type IRNode, type IRRecord, type KindRegistry, type NodeId } from "@insight/ir";
-import { archModel, type ArchModel } from "@insight/lens-dependencies";
+import { type IREdge, type IRDocument, type IRFinding, type IRNode, type IRRecord, type KindRegistry, type NodeId } from "@insight/ir";
+import { createCoreRegistry } from "@insight/ir/node";
+import { archModel, type ArchModel } from "@insight/model";
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import { ProjectError, type ProjectRecord } from "./registry.js";
@@ -564,26 +565,30 @@ export interface ScopeLensRow {
   reason?: string;
   /** The findings of the stored result, or null when there is none. */
   findings: number | null;
+  /** True for a lens with no tab in the web app (its manifest's `hidden` flag). */
+  hidden?: boolean;
 }
 
 /** Each lens with the status of its latest stored run on the scope. */
 export function scopeLensRows(view: ScopeView, paths: ProjectPaths): ScopeLensRow[] {
   const projectRecords = view.scope === ROOT_SCOPE ? readAnalysis(paths, view.snapshot)?.lenses : undefined;
-  return view.plugins.lenses.map(({ lens }): ScopeLensRow => {
+  return view.plugins.lenses.map(({ lens, hidden }): ScopeLensRow => {
+    const flag = hidden ? { hidden: true } : {};
     const missing = lens.requires.filter((f) => !view.facets.includes(f));
     if (missing.length > 0) {
-      return { id: lens.id, title: lens.title, status: "unavailable", reason: unavailableReason(view.scope, missing), findings: null };
+      return { id: lens.id, title: lens.title, status: "unavailable", reason: unavailableReason(view.scope, missing), findings: null, ...flag };
     }
     const record = projectRecords
       ? projectRecords.find((r) => r.id === lens.id)
       : latestScopedRun(paths, view.snapshot, view.scope, lens.id);
-    if (!record) return { id: lens.id, title: lens.title, status: "not-run", findings: null };
+    if (!record) return { id: lens.id, title: lens.title, status: "not-run", findings: null, ...flag };
     return {
       id: lens.id,
       title: lens.title,
       status: record.status,
       ...(record.reason ? { reason: record.reason } : {}),
       findings: record.result?.findings.length ?? null,
+      ...flag,
     };
   });
 }

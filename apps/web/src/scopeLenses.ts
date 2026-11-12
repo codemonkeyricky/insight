@@ -2,15 +2,9 @@
 // load the content rule (resultHasContent) directly, the same as scopeKey.ts.
 import type { LensView, ScopeLensRow, ScopeStats, TreeNode, TreeView } from "./api";
 
-/**
- * Lenses that no longer have a tab. The flow tab's execution canvas shows what they showed, and a link to one of them
- * opens the flow tab instead (see redirectFor in router.ts). The lens itself stays, for the CLI.
- */
-export const RETIRED_LENSES: readonly string[] = ["lens-execution"];
-
-/** The lens rows that get a tab: every row but the retired ones, in the order the server gave. */
+/** The lens rows that get a tab: every row but the hidden ones (the manifest's `hidden` flag), in the order the server gave. */
 export function tabbedLenses(rows: readonly ScopeLensRow[]): ScopeLensRow[] {
-  return rows.filter((r) => !RETIRED_LENSES.includes(r.id));
+  return rows.filter((r) => !r.hidden);
 }
 
 export interface LensTab {

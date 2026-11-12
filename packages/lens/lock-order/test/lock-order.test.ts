@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { irFixtures as fx, type GraphView, type LensFinding } from "@insight/sdk";
+import * as fx from "@insight/sdk/testing";
+import { type GraphView, type LensFinding } from "@insight/sdk";
 import { lensLockOrder, lockOrderEdges } from "../src/index.js";
 
 const ctx = () => ({ root: { path: "/unused", name: "fixture", allowBuildTools: false }, resultOf: () => undefined });

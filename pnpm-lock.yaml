@@ -25,29 +25,95 @@ importers:
         specifier: ^5.1.0
         version: 5.1.0(@types/node@22.20.5)(vite@8.3.6(@types/node@22.20.5))
 
+  apps/cli:
+    dependencies:
+      '@insight/indexer':
+        specifier: workspace:*
+        version: link:../../packages/core/indexer
+      '@insight/ir':
+        specifier: workspace:*
+        version: link:../../packages/core/ir
+
+  apps/export:
+    dependencies:
+      '@insight/indexer':
+        specifier: workspace:*
+        version: link:../../packages/core/indexer
+      '@insight/sdk':
+        specifier: workspace:*
+        version: link:../../packages/core/sdk
+      '@insight/server':
+        specifier: workspace:*
+        version: link:../server
+
+  apps/hosted:
+    dependencies:
+      '@insight/export':
+        specifier: workspace:*
+        version: link:../export
+      '@insight/frontend-bazel':
+        specifier: workspace:*
+        version: link:../../packages/frontend/bazel
+      '@insight/frontend-cmake':
+        specifier: workspace:*
+        version: link:../../packages/frontend/cmake
+      '@insight/frontend-cpp':
+        specifier: workspace:*
+        version: link:../../packages/frontend/cpp
+      '@insight/frontend-typescript':
+        specifier: workspace:*
+        version: link:../../packages/frontend/typescript
+      '@insight/lens-calls':
+        specifier: workspace:*
+        version: link:../../packages/lens/calls
+      '@insight/lens-concurrency-map':
+        specifier: workspace:*
+        version: link:../../packages/lens/concurrency-map
+      '@insight/lens-dependencies':
+        specifier: workspace:*
+        version: link:../../packages/lens/dependencies
+      '@insight/lens-effects':
+        specifier: workspace:*
+        version: link:../../packages/lens/effects
+      '@insight/lens-execution':
+        specifier: workspace:*
+        version: link:../../packages/lens/execution
+      '@insight/lens-flow-complexity':
+        specifier: workspace:*
+        version: link:../../packages/lens/flow-complexity
+      '@insight/lens-lock-order':
+        specifier: workspace:*
+        version: link:../../packages/lens/lock-order
+      '@vercel/functions':
+        specifier: ^3.11.1
+        version: 3.11.1
+      aws4fetch:
+        specifier: ^1.0.20
+        version: 1.0.20
+      tar:
+        specifier: ^7.5.22
+        version: 7.5.22
+
   apps/server:
     dependencies:
       '@fastify/static':
         specifier: ^9.0.0
         version: 9.3.0
-      '@insight/core':
-        specifier: workspace:*
-        version: link:../../packages/core
       '@insight/flow':
         specifier: workspace:*
-        version: link:../../packages/lens/flow
+        version: link:../../packages/core/flow
+      '@insight/indexer':
+        specifier: workspace:*
+        version: link:../../packages/core/indexer
       '@insight/ir':
         specifier: workspace:*
-        version: link:../../packages/ir
-      '@insight/lens-dependencies':
-        specifier: workspace:*
-        version: link:../../packages/lens/dependencies
+        version: link:../../packages/core/ir
       '@insight/model':
         specifier: workspace:*
-        version: link:../../packages/model
+        version: link:../../packages/core/model
       '@insight/sdk':
         specifier: workspace:*
-        version: link:../../packages/sdk
+        version: link:../../packages/core/sdk
       elkjs:
         specifier: 0.12.0
         version: 0.12.0
@@ -94,13 +160,10 @@ importers:
     devDependencies:
       '@insight/flow':
         specifier: workspace:*
-        version: link:../../packages/lens/flow
-      '@insight/lens-dependencies':
-        specifier: workspace:*
-        version: link:../../packages/lens/dependencies
+        version: link:../../packages/core/flow
       '@insight/model':
         specifier: workspace:*
-        version: link:../../packages/model
+        version: link:../../packages/core/model
       '@types/cytoscape':
         specifier: 3.31.0
         version: 3.31.0
@@ -129,16 +192,23 @@ importers:
         specifier: 8.3.6
         version: 8.3.6(@types/node@22.20.5)
 
-  packages/cli:
+  packages/core/flow:
     dependencies:
-      '@insight/core':
-        specifier: workspace:*
-        version: link:../core
       '@insight/ir':
         specifier: workspace:*
         version: link:../ir
+      '@insight/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+    devDependencies:
+      '@insight/frontend-typescript':
+        specifier: workspace:*
+        version: link:../../frontend/typescript
+      elkjs:
+        specifier: 0.12.0
+        version: 0.12.0
 
-  packages/core:
+  packages/core/indexer:
     dependencies:
       '@insight/ir':
         specifier: workspace:*
@@ -169,35 +239,53 @@ importers:
         specifier: ^4.0.3
         version: 4.0.3
 
-  packages/export:
+  packages/core/ir:
     dependencies:
-      '@insight/core':
+      ajv:
+        specifier: ^8.20.0
+        version: 8.20.0
+    devDependencies:
+      json-schema-to-typescript:
+        specifier: ^16.0.0
+        version: 16.0.0
+
+  packages/core/model:
+    dependencies:
+      '@insight/flow':
         specifier: workspace:*
-        version: link:../core
+        version: link:../flow
+      '@insight/ir':
+        specifier: workspace:*
+        version: link:../ir
       '@insight/sdk':
         specifier: workspace:*
         version: link:../sdk
-      '@insight/server':
+
+  packages/core/sdk:
+    dependencies:
+      '@insight/ir':
         specifier: workspace:*
-        version: link:../../apps/server
+        version: link:../ir
 
   packages/frontend/bazel:
     dependencies:
       '@insight/ir':
         specifier: workspace:*
-        version: link:../../ir
+        version: link:../../core/ir
       '@insight/sdk':
         specifier: workspace:*
-        version: link:../../sdk
+        version: link:../../core/sdk
+
+  packages/frontend/cmake: {}
 
   packages/frontend/cpp:
     dependencies:
       '@insight/ir':
         specifier: workspace:*
-        version: link:../../ir
+        version: link:../../core/ir
       '@insight/sdk':
         specifier: workspace:*
-        version: link:../../sdk
+        version: link:../../core/sdk
       tree-sitter-cpp:
         specifier: 0.23.4
         version: 0.23.4
@@ -209,95 +297,43 @@ importers:
     dependencies:
       '@insight/ir':
         specifier: workspace:*
-        version: link:../../ir
+        version: link:../../core/ir
       '@insight/sdk':
         specifier: workspace:*
-        version: link:../../sdk
+        version: link:../../core/sdk
       typescript:
         specifier: 5.9.3
         version: 5.9.3
-
-  packages/hosted:
-    dependencies:
-      '@insight/export':
-        specifier: workspace:*
-        version: link:../export
-      '@insight/frontend-bazel':
-        specifier: workspace:*
-        version: link:../frontend/bazel
-      '@insight/frontend-cpp':
-        specifier: workspace:*
-        version: link:../frontend/cpp
-      '@insight/frontend-typescript':
-        specifier: workspace:*
-        version: link:../frontend/typescript
-      '@insight/lens-calls':
-        specifier: workspace:*
-        version: link:../lens/calls
-      '@insight/lens-concurrency-map':
-        specifier: workspace:*
-        version: link:../lens/concurrency-map
-      '@insight/lens-dependencies':
-        specifier: workspace:*
-        version: link:../lens/dependencies
-      '@insight/lens-effects':
-        specifier: workspace:*
-        version: link:../lens/effects
-      '@insight/lens-execution':
-        specifier: workspace:*
-        version: link:../lens/execution
-      '@insight/lens-flow-complexity':
-        specifier: workspace:*
-        version: link:../lens/flow-complexity
-      '@insight/lens-lock-order':
-        specifier: workspace:*
-        version: link:../lens/lock-order
-      '@vercel/functions':
-        specifier: ^3.11.1
-        version: 3.11.1
-      aws4fetch:
-        specifier: ^1.0.20
-        version: 1.0.20
-      tar:
-        specifier: ^7.5.22
-        version: 7.5.22
-
-  packages/ir:
-    dependencies:
-      ajv:
-        specifier: ^8.20.0
-        version: 8.20.0
-    devDependencies:
-      json-schema-to-typescript:
-        specifier: ^16.0.0
-        version: 16.0.0
 
   packages/lens/calls:
     dependencies:
       '@insight/ir':
         specifier: workspace:*
-        version: link:../../ir
+        version: link:../../core/ir
       '@insight/sdk':
         specifier: workspace:*
-        version: link:../../sdk
+        version: link:../../core/sdk
 
   packages/lens/concurrency-map:
     dependencies:
       '@insight/ir':
         specifier: workspace:*
-        version: link:../../ir
+        version: link:../../core/ir
       '@insight/sdk':
         specifier: workspace:*
-        version: link:../../sdk
+        version: link:../../core/sdk
 
   packages/lens/dependencies:
     dependencies:
       '@insight/ir':
         specifier: workspace:*
-        version: link:../../ir
+        version: link:../../core/ir
+      '@insight/model':
+        specifier: workspace:*
+        version: link:../../core/model
       '@insight/sdk':
         specifier: workspace:*
-        version: link:../../sdk
+        version: link:../../core/sdk
       picomatch:
         specifier: ^4.0.7
         version: 4.0.7
@@ -310,10 +346,10 @@ importers:
     dependencies:
       '@insight/ir':
         specifier: workspace:*
-        version: link:../../ir
+        version: link:../../core/ir
       '@insight/sdk':
         specifier: workspace:*
-        version: link:../../sdk
+        version: link:../../core/sdk
       picomatch:
         specifier: ^4.0.7
         version: 4.0.7
@@ -326,62 +362,28 @@ importers:
     dependencies:
       '@insight/ir':
         specifier: workspace:*
-        version: link:../../ir
+        version: link:../../core/ir
       '@insight/sdk':
         specifier: workspace:*
-        version: link:../../sdk
-
-  packages/lens/flow:
-    dependencies:
-      '@insight/ir':
-        specifier: workspace:*
-        version: link:../../ir
-      '@insight/sdk':
-        specifier: workspace:*
-        version: link:../../sdk
-    devDependencies:
-      '@insight/frontend-typescript':
-        specifier: workspace:*
-        version: link:../../frontend/typescript
-      elkjs:
-        specifier: 0.12.0
-        version: 0.12.0
+        version: link:../../core/sdk
 
   packages/lens/flow-complexity:
     dependencies:
       '@insight/ir':
         specifier: workspace:*
-        version: link:../../ir
+        version: link:../../core/ir
       '@insight/sdk':
         specifier: workspace:*
-        version: link:../../sdk
+        version: link:../../core/sdk
 
   packages/lens/lock-order:
     dependencies:
       '@insight/ir':
         specifier: workspace:*
-        version: link:../../ir
+        version: link:../../core/ir
       '@insight/sdk':
         specifier: workspace:*
-        version: link:../../sdk
-
-  packages/model:
-    dependencies:
-      '@insight/flow':
-        specifier: workspace:*
-        version: link:../lens/flow
-      '@insight/ir':
-        specifier: workspace:*
-        version: link:../ir
-      '@insight/sdk':
-        specifier: workspace:*
-        version: link:../sdk
-
-  packages/sdk:
-    dependencies:
-      '@insight/ir':
-        specifier: workspace:*
-        version: link:../ir
+        version: link:../../core/sdk
 
 packages:
 

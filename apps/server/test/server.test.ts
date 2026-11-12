@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import type { IndexReport } from "@insight/core";
+import type { IndexReport } from "@insight/indexer";
 import { buildServer, type InsightServer } from "../src/index.js";
 import { resolveInside } from "../src/source.js";
 
