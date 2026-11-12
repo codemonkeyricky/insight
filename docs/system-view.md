@@ -1,6 +1,6 @@
 # System view
 
-The System view is a mode of the Arch tab (the System / Packages toggle, System by default). It answers "what does this
+The System view is a mode of the Arch tab (the System / Pipeline / Packages toggle, System by default). It answers "what does this
 code talk to?" for the current explorer scope: the components inside the scope, the routes they serve, the outside
 systems they reach and the verbs between them.
 
@@ -78,6 +78,54 @@ The geometry is `layoutSystem` in `apps/web/src/arch/system-layout.ts`, pure and
 
 Tests: `apps/web/test/systemLayout.test.tsx` (no pill overlaps another pill or a card, no edge sample point inside a
 non-endpoint card, for a hosted-like and a dense 20-component, 60-edge fixture) and `packages/core/model/test/system*.test.ts`.
+
+## Pipeline mode
+
+The Arch tab has three modes: System | Pipeline | Packages (System by default, the reader's choice is kept in localStorage).
+Pipeline shows the processing stages of the explorer scope: where the scope's data comes from, which component handles it, and
+where it goes. It is derived by `pipelineModel(model, scope, { tests })` in `packages/core/model/src/pipeline.ts`, computed in the
+page by `api.getPipeline` like the System view, and drawn by the same `layoutSystem` and card, edge and panel code.
+
+![The pipeline of the packages scope](screenshots/pipeline-view/01b-summary.png)
+
+- **Extension points** are interface call sites: a call through an interface (or abstract class) whose implementers sit in two or
+  more components of the scope. The receiver names the point and its label is the receiver, capitalised and pluralised
+  (`frontend` → "Frontends", `lens` → "Lenses"). Points with the same host and implementers are one point.
+- **Host** is the component that holds the most extension points (ties go to the most call sites, then the id). Extension points
+  of other hosts are not drawn and are counted in the panel.
+- **Order** comes from the driver: the host function that reaches the most extension points through calls inside the host (the
+  deepest one on a tie). A point's key is the driver's first call on the way to one of its sites, so points run in the order the
+  driver calls them. A point the driver does not reach goes last, and without a driver the order is by file and line.
+- **Roles.** The first point is the source (`role: source`), every later point is a sink. The first point is assumed to be the
+  producer: nothing in the model says which way the data flows, so the order is the assumption.
+- **Columns**, left to right: the source's implementers, the host with the components it calls exactly (`calls`, not candidates),
+  then each sink's implementers. A component is drawn in the first column that claims it, so a point whose implementers are all
+  drawn in an earlier column gets no column (the panel says "shown under ..."). Column titles: `Frontends ×3 · detect, extract` (the
+  point's label, its component count and its members), `Host · indexer` for the host's package.
+- **Edges.** A source's implementer produces into the host (`produces`, labelled with the point's members: `detect, extract`), and
+  the host feeds each sink's implementer (`feeds`, labelled with the members: `run`). Produces edges are accent coloured, feeds are
+  plain, and both are drawn solid even though their confidence is inferred: they are the point of the view. Verb pills show only
+  for the hovered or selected edge. The edge's sites are the call sites of the point.
+- **Same-column calls are not drawn.** The host's calls to components in its own column would loop back through a gap, so they
+  are not edges. They become a note on the host card (`uses ir, model, sdk`) and a "Host calls" line in the side panel
+  (`packages/ir, packages/sdk`, with `×N` for several sites). The model keeps them as `calls` edges.
+- **Side panel** with nothing selected (under the diagram): the driver ("Driven by runIndex"), each point in order with its role, its
+  members and its component count, and the counts "N components not in the pipeline" (omitted) and "N extension points of other
+  hosts" (dropped). Clicking an edge or a card works as in System: the sites open in the Code pane, and a function links to its
+  Flow chart.
+- **Empty state.** When the scope has no extension point the model gives a `reason`, and the stage says "No extension points in
+  this scope. Pick a parent scope."
+
+Limits:
+
+- The first point is assumed to be the producer. A pipeline that starts from a sink (a dispatch whose first point is a consumer)
+  is drawn the same way, with its arrows in the order of the driver.
+- A point whose implementers are all drawn in earlier columns gets no column of its own, so it appears only in the panel.
+- Points are interface dispatch only. A pipeline made of plain function calls, or of routes, is not drawn.
+- The feeds arrows of many sinks run close together at the host's right side in a dense graph. Hover a card to read its arrows.
+
+Tests: `apps/web/test/pipelineLayout.test.tsx` (column titles and order, verbs and styles, rows and the summary, the empty model and
+its message, the mode toggle) and `packages/core/model/test/pipeline*.test.ts`.
 
 ## Known limits
 

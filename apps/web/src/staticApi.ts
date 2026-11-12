@@ -28,9 +28,9 @@ import type {
   SourceSlice,
   TargetType,
 } from "./api";
-import type { SerializedModel, SystemModel } from "@insight/model";
+import type { PipelineModel, SerializedModel, SystemModel } from "@insight/model";
 import { buildFileFlow } from "@insight/flow";
-import { refsFor, scopeCallersFor, scopeExecFor, scopeFlowFor, systemFor, type ScopeRefsPayload } from "./model/payloads";
+import { pipelineFor, refsFor, scopeCallersFor, scopeExecFor, scopeFlowFor, systemFor, type ScopeRefsPayload } from "./model/payloads";
 import { models } from "./model/store";
 import { canonicalScope, scopeKey, scopeProblem } from "./scopeKey";
 
@@ -365,6 +365,14 @@ export function makeStaticApi(baseFor: (projectId: string) => string | Promise<s
       if (problem) throw new ApiError(400, problem);
       const { model } = await modelOf(id);
       return systemFor(model, scope, tests);
+    },
+    /** The Pipeline view of a scope, computed from the project's model (like getSystem). */
+    getPipeline: async (id: string, scope: string, opts: { tests?: boolean } = {}): Promise<PipelineModel> => {
+      await checkProject(id);
+      const problem = scopeProblem(scope);
+      if (problem) throw new ApiError(400, problem);
+      const { model } = await modelOf(id);
+      return pipelineFor(model, scope, opts.tests === true);
     },
     /**
      * The architecture model as the export saved it. The model covers the whole project, so the export writes it

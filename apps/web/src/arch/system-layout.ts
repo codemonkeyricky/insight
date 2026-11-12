@@ -149,7 +149,18 @@ interface Port {
   id: string;
 }
 
-export function layoutSystem(sys: SystemModel): SysLayout {
+/** Verbs whose edges are facts of the Pipeline view: drawn solid even when their confidence is inferred. */
+const SOLID_VERBS: ReadonlySet<SystemEdge["verb"]> = new Set(["produces", "feeds"]);
+
+/** Options of the layout: the column titles (one per column, left to right) and a note drawn as a chip on a component's card. */
+export interface LayoutOptions {
+  /** Without titles the first column is "Entry" and the rest have none. */
+  titles?: readonly string[];
+  notes?: ReadonlyMap<string, string>;
+}
+
+/** The geometry of one System model. The Pipeline view passes its column titles and host notes through `opts`. */
+export function layoutSystem(sys: SystemModel, opts: LayoutOptions = {}): SysLayout {
   const empty: SysLayout = { focusY: 0, width: 0, height: 0, columns: [], groups: [], boxes: [], arrows: [] };
   if (sys.components.length === 0) return empty;
 
@@ -181,12 +192,14 @@ export function layoutSystem(sys: SystemModel): SysLayout {
   }
   const stacks: Array<{ column: number; items: SysBox[]; headers: Array<{ category: SystemExternal["category"]; before: number }> }> = [];
   stages.forEach((stage, i) => {
-    columns.push({ index: i, title: i === 0 ? "Entry" : "", x, w: SYS_CARD_W });
+    columns.push({ index: i, title: opts.titles?.[i] ?? (i === 0 ? "Entry" : ""), x, w: SYS_CARD_W });
     const items = stage.map((id): SysBox => {
       const c = compById.get(id) as SystemComponent;
       const routes = routesBy.get(id) ?? [];
       const chips = routes.slice(0, SYS_MAX_CHIPS).map((r) => cut(routeText(r), 30));
       if (routes.length > SYS_MAX_CHIPS) chips.push(`+${routes.length - SYS_MAX_CHIPS} more`);
+      const note = opts.notes?.get(id);
+      if (note !== undefined) chips.push(cut(note, 22));
       return {
         id,
         kind: "component",
@@ -408,7 +421,7 @@ export function layoutSystem(sys: SystemModel): SysLayout {
       ...(geo.lane !== undefined ? { lane: geo.lane } : {}),
       pill: { x: c.x, y: c.y, w, h: SYS_PILL_H, text },
       dashed: e.verb === "runs" || e.verb === "spawns",
-      inferred: e.confidence === "inferred",
+      inferred: e.confidence === "inferred" && !SOLID_VERBS.has(e.verb),
     });
   });
 
