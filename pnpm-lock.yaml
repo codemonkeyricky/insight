@@ -35,7 +35,7 @@ importers:
         version: link:../../packages/core
       '@insight/flow':
         specifier: workspace:*
-        version: link:../../packages/flow
+        version: link:../../packages/lens/flow
       '@insight/ir':
         specifier: workspace:*
         version: link:../../packages/ir
@@ -94,7 +94,7 @@ importers:
     devDependencies:
       '@insight/flow':
         specifier: workspace:*
-        version: link:../../packages/flow
+        version: link:../../packages/lens/flow
       '@insight/lens-dependencies':
         specifier: workspace:*
         version: link:../../packages/lens/dependencies
@@ -180,22 +180,6 @@ importers:
       '@insight/server':
         specifier: workspace:*
         version: link:../../apps/server
-
-  packages/flow:
-    dependencies:
-      '@insight/ir':
-        specifier: workspace:*
-        version: link:../ir
-      '@insight/sdk':
-        specifier: workspace:*
-        version: link:../sdk
-    devDependencies:
-      '@insight/frontend-typescript':
-        specifier: workspace:*
-        version: link:../frontend/typescript
-      elkjs:
-        specifier: 0.12.0
-        version: 0.12.0
 
   packages/frontend/bazel:
     dependencies:
@@ -347,6 +331,22 @@ importers:
         specifier: workspace:*
         version: link:../../sdk
 
+  packages/lens/flow:
+    dependencies:
+      '@insight/ir':
+        specifier: workspace:*
+        version: link:../../ir
+      '@insight/sdk':
+        specifier: workspace:*
+        version: link:../../sdk
+    devDependencies:
+      '@insight/frontend-typescript':
+        specifier: workspace:*
+        version: link:../../frontend/typescript
+      elkjs:
+        specifier: 0.12.0
+        version: 0.12.0
+
   packages/lens/flow-complexity:
     dependencies:
       '@insight/ir':
@@ -369,7 +369,7 @@ importers:
     dependencies:
       '@insight/flow':
         specifier: workspace:*
-        version: link:../flow
+        version: link:../lens/flow
       '@insight/ir':
         specifier: workspace:*
         version: link:../ir

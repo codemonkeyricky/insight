@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { irFixtures as fx } from "@insight/sdk";
-import { archModel } from "../src/index.js";
+import { archModel, defaultLayerOf } from "../src/index.js";
 
 const sp = (file: string) => fx.span(file, 0, 0, 0, 20);
 const file = (path: string) => fx.node(path, "structure", "structure.file");
@@ -51,6 +51,12 @@ describe("archModel", () => {
       "packages/frontend/typescript": "frontend",
       "packages/frontend/cpp": "frontend",
     });
+  });
+
+  it("layers packages/lens/* as lenses, except the flow library, which stays unlayered", () => {
+    expect(defaultLayerOf("packages/lens/flow")).toBeUndefined();
+    expect(defaultLayerOf("packages/lens/calls")).toBe("lens");
+    expect(defaultLayerOf("packages/lens-calls")).toBe("lens");
   });
 
   it("reports a lens importing a frontend as one violation with its site", () => {
