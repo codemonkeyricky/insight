@@ -7,11 +7,11 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as KeyEvent, type PointerEvent as PointerEv, type ReactNode } from "react";
 import { select } from "d3-selection";
 import { zoom, zoomIdentity, type D3ZoomEvent, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
-import { CHART_FIT_MAX_K, MORE_SUFFIX, ZOOM_SIZE, fitCamera, fitChartCamera, visibleWorld, type Camera, type FlowNode, type FlowSpan, type FunctionFlow, type PlacedItem, type Rect } from "@insight/flow";
+import { CHART_FIT_MAX_K, CHART_HEAD, MORE_SUFFIX, ZOOM_SIZE, fitCamera, fitChartCamera, visibleWorld, type Camera, type FlowNode, type FlowSpan, type FunctionFlow, type PlacedItem, type Rect } from "@insight/flow";
 import { nameOfId, runtimeLabel, stepRuntime } from "../../flowTargets";
 import { hrefView } from "../../router";
 import { CHART_MIN_PX } from "../../zoom/chart";
-import { anchoredTo, isInPlace, calloutOf, closeExpansion, footprintOf, isNested, NARROW_VIEW_PX, openExpansion, ownerOf, refresh, revealCamera, rootBoxOf, sameFootprint, sceneCamera, setInline, SLOT_PAD, shiftAt, type Expansion, type ExpandAnchor } from "../../zoom/expand";
+import { anchoredTo, expandCamera, isInPlace, calloutOf, closeExpansion, footprintOf, isNested, NARROW_VIEW_PX, openExpansion, ownerOf, REVEAL_MIN_K, refresh, revealCamera, rootBoxOf, sameFootprint, sceneCamera, setInline, SLOT_PAD, shiftAt, type Expansion, type ExpandAnchor } from "../../zoom/expand";
 import { calloutD } from "../../zoom/connector";
 import { popDelay } from "../../zoom/pop";
 import { displayName } from "../../zoom/names";
@@ -577,12 +577,17 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     cam.to(target, !animate);
   };
 
-  /** The camera that shows an expansion from `from`, the least it can move (see revealCamera). */
+  /**
+   * The camera that shows an expansion from `from`, the least it can move (see expandCamera). The room is the stage's room
+   * in the camera's own units: left of the Layers inset and below the top reserve, above the minimap and the status pill.
+   */
   const revealOf = (from: Camera, e: Expansion, minPx = CHART_MIN_PX): Camera => {
-    // The reveal works in the room's own coordinates (from the left and top insets), so the insets are taken off and put back.
-    const left = leftRef.current;
-    const c = revealCamera({ ...from, x: from.x - left, y: from.y - TOP_RESERVE }, { x: e.x, y: e.y, w: e.w, h: e.h }, e.chart.width, roomOf(), minPx);
-    return { ...c, x: c.x + left, y: c.y + TOP_RESERVE };
+    const room = roomOf();
+    return expandCamera(from, { x: e.x, y: e.y, w: e.w, h: e.h }, { x: leftRef.current, y: TOP_RESERVE, w: room.width, h: room.height }, {
+      readK: minPx / Math.max(e.chart.width, 1),
+      fitMinK: REVEAL_MIN_K,
+      headH: CHART_HEAD,
+    });
   };
 
   /** The expansions as the build places them: the boxes they hang from, in the build's layout, placed on the current view. */

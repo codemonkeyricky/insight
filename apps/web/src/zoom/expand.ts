@@ -407,6 +407,44 @@ export function revealCamera(cam: Camera, rect: Rect, chartW: number, room: { wi
   return { k, x, y };
 }
 
+/** What a click-to-expand reveal may change: the scale a readable chart needs, the lowest scale a width-fit takes, and the header height kept in view. */
+export interface ExpandLimits {
+  readK: number;
+  fitMinK: number;
+  headH: number;
+}
+
+/**
+ * The camera after a click opens an expansion `box` (world units) in `room` (the stage's room, in the camera's own units).
+ * The least change: the scale stays, unless the box is below `readK` (zoomed in, at most 1.5 times) or wider than the room
+ * (width-fit, not below `fitMinK`, aligned left). The camera then moves the least that brings the box inside the room. A box
+ * taller than the room needs only its header in view: the camera moves only when the header is cut off, and then the least
+ * that brings the header in (its top to the room's top when it is above). A camera that already shows the box is returned
+ * unchanged.
+ */
+export function expandCamera(cam: Camera, box: Rect, room: Rect, lim: ExpandLimits): Camera {
+  let k = cam.k;
+  if (k < lim.readK) k = Math.min(lim.readK, cam.k * CHART_FIT_MAX_K);
+  const fitK = (room.w - 2 * REVEAL_MARGIN) / Math.max(box.w, 1);
+  if (fitK < k) k = Math.min(k, Math.max(lim.fitMinK, fitK));
+  // Zoomed about the box's top-left corner, which stays where it was.
+  let x = cam.x + box.x * (cam.k - k);
+  let y = cam.y + box.y * (cam.k - k);
+  // The box's place on screen, relative to the room's top-left.
+  const left = box.x * k + x - room.x;
+  const top = box.y * k + y - room.y;
+  x += shift(left, box.w * k, room.w);
+  const tallH = room.h - 2 * REVEAL_MARGIN;
+  if (box.h * k > tallH) {
+    const headPx = Math.min(lim.headH * k, tallH);
+    if (top < REVEAL_MARGIN) y += REVEAL_MARGIN - top;
+    else if (top + headPx > room.h - REVEAL_MARGIN) y += room.h - REVEAL_MARGIN - headPx - top;
+  } else {
+    y += shift(top, box.h * k, room.h);
+  }
+  return { k, x, y };
+}
+
 /** A narrow viewport (a phone) shows the first column at least this large, so its text stays readable. */
 export const READABLE_COLUMN_K = 0.6;
 /** The viewport width at or below which the whole-project view favours one readable column over the whole width. */
