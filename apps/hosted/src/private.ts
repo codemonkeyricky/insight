@@ -29,7 +29,7 @@ export function repoStoragePrefix(owner: string, repo: string, sha: string, visi
 
 /**
  * The signature of a storage prefix: base64url(HMAC-SHA256(key, `${exp}:${prefix}`)). The storage Worker computes the same
- * value (workers/storage/index.js) and compares it in constant time.
+ * value (apps/storage-worker/index.js) and compares it in constant time.
  */
 export function signPrefix(key: Buffer, exp: number, prefix: string): string {
   return createHmac("sha256", key).update(`${exp}:${prefix}`).digest("base64url");

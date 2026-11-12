@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { projectPaths, readSnapshot, runIndex, type IndexReport } from "@insight/indexer";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const FIXTURE = resolve(here, "../../frontend/typescript/test/fixtures/sample-ts");
+const FIXTURE = resolve(here, "../../../packages/frontend/typescript/test/fixtures/sample-ts");
 // Scratch lives inside this package and is gitignored. Removed after the test.
 const SCRATCH = join(here, "..", ".insight-test", `incremental-${process.pid}`);
 

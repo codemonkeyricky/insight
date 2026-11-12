@@ -21,14 +21,14 @@ function call(from: string, to: string, path: string, line: number) {
 const net = (api: string, attrs: Record<string, unknown>) => ({ api, confidence: "exact", ...attrs });
 
 /** Insight-like hosted code: a Vercel handler POSTs to the indexer; the indexer reads GitHub and writes Cloudflare KV. */
-const HV = "packages/hosted/src/vercel.ts";
-const HI = "packages/hosted/src/indexer.ts";
-const HG = "packages/hosted/src/github.ts";
-const HS = "packages/hosted/src/storage.ts";
+const HV = "apps/hosted/src/vercel.ts";
+const HI = "apps/hosted/src/indexer.ts";
+const HG = "apps/hosted/src/github.ts";
+const HS = "apps/hosted/src/storage.ts";
 
 function hostedDoc(): IRDocument {
   const nodes: IRNode[] = [
-    file("packages/hosted/package.json"),
+    file("apps/hosted/package.json"),
     file(HV),
     file(HI),
     file(HG),
@@ -63,7 +63,7 @@ function edgeBetween(sys: SystemModel, from: string, to: string) {
 }
 
 describe("systemModel on the hosted-like fixture", () => {
-  const sys = systemModel(modelOf(hostedDoc()), "packages/hosted/src");
+  const sys = systemModel(modelOf(hostedDoc()), "apps/hosted/src");
 
   it("makes one component per file of the scope, with the entry point marked", () => {
     expect(sys.components.map((c) => c.id)).toEqual([HG, HI, HS, HV]);
@@ -248,8 +248,8 @@ describe("systemModel rules", () => {
   });
 
   it("is deterministic: the same model gives the same output", () => {
-    const a = JSON.stringify(systemModel(modelOf(hostedDoc()), "packages/hosted/src"));
-    const b = JSON.stringify(systemModel(modelOf(hostedDoc()), "packages/hosted/src"));
+    const a = JSON.stringify(systemModel(modelOf(hostedDoc()), "apps/hosted/src"));
+    const b = JSON.stringify(systemModel(modelOf(hostedDoc()), "apps/hosted/src"));
     expect(a).toBe(b);
   });
 
@@ -281,8 +281,8 @@ describe("older model.json without effect facts", () => {
 
   it("round-trips the effect facts of a current model", () => {
     const json = JSON.parse(JSON.stringify(serializeModel(modelOf(hostedDoc()), "snap")));
-    const a = systemModel(loadModel(json), "packages/hosted/src");
-    const b = systemModel(modelOf(hostedDoc()), "packages/hosted/src");
+    const a = systemModel(loadModel(json), "apps/hosted/src");
+    const b = systemModel(modelOf(hostedDoc()), "apps/hosted/src");
     expect(a).toEqual(b);
   });
 });
@@ -299,45 +299,45 @@ describe("services catalog", () => {
 });
 
 describe("systemModel follow-ups", () => {
-  const T = "packages/hosted/test/indexer.test.ts";
+  const T = "apps/hosted/test/indexer.test.ts";
   const withTests = (): IRDocument => {
     const doc = hostedDoc();
-    doc.nodes.push(file("packages/hosted/tsconfig.json"), file(T), fn(T, "check"));
+    doc.nodes.push(file("apps/hosted/tsconfig.json"), file(T), fn(T, "check"));
     doc.edges.push(call(`${T}#check`, `${HI}#indexRepo`, T, 3));
     return doc;
   };
 
   it("drops children that hold no code (package.json, tsconfig.json)", () => {
-    const sys = systemModel(modelOf(withTests()), "packages/hosted", { tests: true });
-    expect(sys.components.map((c) => c.id)).not.toContain("packages/hosted/package.json");
-    expect(sys.components.map((c) => c.id)).not.toContain("packages/hosted/tsconfig.json");
+    const sys = systemModel(modelOf(withTests()), "apps/hosted", { tests: true });
+    expect(sys.components.map((c) => c.id)).not.toContain("apps/hosted/package.json");
+    expect(sys.components.map((c) => c.id)).not.toContain("apps/hosted/tsconfig.json");
   });
 
   it("hides tests by default and includes them with the tests option", () => {
-    const hidden = systemModel(modelOf(withTests()), "packages/hosted");
+    const hidden = systemModel(modelOf(withTests()), "apps/hosted");
     expect(hidden.components.some((c) => c.path.includes("test"))).toBe(false);
     expect(hidden.edges.every((e) => !e.from.includes("test"))).toBe(true);
-    const shown = systemModel(modelOf(withTests()), "packages/hosted", { tests: true });
-    expect(shown.components.map((c) => c.id)).toContain("packages/hosted/test");
-    expect(shown.edges.some((e) => e.from === "packages/hosted/test")).toBe(true);
+    const shown = systemModel(modelOf(withTests()), "apps/hosted", { tests: true });
+    expect(shown.components.map((c) => c.id)).toContain("apps/hosted/test");
+    expect(shown.edges.some((e) => e.from === "apps/hosted/test")).toBe(true);
   });
 
   it("shows a scope inside a test folder without the option", () => {
-    const sys = systemModel(modelOf(withTests()), "packages/hosted/test");
+    const sys = systemModel(modelOf(withTests()), "apps/hosted/test");
     expect(sys.components.map((c) => c.id)).toEqual([T]);
   });
 
   it("descends through a scope that holds one code folder, and names it in via", () => {
-    const sys = systemModel(modelOf(withTests()), "packages/hosted");
-    expect(sys.scope).toBe("packages/hosted");
+    const sys = systemModel(modelOf(withTests()), "apps/hosted");
+    expect(sys.scope).toBe("apps/hosted");
     expect(sys.via).toBe("src");
     expect(sys.components.map((c) => c.id)).toEqual([HG, HI, HS, HV]);
     expect(sys.stages).toEqual([[HV], [HI], [HG, HS]]);
   });
 
   it("sets no via when the scope holds several components", () => {
-    expect(systemModel(modelOf(withTests()), "packages/hosted", { tests: true }).via).toBeUndefined();
-    expect(systemModel(modelOf(hostedDoc()), "packages/hosted/src").via).toBeUndefined();
+    expect(systemModel(modelOf(withTests()), "apps/hosted", { tests: true }).via).toBeUndefined();
+    expect(systemModel(modelOf(hostedDoc()), "apps/hosted/src").via).toBeUndefined();
   });
 
   it("descends repeatedly through nested single folders", () => {

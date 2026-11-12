@@ -19,15 +19,15 @@ describe("archModel", () => {
         file("packages/core/ir/src/a.ts"),
         pkg("apps/web"),
         file("apps/web/src/a.ts"),
-        pkg("packages/cli"),
-        file("packages/cli/src/a.ts"),
+        pkg("apps/cli"),
+        file("apps/cli/src/a.ts"),
       ],
     });
     const model = archModel(view);
     const layerOf = Object.fromEntries(model.packages.map((p) => [p.path, p.layer]));
     expect(layerOf).toEqual({
       "apps/web": "app",
-      "packages/cli": "app",
+      "apps/cli": "app",
       "packages/frontend-typescript": "frontend",
       "packages/core/ir": "ir",
       "packages/lens-calls": "lens",

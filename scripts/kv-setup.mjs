@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Creates the Workers KV namespace the hosted indexes live in (title "insight-index"), or finds it when it exists, and
-// prints its id. The id goes into workers/storage/wrangler.toml and CF_KV_NAMESPACE_ID. The API token is read from the
+// prints its id. The id goes into apps/storage-worker/wrangler.toml and CF_KV_NAMESPACE_ID. The API token is read from the
 // environment and never printed.
 //
 //   CLOUDFLARE_API_TOKEN=... R2_ACCOUNT_ID=<account id> node scripts/kv-setup.mjs [--title insight-index]

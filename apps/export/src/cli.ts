@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Exports one project to a folder of static JSON files and prints each file's size, raw and gzipped.
 //
-//   node packages/export/dist/cli.js <root> --out <dir> [--name n] [--commit sha]
+//   node apps/export/dist/cli.js <root> --out <dir> [--name n] [--commit sha]
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -19,7 +19,7 @@ const { values, positionals } = parseArgs({
 });
 const [root] = positionals;
 if (!root || !values.out) {
-  console.error("usage: node packages/export/dist/cli.js <root> --out <dir> [--name n] [--commit sha]");
+  console.error("usage: node apps/export/dist/cli.js <root> --out <dir> [--name n] [--commit sha]");
   process.exit(2);
 }
 

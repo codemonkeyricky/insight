@@ -23,14 +23,14 @@ browser ──► arch-insight.vercel.app (static: dist-hosted, VITE_STORAGE_BAS
    │                                    4. @insight/export (in-process indexer, built-in plugins)
    │                                    5. KV writes: export files, latest.json, recent.json, status.json done
    │
-   └─ GET  <KV_PUBLIC_BASE>/gh/<owner>/<repo>/<sha>/…   (workers/storage: KV read, CORS-allowed)
+   └─ GET  <KV_PUBLIC_BASE>/gh/<owner>/<repo>/<sha>/…   (apps/storage-worker: KV read, CORS-allowed)
              GET  <KV_PUBLIC_BASE>/gh/<owner>/<repo>/latest.json, /meta/recent.json
              the run's progress is polled from /api/status (see "Status" below)
 ```
 
-Packages: `packages/export` (`@insight/export`, the slim static export), `packages/hosted` (`@insight/hosted`,
+Apps: `apps/export` (`@insight/export`, the slim static export), `apps/hosted` (`@insight/hosted`,
 handlers, storage adapters, GitHub fetch, the Node entry for Vercel), `apps/web` (hosted build flavour, `build:hosted`),
-`workers/storage` (the read-only Worker, `insight-storage`).
+`apps/storage-worker` (the read-only Worker, `insight-storage`).
 
 ## Storage layout
 
@@ -70,7 +70,7 @@ Responses: 200 with the status; 400 `bad_request` for a missing or malformed `re
 - Status writes only on a phase change, and at most one per 3 s. The queued and the final `done`/`failed` writes always
   happen. Progress events of the same phase are dropped.
 - One index writes about 17 export files, `latest.json`, `recent.json`, the daily counter, and two to seven status
-  writes: roughly 20 to 28 puts. A test run of the fixture performs at most 30 puts (`packages/hosted/test/budget.test.ts`).
+  writes: roughly 20 to 28 puts. A test run of the fixture performs at most 30 puts (`apps/hosted/test/budget.test.ts`).
 - The daily cap defaults to 25 indexes a day when the store is KV (about 650 writes a day at most), so the whole site
   stays under the 1,000 writes a day allowance. Reads are 100,000 a day on the free plan; the Worker's reads are cached at
   the edge.
@@ -96,7 +96,7 @@ Responses: 200 with the status; 400 `bad_request` for a missing or malformed `re
 | `VITE_API_BASE` | web build | The origin of `/api/index` and `/api/status`. Default empty (the same origin). |
 | `VITE_HOSTED`, `VITE_STATIC` | web build | `build:hosted` sets `VITE_HOSTED=1`. `build:demo` is the offline demo. |
 
-Storage is chosen in this order (`packages/hosted/src/env.ts`): KV when `CLOUDFLARE_API_TOKEN` or `CF_KV_NAMESPACE_ID` is
+Storage is chosen in this order (`apps/hosted/src/env.ts`): KV when `CLOUDFLARE_API_TOKEN` or `CF_KV_NAMESPACE_ID` is
 set (then the account id and both others are required), else R2 when any `R2_*` variable is set, else the folder in
 `INSIGHT_STORAGE_DIR`. `GET /api/health` reports the store as `{"ok":true,"storage":"kv"}`.
 
@@ -193,18 +193,18 @@ The local (non-hosted) Index strip is unchanged. Code: `apps/web/src/components/
 
 ## Packaging and deploy
 
-### 1. The storage Worker (once, and after changing `workers/storage`)
+### 1. The storage Worker (once, and after changing `apps/storage-worker`)
 
 The Worker is read-only: `GET`/`HEAD /<key>` from the KV binding `INDEX`, with the headers the namespace's metadata records.
 Pre-gzipped bodies are sent as they are, and `Access-Control-Allow-Origin: *`.
 
 ```sh
 node scripts/kv-setup.mjs                    # needs CLOUDFLARE_API_TOKEN and R2_ACCOUNT_ID; prints the namespace id
-cd workers/storage
+cd apps/storage-worker
 CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… npx wrangler@4 deploy
 ```
 
-`workers/storage/wrangler.toml` names the Worker `insight-storage` (so the URL is
+`apps/storage-worker/wrangler.toml` names the Worker `insight-storage` (so the URL is
 `https://insight-storage.<account subdomain>.workers.dev`) and binds the namespace. Set `KV_PUBLIC_BASE` to that URL.
 
 ### 2. The Function and the static site
@@ -219,7 +219,7 @@ CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… npx wrangler@4 deploy
    `/api/index`, `/api/status` and `/api/health`, each sent to `/api/index?route=<name>`, then `/index.html`), `static/`
    (the hosted web build), and one Function, `functions/api/index.func`. It holds a flat `node_modules` from
    `pnpm --filter @insight/hosted deploy --prod --config.node-linker=hoisted`, the hosted `dist`, the built-in plugins
-   under `packages/` and `plugins/`, and a `pnpm-workspace.yaml` marker at its root.
+   under `packages/`, and a `pnpm-workspace.yaml` marker at its root.
 
    Built-in plugins: core discovers them by walking up from its own file to `pnpm-workspace.yaml`. The marker makes the
    function's root the plugin root, so the plugins are found with no code change. `better-sqlite3` is removed from the
@@ -301,7 +301,7 @@ GitHub App setup (Settings → Developer settings → GitHub Apps → New GitHub
 The storage Worker's secret must match the Function's `STORAGE_SIGNING_KEY`:
 
 ```sh
-cd workers/storage
+cd apps/storage-worker
 printf '%s' "$STORAGE_SIGNING_KEY" | CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… npx wrangler@4 secret put STORAGE_SIGNING_KEY
 ```
 

@@ -31,6 +31,7 @@
   "dependencies": {
     "@insight/export": "workspace:*",
     "@insight/frontend-bazel": "workspace:*",
+    "@insight/frontend-cmake": "workspace:*",
     "@insight/frontend-cpp": "workspace:*",
     "@insight/frontend-typescript": "workspace:*",
     "@insight/lens-calls": "workspace:*",

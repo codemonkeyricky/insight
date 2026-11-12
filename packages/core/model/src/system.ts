@@ -95,7 +95,7 @@ const MAX_VIA = 8;
 /**
  * The System model of one scope. A scope outside the project, or with no files, gives an empty model. Tests, fixtures and
  * samples (the Flow tab's noise rule) are left out unless `opts.tests` is set. When the scope holds one folder of code
- * (packages/hosted → src), that folder's children are shown and `via` names the folder.
+ * (apps/hosted → src), that folder's children are shown and `via` names the folder.
  */
 export function systemModel(model: ProjectModel, scopePath: string, opts: SystemOptions = {}): SystemModel {
   const scope = normalizeScope(scopePath);

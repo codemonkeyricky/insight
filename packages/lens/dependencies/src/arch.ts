@@ -13,7 +13,7 @@ export function defaultLayerOf(pkgPath: string): string | undefined {
   if (/^packages\/lens[-/]/.test(pkgPath)) return "lens";
   // The kernel group packages/core/* (ir, sdk, model, flow, indexer) all sit in the ir layer.
   if (/^packages\/core(\/|$)/.test(pkgPath)) return "ir";
-  if (pkgPath.startsWith("apps/") || pkgPath === "packages/cli") return "app";
+  if (pkgPath.startsWith("apps/")) return "app";
   if (pkgPath === ".") return "project";
   return undefined;
 }

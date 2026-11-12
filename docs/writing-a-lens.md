@@ -185,5 +185,5 @@ For the end to end check, index a real project with the CLI and open the lens pa
 
 ```sh
 pnpm -r build
-node packages/cli/dist/cli.js index /path/to/project
+node apps/cli/dist/cli.js index /path/to/project
 ```

@@ -7,7 +7,7 @@ const SHA40 = /^[0-9a-f]{40}$/;
 // A branch, tag or sha as the server accepts it (checkRef): letters, digits, ".", "_", "-" and "/", no empty or dot segments.
 const REF = /^[A-Za-z0-9._\-/]+$/;
 
-/** True when `ref` is a git ref the server accepts (see checkRef in packages/hosted). */
+/** True when `ref` is a git ref the server accepts (see checkRef in apps/hosted). */
 export function isRefName(ref: string): boolean {
   return REF.test(ref) && !ref.split("/").some((seg) => seg === "" || seg === "." || seg === "..");
 }

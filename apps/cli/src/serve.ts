@@ -69,7 +69,7 @@ export function openCommand(url: string, platform: NodeJS.Platform): { cmd: stri
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-/** The repository root: packages/cli/dist -> the repo. */
+/** The repository root: apps/cli/dist -> the repo. */
 const REPO_ROOT = resolve(HERE, "..", "..", "..");
 const SERVER_MAIN = join(REPO_ROOT, "apps", "server", "dist", "main.js");
 const WEB_INDEX = join(REPO_ROOT, "apps", "web", "dist", "index.html");

@@ -4,7 +4,7 @@ The System view is a mode of the Arch tab (the System / Packages toggle, System 
 code talk to?" for the current explorer scope: the components inside the scope, the routes they serve, the outside
 systems they reach and the verbs between them.
 
-![The hosted package at packages/hosted/src](screenshots/system-view/07-edge-selected.png)
+![The hosted package at apps/hosted/src](screenshots/system-view/07-edge-selected.png)
 
 ## What it shows
 
@@ -57,7 +57,7 @@ include them. A scope that is itself inside a test folder shows its tests withou
 
 ### Pass-through descend
 
-When a scope holds exactly one folder of code (`packages/hosted` holds `src`), the view shows that folder's children and
+When a scope holds exactly one folder of code (`apps/hosted` holds `src`), the view shows that folder's children and
 the toolbar notes `via src`. It repeats for up to eight levels, so a chain of single folders does not give a one-card view.
 
 ## Layout

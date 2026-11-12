@@ -102,7 +102,7 @@ const KV_API = "https://api.cloudflare.com/client/v4";
 /**
  * A Workers KV namespace, through the Cloudflare REST API (bearer token). A put is a multipart form: `value` (the bytes,
  * gzipped when gzip is set) and `metadata` (JSON with contentType, cacheControl and contentEncoding). The read-only Worker
- * (workers/storage) serves the same metadata as headers. Reads gunzip by magic bytes, as the other adapters do.
+ * (apps/storage-worker) serves the same metadata as headers. Reads gunzip by magic bytes, as the other adapters do.
  */
 export function kvStorage(config: KvConfig): Storage {
   const fetchFn: FetchLike = config.fetch ?? ((input, init) => fetch(input, init));

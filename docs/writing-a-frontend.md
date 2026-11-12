@@ -20,7 +20,7 @@ interface Frontend {
 
 Frontends are plugins. The loader (`packages/core/indexer/src/loader.ts`) finds every folder that has an `insight-plugin.json` in:
 
-- `packages/*` and `plugins/*` in the repository (`plugins/frontend-cmake` is an example of the second),
+- `packages/*` in the repository (the cmake frontend is `packages/frontend/cmake`), and `plugins/*` for local plugins,
 - `~/.insight/plugins`, and
 - `.insight/plugins` inside the project being indexed (scanned last).
 
@@ -166,7 +166,7 @@ After the package builds, index a project and look at the coverage table and the
 
 ```sh
 pnpm -r build
-node packages/cli/dist/cli.js index /path/to/project
+node apps/cli/dist/cli.js index /path/to/project
 ```
 
 Coverage shows files scanned, files with records and files with errors for each facet. Parse errors and frontend findings are listed under "Index" on the project overview, not under a lens. Messages a frontend logs with `ctx.log` go to the run log.

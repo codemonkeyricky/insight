@@ -247,7 +247,7 @@ export function scriptRunFiles(command: string): string[] {
 
 /**
  * The indexed source file a package target names, mapped from build output to source. Every `dist|build|out|lib`
- * segment is tried as `src` in its place, leftmost first, so `dist/cli.js` and `packages/cli/dist/cli.js` both reach
+ * segment is tried as `src` in its place, leftmost first, so `dist/cli.js` and `apps/cli/dist/cli.js` both reach
  * their source. The target itself is the last try. Undefined when no indexed source file matches.
  */
 export function packageTargetSource(pkgDir: string, target: string, rels: Set<string>): string | undefined {

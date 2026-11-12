@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import worker from "../../../workers/storage/index.js";
+import worker from "../../storage-worker/index.js";
 import { handleGrant, signPrefix } from "../src/index.js";
 import { AUTH_ENV, fakeApp, SESSION_KEY, SIGNING_KEY, type AppRepo } from "./app-helpers.js";
 import { FIXTURE, makeTarball, NOW, SHA } from "./helpers.js";

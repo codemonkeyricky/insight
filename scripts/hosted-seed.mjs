@@ -7,8 +7,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { exportProject } from "../packages/export/dist/index.js";
-import { IMMUTABLE, publishExport, storageFromEnv, writeStatus } from "../packages/hosted/dist/index.js";
+import { exportProject } from "../apps/export/dist/index.js";
+import { IMMUTABLE, publishExport, storageFromEnv, writeStatus } from "../apps/hosted/dist/index.js";
 
 const argv = process.argv.slice(2);
 const visibility = argv.includes("--private") ? "private" : "public";

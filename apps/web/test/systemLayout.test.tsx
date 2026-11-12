@@ -119,7 +119,7 @@ describe("layoutSystem", () => {
   });
 
   it("shortens long labels at a segment and writes pills with the verb first", () => {
-    expect(shortLabel("packages/hosted/src/github.ts", 20)).toBe("…/src/github.ts");
+    expect(shortLabel("apps/hosted/src/github.ts", 20)).toBe("…/src/github.ts");
     expect(shortLabel("a/b.ts", 20)).toBe("a/b.ts");
     expect(pillText({ verb: "writes", label: "PUT ×5" })).toBe("writes · PUT ×5");
     expect(pillText({ verb: "calls", label: "calls ×3" })).toBe("calls ×3");
