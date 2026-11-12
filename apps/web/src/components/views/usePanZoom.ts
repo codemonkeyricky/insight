@@ -11,17 +11,21 @@ export interface FitOpts {
   /** Room kept between the content and the stage's edges, in px. */
   pad: number;
   maxK: number;
-  minK: number;
+  /** The smallest scale a fit settles on. A wider drawing is then left-aligned and panned, so its text stays readable. */
+  fitMinK: number;
 }
 
 const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
 
-/** The camera that shows a `contentW` by `contentH` box in a `stageW` by `stageH` stage. Wide content is limited by the width, tall content by the height. */
+/**
+ * The camera that fits a `contentW` by `contentH` box in a `stageW` by `stageH` stage. The scale is limited by the width or the
+ * height, clamped to [fitMinK, maxK]. Content wider than the stage at that scale sits at the left pad; narrower content is centred.
+ * Content taller than the stage sits at the top pad; shorter content is centred vertically.
+ */
 export function fitBox(contentW: number, contentH: number, stageW: number, stageH: number, o: FitOpts): Camera {
   if (contentW <= 0 || contentH <= 0 || stageW <= 0 || stageH <= 0) return { k: 1, x: 0, y: 0 };
-  const k = clamp(Math.min((stageW - 2 * o.pad) / contentW, (stageH - 2 * o.pad) / contentH), o.minK, o.maxK);
-  const x = (stageW - contentW * k) / 2;
-  // Content still taller than the stage at the chosen scale starts at its top edge; otherwise it is centred.
+  const k = clamp(Math.min((stageW - 2 * o.pad) / contentW, (stageH - 2 * o.pad) / contentH), o.fitMinK, o.maxK);
+  const x = contentW * k > stageW ? o.pad : (stageW - contentW * k) / 2;
   const y = contentH * k > stageH ? o.pad : (stageH - contentH * k) / 2;
   return { k, x, y };
 }
@@ -29,8 +33,8 @@ export function fitBox(contentW: number, contentH: number, stageW: number, stage
 /** The zoom range of the wheel and the + and − buttons. Matches the System view. */
 const MIN_K = 0.1;
 const MAX_K = 2.5;
-/** The fit of the Packages view: content at most 1.15 times its size, 16 px from the stage's edges, down to 0.1. */
-const FIT: FitOpts = { pad: 16, maxK: 1.15, minK: 0.1 };
+/** The fit of the Packages view: its floor matches the System view's FIT_MIN_K, content at most 1.15 times its size, 16 px from the edges. */
+const FIT: FitOpts = { pad: 16, maxK: 1.15, fitMinK: 0.56 };
 /** A pointer that moves more than this many px is a drag, not a click. */
 const DRAG_PX = 3;
 /** Room kept below the stage's top edge when it is not expanded, in px. */
