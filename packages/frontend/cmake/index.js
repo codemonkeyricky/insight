@@ -47,7 +47,8 @@ function batchFor(file, model, fileSet) {
   return { file, records };
 }
 
-export default {
+/** @type {import("@insight/sdk").Frontend} */
+const frontend = {
   id: FRONTEND_ID,
   version: "0.1.0",
   provides: ["packaging"],
@@ -69,3 +70,4 @@ export default {
   },
 };
 
+export default frontend;
