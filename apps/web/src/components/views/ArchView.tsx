@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { api, type ArchModel, type Span } from "../../api";
+import { usePanZoom } from "./usePanZoom";
 import { diagramModel, FOLDER_GRID, type DiagramModel } from "../../arch/folders";
 import { ARCH_HEADER_H, ARCH_PAD, archLayout, arrowKey, arrowLabel, type ArchBox } from "../../arch/layout";
 import { bandPerRow, IMPORTED_BY, IMPORTS, scopedView, withoutCodeText, type ScopedDiagram } from "../../arch/scoped";
@@ -69,26 +70,25 @@ function ArchDiagram({ id, scope, model: whole }: { id: string; scope: string; m
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
-  // The scoped view follows the width of its container, the centre pane, measured as it changes.
-  const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
+  // The scoped view follows the width of its stage, the centre pane, measured as it changes.
+  const [stageEl, setStageEl] = useState<HTMLDivElement | null>(null);
   const [avail, setAvail] = useState(() => window.innerWidth);
   useEffect(() => {
-    if (!scrollEl || typeof ResizeObserver === "undefined") return;
-    const measure = () => setAvail(scrollEl.clientWidth);
+    if (!stageEl || typeof ResizeObserver === "undefined") return;
+    const measure = () => setAvail(stageEl.clientWidth);
     measure();
     const observer = new ResizeObserver(measure);
-    observer.observe(scrollEl);
+    observer.observe(stageEl);
     return () => observer.disconnect();
-  }, [scrollEl]);
+  }, [stageEl]);
   const perRow = cardsPerRow(winWidth);
   const folders = scoped === null && shown.depth !== undefined;
   const layout = useMemo(
     () => archLayout(model, scoped ? { band: { layer: scoped.inner, perRow: bandPerRow(avail) } } : folders ? { grid: perRow } : {}),
     [model, scoped, folders, perRow, avail],
   );
-  // A drawing wider than its container is drawn to the container's width, so every edge and column stays in view. The root
-  // folder grid does this when its cards do not fill a full row.
-  const scaled = scoped !== null ? layout.width > avail : folders && perRow < FOLDER_GRID;
+  // The camera pans and zooms the drawing inside the stage. It fits the drawing when the layout changes.
+  const pz = usePanZoom(stageEl, { w: layout.width, h: layout.height });
   const [sel, setSel] = useState<Selection>(null);
   // The scope's folder (a file scope gives its folder), and how many cards lie inside it.
   const at = scoped?.scope ?? "";
@@ -114,6 +114,7 @@ function ArchDiagram({ id, scope, model: whole }: { id: string; scope: string; m
   const openBox = (box: ArchBox) => {
     window.location.hash = cardHref(box);
   };
+  const { cam } = pz;
   const boxKey = (box: ArchBox, e: KeyboardEvent<SVGGElement>) => {
     if (e.key !== "Enter" && e.key !== " ") return;
     e.preventDefault();
@@ -147,16 +148,33 @@ function ArchDiagram({ id, scope, model: whole }: { id: string; scope: string; m
         </p>
       )}
       {empty && <p className="muted">No source files in {at}.</p>}
-      {!empty && <div className="arch-scroll" ref={setScrollEl}>
-        <svg
-          className="arch-svg"
-          width={scaled ? undefined : layout.width}
-          height={scaled ? undefined : layout.height}
-          style={scaled ? { width: "100%", height: "auto" } : undefined}
-          viewBox={`0 0 ${layout.width} ${layout.height}`}
-          role="img"
-          aria-label="Package architecture"
+      {!empty && (
+        <div
+          className={`arch-stage${pz.expanded ? " expanded" : ""}`}
+          ref={setStageEl}
+          style={pz.expanded || pz.stageH === null ? undefined : { height: pz.stageH }}
+          onPointerDown={pz.pointer.onPointerDown}
+          onPointerMove={pz.pointer.onPointerMove}
+          onPointerUp={pz.pointer.onPointerUp}
+          onPointerCancel={pz.pointer.onPointerCancel}
         >
+          <div className="arch-bar">
+            <span className="sysv-zoom" role="group" aria-label="Zoom">
+              <button type="button" onClick={() => pz.zoomBy(1 / 1.25)} aria-label="Zoom out">
+                −
+              </button>
+              <button type="button" onClick={() => pz.zoomBy(1.25)} aria-label="Zoom in">
+                +
+              </button>
+              <button type="button" onClick={pz.fit}>
+                Fit
+              </button>
+              <button type="button" onClick={() => pz.setExpanded(!pz.expanded)} aria-pressed={pz.expanded} title="Fill the window (Esc leaves)">
+                {pz.expanded ? "Close" : "Expand"}
+              </button>
+            </span>
+          </div>
+        <svg className="arch-svg" width="100%" height="100%" role="img" aria-label="Package architecture">
           <defs>
             <marker id="arch-head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
               <path className="arch-head" d="M0 0 L10 5 L0 10 z" />
@@ -165,8 +183,18 @@ function ArchDiagram({ id, scope, model: whole }: { id: string; scope: string; m
               <path className="arch-head error" d="M0 0 L10 5 L0 10 z" />
             </marker>
           </defs>
+          <g transform={`translate(${cam.x} ${cam.y}) scale(${cam.k})`}>
           {/* Clicking the empty diagram clears the selection. Boxes and arrows stop the click before it gets here. */}
-          <rect className="arch-bg" x={0} y={0} width={layout.width} height={layout.height} onClick={() => setSel(null)} />
+          <rect
+            className="arch-bg"
+            x={0}
+            y={0}
+            width={layout.width}
+            height={layout.height}
+            onClick={() => {
+              if (!pz.moved()) setSel(null);
+            }}
+          />
           {layout.columns.map((col) => (
             <text key={col.layer} className="arch-layer" x={col.x} y={ARCH_PAD + ARCH_HEADER_H / 2 + 4}>
               {layerTitle(col.layer)}
@@ -178,6 +206,7 @@ function ArchDiagram({ id, scope, model: whole }: { id: string; scope: string; m
             const cls = ["arch-arrow", on && "lit", dim && "dim", a.violation && "violation", a.dashed && "dashed"].filter(Boolean).join(" ");
             const pick = (e: { stopPropagation: () => void }) => {
               e.stopPropagation();
+              if (pz.moved()) return;
               setSel({ kind: "arrow", key: a.key });
             };
             return (
@@ -209,7 +238,8 @@ function ArchDiagram({ id, scope, model: whole }: { id: string; scope: string; m
                 aria-label={`${box.pkg.name}, ${boundary ? plural(imports, "import") : plural(box.pkg.fileCount, "file")}. ${action}`}
                 onClick={(e) => {
                   e.stopPropagation();
-                  openBox(box);
+                  // The click that ends a drag does not open the card.
+                  if (!pz.moved()) openBox(box);
                 }}
                 onKeyDown={(e) => boxKey(box, e)}
               >
@@ -235,8 +265,10 @@ function ArchDiagram({ id, scope, model: whole }: { id: string; scope: string; m
               </g>
             );
           })}
+          </g>
         </svg>
-      </div>}
+        </div>
+      )}
       {!empty && scoped === null && shown.other > 0 && (
         <p className="muted small arch-other">
           Other: {shown.other} {shown.other === 1 ? "folder" : "folders"} without code
