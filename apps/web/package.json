@@ -27,7 +27,6 @@
   },
   "devDependencies": {
     "@insight/flow": "workspace:*",
-    "@insight/lens-dependencies": "workspace:*",
     "@insight/model": "workspace:*",
     "@types/cytoscape": "3.31.0",
     "@types/d3-interpolate": "3.0.4",

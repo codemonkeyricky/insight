@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ArchEdge, ArchFile, ArchFileImport, ArchModel, ArchPackage } from "@insight/lens-dependencies";
+import type { ArchEdge, ArchFile, ArchFileImport, ArchModel, ArchPackage } from "@insight/model";
 import { bandPerRow, IMPORTED_BY, IMPORTS, scopedView, withoutCodeText } from "../src/arch/scoped.js";
 
 const span = (file: string, line: number) => ({ file, start: [line, 0] as [number, number], end: [line, 10] as [number, number] });

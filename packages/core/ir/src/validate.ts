@@ -1,8 +1,8 @@
 import { type ValidateFunction } from "ajv/dist/2020.js";
 import type { IRFinding, IREdge, IRNode } from "./generated/core.js";
-import { createIRAjv, KindRegistry } from "./registry.js";
-import { CORE_SCHEMA_ID } from "./schemas.js";
-import { Ajv2020 } from "ajv/dist/2020.js";
+import type { Ajv2020 } from "ajv/dist/2020.js";
+import type { KindRegistry } from "./registry.js";
+import { CORE_SCHEMA_ID } from "./ids.js";
 
 export interface Diagnostic {
   /** 1-based line in the NDJSON input, when the problem is tied to a line. */
@@ -65,7 +65,7 @@ export function validateIR(
   text: string,
   registry: KindRegistry,
   options: ValidateOptions = {},
-  ajv: Ajv2020 = createIRAjv(),
+  ajv: Ajv2020 = registry.ajv,
 ): ValidationReport {
   const closed = options.closed ?? true;
   const { lines, errors: parseErrors } = parseNdjson(text);

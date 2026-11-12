@@ -2,8 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const CORE_SCHEMA_ID = "https://insight.dev/ir/core.json";
-export const KIND_DEFINITION_SCHEMA_ID = "https://insight.dev/ir/kind-definition.json";
+export { CORE_SCHEMA_ID, KIND_DEFINITION_SCHEMA_ID } from "./ids.js";
 
 /**
  * Directory holding the JSON Schema sources. Works from both src/ and dist/. It is worked out on first use, not when

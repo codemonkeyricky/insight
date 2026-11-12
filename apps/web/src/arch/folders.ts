@@ -1,4 +1,4 @@
-import type { ArchEdge, ArchFile, ArchFileImport, ArchModel, ArchPackage } from "@insight/lens-dependencies";
+import type { ArchEdge, ArchFile, ArchFileImport, ArchModel, ArchPackage } from "@insight/model";
 import type { Span } from "../api";
 
 // The folder view of the Arch tab. A project with fewer than three packages draws its folders instead: one card per

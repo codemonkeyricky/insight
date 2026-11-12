@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createCoreRegistry, type IREdge, type IRNode } from "@insight/ir";
+import { type IREdge, type IRNode } from "@insight/ir";
+import { createCoreRegistry } from "@insight/ir/node";
 import { IRView, edgeTargets } from "../src/index.js";
 
 const prov = { frontend: "fixture", confidence: "exact" as const };

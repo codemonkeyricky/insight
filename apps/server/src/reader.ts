@@ -32,8 +32,9 @@ import {
 } from "@insight/flow";
 import { buildProjectModel, refsOf as modelRefsOf, scopeView as modelScopeView, serializeModel, type ProjectModel, type Refs, type SerializedModel } from "@insight/model";
 import { edgeTargets, IRView, isExternal, type ProjectRoot } from "@insight/sdk";
-import { createCoreRegistry, type IREdge, type IRDocument, type IRFinding, type IRNode, type IRRecord, type KindRegistry, type NodeId } from "@insight/ir";
-import { archModel, type ArchModel } from "@insight/lens-dependencies";
+import { type IREdge, type IRDocument, type IRFinding, type IRNode, type IRRecord, type KindRegistry, type NodeId } from "@insight/ir";
+import { createCoreRegistry } from "@insight/ir/node";
+import { archModel, type ArchModel } from "@insight/model";
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import { ProjectError, type ProjectRecord } from "./registry.js";

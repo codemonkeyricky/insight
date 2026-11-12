@@ -2,7 +2,8 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { createCoreRegistry, validateIR, type IREdge, type IRNode } from "@insight/ir";
+import { validateIR, type IREdge, type IRNode } from "@insight/ir";
+import { createCoreRegistry } from "@insight/ir/node";
 import type { IRBatch, ProjectRoot } from "@insight/sdk";
 import frontend from "../src/index.js";
 

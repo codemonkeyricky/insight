@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ArchModel } from "@insight/lens-dependencies";
+import type { ArchModel } from "@insight/model";
 import { ARCH_PAD, arrowKey, arrowsOf, arrowWidth, archLayout } from "../src/arch/layout.js";
 
 const LAYERS = ["project", "frontend", "ir", "lens", "app"];

@@ -12,7 +12,10 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist", "insight-plugin.json"],
+  "files": [
+    "dist",
+    "insight-plugin.json"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -20,6 +23,7 @@
   },
   "dependencies": {
     "@insight/ir": "workspace:*",
+    "@insight/model": "workspace:*",
     "@insight/sdk": "workspace:*",
     "picomatch": "^4.0.7"
   },

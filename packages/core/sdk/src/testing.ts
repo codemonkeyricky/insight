@@ -2,7 +2,8 @@
  * Builders for hand-written IR. Lens tests use these instead of a parser, which keeps every lens
  * testable on plain data.
  */
-import { createCoreRegistry, type IREdge, type IRFinding, type IRNode, type KindRegistry, type NodeId, type Span, type UnresolvedRef } from "@insight/ir";
+import { type IREdge, type IRFinding, type IRNode, type KindRegistry, type NodeId, type Span, type UnresolvedRef } from "@insight/ir";
+import { createCoreRegistry } from "@insight/ir/node";
 import { IRView } from "./irview.js";
 
 export type Confidence = "exact" | "inferred" | "heuristic";

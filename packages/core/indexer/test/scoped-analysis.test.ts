@@ -2,7 +2,8 @@ import { existsSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createCoreRegistry, type IRDocument } from "@insight/ir";
+import { type IRDocument } from "@insight/ir";
+import { createCoreRegistry } from "@insight/ir/node";
 import { irFixtures as fx, type Lens, type LensResult, type ProjectRoot } from "@insight/sdk";
 import {
   ANALYSIS_SCHEMA,

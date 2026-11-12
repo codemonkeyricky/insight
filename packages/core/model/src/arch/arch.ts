@@ -1,6 +1,6 @@
 import type { IRView } from "@insight/sdk";
 import type { IREdge, NodeId, Span } from "@insight/ir";
-import { buildModuleGraph } from "./index.js";
+import { buildModuleGraph } from "./module-graph.js";
 
 /** Layer order used when the caller does not supply its own `layerOf`. */
 export const DEFAULT_LAYERS = ["project", "frontend", "ir", "lens", "app"] as const;

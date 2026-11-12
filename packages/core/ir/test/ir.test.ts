@@ -2,7 +2,8 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { createCoreRegistry, KindRegistry, validateIR } from "../src/index.js";
+import { createIRAjv, KindRegistry, validateIR } from "../src/index.js";
+import { createCoreRegistry, loadIRSchemas } from "../src/node.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixture = (name: string) => readFileSync(join(here, "fixtures", name), "utf8");
@@ -94,7 +95,7 @@ describe("kinds defined as JSON only", () => {
   });
 
   it("rejects an invalid definition with the schema path", () => {
-    const registry = new KindRegistry();
+    const registry = new KindRegistry(createIRAjv(loadIRSchemas()));
     expect(() => registry.add([{ kind: "x-a.b", facet: "flow" }], "bad")).toThrow(/not a valid kind definition/);
   });
 });

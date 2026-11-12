@@ -1,13 +1,7 @@
 import { Ajv2020, type ValidateFunction } from "ajv/dist/2020.js";
 import type { KindDefinition, Part } from "./generated/kind-definition.js";
 import { isCoreFacet, isFacetId } from "./facets.js";
-import {
-  CORE_SCHEMA_ID,
-  KIND_DEFINITION_SCHEMA_ID,
-  loadCoreSchema,
-  loadFacetSchemas,
-  loadKindDefinitionSchema,
-} from "./schemas.js";
+import { CORE_SCHEMA_ID, KIND_DEFINITION_SCHEMA_ID } from "./ids.js";
 
 export interface RegisteredKind {
   kind: string;
@@ -28,12 +22,19 @@ export class KindRegistryError extends Error {
   }
 }
 
+/** The JSON Schema documents the IR is checked against. Node callers load them with `loadIRSchemas` from `@insight/ir/node`. */
+export interface IRSchemaSet {
+  core: object;
+  kindDefinition: object;
+  facets: object[];
+}
+
 /** Creates the Ajv instance used for every schema in the IR. All IR schemas are registered once. */
-export function createIRAjv(): Ajv2020 {
+export function createIRAjv(schemas: IRSchemaSet): Ajv2020 {
   const ajv = new Ajv2020({ allErrors: true, strict: false, allowUnionTypes: true });
-  ajv.addSchema(loadCoreSchema(), CORE_SCHEMA_ID);
-  ajv.addSchema(loadKindDefinitionSchema(), KIND_DEFINITION_SCHEMA_ID);
-  for (const schema of loadFacetSchemas()) ajv.addSchema(schema);
+  ajv.addSchema(schemas.core, CORE_SCHEMA_ID);
+  ajv.addSchema(schemas.kindDefinition, KIND_DEFINITION_SCHEMA_ID);
+  for (const schema of schemas.facets) ajv.addSchema(schema);
   return ajv;
 }
 
@@ -43,12 +44,13 @@ export function createIRAjv(): Ajv2020 {
  */
 export class KindRegistry {
   private readonly kinds: Map<string, RegisteredKind>;
-  private readonly ajv: Ajv2020;
+  /** The compiler every schema of this registry is registered with. Validation reuses it. */
+  readonly ajv: Ajv2020;
   private readonly kindValidator: ValidateFunction;
   private readonly attrValidators = new Map<string, ValidateFunction>();
   private readonly subkindCache = new Map<string, string[]>();
 
-  constructor(ajv: Ajv2020 = createIRAjv(), kinds: Map<string, RegisteredKind> = new Map()) {
+  constructor(ajv: Ajv2020, kinds: Map<string, RegisteredKind> = new Map()) {
     this.ajv = ajv;
     this.kinds = kinds;
     const compiled = ajv.getSchema(KIND_DEFINITION_SCHEMA_ID);

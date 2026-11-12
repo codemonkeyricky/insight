@@ -23,7 +23,6 @@
     "@insight/indexer": "workspace:*",
     "@insight/flow": "workspace:*",
     "@insight/ir": "workspace:*",
-    "@insight/lens-dependencies": "workspace:*",
     "@insight/model": "workspace:*",
     "@insight/sdk": "workspace:*",
     "elkjs": "0.12.0",
