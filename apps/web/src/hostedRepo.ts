@@ -1,7 +1,16 @@
 // Hosted mode's repository names: what the home page accepts as "owner/repo" or a GitHub link, the hash links to an
 // index, the messages for an index that failed, and a relative time for the recent list. Pure, so the tests need no DOM.
 
-export type RepoInput = { ok: true; owner: string; repo: string } | { ok: false; error: string };
+export type RepoInput = { ok: true; owner: string; repo: string; ref?: string } | { ok: false; error: string };
+
+const SHA40 = /^[0-9a-f]{40}$/;
+// A branch, tag or sha as the server accepts it (checkRef): letters, digits, ".", "_", "-" and "/", no empty or dot segments.
+const REF = /^[A-Za-z0-9._\-/]+$/;
+
+/** True when `ref` is a git ref the server accepts (see checkRef in packages/hosted). */
+export function isRefName(ref: string): boolean {
+  return REF.test(ref) && !ref.split("/").some((seg) => seg === "" || seg === "." || seg === "..");
+}
 
 // GitHub account names: letters, digits and single hyphens, no leading or trailing hyphen, at most 39 characters.
 const OWNER = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -25,18 +34,50 @@ export function parseRepoInput(text: string): RepoInput {
   if (!link && /^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return { ok: false, error: "Only GitHub repositories can be indexed here." };
   const path = (link ? (link[1] ?? "") : raw).replace(/[?#].*$/, "").replace(/\/+$/, "");
   const parts = path.split("/");
-  if (parts.length > 2 && parts[2] === "tree") return { ok: false, error: "Paste the repository's link, not a branch or folder link." };
-  if (parts.length !== 2) return { ok: false, error: "Use owner/repo or https://github.com/owner/repo." };
+  let ref: string | undefined;
+  if (parts.length > 3 && parts[2] === "tree") {
+    // A branch link: the ref is the first segment after "tree" (a folder path after it cannot be told from a slash branch;
+    // write owner/repo@a/b for that).
+    ref = parts[3];
+    parts.length = 2;
+  } else if (parts.length === 3 && parts[2] === "tree") {
+    return { ok: false, error: "Add the branch after /tree/, or paste the repository's link." };
+  } else if (parts.length > 2 && parts[1]?.includes("@")) {
+    // owner/repo@a/b: everything after the "@" is the ref.
+    const first = (parts[1] ?? "").split("@");
+    ref = [first.slice(1).join("@"), ...parts.slice(2)].join("/");
+    parts.length = 2;
+    parts[1] = first[0] ?? "";
+  } else if (parts.length === 2 && parts[1]?.includes("@")) {
+    const at = (parts[1] ?? "").indexOf("@");
+    ref = (parts[1] ?? "").slice(at + 1);
+    parts[1] = (parts[1] ?? "").slice(0, at);
+  }
+  if (ref !== undefined) {
+    try {
+      ref = decodeURIComponent(ref);
+    } catch {
+      return { ok: false, error: `"${ref}" is not a valid branch name.` };
+    }
+    if (!isRefName(ref)) return { ok: false, error: `"${ref}" is not a valid branch name.` };
+  }
+  if (parts.length !== 2) return { ok: false, error: "Use owner/repo, owner/repo@branch or https://github.com/owner/repo." };
   const owner = (parts[0] ?? "").toLowerCase();
   const repo = (parts[1] ?? "").replace(/\.git$/i, "").toLowerCase();
   if (owner === "" || owner.length > 39 || !OWNER.test(owner)) return { ok: false, error: `"${parts[0] ?? ""}" is not a GitHub account name.` };
   if (!REPO.test(repo) || repo === "." || repo === "..") return { ok: false, error: `"${parts[1] ?? ""}" is not a valid repository name.` };
-  return { ok: true, owner, repo };
+  return { ok: true, owner, repo, ...(ref !== undefined ? { ref } : {}) };
 }
 
-/** The hash link to an index: the latest one of a repository, or the one at a commit. */
-export function hrefHosted(owner: string, repo: string, sha?: string): string {
-  return `#/gh/${owner}/${repo}${sha ? `@${sha}` : ""}`;
+/**
+ * The hash link to an index: the latest one of a repository, the one at a commit, or (with `ref`) the latest of a branch.
+ * A branch is percent-encoded, so "build/x" is `@build%2Fx`; a 40-hex ref is the commit form.
+ */
+export function hrefHosted(owner: string, repo: string, sha?: string, ref?: string): string {
+  const base = `#/gh/${owner}/${repo}`;
+  if (sha) return `${base}@${sha}`;
+  if (ref === undefined || ref === "") return base;
+  return SHA40.test(ref) ? `${base}@${ref}` : `${base}@${encodeURIComponent(ref)}`;
 }
 
 /** What a run's phase is called on the page. The names are the ones the hosted job and the core pipeline write to status.json. */
@@ -61,9 +102,11 @@ export function phaseLabel(phase: string | undefined): string {
 }
 
 /** What the user reads when an index did not finish, by the error code the server or the page gave. */
-export function indexErrorText(code: string, repo: string, fallback?: string): string {
+export function indexErrorText(code: string, repo: string, fallback?: string, branch?: string): string {
   switch (code) {
     case "not_found":
+      // The server words a missing ref "ref <name> was not found in <repo>".
+      if (branch !== undefined && /^ref /.test(fallback ?? "")) return `Branch not found on GitHub: ${branch} (in ${repo}).`;
       return `No public GitHub repository named ${repo}. Check the spelling. A private one needs sign-in and the Insight app installed on it.`;
     case "auth_required":
       return `${repo} is private. Sign in with GitHub to index it.`;
@@ -118,7 +161,7 @@ export function relativeTime(iso: string, now: number): string {
 }
 
 /** A repository named by a page path: `/owner/repo`. `scope` is reserved for a folder or file; v1 never sets it. */
-export type RepoPath = { owner: string; repo: string; scope?: string };
+export type RepoPath = { owner: string; repo: string; scope?: string; ref?: string };
 
 /** First path segments that belong to the app or the server, never to a GitHub account. */
 const RESERVED_FIRST = new Set(["api", "assets", "storage", "index.html"]);
@@ -143,12 +186,27 @@ export function parseRepoPath(pathname: string): RepoPath | null {
   if (/^https?:$/i.test(parts[0] ?? "")) parts.shift();
   if (/^(?:www\.)?github\.com$/i.test(parts[0] ?? "")) parts.shift();
   const owner = (parts[0] ?? "").toLowerCase();
-  const repo = (parts[1] ?? "").replace(/\.git$/i, "").toLowerCase();
+  let repoPart = parts[1] ?? "";
+  // /owner/repo@<ref>: the ref is everything after the "@" (it may hold slashes).
+  const at = repoPart.indexOf("@");
+  if (at !== -1) {
+    const ref = [repoPart.slice(at + 1), ...parts.slice(2)].join("/");
+    repoPart = repoPart.slice(0, at);
+    const repoName = repoPart.replace(/\.git$/i, "").toLowerCase();
+    if (parts.length < 2 || !isRepoName(owner, repoName) || !isRefName(ref)) return null;
+    return { owner, repo: repoName, ref };
+  }
+  const repo = repoPart.replace(/\.git$/i, "").toLowerCase();
   if (parts.length < 2 || !isRepoName(owner, repo)) return null;
   const rest = parts.slice(2);
   if (rest.length === 0) return { owner, repo };
-  // A tree or blob link needs its ref; the ref and the path after it are ignored.
-  if ((rest[0] === "tree" || rest[0] === "blob") && rest.length >= 2) return { owner, repo };
+  // A tree or blob link needs its ref: the first segment after it (a folder path after it cannot be told from a slash
+  // branch; use /owner/repo@a/b for that). A blob ref is ignored, as in v1.
+  if (rest[0] === "tree" && rest.length >= 2) {
+    const ref = rest[1] as string;
+    return isRefName(ref) ? { owner, repo, ref } : { owner, repo };
+  }
+  if (rest[0] === "blob" && rest.length >= 2) return { owner, repo };
   return null;
 }
 
@@ -162,5 +220,21 @@ export function hashForRepoPath(pathname: string, hash: string): string | undefi
   if (!repo) return undefined;
   const route = hash.replace(/^#\/?/, "");
   if (route !== "") return `/${hash}`;
-  return `/#/gh/${repo.owner}/${repo.repo}`;
+  return `/${hrefHosted(repo.owner, repo.repo, undefined, repo.ref)}`;
+}
+
+/** Fired on window when the workspace has re-indexed the branch the page is already showing: the page reloads its pointer. */
+export const REINDEXED_EVENT = "insight:reindexed";
+
+/** "3 min", "5 h": a wait in seconds as a short phrase. */
+export function waitText(seconds: number): string {
+  if (seconds < 90) return `${Math.max(1, Math.round(seconds))} s`;
+  const min = Math.round(seconds / 60);
+  if (min < 90) return `${min} min`;
+  return `${Math.round(min / 60)} h`;
+}
+
+/** What the re-index control says for a rate limit: the server's message, and the wait when the server gave one. */
+export function rateLimitText(message: string, retryAfterSeconds?: number): string {
+  return retryAfterSeconds === undefined ? message : `${message}. Resets in about ${waitText(retryAfterSeconds)}.`;
 }

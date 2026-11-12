@@ -961,6 +961,14 @@ a.btn.rv-show:hover { background: color-mix(in srgb, var(--accent) 12%, transpar
 .idx-strip .check { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: var(--t-sm); color: var(--muted); }
 .idx-strip .idx-rest, .idx-strip .idx-note { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--t-xs); color: var(--muted); }
 .idx-strip > a, .idx-strip > .error { flex: none; font-size: var(--t-xs); }
+/* Hosted: a branch field and Re-index latest, then one line. It wraps at phone width instead of clipping. */
+.idx-strip.idx-hosted { height: auto; min-height: 32px; flex-wrap: wrap; row-gap: 4px; padding: 4px 12px; overflow: visible; white-space: normal; }
+.idx-hosted .idx-branch { flex: 0 1 180px; min-width: 96px; min-height: 24px; box-sizing: border-box; padding: 2px 8px; font: inherit; font-size: var(--t-sm); }
+.idx-hosted .idx-rest, .idx-hosted .idx-note { flex: 1 1 140px; white-space: nowrap; }
+.idx-hosted .idx-uptodate { color: var(--accent); }
+.idx-hosted .idx-error { flex: 1 1 100%; white-space: normal; }
+.idx-hosted .idx-hosted-run { flex: 1 1 140px; max-width: 320px; }
+.idx-hosted .idx-hosted-line { flex: 1 1 100%; }
 .idx-strip-main { flex: 1 1 160px; min-width: 0; max-width: 460px; }
 /* One line: the label and the bar sit on the strip's centre line, level with the Index button's text. */
 .idx-strip .idx { flex-direction: row; align-items: center; gap: 10px; }

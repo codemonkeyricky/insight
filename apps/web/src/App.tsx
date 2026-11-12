@@ -26,6 +26,12 @@ export function App() {
   const route = useRoute();
   const [server, setServer] = useState<string>("checking");
   const [meta, setMeta] = useState<DemoMeta | null>(null);
+  // A hosted @branch route opens its workspace in place; the page chrome follows.
+  const [inPlace, setInPlace] = useState<string>();
+  useEffect(() => {
+    if (route.name !== "hosted") setInPlace(undefined);
+  }, [route]);
+  const wide = route.name === "workspace" || (route.name === "hosted" && inPlace !== undefined);
   useEffect(() => {
     if (IS_DEMO) void staticApi.meta().then(setMeta).catch(() => setMeta(null));
   }, []);
@@ -37,8 +43,8 @@ export function App() {
   }, []);
 
   return (
-    <div className={route.name === "workspace" ? "app wide" : route.name === "projects" || route.name === "hosted" ? "app home" : "app"}>
-      {route.name !== "workspace" && (
+    <div className={wide ? "app wide" : route.name === "projects" || route.name === "hosted" ? "app home" : "app"}>
+      {!wide && (
         <header className="sh-top sh-page-top">
           <BrandMark />
           <div className="sh-spacer" />
@@ -58,7 +64,13 @@ export function App() {
         {route.name === "projects" && (IS_HOSTED ? <HostedHome /> : <ProjectsPage />)}
         {route.name === "hosted" &&
           (IS_HOSTED ? (
-            <HostedIndexPage key={`${route.owner}/${route.repo}@${route.sha ?? ""}`} owner={route.owner} repo={route.repo} sha={route.sha} />
+            <HostedIndexPage key={`${route.owner}/${route.repo}@${route.sha ?? ""}#${route.ref ?? ""}`}
+              owner={route.owner}
+              repo={route.repo}
+              sha={route.sha}
+              branch={route.ref}
+              onOpened={setInPlace}
+            />
           ) : (
             <p>
               Page not found. <a href="#/">Back to projects</a>

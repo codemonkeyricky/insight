@@ -42,6 +42,8 @@ the same when R2 is used):
 | `gh/<owner>/<repo>/<sha>/<export file>` | static export JSON | gzip, `application/json`, `public, max-age=31536000, immutable` |
 | `gh/<owner>/<repo>/<sha>/status.json` | `{repo, sha, ref, state, phase?, done?, total?, error?, startedAt, updatedAt}` | `no-store`, not gzipped |
 | `gh/<owner>/<repo>/latest.json` | `{repo, sha, ref, indexedAt, nodes, files}` | gzip, `max-age=60` |
+| `gh/<owner>/<repo>/refs/<encodeURIComponent(ref)>.json` | ref pointer `{ref, sha, indexedAt}`: where a branch pointed when last indexed. `build/x` is stored as `refs/build%2Fx.json`; a submission with no ref also writes `refs/@default.json` | gzip, `max-age=60` (same as `latest.json`) |
+| `private/gh/<owner>/<repo>/refs/<ref>.json` | the same for a private repo, beside its private `latest.json` (read through `GET /api/private/latest?repo=&ref=`) | signed reads only |
 | `meta/recent.json` | array, newest 50 `{repo, sha, indexedAt, nodes, files}` | gzip, `max-age=60` |
 | `meta/daily/<YYYY-MM-DD>.json` | `{total, ips: {<ip>: n}}` for the daily caps | `no-store` (not served by the Worker's CORS path in practice) |
 
@@ -115,7 +117,7 @@ set (then the account id and both others are required), else R2 when any `R2_*` 
 | Function unzipped size | about 111 MB (limit 250 MB) | |
 
 Only public repositories are indexed. Private, missing and non-GitHub hosts are refused (`not_found`, `bad_request`).
-The index is of the default branch's head, or of the ref in a `/tree/<ref>` URL. The web page itself refuses branch and folder links and asks for the repository link.
+The index is of the default branch's head, or of the requested ref (the web page's `@<branch>` links and the Re-index control send one).
 
 ## Local development
 
@@ -143,10 +145,51 @@ End-to-end checks were run with playwright-core and headless chromium (see the P
 A repository opens at a path as well as from the home page: `https://arch-insight.vercel.app/facebook/zstd` (the
 `github.com/<owner>/<repo>` and `https://github.com/<owner>/<repo>` forms work too, with an optional `.git`). The page
 moves the path to the hash route `#/gh/<owner>/<repo>` before the router reads it, and that route indexes the repository
-if it has no index yet, exactly as the home page's Index button does. A `/tree/<ref>/<path>` or `/blob/<ref>/<path>` link
-opens the repository's default branch: the ref and the path are ignored in v1. Paths under `/api/`, `/assets/` and
+if it has no index yet, exactly as the home page's Index button does. Paths under `/api/`, `/assets/` and
 `/storage/`, and any other path, show the home page. Vercel and `scripts/hosted-dev.mjs` send every unknown path to
-`index.html`, so the same page answers all of them. The parser is `parseRepoPath` in `apps/web/src/hostedRepo.ts`.
+`index.html`, so the same page answers all of them. The parsers are `parseRepoPath` and `parseRepoInput` in
+`apps/web/src/hostedRepo.ts`, and `parseRoute` in `apps/web/src/router.ts`.
+
+### Branch links
+
+| URL | Opens |
+|---|---|
+| `/o/r`, `#/gh/o/r` | the newest index of the repository (`latest.json`), else indexes the default branch |
+| `/o/r/tree/<branch>[/<path>]`, `/o/r@<branch>` | `#/gh/o/r@<branch>`: the latest of that branch |
+| `#/gh/o/r@<branch>` | the latest of a branch. A slash is `%2F` (`@build%2Finsight-plan`); a raw slash (`@build/insight-plan`) also reads as part of the ref |
+| `#/gh/o/r@<40 hex>` | that exact commit (unchanged) |
+
+For a `/tree/<ref>/<path>` link the ref is the first segment after `tree` (a folder cannot be told from a slash branch);
+write `/o/r@a/b` for a branch with a slash. The home input accepts `owner/repo@branch` and `github.com/.../tree/<branch>`.
+
+`#/gh/o/r@<branch>` resolves in this order: read `refs/<branch>.json`; if found, open that commit's index; else
+`POST /api/index {repo, ref}` and show the progress, then open it. The page opens the workspace in place, so the URL keeps
+showing `@<branch>` and is a shareable "latest of this branch" link (any click inside the workspace moves to the
+`#/projects/...` route). A ref GitHub does not know shows "Branch not found on GitHub".
+
+The pointer is written when an index finishes `done`, and also when `POST /api/index` finds the commit already indexed but the
+pointer missing or naming another commit (the branch moved back). It is never written for a failed run. The Worker reads the key
+with `decodeURIComponent` once, so the page asks for `refs/build%252Fx.json` to reach the key `refs/build%2Fx.json`.
+`status.json`, `latest.json` and the index's `meta.json` carry the `ref` the index was taken from.
+
+### POST /api/index replies
+
+`{state, repo, sha, ref}` (`ref` is the default branch's name when none was sent). A `200` with `state: "done"` adds
+`upToDate: true` when `refs/<ref>.json` already names that commit. A `429 rate_limited` error carries
+`error.retryAfterSeconds` (until 00:00 UTC, when the daily counters reset).
+
+### Re-index latest (hosted workspace)
+
+The strip under the layer tabs has a branch field (prefilled with the shown index's ref, else the default branch) and a
+**Re-index latest** button, and a line "Indexed 0123456 from main · 3 days ago". The button sends `POST /api/index {repo, ref}`:
+
+- `200 upToDate`: "Already up to date · 0123456".
+- `202`: a progress bar that polls `/api/status` as the index page does, then the page moves to `#/gh/o/r@<ref>` (also when it
+  was pinned to an `@sha` or a `#/projects/...` view).
+- `429`: the server's message, with the wait when the API gives it.
+
+The local (non-hosted) Index strip is unchanged. Code: `apps/web/src/components/HostedReindex.tsx`. Screenshots:
+`docs/screenshots/reindex-ref/`.
 
 ## Packaging and deploy
 

@@ -56,8 +56,17 @@ describe("repository path", () => {
     });
   }
 
-  it("keeps only owner and repo for a tree or blob link", () => {
-    expect(parseRepoPath("/facebook/zstd/tree/dev/lib")).toEqual({ owner: "facebook", repo: "zstd" });
+  it("reads the ref of a tree link (the first segment) and of owner/repo@ref", () => {
+    expect(parseRepoPath("/facebook/zstd/tree/dev/lib")).toEqual({ owner: "facebook", repo: "zstd", ref: "dev" });
+    expect(parseRepoPath("/facebook/zstd/tree/dev")).toEqual({ owner: "facebook", repo: "zstd", ref: "dev" });
+    expect(parseRepoPath("/facebook/zstd@dev")).toEqual({ owner: "facebook", repo: "zstd", ref: "dev" });
+    expect(parseRepoPath("/facebook/zstd@build/insight-plan")).toEqual({ owner: "facebook", repo: "zstd", ref: "build/insight-plan" });
+    expect(parseRepoPath("/facebook/zstd@build%2Finsight-plan")).toEqual({ owner: "facebook", repo: "zstd", ref: "build/insight-plan" });
+    expect(parseRepoPath("/facebook/zstd@")).toBeNull();
+  });
+
+  it("keeps only owner and repo for a blob link", () => {
+    expect(parseRepoPath("/facebook/zstd/blob/dev/lib/x.c")).toEqual({ owner: "facebook", repo: "zstd" });
   });
 
   it("rejects an owner over 39 characters", () => {
@@ -69,8 +78,9 @@ describe("repository path", () => {
 describe("boot route from a repository path", () => {
   it("moves a repository path to the hash route", () => {
     expect(hashForRepoPath("/facebook/zstd", "")).toBe("/#/gh/facebook/zstd");
-    expect(hashForRepoPath("/facebook/zstd/tree/dev/lib", "")).toBe("/#/gh/facebook/zstd");
-    expect(hashForRepoPath("/github.com/sindresorhus/is-plain-obj/tree/main/test", "#")).toBe("/#/gh/sindresorhus/is-plain-obj");
+    expect(hashForRepoPath("/facebook/zstd/tree/dev/lib", "")).toBe("/#/gh/facebook/zstd@dev");
+    expect(hashForRepoPath("/facebook/zstd@a/b", "")).toBe("/#/gh/facebook/zstd@a%2Fb");
+    expect(hashForRepoPath("/github.com/sindresorhus/is-plain-obj/tree/main/test", "#")).toBe("/#/gh/sindresorhus/is-plain-obj@main");
     expect(hashForRepoPath("/https://github.com/facebook/zstd", "#/")).toBe("/#/gh/facebook/zstd");
   });
 

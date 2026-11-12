@@ -154,7 +154,10 @@ export async function handleLatest(request: Request, deps: PrivateDeps): Promise
   const session = await requireAccess(request, deps.env, deps.fetch, target.owner, target.repo);
   if (session instanceof Response) return session;
   const storage = deps.storage ?? storageFromEnv(deps.env);
-  const latest = await storage.getJson(`${repoStorageBase(target.owner, target.repo, "private")}latest.json`);
+  // ?ref=<branch> (or @default) reads that ref's pointer instead of latest.json.
+  const refParam = new URL(request.url).searchParams.get("ref");
+  const name = refParam === null ? "latest.json" : `refs/${encodeURIComponent(refParam)}.json`;
+  const latest = await storage.getJson(`${repoStorageBase(target.owner, target.repo, "private")}${name}`);
   if (latest === undefined) return withCookies(errorResponse(404, "not_found", "no private index for this repository"), session.setCookie);
   return withCookies(json(200, latest), session.setCookie);
 }

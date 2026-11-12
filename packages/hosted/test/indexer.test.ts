@@ -159,9 +159,20 @@ describe("handleIndex: dedupe", () => {
     });
     const res = await handleIndex(submit("acme/widget"), h.deps);
     expect(res.status).toBe(200);
-    expect(await json(res)).toEqual({ state: "done", repo: "acme/widget", sha: SHA });
+    expect(await json(res)).toEqual({ state: "done", repo: "acme/widget", sha: SHA, ref: "main" });
     expect(h.jobs).toHaveLength(0);
     expect(h.calls.some((c) => c.includes("codeload"))).toBe(false);
+  });
+
+  it("returns 200 done with upToDate when the ref pointer already names the sha", async () => {
+    const h = await harness({ "acme/widget": {} });
+    await writeStatus(h.storage, "acme", "widget", SHA, {
+      repo: "acme/widget", sha: SHA, ref: "main", state: "done", startedAt: "x", updatedAt: "2026-11-10T00:01:00.000Z",
+    });
+    await h.storage.put("gh/acme/widget/refs/main.json", JSON.stringify({ ref: "main", sha: SHA, indexedAt: "x" }), { contentType: "application/json" });
+    const res = await handleIndex(submit("acme/widget", { ref: "main" }), h.deps);
+    expect(res.status).toBe(200);
+    expect(await json(res)).toEqual({ state: "done", repo: "acme/widget", sha: SHA, ref: "main", upToDate: true });
   });
 
   it("returns 202 for a running job updated under 6 minutes ago, without a second job", async () => {
@@ -171,7 +182,7 @@ describe("handleIndex: dedupe", () => {
     });
     const res = await handleIndex(submit("acme/widget"), h.deps);
     expect(res.status).toBe(202);
-    expect(await json(res)).toEqual({ state: "running", repo: "acme/widget", sha: SHA });
+    expect(await json(res)).toEqual({ state: "running", repo: "acme/widget", sha: SHA, ref: "main" });
     expect(h.jobs).toHaveLength(0);
   });
 
@@ -195,7 +206,7 @@ describe("handleIndex: the job", () => {
     const h = await harness({ "acme/widget": {} });
     const res = await handleIndex(submit("https://github.com/Acme/Widget/tree/main"), h.deps);
     expect(res.status).toBe(202);
-    expect(await json(res)).toEqual({ state: "running", repo: "acme/widget", sha: SHA });
+    expect(await json(res)).toEqual({ state: "running", repo: "acme/widget", sha: SHA, ref: "main" });
     expect(h.jobs).toHaveLength(1);
     await Promise.all(h.jobs);
 
@@ -354,5 +365,72 @@ describe("handleIndex: contract shapes", () => {
     const recent = await h.storage.getJson<unknown[]>("meta/recent.json");
     expect(Array.isArray(recent)).toBe(true);
     expect(recent).toHaveLength(1);
+  });
+});
+
+describe("handleIndex: ref pointers", () => {
+  const pointer = async (h: Harness, key: string) => h.storage.getJson<{ ref: string; sha: string; indexedAt: string }>(key);
+
+  it("writes refs/<ref>.json beside latest.json when an index finishes, and the ref in meta.json and status", async () => {
+    const h = await harness({ "acme/widget": {} });
+    await handleIndex(submit("acme/widget", { ref: "dev" }), h.deps);
+    await Promise.all(h.jobs);
+    const ptr = await pointer(h, "gh/acme/widget/refs/dev.json");
+    expect(ptr).toMatchObject({ ref: "dev", sha: SHA });
+    expect(typeof ptr?.indexedAt).toBe("string");
+    expect(await pointer(h, "gh/acme/widget/refs/@default.json")).toBeUndefined();
+    const sidecar = JSON.parse(readFileSync(join(h.dir, "storage", "gh/acme/widget/refs/dev.json.meta.json"), "utf8"));
+    expect(sidecar.cacheControl).toBe("public, max-age=60");
+    const meta = JSON.parse(gunzipSync(readFileSync(join(h.dir, "storage", `gh/acme/widget/${SHA}/meta.json`))).toString("utf8"));
+    expect(meta.ref).toBe("dev");
+    expect((await h.storage.getJson<IndexStatus>(`gh/acme/widget/${SHA}/status.json`))?.ref).toBe("dev");
+  });
+
+  it("writes the default branch pointer and refs/@default.json when no ref was given", async () => {
+    const h = await harness({ "acme/widget": {} });
+    const res = await handleIndex(submit("acme/widget"), h.deps);
+    expect((await json(res)).ref).toBe("main");
+    await Promise.all(h.jobs);
+    expect(await pointer(h, "gh/acme/widget/refs/main.json")).toMatchObject({ ref: "main", sha: SHA });
+    expect(await pointer(h, "gh/acme/widget/refs/@default.json")).toMatchObject({ ref: "main", sha: SHA });
+  });
+
+  it("encodes a slash branch in the pointer key", async () => {
+    const h = await harness({ "acme/widget": {} });
+    const res = await handleIndex(submit("acme/widget", { ref: "build/insight-plan" }), h.deps);
+    expect((await json(res)).ref).toBe("build/insight-plan");
+    await Promise.all(h.jobs);
+    expect(await pointer(h, "gh/acme/widget/refs/build%2Finsight-plan.json")).toMatchObject({ ref: "build/insight-plan", sha: SHA });
+  });
+
+  it("reports retryAfterSeconds on a daily-cap 429", async () => {
+    const h = await harness({ "acme/widget": {} }, { env: { INDEX_DAILY_CAP: "0" } });
+    const res = await handleIndex(submit("acme/widget"), h.deps);
+    expect(res.status).toBe(429);
+    const wait = (await json(res)).error.retryAfterSeconds;
+    expect(wait).toBeGreaterThan(0);
+    expect(wait).toBeLessThanOrEqual(86400);
+  });
+
+  it("moves a stale pointer to the already-indexed commit without a new job", async () => {
+    const h = await harness({ "acme/widget": {} });
+    await writeStatus(h.storage, "acme", "widget", SHA, {
+      repo: "acme/widget", sha: SHA, ref: "main", state: "done", startedAt: "x", updatedAt: "2026-11-10T00:01:00.000Z",
+    });
+    await h.storage.put("gh/acme/widget/refs/main.json", JSON.stringify({ ref: "main", sha: "f".repeat(40), indexedAt: "x" }), { contentType: "application/json" });
+    await handleIndex(submit("acme/widget"), h.deps);
+    expect(h.jobs).toHaveLength(0);
+    expect(await pointer(h, "gh/acme/widget/refs/main.json")).toMatchObject({ sha: SHA });
+    expect(await pointer(h, "gh/acme/widget/refs/@default.json")).toMatchObject({ sha: SHA });
+  });
+
+  it("does not report upToDate when the pointer names another commit", async () => {
+    const h = await harness({ "acme/widget": {} });
+    await writeStatus(h.storage, "acme", "widget", SHA, {
+      repo: "acme/widget", sha: SHA, ref: "main", state: "done", startedAt: "x", updatedAt: "2026-11-10T00:01:00.000Z",
+    });
+    await h.storage.put("gh/acme/widget/refs/main.json", JSON.stringify({ ref: "main", sha: "f".repeat(40), indexedAt: "x" }), { contentType: "application/json" });
+    const body = await json(await handleIndex(submit("acme/widget"), h.deps));
+    expect(body.upToDate).toBeUndefined();
   });
 });

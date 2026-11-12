@@ -43,6 +43,13 @@ export interface LatestIndex {
   files: number;
 }
 
+/** refs/<ref>.json: where a branch pointed when it was last indexed. */
+export interface RefPointer {
+  ref: string;
+  sha: string;
+  indexedAt: string;
+}
+
 /** One entry of meta/recent.json. */
 export interface RecentIndex {
   repo: string;
@@ -57,6 +64,10 @@ export interface IndexReply {
   state: "running" | "done" | "failed";
   repo: string;
   sha: string;
+  /** The ref the run is for (the default branch's name when the request named none). */
+  ref?: string;
+  /** On a 200 done: the ref's pointer already named this commit, so nothing was indexed. */
+  upToDate?: boolean;
   /** "private" when the repository is private: the index is then a ghp~ project. */
   visibility?: "public" | "private";
   error?: { code: string; message: string };
@@ -200,10 +211,13 @@ export function rawSourceUrl(ref: HostedRef, path: string): string {
 /** A thrown index request: the HTTP status (0 when the request never got one), the server's code and its message. */
 export class IndexRequestError extends ApiError {
   readonly code: string;
+  /** Seconds until a rate limit lifts, when the server says. */
+  readonly retryAfterSeconds?: number;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, retryAfterSeconds?: number) {
     super(status, message);
     this.code = code;
+    if (retryAfterSeconds !== undefined) this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
@@ -229,6 +243,29 @@ export function readStatus(ref: HostedRef): Promise<IndexStatus | undefined> {
 /** The newest finished index of a repository, or undefined when none has finished. */
 export function readLatest(root: string, owner: string, repo: string): Promise<LatestIndex | undefined> {
   return readJson<LatestIndex>(`${root}gh/${owner}/${repo}/latest.json`);
+}
+
+/** The storage key of a ref's pointer under a repository folder, as the Worker is asked for it (the stored key is encoded once, the URL twice). */
+export function refPointerUrl(root: string, owner: string, repo: string, ref: string): string {
+  const name = ref === "@default" ? "%40default" : encodeURIComponent(encodeURIComponent(ref));
+  return `${root}gh/${owner}/${repo}/refs/${name}.json`;
+}
+
+/** Where a branch pointed when it was last indexed (public), or undefined when it was never indexed here. */
+export function readRefPointer(root: string, owner: string, repo: string, ref: string): Promise<RefPointer | undefined> {
+  return readJson<RefPointer>(refPointerUrl(root, owner, repo, ref));
+}
+
+/** The same for a private repository the signed-in user can read. */
+export function readPrivateRefPointer(owner: string, repo: string, ref: string): Promise<RefPointer | undefined> {
+  const name = encodeURIComponent(`${owner}/${repo}`);
+  return readJson<RefPointer>(`${apiBase()}/api/private/latest?repo=${name}&ref=${encodeURIComponent(ref)}`);
+}
+
+/** meta.json of an indexed commit: the ref it was taken from (newer indexes) and when. Public commits only. */
+export async function readIndexMeta(root: string, ref: HostedRef): Promise<{ ref?: string; capturedAt?: string } | undefined> {
+  if (ref.private) return undefined;
+  return readJson<{ ref?: string; capturedAt?: string }>(`${indexBase(root, ref)}meta.json`);
 }
 
 /** The newest finished private index of a repository the signed-in user can read, or undefined when there is none. */
@@ -265,9 +302,13 @@ export async function requestIndex(repo: string, ref?: string): Promise<IndexRep
   } catch {
     throw new IndexRequestError(0, "network", "Could not reach the indexing service");
   }
-  const data = (await res.json().catch(() => ({}))) as Partial<IndexReply> & { error?: { code?: string; message?: string } };
+  const data = (await res.json().catch(() => ({}))) as Partial<IndexReply> & {
+    error?: { code?: string; message?: string; retryAfterSeconds?: number };
+  };
   if (res.status === 200 || res.status === 202) return data as IndexReply;
-  throw new IndexRequestError(res.status, data.error?.code ?? "request_failed", data.error?.message ?? `indexing request failed (${res.status})`);
+  throw new IndexRequestError(res.status, data.error?.code ?? "request_failed", data.error?.message ?? `indexing request failed (${res.status})`,
+    typeof data.error?.retryAfterSeconds === "number" ? data.error.retryAfterSeconds : undefined,
+  );
 }
 
 /**
