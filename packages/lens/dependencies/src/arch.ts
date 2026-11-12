@@ -9,7 +9,9 @@ const FRONTEND_LENS_RULE = "frontends and lenses never import each other";
 
 /** Maps a package directory (for example "packages/lens/calls" or "packages/lens-calls") to a layer name, or undefined for "other". */
 export function defaultLayerOf(pkgPath: string): string | undefined {
-  if (/^(packages|plugins)\/frontend-/.test(pkgPath)) return "frontend";
+  if (/^(packages|plugins)\/frontend[-/]/.test(pkgPath)) return "frontend";
+  // flow is a library that lenses and apps consume, not a lens: it stays unlayered, as it was before it moved here.
+  if (pkgPath === "packages/lens/flow") return undefined;
   if (/^packages\/lens[-/]/.test(pkgPath)) return "lens";
   if (pkgPath === "packages/ir" || pkgPath === "packages/sdk" || pkgPath === "packages/core") return "ir";
   if (pkgPath.startsWith("apps/") || pkgPath === "packages/cli") return "app";

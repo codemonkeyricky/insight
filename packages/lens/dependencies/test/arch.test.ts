@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { irFixtures as fx } from "@insight/sdk";
-import { archModel } from "../src/index.js";
+import { archModel, defaultLayerOf } from "../src/index.js";
 
 const sp = (file: string) => fx.span(file, 0, 0, 0, 20);
 const file = (path: string) => fx.node(path, "structure", "structure.file");
@@ -35,6 +35,28 @@ describe("archModel", () => {
     expect(model.layers).toEqual(["project", "frontend", "ir", "lens", "app"]);
     expect(model.packages.find((p) => p.path === "packages/lens-calls")?.fileCount).toBe(3);
     expect(() => JSON.parse(JSON.stringify(model))).not.toThrow();
+  });
+
+  it("puts frontends grouped under packages/frontend/ in the frontend layer", () => {
+    const view = fx.view({
+      nodes: [
+        pkg("packages/frontend/typescript"),
+        file("packages/frontend/typescript/src/a.ts"),
+        pkg("packages/frontend/cpp"),
+        file("packages/frontend/cpp/src/a.ts"),
+      ],
+    });
+    const layerOf = Object.fromEntries(archModel(view).packages.map((p) => [p.path, p.layer]));
+    expect(layerOf).toEqual({
+      "packages/frontend/typescript": "frontend",
+      "packages/frontend/cpp": "frontend",
+    });
+  });
+
+  it("layers packages/lens/* as lenses, except the flow library, which stays unlayered", () => {
+    expect(defaultLayerOf("packages/lens/flow")).toBeUndefined();
+    expect(defaultLayerOf("packages/lens/calls")).toBe("lens");
+    expect(defaultLayerOf("packages/lens-calls")).toBe("lens");
   });
 
   it("reports a lens importing a frontend as one violation with its site", () => {

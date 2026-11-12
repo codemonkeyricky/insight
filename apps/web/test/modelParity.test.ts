@@ -11,7 +11,7 @@ import { staticApi } from "../src/staticApi";
 import { buildServer, type InsightServer } from "../../server/dist/index.js";
 
 const REPO = resolve(import.meta.dirname, "..", "..", "..");
-const SCOPES = ["", "packages/flow", "packages/core/src/scope.ts"];
+const SCOPES = ["", "packages/lens/flow", "packages/core/src/scope.ts"];
 
 describe("browser scope payloads equal the server's", () => {
   let server: InsightServer;
@@ -58,8 +58,8 @@ describe("browser scope payloads equal the server's", () => {
     }
     expect(modelCalls).toHaveLength(1);
     // The comparison means something only when the scopes have functions to compare.
-    expect((await api.scopeFlow(id, "packages/flow")).stats.functions).toBeGreaterThan(0);
-    expect((await api.getScopeExec(id, "packages/flow")).functions.length).toBeGreaterThan(0);
+    expect((await api.scopeFlow(id, "packages/lens/flow")).stats.functions).toBeGreaterThan(0);
+    expect((await api.getScopeExec(id, "packages/lens/flow")).functions.length).toBeGreaterThan(0);
   }, 600_000);
 
   it("the live api computes the reverse references of a function from the model, as the refs route answers them", async () => {
