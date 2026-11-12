@@ -3,7 +3,7 @@
 // flow and exec functions run on the same scoped IR, so the payloads are equal. Pure, with no React and no
 // browser globals: the demo capture (scripts/capture-demo.mjs) imports this file too.
 import { execModel, summarizeScope, type ExecFunctionRef, type ExecModel, type ScopeFlow } from "@insight/flow";
-import { refsOf, scopeView, ScopeError, systemModel, type ProjectModel, type Refs, type ScopeKindName, type SystemModel } from "@insight/model";
+import { pipelineModel, refsOf, scopeView, ScopeError, systemModel, type PipelineModel, type ProjectModel, type Refs, type ScopeKindName, type SystemModel } from "@insight/model";
 // The extension is written so the capture script can load this file with Node's type stripping (see scripts/capture-demo.mjs).
 import { ApiError } from "../apiError.ts";
 
@@ -116,4 +116,10 @@ export function scopeCallersFor(model: ProjectModel, path: string): ReadonlyMap<
 export function systemFor(model: ProjectModel, path: string, tests = false): SystemModel {
   const scope = canonical(model, path);
   return remember(model, `system\0${scope}\0${tests ? 1 : 0}`, () => systemModel(model, scope, { tests }));
+}
+
+/** The Pipeline view of a scope, computed from the project model the way systemFor computes the System view. */
+export function pipelineFor(model: ProjectModel, path: string, tests = false): PipelineModel {
+  const scope = canonical(model, path);
+  return remember(model, `pipeline\0${scope}\0${tests ? 1 : 0}`, () => pipelineModel(model, scope, { tests }));
 }

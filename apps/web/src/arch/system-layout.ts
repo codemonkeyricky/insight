@@ -149,7 +149,14 @@ interface Port {
   id: string;
 }
 
-export function layoutSystem(sys: SystemModel): SysLayout {
+/** Verbs whose edges are facts of the Pipeline view: drawn solid even when their confidence is inferred. */
+const SOLID_VERBS: ReadonlySet<SystemEdge["verb"]> = new Set(["produces", "feeds"]);
+
+/**
+ * The geometry of one System model. `titles` overrides the column titles, one per column left to right (the Pipeline view names
+ * its columns); without it the first column is "Entry" and the rest have none.
+ */
+export function layoutSystem(sys: SystemModel, titles?: readonly string[]): SysLayout {
   const empty: SysLayout = { focusY: 0, width: 0, height: 0, columns: [], groups: [], boxes: [], arrows: [] };
   if (sys.components.length === 0) return empty;
 
@@ -181,7 +188,7 @@ export function layoutSystem(sys: SystemModel): SysLayout {
   }
   const stacks: Array<{ column: number; items: SysBox[]; headers: Array<{ category: SystemExternal["category"]; before: number }> }> = [];
   stages.forEach((stage, i) => {
-    columns.push({ index: i, title: i === 0 ? "Entry" : "", x, w: SYS_CARD_W });
+    columns.push({ index: i, title: titles?.[i] ?? (i === 0 ? "Entry" : ""), x, w: SYS_CARD_W });
     const items = stage.map((id): SysBox => {
       const c = compById.get(id) as SystemComponent;
       const routes = routesBy.get(id) ?? [];
@@ -408,7 +415,7 @@ export function layoutSystem(sys: SystemModel): SysLayout {
       ...(geo.lane !== undefined ? { lane: geo.lane } : {}),
       pill: { x: c.x, y: c.y, w, h: SYS_PILL_H, text },
       dashed: e.verb === "runs" || e.verb === "spawns",
-      inferred: e.confidence === "inferred",
+      inferred: e.confidence === "inferred" && !SOLID_VERBS.has(e.verb),
     });
   });
 

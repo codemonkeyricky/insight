@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
-import type { Site, SystemEdge, SystemModel } from "@insight/model";
+import type { PipelineModel, Site, SystemEdge, SystemModel } from "@insight/model";
 import { api } from "../../api";
 import { fileTarget, useCodeTarget } from "../../codeTarget";
 import { layoutSystem, pillText, routeText, type SysArrow, type SysBox, type SysLayout } from "../../arch/system-layout";
 import { hrefView } from "../../router";
+import { PipelineSummary } from "./PipelineSummary";
 
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
 
@@ -72,11 +73,15 @@ export interface SystemDiagramProps {
   tests: boolean;
   onTests: (on: boolean) => void;
   stale?: boolean;
+  /** Column titles, left to right (the Pipeline view's columns). Without them the System view's own titles are drawn. */
+  titles?: readonly string[];
+  /** The Pipeline model `sys` was converted from: its side panel shows when nothing is selected, and its reason fills the empty state. */
+  pipeline?: PipelineModel;
 }
 
 /** The diagram, its toolbar and its side panel for one System model. Pure of data loading, so it renders from a model alone. */
-export function SystemDiagram({ id, sys, tests, onTests, stale = false }: SystemDiagramProps) {
-  const layout = useMemo(() => layoutSystem(sys), [sys]);
+export function SystemDiagram({ id, sys, tests, onTests, stale = false, titles, pipeline }: SystemDiagramProps) {
+  const layout = useMemo(() => layoutSystem(sys, titles), [sys, titles]);
   const [sel, setSel] = useState<Selection>(null);
   const [hover, setHover] = useState<string | null>(null);
   const [cam, setCam] = useState<Camera>({ k: 1, x: 0, y: 0 });
@@ -223,7 +228,9 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false }: System
     <div className={`sysv${expanded ? " expanded" : ""}`}>
       <div className="sysv-bar">
         <span className="muted small sysv-counts">
-          {plural(sys.components.length, "component")} · {plural(sys.externals.length, "outside system")} · {plural(sys.edges.length, "edge")}
+          {pipeline !== undefined
+            ? `${plural(pipeline.points.length, "extension point")} · ${plural(sys.components.length, "component")} · ${plural(sys.edges.length, "edge")}`
+            : `${plural(sys.components.length, "component")} · ${plural(sys.externals.length, "outside system")} · ${plural(sys.edges.length, "edge")}`}
         </span>
         <span className="muted small sysv-scope">
           Scope <span className="mono">{sys.scope === "" ? "(project)" : sys.scope}</span>
@@ -262,7 +269,11 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false }: System
           onPointerUp={onUp}
           onPointerCancel={onUp}
         >
-          {empty ? (
+          {empty && pipeline?.reason !== undefined ? (
+            <div className="sysv-empty">
+              <p>No extension points in this scope. Pick a parent scope.</p>
+            </div>
+          ) : empty ? (
             <div className="sysv-empty">
               <p>No system facts in this scope.</p>
               <p className="muted small">
@@ -316,7 +327,7 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false }: System
                       onFocus={() => setHover(a.id)}
                       onBlur={() => setHover(null)}
                     >
-                      <path className="sysv-line" d={a.d} markerEnd={a.edge.verb === "writes" ? "url(#sysv-head-w)" : "url(#sysv-head)"} />
+                      <path className="sysv-line" d={a.d} markerEnd={a.edge.verb === "writes" || a.edge.verb === "produces" ? "url(#sysv-head-w)" : "url(#sysv-head)"} />
                       <path className="sysv-hit" d={a.d} onClick={() => pickEdge(a)} />
                       {showPill && (
                         <g className="sysv-pill" onClick={() => pickEdge(a)}>
@@ -374,15 +385,28 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false }: System
           )}
           {cutRight && <div className="sysv-fade" aria-hidden="true" />}
           {cut && sel === null && <span className="sysv-hint small muted">drag to pan · Fit</span>}
-          {!empty && sel === null && <Legend />}
+          {!empty && sel === null && <Legend pipeline={pipeline !== undefined} />}
           {sel !== null && <Panel id={id} sys={sys} layout={layout} sel={sel} onSelect={setSel} onOpen={openScope} onClose={() => setSel(null)} />}
         </div>
+        {!empty && sel === null && pipeline !== undefined && <PipelineSummary pipeline={pipeline} />}
       </div>
     </div>
   );
 }
 
-function Legend() {
+function Legend({ pipeline }: { pipeline: boolean }) {
+  if (pipeline) {
+    return (
+      <ul className="sysv-legend small muted" aria-label="Legend">
+        <li>
+          <span className="sw w" /> produces
+        </li>
+        <li>
+          <span className="sw" /> feeds, calls
+        </li>
+      </ul>
+    );
+  }
   return (
     <ul className="sysv-legend small muted" aria-label="Legend">
       <li>

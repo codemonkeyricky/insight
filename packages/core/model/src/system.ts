@@ -55,7 +55,7 @@ export interface SystemEdge {
   id: string;
   from: string;
   to: string;
-  verb: "calls" | "reads" | "writes" | "runs" | "requests" | "spawns" | "posts";
+  verb: "calls" | "reads" | "writes" | "runs" | "requests" | "spawns" | "posts" | "produces" | "feeds"; // produces and feeds: the Pipeline view
   label: string; // e.g. "PUT ×5", "GET", "POST /api/index", "git", "3 vars"
   count: number;
   sites: Site[]; // up to 20 sites
