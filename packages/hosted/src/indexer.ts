@@ -120,6 +120,12 @@ function utcDay(nowMs: number): string {
   return new Date(nowMs).toISOString().slice(0, 10);
 }
 
+/** Seconds until the daily counters reset at 00:00 UTC. */
+function secondsToUtcMidnight(nowMs: number): number {
+  const next = Date.UTC(new Date(nowMs).getUTCFullYear(), new Date(nowMs).getUTCMonth(), new Date(nowMs).getUTCDate() + 1);
+  return Math.max(1, Math.ceil((next - nowMs) / 1000));
+}
+
 interface DailyCounter {
   total: number;
   ips: Record<string, number>;
@@ -139,18 +145,60 @@ function failureCode(err: unknown): ErrorCode {
   return "index_failed";
 }
 
+/** The pointer name used for "the default branch" when a submission named no ref. */
+export const DEFAULT_REF = "@default";
+
+/** The storage key (under the repo folder) of a ref's pointer: refs/<encodeURIComponent(ref)>.json. */
+export function refPointerKey(ref: string): string {
+  return ref === DEFAULT_REF ? `refs/${DEFAULT_REF}.json` : `refs/${encodeURIComponent(ref)}.json`;
+}
+
+/**
+ * Ref pointers: refs/<encoded ref>.json = {ref, sha, indexedAt} next to latest.json (same visibility, same cache). A
+ * submission with no ref also writes refs/@default.json ("@" is not a valid ref character, so no branch collides with it).
+ */
+export async function writeRefPointers(
+  storage: Storage,
+  args: { owner: string; repo: string; visibility: Visibility; ref: string; sha: string; indexedAt: string; isDefault?: boolean },
+): Promise<void> {
+  const pointer = JSON.stringify({ ref: args.ref, sha: args.sha, indexedAt: args.indexedAt });
+  const opts = { contentType: JSON_TYPE, cacheControl: SHORT_CACHE, gzip: true };
+  const base = repoStorageBase(args.owner, args.repo, args.visibility);
+  await storage.put(`${base}${refPointerKey(args.ref)}`, pointer, opts);
+  if (args.isDefault) await storage.put(`${base}${refPointerKey(DEFAULT_REF)}`, pointer, opts);
+}
+
 /**
  * Writes the commit's static export (gzip, immutable), then latest.json and, for a public index only, recent.json. A
  * private index writes its files and latest.json under private/gh/... and nothing else.
  */
 export async function publishExport(
   storage: Storage,
-  args: { owner: string; repo: string; sha: string; ref: string; indexedAt: string; result: ExportResult; visibility?: Visibility },
+  args: {
+    owner: string;
+    repo: string;
+    sha: string;
+    ref: string;
+    indexedAt: string;
+    result: ExportResult;
+    visibility?: Visibility;
+    /** The submission named no ref, so the resolved default branch is also the "@default" pointer. */
+    isDefault?: boolean;
+  },
 ): Promise<void> {
   const { owner, repo, sha, ref, indexedAt, result } = args;
   const visibility = args.visibility ?? "public";
   const prefix = repoStoragePrefix(owner, repo, sha, visibility);
-  for (const [path, text] of result.files) {
+  for (const [path, rawText] of result.files) {
+    let text = rawText;
+    // The index's metadata says which ref it was taken from, so the page can show "from <branch>".
+    if (path === "meta.json") {
+      try {
+        text = JSON.stringify({ ...JSON.parse(rawText), ref });
+      } catch {
+        text = rawText;
+      }
+    }
     await storage.put(prefix + path, text, { contentType: JSON_TYPE, cacheControl: IMMUTABLE, gzip: true });
   }
   const name = repoName(owner, repo);
@@ -160,6 +208,7 @@ export async function publishExport(
     JSON.stringify({ repo: name, sha, ref, indexedAt, nodes, files }),
     { contentType: JSON_TYPE, cacheControl: SHORT_CACHE, gzip: true },
   );
+  await writeRefPointers(storage, { owner, repo, visibility, ref, sha, indexedAt, isDefault: args.isDefault });
   if (visibility === "private") return;
   const previous = (await storage.getJson<{ repo: string }[]>("meta/recent.json")) ?? [];
   const recent = [{ repo: name, sha, indexedAt, nodes, files }, ...previous.filter((e) => e.repo !== name)].slice(
@@ -206,6 +255,8 @@ interface JobContext {
   visibility: Visibility;
   /** The signed-in user's token, for a private index only. Used for the download; never stored. */
   token?: string;
+  /** The submission named no ref. */
+  isDefault?: boolean;
 }
 
 async function writeJobStatus(ctx: JobContext, patch: Partial<IndexStatus>): Promise<void> {
@@ -267,6 +318,7 @@ async function runJob(ctx: JobContext): Promise<void> {
       indexedAt: new Date(deps.now()).toISOString(),
       result,
       visibility: ctx.visibility,
+      isDefault: ctx.isDefault,
     });
     await finish(ctx, { state: "done" });
   } catch (err) {
@@ -396,13 +448,23 @@ async function submit(request: Request, deps: IndexDeps, session: Session | unde
   const now = deps.now();
   const existing = await deps.storage.getJson<IndexStatus>(`${repoStoragePrefix(owner, repo, sha, visibility)}status.json`);
   if (existing) {
-    if (existing.state === "done") return reply(200, { state: "done", repo: name, sha });
+    if (existing.state === "done") {
+      const base = repoStorageBase(owner, repo, visibility);
+      const pointer = await deps.storage.getJson<{ sha?: string }>(`${base}${refPointerKey(ref)}`);
+      if (pointer?.sha === sha) return reply(200, { state: "done", repo: name, sha, ref, upToDate: true });
+      // The commit is indexed but the ref's pointer is missing or names another commit (the branch moved back, or the index
+      // predates pointers): move the pointer to it, so "latest of <ref>" is this commit.
+      await writeRefPointers(deps.storage, {
+        owner, repo, visibility, ref, sha, indexedAt: existing.updatedAt, isDefault: requestedRef === undefined && parsed.ref === undefined,
+      });
+      return reply(200, { state: "done", repo: name, sha, ref });
+    }
     const updated = Date.parse(existing.updatedAt);
     if (existing.state === "running" && now - updated < RUNNING_FRESH_MS) {
-      return reply(202, { state: "running", repo: name, sha });
+      return reply(202, { state: "running", repo: name, sha, ref });
     }
     if (existing.state === "failed" && now - updated < FAILED_RETRY_MS) {
-      return reply(200, { state: "failed", repo: name, sha, error: existing.error });
+      return reply(200, { state: "failed", repo: name, sha, ref, error: existing.error });
     }
   }
 
@@ -414,11 +476,15 @@ async function submit(request: Request, deps: IndexDeps, session: Session | unde
   const counter = (await deps.storage.getJson<DailyCounter>(dayKey)) ?? { total: 0, ips: {} };
   const identityCount = counter.ips[identity] ?? 0;
   if (counter.total >= dailyCap) {
-    return errorResponse(429, "rate_limited", "the daily indexing limit has been reached; try again tomorrow");
+    return errorResponse(429, "rate_limited", "the daily indexing limit has been reached; try again tomorrow", {
+      retryAfterSeconds: secondsToUtcMidnight(now),
+    });
   }
   if (identityCount >= ipCap) {
     const who = identity.startsWith("user:") ? "this account" : "this address";
-    return errorResponse(429, "rate_limited", `${who} has reached its ${ipCap} indexes for today`);
+    return errorResponse(429, "rate_limited", `${who} has reached its ${ipCap} indexes for today`, {
+      retryAfterSeconds: secondsToUtcMidnight(now),
+    });
   }
   await deps.storage.put(
     dayKey,
@@ -441,10 +507,11 @@ async function submit(request: Request, deps: IndexDeps, session: Session | unde
     lastWrite: 0,
     visibility,
     token: visibility === "private" ? session?.token : undefined,
+    isDefault: requestedRef === undefined && parsed.ref === undefined,
   };
   await writeJobStatus(ctx, { state: "running", phase: "queued" });
   deps.waitUntil(runWithWatchdog(ctx));
-  return reply(202, { state: "running", repo: name, sha });
+  return reply(202, { state: "running", repo: name, sha, ref });
 }
 
 /** GET /api/health: {ok, storage: "kv" | "r2" | "fs"}. */

@@ -6,14 +6,19 @@ import {
   projectIdOf,
   readLatest,
   readPrivateLatest,
+  readPrivateRefPointer,
+  readRefPointer,
   readStatus,
   requestIndex,
   signInUrl,
   storageRoot,
   type HostedRef,
 } from "../hostedApi";
-import { canRetry, indexErrorText, phaseLabel } from "../hostedRepo";
+import { canRetry, indexErrorText, phaseLabel, REINDEXED_EVENT } from "../hostedRepo";
+import { Workspace } from "../components/Workspace";
 import { watchIndex, type PollStatus } from "../indexPoll";
+
+
 
 type View = { kind: "checking" } | { kind: "running"; status: PollStatus } | { kind: "failed"; code: string; message: string };
 
@@ -54,8 +59,23 @@ function RunProgress({ status }: { status: PollStatus }) {
  * to index it and follows the run until it is done (then opens it) or fails (then says why). A private index is found
  * only while signed in; a private repository asked for while signed out says so, with a sign-in link.
  */
-export function HostedIndexPage({ owner, repo, sha }: { owner: string; repo: string; sha?: string }) {
+export function HostedIndexPage({
+  owner,
+  repo,
+  sha,
+  branch,
+  onOpened,
+}: {
+  owner: string;
+  repo: string;
+  sha?: string;
+  /** #/gh/o/r@<branch>: the latest index of a branch. It opens in place, so the URL keeps showing @<branch>. */
+  branch?: string;
+  /** Called with the project id while a branch's index is open in place, and with undefined otherwise. */
+  onOpened?: (id: string | undefined) => void;
+}) {
   const [view, setView] = useState<View>({ kind: "checking" });
+  const [openId, setOpenId] = useState<string>();
   const [attempt, setAttempt] = useState(0);
   const repoName = `${owner}/${repo}`;
 
@@ -65,10 +85,16 @@ export function HostedIndexPage({ owner, repo, sha }: { owner: string; repo: str
     const root = storageRoot();
 
     const open = (ref: HostedRef) => {
+      if (branch !== undefined) {
+        const id = projectIdOf(ref);
+        setOpenId(id);
+        onOpened?.(id);
+        return;
+      }
       window.location.hash = hrefView(projectIdOf(ref), "flow");
     };
     const fail = (code: string, message?: string) => {
-      setView({ kind: "failed", code, message: indexErrorText(code, repoName, message) });
+      setView({ kind: "failed", code, message: indexErrorText(code, repoName, message, branch) });
     };
     const follow = (ref: HostedRef) => {
       stop = watchIndex({
@@ -97,7 +123,23 @@ export function HostedIndexPage({ owner, repo, sha }: { owner: string; repo: str
 
     const run = async () => {
       setView({ kind: "checking" });
+      setOpenId(undefined);
+      onOpened?.(undefined);
       try {
+        if (branch !== undefined) {
+          // Latest of a branch: its pointer first, then (signed in) the private pointer, else ask the server to index it.
+          const pointer = await readRefPointer(root, owner, repo, branch);
+          if (cancelled) return;
+          if (pointer) return open({ owner, repo, sha: pointer.sha });
+          if (await signedIn()) {
+            const priv = await readPrivateRefPointer(owner, repo, branch);
+            if (cancelled) return;
+            if (priv) return open({ owner, repo, sha: priv.sha, private: true });
+          }
+          const reply = await requestIndex(repoName, branch);
+          if (cancelled) return;
+          return settle(reply, reply.visibility === "private");
+        }
         if (sha) {
           const pub = { owner, repo, sha };
           const status = await readStatus(pub);
@@ -130,11 +172,18 @@ export function HostedIndexPage({ owner, repo, sha }: { owner: string; repo: str
       }
     };
     void run();
+    const again = () => setAttempt((n) => n + 1);
+    window.addEventListener(REINDEXED_EVENT, again);
     return () => {
       cancelled = true;
       stop?.();
+      window.removeEventListener(REINDEXED_EVENT, again);
     };
-  }, [owner, repo, sha, attempt]);
+  }, [owner, repo, sha, branch, attempt]);
+
+  if (openId !== undefined && branch !== undefined) {
+    return <Workspace key={openId} id={openId} tab="flow" scope="" roots />;
+  }
 
   return (
     <section className="home index-page">
@@ -144,6 +193,7 @@ export function HostedIndexPage({ owner, repo, sha }: { owner: string; repo: str
       <h1>
         {repoName}
         {sha && <span className="muted index-sha"> @{sha.slice(0, 7)}</span>}
+        {branch && <span className="muted index-sha"> @{branch}</span>}
       </h1>
 
       {view.kind === "checking" && (

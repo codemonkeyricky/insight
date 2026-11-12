@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { api, NO_SERVER, type FileEntry, type Overview, type ScopeLenses } from "../api";
+import { api, IS_HOSTED, NO_SERVER, type FileEntry, type Overview, type ScopeLenses } from "../api";
 import { CodeTargetContext, opensCodePane, scopeCodeTarget, type CodeTarget, type CodeTargetValue } from "../codeTarget";
 import { contentOf, flowScopeOf, layerLinks, type ShellContent } from "./sheet/shell";
 import { hrefView, redirectFor } from "../router";
@@ -12,6 +12,7 @@ import { ReviewPage } from "../pages/Review";
 import { StatusBadge } from "../pages/Projects";
 import { useIndexProgress } from "../useIndexProgress";
 import { FirstIndex, IndexStrip } from "./IndexStrip";
+import { HostedReindex } from "./HostedReindex";
 import { ScopeNote, scopeKind } from "./ScopeNote";
 import { CodePane } from "./sheet/CodePane";
 import { FileTree } from "./sheet/FileTree";
@@ -336,7 +337,11 @@ export function Workspace({ id, tab, scope, line, fn, roots = true, base, head, 
         <Splitter side="left" label="Resize the files pane" width={treeEff} shown={treeShown && !narrow} onResize={setTreeW} />
         <section className="sh-center">
           <LayerTabs links={layers} />
-          <IndexStrip id={id} project={p} snapshot={overview.snapshot} run={run} onRequested={() => void load()} />
+          {IS_HOSTED ? (
+            <HostedReindex id={id} />
+          ) : (
+            <IndexStrip id={id} project={p} snapshot={overview.snapshot} run={run} onRequested={() => void load()} />
+          )}
           {noSnapshot && content !== "overview" ? (
             <FirstIndex name={p.name} run={run} running={run.running || p.status === "indexing"} />
           ) : content === "flow" ? (

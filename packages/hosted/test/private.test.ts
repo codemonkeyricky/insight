@@ -110,12 +110,14 @@ describe("handleIndex: private repositories", () => {
       const h = await harness();
       const res = await handleIndex(submit("https://github.com/Acme/Secret", ALICE), h.deps);
       expect(res.status).toBe(202);
-      expect(await json(res)).toEqual({ state: "running", repo: "acme/secret", sha: SHA, visibility: "private" });
+      expect(await json(res)).toEqual({ state: "running", repo: "acme/secret", sha: SHA, ref: "main", visibility: "private" });
       await Promise.all(h.jobs);
 
       const status = (await h.storage.getJson<IndexStatus>(`private/gh/acme/secret/${SHA}/status.json`)) as IndexStatus;
       expect(status.state).toBe("done");
       expect(existsSync(join(h.storageDir, "private/gh/acme/secret", "latest.json"))).toBe(true);
+      expect(await h.storage.getJson(`private/gh/acme/secret/refs/main.json`)).toMatchObject({ ref: "main", sha: SHA });
+      expect(await h.storage.getJson(`private/gh/acme/secret/refs/@default.json`)).toMatchObject({ sha: SHA });
       expect(await h.storage.getJson(`private/gh/acme/secret/latest.json`)).toMatchObject({ repo: "acme/secret", sha: SHA });
       expect(await h.storage.getJson(`private/gh/acme/secret/${SHA}/model.json`)).toEqual({ nodes: [] });
 
@@ -166,7 +168,7 @@ describe("handleIndex: private repositories", () => {
     const h = await harness();
     const res = await handleIndex(submit("acme/open", ALICE), h.deps);
     expect(res.status).toBe(202);
-    expect(await json(res)).toEqual({ state: "running", repo: "acme/open", sha: SHA });
+    expect(await json(res)).toEqual({ state: "running", repo: "acme/open", sha: SHA, ref: "main" });
     await Promise.all(h.jobs);
     expect(existsSync(join(h.storageDir, "gh", "acme", "open", "latest.json"))).toBe(true);
     expect(existsSync(join(h.storageDir, "meta", "recent.json"))).toBe(true);

@@ -15,7 +15,6 @@ describe("repository input", () => {
     ["   ", null],
     ["owner", null],
     ["owner/repo/extra", null],
-    ["https://github.com/o/r/tree/main", null],
     ["https://gitlab.com/o/r", null],
     ["-owner/repo", null],
     ["owner-/repo", null],
@@ -35,10 +34,19 @@ describe("repository input", () => {
     });
   }
 
-  it("names a branch link as a link problem", () => {
-    const parsed = parseRepoInput("https://github.com/o/r/tree/main");
-    expect(parsed.ok).toBe(false);
-    if (!parsed.ok) expect(parsed.error).toMatch(/branch or folder/);
+  it("reads a branch link and owner/repo@branch as a repository with a ref", () => {
+    expect(parseRepoInput("https://github.com/o/r/tree/main")).toEqual({ ok: true, owner: "o", repo: "r", ref: "main" });
+    expect(parseRepoInput("github.com/o/r/tree/dev/src/lib")).toEqual({ ok: true, owner: "o", repo: "r", ref: "dev" });
+    expect(parseRepoInput("O/R@feature-x")).toEqual({ ok: true, owner: "o", repo: "r", ref: "feature-x" });
+    expect(parseRepoInput("o/r@build/insight-plan")).toEqual({ ok: true, owner: "o", repo: "r", ref: "build/insight-plan" });
+    expect(parseRepoInput("o/r@build%2Fx")).toEqual({ ok: true, owner: "o", repo: "r", ref: "build/x" });
+  });
+
+  it("refuses a tree link with no branch and a bad branch name", () => {
+    expect(parseRepoInput("https://github.com/o/r/tree").ok).toBe(false);
+    expect(parseRepoInput("o/r@").ok).toBe(false);
+    expect(parseRepoInput("o/r@a..b/../c").ok).toBe(false);
+    expect(parseRepoInput("o/r@a b").ok).toBe(false);
   });
 
   it("checks owner and repo names on their own", () => {

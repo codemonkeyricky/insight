@@ -1,5 +1,5 @@
 import { RETIRED_LENSES } from "./scopeLenses";
-import { isRepoName } from "./hostedRepo";
+import { isRefName, isRepoName } from "./hostedRepo";
 
 /**
  * The tabs every project has. Any other tab id is a lens id. The Source and Findings tabs are gone: their old URLs
@@ -32,7 +32,7 @@ export type Route =
       head?: string;
     }
   /** A hosted repository: its latest index (no sha), or the index at one commit. Only the hosted build opens it. */
-  | { name: "hosted"; owner: string; repo: string; sha?: string }
+  | { name: "hosted"; owner: string; repo: string; sha?: string; ref?: string }
   | { name: "unknown" };
 
 export interface ViewOptions {
@@ -102,16 +102,24 @@ export function parseRoute(hash: string): Route {
   return { name: "unknown" };
 }
 
-/** #/gh/<owner>/<repo> or #/gh/<owner>/<repo>@<sha>. Names are read in lowercase, as the storage holds them. */
+/**
+ * #/gh/<owner>/<repo>, #/gh/<owner>/<repo>@<sha> (40 hex) or #/gh/<owner>/<repo>@<ref>: the latest index of a branch or tag.
+ * A ref with a slash is written `@build%2Fx`; a raw slash (`@build/x`) is read as part of the ref too, since nothing else
+ * follows the repository in this route. Names are read in lowercase, as the storage holds them; a ref keeps its case.
+ */
 function parseHostedRoute(parts: string[]): Route {
-  if (parts.length !== 3) return { name: "unknown" };
+  if (parts.length < 3) return { name: "unknown" };
   const owner = (parts[1] ?? "").toLowerCase();
-  const last = parts[2] ?? "";
-  const at = last.lastIndexOf("@");
+  const last = parts.slice(2).join("/");
+  const at = last.indexOf("@");
+  if (at === -1 && parts.length !== 3) return { name: "unknown" };
   const repo = (at === -1 ? last : last.slice(0, at)).toLowerCase();
-  const sha = at === -1 ? undefined : last.slice(at + 1).toLowerCase();
-  if (!isRepoName(owner, repo) || (sha !== undefined && !/^[0-9a-f]{40}$/.test(sha))) return { name: "unknown" };
-  return { name: "hosted", owner, repo, ...(sha ? { sha } : {}) };
+  if (!isRepoName(owner, repo)) return { name: "unknown" };
+  if (at === -1) return { name: "hosted", owner, repo };
+  const tail = last.slice(at + 1);
+  if (/^[0-9a-f]{40}$/i.test(tail)) return { name: "hosted", owner, repo, sha: tail.toLowerCase() };
+  if (tail === "" || !isRefName(tail)) return { name: "unknown" };
+  return { name: "hosted", owner, repo, ref: tail };
 }
 
 const enc = encodeURIComponent;

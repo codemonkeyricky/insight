@@ -136,7 +136,7 @@ export function HostedHome() {
       return;
     }
     setInputError(null);
-    window.location.hash = hrefHosted(parsed.owner, parsed.repo);
+    window.location.hash = hrefHosted(parsed.owner, parsed.repo, undefined, parsed.ref);
   };
 
   return (
@@ -156,7 +156,7 @@ export function HostedHome() {
               setValue(e.target.value);
               setInputError(null);
             }}
-            placeholder="owner/repo or https://github.com/owner/repo"
+            placeholder="owner/repo[@branch] or a github.com link"
             aria-invalid={inputError !== null}
             aria-describedby={inputError ? "repo-input-error" : undefined}
             autoComplete="off"
@@ -176,7 +176,7 @@ export function HostedHome() {
       </form>
 
       <p className="muted small">
-        Tip: open {window.location.host}/&lt;owner&gt;/&lt;repo&gt; directly, e.g. /facebook/zstd
+        Tip: open {window.location.host}/&lt;owner&gt;/&lt;repo&gt; directly, e.g. /facebook/zstd, or /facebook/zstd/tree/dev for a branch
       </p>
 
       {auth?.signedIn && <YourRepos repos={repos} installUrl={installUrl ?? auth.installUrl} error={reposError} />}
