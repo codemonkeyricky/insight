@@ -7,11 +7,11 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as KeyEvent, type PointerEvent as PointerEv, type ReactNode } from "react";
 import { select } from "d3-selection";
 import { zoom, zoomIdentity, type D3ZoomEvent, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
-import { MORE_SUFFIX, ZOOM_SIZE, fitCamera, fitChartCamera, visibleWorld, type Camera, type FlowNode, type FlowSpan, type FunctionFlow, type PlacedItem, type Rect } from "@insight/flow";
+import { CHART_FIT_MAX_K, CHART_HEAD, MORE_SUFFIX, ZOOM_SIZE, fitCamera, fitChartCamera, visibleWorld, type Camera, type FlowNode, type FlowSpan, type FunctionFlow, type PlacedItem, type Rect } from "@insight/flow";
 import { nameOfId, runtimeLabel, stepRuntime } from "../../flowTargets";
 import { hrefView } from "../../router";
 import { CHART_MIN_PX } from "../../zoom/chart";
-import { anchoredTo, isInPlace, calloutOf, closeExpansion, footprintOf, isNested, NARROW_VIEW_PX, openExpansion, ownerOf, refresh, revealCamera, rootBoxOf, sameFootprint, sceneCamera, setInline, SLOT_PAD, shiftAt, type Expansion, type ExpandAnchor } from "../../zoom/expand";
+import { anchoredTo, expandCamera, isInPlace, calloutOf, closeExpansion, footprintOf, isNested, NARROW_VIEW_PX, openExpansion, ownerOf, REVEAL_MIN_K, refresh, revealCamera, rootBoxOf, sameFootprint, sceneCamera, setInline, SLOT_PAD, shiftAt, type Expansion, type ExpandAnchor } from "../../zoom/expand";
 import { calloutD } from "../../zoom/connector";
 import { popDelay } from "../../zoom/pop";
 import { displayName } from "../../zoom/names";
@@ -520,8 +520,20 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     const focus = b.placed.rects.get(b.nodeId);
     if (!focus || !svgRef.current || !zoomRef.current) return undefined;
     const room = roomOf();
-    // The focus and its open expansions are fitted together, so an opened detail is framed with its card.
-    const rect = unionWith(focus, list);
+    // The focus and the header of each open expansion are fitted together, so an opened detail is framed with its card. A
+    // header is at most one room tall: a tall chart does not shrink the fit to an unreadable scale.
+    const head = (e: Expansion): Rect => ({ x: e.x, y: e.y, w: e.w, h: Math.min(e.h, room.height) });
+    const rect = list.reduce((r, e) => union(r, head(e)), focus);
+    // The focus's own expansion: fitted at a scale that keeps its boxes out of the far tier (never below it), then aligned so
+    // its header sits at the room's top, inside the stage.
+    const own = anchoredTo(list, b.nodeId);
+    if (own !== undefined) {
+      const boxH = medianOf(b.placed.items.filter((i) => i.kind === "box").map((i) => i.rect.h));
+      const minK = Math.max(CHART_MIN_PX / Math.max(rect.w, 1), boxH > 0 ? MID_TILE_PX / boxH : 0);
+      const fitted = fitCamera(rect, room, { minK, maxK: Math.max(CHART_FIT_MAX_K, minK) });
+      const c = revealCamera(fitted, head(own), own.chart.width, room, 0);
+      return { ...c, x: c.x + leftRef.current, y: c.y + TOP_RESERVE };
+    }
     const opens = b.placed.items.some((i) => i.id === b.nodeId && i.kind === "frame");
     // A roots-only grid fits at 1x when it fits: the cards are never enlarged past their size.
     let c = opens || b.node(b.nodeId)?.chart !== undefined ? fitChartCamera(rect, room, CHART_MIN_PX) : fitCamera(rect, room, flat ? { maxK: 1 } : {});
@@ -565,12 +577,17 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     cam.to(target, !animate);
   };
 
-  /** The camera that shows an expansion from `from`, the least it can move (see revealCamera). */
+  /**
+   * The camera that shows an expansion from `from`, the least it can move (see expandCamera). The room is the stage's room
+   * in the camera's own units: left of the Layers inset and below the top reserve, above the minimap and the status pill.
+   */
   const revealOf = (from: Camera, e: Expansion, minPx = CHART_MIN_PX): Camera => {
-    // The reveal works in the room's own coordinates (from the left and top insets), so the insets are taken off and put back.
-    const left = leftRef.current;
-    const c = revealCamera({ ...from, x: from.x - left, y: from.y - TOP_RESERVE }, { x: e.x, y: e.y, w: e.w, h: e.h }, e.chart.width, roomOf(), minPx);
-    return { ...c, x: c.x + left, y: c.y + TOP_RESERVE };
+    const room = roomOf();
+    return expandCamera(from, { x: e.x, y: e.y, w: e.w, h: e.h }, { x: leftRef.current, y: TOP_RESERVE, w: room.width, h: room.height }, {
+      readK: minPx / Math.max(e.chart.width, 1),
+      fitMinK: REVEAL_MIN_K,
+      headH: CHART_HEAD,
+    });
   };
 
   /** The expansions as the build places them: the boxes they hang from, in the build's layout, placed on the current view. */
@@ -653,7 +670,9 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     // desktop. On a phone, a detail that opens is fitted with the sheet over the map: the one move that is allowed there.
     const fit = !(toggle && holds) || (bottomRef.current > 0 && placed.length > openBefore);
     if (fit) {
-      const target = fitDetails(b, placed) ?? fitTarget(b, placed);
+      // setExp may have laid the build out again: the fit uses the build as it is now, not the one this call started with.
+      const cur = buildRef.current ?? b;
+      const target = fitDetails(cur, placed) ?? fitTarget(cur, placed);
       if (target !== undefined) moveTo(target, animate);
     } else if (placed.length > openBefore) {
       // A detail opened off the stage's edge is panned into view; a camera that already shows it does not move.
