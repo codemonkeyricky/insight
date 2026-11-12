@@ -1,4 +1,4 @@
-import type { IndexReport } from "@insight/core";
+import type { IndexReport } from "@insight/indexer";
 
 function table(rows: string[][]): string {
   const widths = rows[0]?.map((_, i) => Math.max(...rows.map((r) => (r[i] ?? "").length))) ?? [];

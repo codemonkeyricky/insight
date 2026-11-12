@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { homedir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
-import { STATE_DIR, type CoverageRow } from "@insight/core";
+import { STATE_DIR, type CoverageRow } from "@insight/indexer";
 
 export type ProjectSource = { kind: "path"; path: string } | { kind: "git"; url: string; checkout: string };
 

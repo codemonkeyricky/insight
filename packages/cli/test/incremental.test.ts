@@ -2,7 +2,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, unlink
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { projectPaths, readSnapshot, runIndex, type IndexReport } from "@insight/core";
+import { projectPaths, readSnapshot, runIndex, type IndexReport } from "@insight/indexer";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = resolve(here, "../../frontend/typescript/test/fixtures/sample-ts");

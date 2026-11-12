@@ -20,7 +20,7 @@
   },
   "dependencies": {
     "@fastify/static": "^9.0.0",
-    "@insight/core": "workspace:*",
+    "@insight/indexer": "workspace:*",
     "@insight/flow": "workspace:*",
     "@insight/ir": "workspace:*",
     "@insight/lens-dependencies": "workspace:*",

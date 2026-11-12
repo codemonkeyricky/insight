@@ -22,7 +22,7 @@ const edge = (from: string, to: string, imports: number, confidence: ArchEdge["c
 
 const LENS = "packages/lens-dependencies";
 const CORE = "packages/core";
-const MODEL = "packages/model";
+const MODEL = "packages/core/model";
 const WEB = "apps/web";
 
 const files: ArchFile[] = [
@@ -165,8 +165,8 @@ describe("scopedView", () => {
     // out:model is the workspace import in b.ts (line 9). out:core is not here: a.ts is not in this scope.
     expect(view?.model.packages.map((p) => p.id)).toEqual([
       `in:${LENS}/src/sub2`,
-      `out:${LENS}/src`,
       `out:${MODEL}`,
+      `out:${LENS}/src`,
       `${LENS}/src/sub/b.ts`,
     ]);
     expect(view?.model.layers).toEqual([IMPORTED_BY, "Inside sub", IMPORTS]);

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import type { IndexReport, PhaseProgress } from "@insight/core";
+import type { IndexReport, PhaseProgress } from "@insight/indexer";
 import { buildServer, ProjectRegistry, type JobEvent } from "../src/index.js";
 
 const SCRATCH = resolve(import.meta.dirname, "..", ".insight-test-progress");

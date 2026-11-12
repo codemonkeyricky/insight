@@ -2,7 +2,7 @@
 // in-process hosted index. It indexes with the same server routes the live app uses (buildServer + app.inject), so the
 // files match what the server would answer. No sources, no per-scope flows, no non-root scopes.
 import { basename } from "node:path";
-import { IndexLimitError, projectPaths, runIndex, type IndexLimits } from "@insight/core";
+import { IndexLimitError, projectPaths, runIndex, type IndexLimits } from "@insight/indexer";
 import { buildServer, loadSnapshot, type IndexFn } from "@insight/server";
 import { edgeTargets } from "@insight/sdk";
 

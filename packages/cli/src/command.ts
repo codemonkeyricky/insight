@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { runIndex } from "@insight/core";
+import { runIndex } from "@insight/indexer";
 import { formatReport } from "./format.js";
 
 import { runServe, SERVE_USAGE } from "./serve.js";

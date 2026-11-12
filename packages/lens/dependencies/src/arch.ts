@@ -10,10 +10,9 @@ const FRONTEND_LENS_RULE = "frontends and lenses never import each other";
 /** Maps a package directory (for example "packages/lens/calls" or "packages/lens-calls") to a layer name, or undefined for "other". */
 export function defaultLayerOf(pkgPath: string): string | undefined {
   if (/^(packages|plugins)\/frontend[-/]/.test(pkgPath)) return "frontend";
-  // flow is a library that lenses and apps consume, not a lens: it stays unlayered, as it was before it moved here.
-  if (pkgPath === "packages/lens/flow") return undefined;
   if (/^packages\/lens[-/]/.test(pkgPath)) return "lens";
-  if (pkgPath === "packages/ir" || pkgPath === "packages/sdk" || pkgPath === "packages/core") return "ir";
+  // The kernel group packages/core/* (ir, sdk, model, flow, indexer) all sit in the ir layer.
+  if (/^packages\/core(\/|$)/.test(pkgPath)) return "ir";
   if (pkgPath.startsWith("apps/") || pkgPath === "packages/cli") return "app";
   if (pkgPath === ".") return "project";
   return undefined;
@@ -244,7 +243,7 @@ export function archModel(view: IRView, options: ArchOptions = {}): ArchModel {
     rolled.set(edgeKey, cur);
   }
   // Unresolved imports whose importing file belongs to no package are left out: they have no package to report under.
-  // A bare specifier is not a miss. A scoped one whose name matches exactly one package here ("@insight/core" and the
+  // A bare specifier is not a miss. A scoped one whose name matches exactly one package here ("@insight/indexer" and the
   // package named core) is an import of that workspace package: the IR cannot resolve it (it points into the package's
   // build output), so the edge is inferred from the name. Any other bare specifier is an external dependency.
   // What stays in `unresolved` is a relative or absolute path that resolved to nothing.

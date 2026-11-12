@@ -4,14 +4,14 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { IRRecord } from "@insight/ir";
 import { projectPaths, readSnapshot, runIndex } from "../src/index.js";
-import { buildCmakeModel } from "../../../plugins/frontend-cmake/parse.js";
+import { buildCmakeModel } from "../../../../plugins/frontend-cmake/parse.js";
 
 // The real frontend-cmake plugin is loaded from plugins/ through the normal loader, so `pnpm -r test`
 // covers it. Scratch lives inside this package and is removed after the tests.
 const here = dirname(fileURLToPath(import.meta.url));
 const SCRATCH = join(here, "..", ".insight-test", `cmake-${process.pid}`);
 const project = join(SCRATCH, "cmake-sample");
-const repoRoot = resolve(here, "..", "..", "..");
+const repoRoot = resolve(here, "..", "..", "..", "..");
 
 let records: IRRecord[] = [];
 let frontends: string[] = [];
@@ -68,7 +68,7 @@ describe("frontend-cmake through the loader", () => {
 
 describe("frontend-cmake resolver", () => {
   it("does not expose a PRIVATE include directory to the executable that links the library", async () => {
-    const resolver = (await import("../../../plugins/frontend-cmake/resolve.js")).default as {
+    const resolver = (await import("../../../../plugins/frontend-cmake/resolve.js")).default as {
       resolve(ref: { scheme: string; text: string }, ctx: unknown): Promise<unknown>;
     };
     const ctx = {

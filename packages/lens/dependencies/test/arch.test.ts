@@ -15,8 +15,8 @@ describe("archModel", () => {
         pkg("packages/lens-calls"),
         file("packages/lens-calls/src/a.ts"),
         file("packages/lens-calls/src/b.ts"),
-        pkg("packages/ir"),
-        file("packages/ir/src/a.ts"),
+        pkg("packages/core/ir"),
+        file("packages/core/ir/src/a.ts"),
         pkg("apps/web"),
         file("apps/web/src/a.ts"),
         pkg("packages/cli"),
@@ -29,7 +29,7 @@ describe("archModel", () => {
       "apps/web": "app",
       "packages/cli": "app",
       "packages/frontend-typescript": "frontend",
-      "packages/ir": "ir",
+      "packages/core/ir": "ir",
       "packages/lens-calls": "lens",
     });
     expect(model.layers).toEqual(["project", "frontend", "ir", "lens", "app"]);
@@ -53,8 +53,10 @@ describe("archModel", () => {
     });
   });
 
-  it("layers packages/lens/* as lenses, except the flow library, which stays unlayered", () => {
-    expect(defaultLayerOf("packages/lens/flow")).toBeUndefined();
+  it("layers packages/lens/* as lenses and the packages/core/* kernel group as ir", () => {
+    expect(defaultLayerOf("packages/core/flow")).toBe("ir");
+    expect(defaultLayerOf("packages/core/indexer")).toBe("ir");
+    expect(defaultLayerOf("packages/core")).toBe("ir");
     expect(defaultLayerOf("packages/lens/calls")).toBe("lens");
     expect(defaultLayerOf("packages/lens-calls")).toBe("lens");
   });
@@ -87,14 +89,14 @@ describe("archModel", () => {
       nodes: [
         pkg("packages/frontend-typescript"),
         file("packages/frontend-typescript/src/a.ts"),
-        pkg("packages/ir"),
-        file("packages/ir/src/b.ts"),
+        pkg("packages/core/ir"),
+        file("packages/core/ir/src/b.ts"),
       ],
-      edges: [fx.edge("packages/frontend-typescript/src/a.ts", "packages/ir/src/b.ts", "packaging", "packaging.import", { span: sp("packages/frontend-typescript/src/a.ts") })],
+      edges: [fx.edge("packages/frontend-typescript/src/a.ts", "packages/core/ir/src/b.ts", "packaging", "packaging.import", { span: sp("packages/frontend-typescript/src/a.ts") })],
     });
     const model = archModel(view);
     expect(model.edges).toHaveLength(1);
-    expect(model.edges[0]).toMatchObject({ from: "packages/frontend-typescript", to: "packages/ir", imports: 1 });
+    expect(model.edges[0]).toMatchObject({ from: "packages/frontend-typescript", to: "packages/core/ir", imports: 1 });
     expect(model.violations).toEqual([]);
   });
 });
@@ -105,10 +107,10 @@ describe("archModel: bare specifiers", () => {
 
   it("turns a scoped import of a workspace package into an inferred import edge, and the rest into externals", () => {
     const view = fx.view({
-      nodes: [pkg("apps/server"), file("apps/server/src/a.ts"), pkg("packages/core"), file("packages/core/src/a.ts")],
+      nodes: [pkg("apps/server"), file("apps/server/src/a.ts"), pkg("packages/core/indexer"), file("packages/core/indexer/src/a.ts")],
       edges: [
-        unresolved("apps/server/src/a.ts", "@insight/core"),
-        unresolved("apps/server/src/a.ts", "@insight/core/sub"),
+        unresolved("apps/server/src/a.ts", "@insight/indexer"),
+        unresolved("apps/server/src/a.ts", "@insight/indexer/sub"),
         unresolved("apps/server/src/a.ts", "fastify"),
         unresolved("apps/server/src/a.ts", "node:fs"),
         unresolved("apps/server/src/a.ts", "@fastify/static/x"),
@@ -117,7 +119,7 @@ describe("archModel: bare specifiers", () => {
     });
     const model = archModel(view);
     expect(model.edges).toHaveLength(1);
-    expect(model.edges[0]).toMatchObject({ from: "apps/server", to: "packages/core", imports: 2, confidence: "inferred" });
+    expect(model.edges[0]).toMatchObject({ from: "apps/server", to: "packages/core/indexer", imports: 2, confidence: "inferred" });
     expect(model.unresolved.map((u) => u.text)).toEqual(["./gone.js"]);
     expect(model.externals.map((x) => [x.name, x.imports]).sort()).toEqual([["@fastify/static", 1], ["fastify", 1], ["node:fs", 1]]);
   });

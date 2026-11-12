@@ -20,7 +20,7 @@ systems they reach and the verbs between them.
 
 ## Fact rules
 
-The model is `systemModel(model, scope, { tests })` in `packages/model/src/system.ts`. A scope is a closed world: a fact
+The model is `systemModel(model, scope, { tests })` in `packages/core/model/src/system.ts`. A scope is a closed world: a fact
 that leaves it is not drawn.
 
 | Fact (IR kind) | Becomes |
@@ -38,7 +38,7 @@ sites and the full count. An edge is exact unless any of its facts is inferred.
 
 ### Services catalog
 
-`packages/model/src/services.ts` maps hosts to named services: GitHub API, GitHub codeload, GitHub raw, Cloudflare API
+`packages/core/model/src/services.ts` maps hosts to named services: GitHub API, GitHub codeload, GitHub raw, Cloudflare API
 (with path rules: `/storage/kv/` is Cloudflare KV, `/r2/` is Cloudflare R2), Cloudflare R2 (`*.r2.cloudflarestorage.com`),
 Cloudflare Worker (`*.workers.dev`), Vercel API and the npm registry. A host matches exactly or by suffix. Add a row to
 `SERVICES` to name another one.
@@ -77,7 +77,7 @@ The geometry is `layoutSystem` in `apps/web/src/arch/system-layout.ts`, pure and
   window leaves room for, at least 60vh.
 
 Tests: `apps/web/test/systemLayout.test.tsx` (no pill overlaps another pill or a card, no edge sample point inside a
-non-endpoint card, for a hosted-like and a dense 20-component, 60-edge fixture) and `packages/model/test/system*.test.ts`.
+non-endpoint card, for a hosted-like and a dense 20-component, 60-edge fixture) and `packages/core/model/test/system*.test.ts`.
 
 ## Known limits
 

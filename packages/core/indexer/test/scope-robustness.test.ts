@@ -12,7 +12,7 @@ import { loadPlugins, projectPaths, readSnapshot, runIndex, runLensOnScope, type
 // samples/lock-order-fixture (C++ locks and threads, one file) and a generated TypeScript project whose folders call
 // each other, with a module cycle between two files. The google/benchmark sample is covered by the golden test.
 const here = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(here, "..", "..", "..");
+const repoRoot = resolve(here, "..", "..", "..", "..");
 const SCRATCH = join(here, "..", ".insight-test", `scope-robustness-${process.pid}`);
 const userPluginDir = join(SCRATCH, "no-user-plugins");
 const TIMEOUT = 120_000;

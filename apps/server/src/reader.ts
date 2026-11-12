@@ -18,7 +18,7 @@ import {
   type LensStatus,
   type LoadedPlugins,
   type ScopeStats,
-} from "@insight/core";
+} from "@insight/indexer";
 import {
   buildFileFlow,
   execModel,

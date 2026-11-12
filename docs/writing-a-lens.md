@@ -2,7 +2,7 @@
 
 A lens reads the IR and reports findings and views. It sees only `IRView`, never a parser object, and it never reads source files directly. Frontends make the IR (see [writing-a-frontend.md](writing-a-frontend.md)); lenses analyse it.
 
-The contract is the `Lens` interface in `packages/sdk/src/types.ts`:
+The contract is the `Lens` interface in `packages/core/sdk/src/types.ts`:
 
 ```ts
 interface Lens {

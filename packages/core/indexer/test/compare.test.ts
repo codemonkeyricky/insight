@@ -16,7 +16,7 @@ import {
 // Two real commits in a scratch repo: the base takes the locks in one order everywhere, the head reverses
 // reconcile(), so the lock-order lens should add cycle:accounts_mu|audit_mu between them.
 const here = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(here, "..", "..", "..");
+const repoRoot = resolve(here, "..", "..", "..", "..");
 const SCRATCH = join(here, "..", ".insight-test", `compare-${process.pid}`);
 const project = join(SCRATCH, "repo");
 const CYCLE = "cycle:accounts_mu|audit_mu";

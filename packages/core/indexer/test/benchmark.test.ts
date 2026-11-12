@@ -9,7 +9,7 @@ import { projectPaths, readAnalysis, readSnapshot, runIndex } from "../src/index
 // The copy runs in scratch so the vendored tree never gets an .insight/ directory. The golden summary
 // pins what the pipeline reports today. Regenerate with UPDATE_GOLDEN=1 and review the diff.
 const here = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(here, "..", "..", "..");
+const repoRoot = resolve(here, "..", "..", "..", "..");
 const SCRATCH = join(here, "..", ".insight-test", `benchmark-${process.pid}`);
 const project = join(SCRATCH, "benchmark");
 const golden = join(here, "golden", "benchmark-summary.json");

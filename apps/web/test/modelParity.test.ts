@@ -11,7 +11,7 @@ import { staticApi } from "../src/staticApi";
 import { buildServer, type InsightServer } from "../../server/dist/index.js";
 
 const REPO = resolve(import.meta.dirname, "..", "..", "..");
-const SCOPES = ["", "packages/lens/flow", "packages/core/src/scope.ts"];
+const SCOPES = ["", "packages/core/flow", "packages/core/indexer/src/scope.ts"];
 
 describe("browser scope payloads equal the server's", () => {
   let server: InsightServer;
@@ -58,15 +58,15 @@ describe("browser scope payloads equal the server's", () => {
     }
     expect(modelCalls).toHaveLength(1);
     // The comparison means something only when the scopes have functions to compare.
-    expect((await api.scopeFlow(id, "packages/lens/flow")).stats.functions).toBeGreaterThan(0);
-    expect((await api.getScopeExec(id, "packages/lens/flow")).functions.length).toBeGreaterThan(0);
+    expect((await api.scopeFlow(id, "packages/core/flow")).stats.functions).toBeGreaterThan(0);
+    expect((await api.getScopeExec(id, "packages/core/flow")).functions.length).toBeGreaterThan(0);
   }, 600_000);
 
   it("the live api computes the reverse references of a function from the model, as the refs route answers them", async () => {
-    const fnId = (await api.getScopeExec(id, "packages/model")).functions.find((f) => f.name === "inScope")?.id;
-    expect(fnId, "a function named inScope in packages/model").toBeDefined();
-    const q = `?path=packages/model&id=${encodeURIComponent(fnId!)}`;
-    const refs = await api.getRefs(id, "packages/model", fnId!);
+    const fnId = (await api.getScopeExec(id, "packages/core/model")).functions.find((f) => f.name === "inScope")?.id;
+    expect(fnId, "a function named inScope in packages/core/model").toBeDefined();
+    const q = `?path=packages/core/model&id=${encodeURIComponent(fnId!)}`;
+    const refs = await api.getRefs(id, "packages/core/model", fnId!);
     expect(refs).toEqual(await serverJson(`/api/projects/${id}/refs${q}`));
     // inScope is called from outside its own folder, so the list names a caller outside the scope.
     expect(refs.calledBy.some((r) => !r.inScope)).toBe(true);
@@ -94,9 +94,9 @@ describe("browser scope payloads equal the server's", () => {
         expect(await staticApi.scopeFlow(id, scope), `demo flow ${scope}`).toEqual(await serverJson(`/api/projects/${id}/scope/flow${q}`));
         expect(await staticApi.getScopeExec(id, scope), `demo exec ${scope}`).toEqual(await serverJson(`/api/projects/${id}/scope/exec${q}`));
       }
-      const fnId = (await staticApi.getScopeExec(id, "packages/model")).functions.find((f) => f.name === "inScope")?.id ?? "";
-      expect(await staticApi.getRefs(id, "packages/model", fnId), "demo refs").toEqual(
-        await serverJson(`/api/projects/${id}/refs?path=packages/model&id=${encodeURIComponent(fnId)}`),
+      const fnId = (await staticApi.getScopeExec(id, "packages/core/model")).functions.find((f) => f.name === "inScope")?.id ?? "";
+      expect(await staticApi.getRefs(id, "packages/core/model", fnId), "demo refs").toEqual(
+        await serverJson(`/api/projects/${id}/refs?path=packages/core/model&id=${encodeURIComponent(fnId)}`),
       );
     } finally {
       globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {

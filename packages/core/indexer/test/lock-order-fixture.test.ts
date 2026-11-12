@@ -7,7 +7,7 @@ import { projectPaths, readAnalysis, runIndex } from "../src/index.js";
 // Hand-written fixture (samples/lock-order-fixture) for the lock-order lens only. It is not a project sample,
 // so the test checks the lens's cycle finding and nothing else.
 const here = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(here, "..", "..", "..");
+const repoRoot = resolve(here, "..", "..", "..", "..");
 const SCRATCH = join(here, "..", ".insight-test", `lock-order-${process.pid}`);
 const project = join(SCRATCH, "lock-order-fixture");
 

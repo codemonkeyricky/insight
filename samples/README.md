@@ -14,7 +14,7 @@ To refresh it, archive the same path from a newer upstream commit and update the
 
 Measured with `node packages/cli/dist/cli.js index samples/benchmark --full --json` (static mode only;
 `--allow-build-tools` was not used). The same numbers are pinned in
-`packages/core/test/golden/benchmark-summary.json`.
+`packages/core/indexer/test/golden/benchmark-summary.json`.
 
 - Packaging: Bazel gives 6 targets, 90 target-contains and 7 dep edges. CMake gives 4 targets, 23 contains and
   12 dep edges, and one of those targets is the unexpanded name `cmake://test:${name}` (a `foreach` loop
@@ -37,4 +37,4 @@ Measured with `node packages/cli/dist/cli.js index samples/benchmark --full --js
 Hand-written, not taken from any project, and labelled as such in its own comment. It exists only to
 exercise the lock-order lens. `transfer()` takes `accounts_mu` then `audit_mu`; `reconcile()` takes them in
 the opposite order, and both run on threads. The lens should report one `cycle:accounts_mu|audit_mu`
-finding. `packages/core/test/lock-order-fixture.test.ts` checks that.
+finding. `packages/core/indexer/test/lock-order-fixture.test.ts` checks that.

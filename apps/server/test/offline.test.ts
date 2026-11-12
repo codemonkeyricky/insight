@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import type { IndexReport } from "@insight/core";
+import type { IndexReport } from "@insight/indexer";
 import { syncCheckout } from "../src/git.js";
 import { JobRunner, type JobEvent } from "../src/jobs.js";
 import { ProjectRegistry } from "../src/registry.js";

@@ -1,5 +1,5 @@
 {
-  "name": "@insight/core",
+  "name": "@insight/indexer",
   "version": "0.1.0",
   "description": "Insight core: plugin loader, Merkle change detection, shards, snapshots, linker, pipeline and SQLite index",
   "license": "MIT",

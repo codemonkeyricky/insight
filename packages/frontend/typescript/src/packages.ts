@@ -1,6 +1,6 @@
 /**
  * The workspace packages of an indexed project: every package.json the scanner kept, by package name. A bare import
- * of a workspace package (`@insight/core`, `@insight/core/sub`) resolves to that package's source files here, so the
+ * of a workspace package (`@insight/indexer`, `@insight/indexer/sub`) resolves to that package's source files here, so the
  * index needs no node_modules. Reused by the program-entry work (bin and scripts), which reads the same fields.
  */
 

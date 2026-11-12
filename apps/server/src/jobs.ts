@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { runIndex, type IndexLimits, type IndexOptions, type IndexPhase, type IndexReport } from "@insight/core";
+import { runIndex, type IndexLimits, type IndexOptions, type IndexPhase, type IndexReport } from "@insight/indexer";
 import { headOf, isDirty, syncCheckout } from "./git.js";
 import type { LastRun, ProjectRecord, ProjectRegistry } from "./registry.js";
 

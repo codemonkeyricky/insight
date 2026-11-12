@@ -22,10 +22,10 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildServer, loadSnapshot, resolveSnapshot } from "../apps/server/dist/index.js";
-import { projectPaths } from "../packages/core/dist/index.js";
-import { edgeTargets } from "../packages/sdk/dist/index.js";
-import { buildExecScene, buildFileFlow, execDefaultOpen, layoutScene, summarizeFlows } from "../packages/lens/flow/dist/index.js";
-import { serializeModel } from "../packages/model/dist/index.js";
+import { projectPaths } from "../packages/core/indexer/dist/index.js";
+import { edgeTargets } from "../packages/core/sdk/dist/index.js";
+import { buildExecScene, buildFileFlow, execDefaultOpen, layoutScene, summarizeFlows } from "../packages/core/flow/dist/index.js";
+import { serializeModel } from "../packages/core/model/dist/index.js";
 import { scopeKey } from "../apps/web/src/scopeKey.ts";
 import { resultHasContent } from "../apps/web/src/scopeLenses.ts";
 // The same functions the browser runs to answer /scope/flow and /scope/exec, so the layouts match what the page would solve.
