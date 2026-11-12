@@ -39,7 +39,7 @@ export function splitExecFocus(focus: string): { scope: string; nodeId: string }
 export function execMapNode(scene: Scene, id: string): MapNode | undefined {
   const n = scene.nodes.get(id);
   if (n === undefined) return undefined;
-  const node: MapNode = { id, kind: n.kind, label: n.label, title: n.note ?? n.label };
+  const node: MapNode = { id, kind: n.kind, label: n.label, title: n.title ?? n.note ?? n.label };
   if (n.detail !== undefined) node.detail = n.detail;
   if (n.parent !== undefined) node.parent = n.parent;
   if (n.kind === "function" && n.ref !== undefined) node.ref = n.ref;

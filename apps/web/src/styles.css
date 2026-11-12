@@ -282,8 +282,13 @@ a.flow-node:hover :is(rect, polygon, circle) { stroke: var(--accent); }
 
 /* The Arch tab: a column per layer, a box per package, an arrow per import. Colours are the same tokens as the flow chart. */
 .arch { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
-.arch-scroll { flex: 1 1 100%; min-width: 0; max-height: 75vh; overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
-.arch-svg { display: block; flex: none; }
+/* The stage pans and zooms like the System view's (.sysv-stage): the drawing sits in a transformed group inside it. */
+.arch-stage { position: relative; flex: 1 1 100%; min-width: 0; height: max(60vh, 420px); overflow: hidden; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; cursor: grab; touch-action: none; user-select: none; }
+.arch-stage:active { cursor: grabbing; }
+.arch-stage.expanded { position: fixed; inset: 0; z-index: 60; height: auto; border: 0; border-radius: 0; background: var(--sheet); }
+.arch-bar { position: absolute; top: 8px; right: 8px; z-index: 1; }
+.arch-bar .sysv-zoom button { padding: 3px 10px; }
+.arch-svg { display: block; width: 100%; height: 100%; }
 .arch-bg { fill: transparent; }
 .arch-layer { fill: var(--muted); font: 600 17px system-ui, sans-serif; }
 .arch-box { cursor: pointer; }
@@ -640,9 +645,9 @@ input[type="text"], input:not([type]), input[type="url"], input[type="search"], 
 .panel, .card, .stat, .explorer, .source { border-color: var(--hair); }
 table.grid { background: var(--glass-strong); box-shadow: var(--rim); }
 table.grid th { background: var(--faint); }
-.log, .code, pre.code, .flow-scroll, .graph, .graph-scroll, .arch-scroll, .tree, .outside-list, .lens-empty { box-shadow: inset 0 0 0 0.5px var(--hair); }
+.log, .code, pre.code, .flow-scroll, .graph, .graph-scroll, .arch-stage, .tree, .outside-list, .lens-empty { box-shadow: inset 0 0 0 0.5px var(--hair); }
 .code, pre.code { background: color-mix(in srgb, var(--graphite) 10%, transparent); border-radius: 12px; }
-.graph, .graph-scroll, .arch-scroll, .flow-scroll { background: var(--sheet); }
+.graph, .graph-scroll, .arch-stage, .flow-scroll { background: var(--sheet); }
 .modes-seg, .seg { display: inline-flex; background: var(--faint); border-radius: 9px; padding: 2px; box-shadow: inset 0 0.5px 1.5px var(--shadow); }
 .seg button { background: none; box-shadow: none; border: 0; padding: 4px 11px; border-radius: 7px; font-size: var(--t-sm); font-weight: 500; color: var(--ink); -webkit-backdrop-filter: none; backdrop-filter: none; }
 .seg button:hover:not(:disabled) { background: none; }
@@ -671,7 +676,7 @@ table.grid th { background: var(--faint); }
   button, input, select, textarea, .seg, .chip { box-shadow: inset 0 0 0 1px var(--ink); }
   .fg-muted, .muted, .fc, .where, .small { color: var(--ink); }
   .fn rect, .zone-box, .cfg-node, .arch-box, .detail-bg, .zm-box-body { stroke: var(--ink); }
-  .graph, .graph-scroll, .arch-scroll, .flow-scroll { box-shadow: 0 0 0 1.5px var(--ink); }
+  .graph, .graph-scroll, .arch-stage, .flow-scroll { box-shadow: 0 0 0 1.5px var(--ink); }
 }
 
 /* ---- Sheet shell (phase 2): glass top bar, full-height stage, overlays. Tokens only; dark follows the theme tokens. ---- */
@@ -887,7 +892,7 @@ table.grid th { background: var(--faint); }
 .sh-title-toggle:disabled { opacity: 0.4; cursor: default; }
 
 /* Arch restyle: folders are glass cards with a rim and a shadow; their labels sit on the card in the plan's sizes. */
-.arch-scroll { background: var(--glass-strong); border: 0; box-shadow: var(--rim), var(--float); -webkit-backdrop-filter: var(--blur-glass); backdrop-filter: var(--blur-glass); }
+.arch-stage { background: var(--glass-strong); border: 0; box-shadow: var(--rim), var(--float); -webkit-backdrop-filter: var(--blur-glass); backdrop-filter: var(--blur-glass); }
 .arch-box rect { stroke: var(--hair); stroke-width: 1; fill-opacity: 0.86; filter: drop-shadow(0 2px 6px var(--shadow)); }
 .arch-box:hover rect, .arch-box:focus-visible rect { stroke: var(--accent); stroke-width: 2; }
 .arch-box.dim { opacity: 0.35; }
@@ -933,18 +938,16 @@ a.btn.rv-show:hover { background: color-mix(in srgb, var(--accent) 12%, transpar
   a.btn.rv-show { width: auto; }
 }
 
-/* Arch, folder view and phone. The diagram keeps its natural size and pans inside .arch-scroll, so the 23 px names stay
+/* Arch, folder view and phone. The diagram keeps its natural size and pans inside .arch-stage, so the 23 px names stay
    readable and the page itself never scrolls sideways. */
 .arch { min-width: 0; max-width: 100%; }
 .arch-caption { margin: 0 0 8px; }
-.arch-scroll { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .arch-panel { min-width: 0; }
 .arch-unresolved { margin-top: 16px; }
 .arch-unresolved summary { cursor: pointer; list-style-position: outside; }
 .arch-unresolved summary h2 { display: inline; }
 @media (max-width: 720px) {
   .arch { gap: 12px; }
-  .arch-scroll { max-height: 60vh; }
   .arch-name { font-size: var(--t-xl); }
 }
 .arch-other { flex: 1 1 100%; margin: 0; }

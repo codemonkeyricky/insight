@@ -6,7 +6,7 @@ import type { IRBatch } from "@insight/sdk";
 import { importBindings, matchCall, matchEnvRead, matchExportRoute, matchFetch, matchSchedule, matchServe, matchWorker, nodeScriptArgument, scriptPath, urlText, type ImportBinding, type ScriptPath, type UrlText, type WorkerEnv } from "./effects.js";
 import { scriptKind } from "./digest.js";
 import { dispatchFor, MAX_DISPATCH_TARGETS, propName } from "./dispatch.js";
-import { workspaceManifestPaths, workspacePackages, workspaceProgramFiles, workspaceSource, type WorkspacePackage } from "./packages.js";
+import { workspaceManifestPaths, workspacePackages, workspaceProgramEntries, workspaceSource, type ProgramEntry, type WorkspacePackage } from "./packages.js";
 
 export const FRONTEND_ID = "frontend-typescript";
 export const SOURCE_RE = /\.(?:[mc]?[jt]sx?)$/;
@@ -36,6 +36,11 @@ type Entity =
        * file). Unlike other Node scripts, it is a program even when some spawn also runs it, as a server a CLI starts.
        */
       packageEntry?: true;
+      /**
+       * Set with packageEntry: what the package.json names the program as (a bin command, or a script), so the program can
+       * be labelled by its package rather than its file.
+       */
+      programEntry?: ProgramEntry;
     };
 
 export interface Decl {
@@ -208,7 +213,7 @@ function moduleSpan(rel: string, sf: ts.SourceFile): Span {
 }
 
 /** Assigns IDs to every declaration in a file: <file>#<qualified name>, with ~N for repeats. */
-function assignDecls(rel: string, sf: ts.SourceFile, out: Map<ts.Node, Decl>, htmlEntry: boolean, nodeEntry: boolean, packageEntry: boolean): void {
+function assignDecls(rel: string, sf: ts.SourceFile, out: Map<ts.Node, Decl>, htmlEntry: boolean, nodeEntry: boolean, programEntry: ProgramEntry | undefined): void {
   // The module entry is keyed by the source file itself. Its name is not a container, so declarations keep their ids.
   if (runsAtLoad(sf)) {
     const entity: Entity = {
@@ -221,7 +226,7 @@ function assignDecls(rel: string, sf: ts.SourceFile, out: Map<ts.Node, Decl>, ht
       module: true,
       ...(htmlEntry ? { htmlEntry: true as const } : {}),
       ...(nodeEntry ? { nodeEntry: true as const } : {}),
-      ...(packageEntry ? { packageEntry: true as const } : {}),
+      ...(programEntry !== undefined ? { packageEntry: true as const, programEntry } : {}),
     };
     out.set(sf, { id: `${rel}#${MODULE_NAME}`, rel, qname: MODULE_NAME, entity, node: sf });
   }
@@ -311,10 +316,10 @@ function manifestScripts(text: string): Set<string> {
  * process.argv, or that a package.json "bin" or "scripts" entry names (the root's by name, every workspace package's
  * through its build-to-source map). `texts` is keyed by absolute path.
  */
-function nodeEntryFiles(root: string, rels: string[], texts: Map<string, string>, manifests: Map<string, string>, packageEntries: Set<string>): Set<string> {
+function nodeEntryFiles(root: string, rels: string[], texts: Map<string, string>, manifests: Map<string, string>, packageEntries: ReadonlySet<string>): Set<string> {
   const named = new Set<string>();
   for (const text of manifests.values()) for (const f of manifestScripts(text)) named.add(f);
-  // Every workspace package's bin and script targets, mapped from build output to source (see workspaceProgramFiles).
+  // Every workspace package's bin and script targets, mapped from build output to source (see workspaceProgramEntries).
   for (const f of packageEntries) named.add(f);
   const out = new Set<string>();
   for (const rel of rels) {
@@ -441,11 +446,11 @@ export function buildProject(
   const decls = new Map<ts.Node, Decl>();
   const htmlEntries = htmlScriptEntries(html, relSet);
   // The programs the workspace packages name, as source files. A test or declaration file is never a program.
-  const packageEntries = new Set([...workspaceProgramFiles(packageJsons, relSet)].filter((f) => !TEST_PATH.test(f) && !f.endsWith(".d.ts")));
-  const nodeEntries = nodeEntryFiles(root, rels, texts, manifests, packageEntries);
+  const packageEntries = new Map([...workspaceProgramEntries(packageJsons, relSet)].filter(([f]) => !TEST_PATH.test(f) && !f.endsWith(".d.ts")));
+  const nodeEntries = nodeEntryFiles(root, rels, texts, manifests, new Set(packageEntries.keys()));
   for (const rel of rels) {
     const sf = program.getSourceFile(abs(rel));
-    if (sf) assignDecls(rel, sf, decls, htmlEntries.has(rel), nodeEntries.has(rel), packageEntries.has(rel));
+    if (sf) assignDecls(rel, sf, decls, htmlEntries.has(rel), nodeEntries.has(rel), packageEntries.get(rel));
   }
   const moduleIds = new Map<string, NodeId>();
   for (const d of decls.values()) {
@@ -1257,6 +1262,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
             ...(decl.entity.htmlEntry ? { htmlEntry: true } : {}),
             ...(decl.entity.nodeEntry ? { nodeEntry: true } : {}),
             ...(decl.entity.packageEntry ? { packageEntry: true } : {}),
+            ...(decl.entity.programEntry !== undefined ? { programEntry: decl.entity.programEntry } : {}),
           },
           span,
           provenance: PROV,

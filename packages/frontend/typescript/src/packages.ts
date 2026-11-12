@@ -269,13 +269,27 @@ export function packageTargetSource(pkgDir: string, target: string, rels: Set<st
 }
 
 /**
- * The indexed source files that the workspace packages run as programs: every `bin` target (a path, or each path of a
- * map) and every file a `scripts` command starts with node, tsx, ts-node or bun. A package's `main`, `exports` and
- * other library fields are not programs. Each target is mapped to its source (packageTargetSource); a target with no
- * source file is left out. Test and declaration files are left to the caller. `manifests` is keyed like workspacePackages.
+ * What a workspace package.json names a program file as. `kind` "bin" is a bin entry, whose `name` is the command (for a
+ * plain string bin, the package name); "script" is a package.json script, whose `name` is the script's name. `pkg` is the
+ * package name as written, scope included.
  */
-export function workspaceProgramFiles(manifests: Map<string, string>, rels: Set<string>): Set<string> {
-  const out = new Set<string>();
+export interface ProgramEntry {
+  kind: "bin" | "script";
+  pkg: string;
+  name: string;
+}
+
+/**
+ * The indexed source files that the workspace packages run as programs, each with what names it: every `bin` target (a
+ * path, or each path of a map) and every file a `scripts` command starts with node, tsx, ts-node or bun. A bin entry wins
+ * over a script that starts the same file, so a CLI that a root script also runs is named by its bin. A package's
+ * `main`, `exports` and other library fields are not programs. Each target is mapped to its source (packageTargetSource);
+ * a target with no source file is left out. Test and declaration files are left to the caller. `manifests` is keyed like
+ * workspacePackages.
+ */
+export function workspaceProgramEntries(manifests: Map<string, string>, rels: Set<string>): Map<string, ProgramEntry> {
+  const out = new Map<string, ProgramEntry>();
+  const parsed: { pkg: string; dir: string; fields: { bin?: unknown; scripts?: unknown } }[] = [];
   for (const manifest of manifests.keys()) {
     if (!isWorkspaceManifest(manifest)) continue;
     let json: unknown;
@@ -285,20 +299,38 @@ export function workspaceProgramFiles(manifests: Map<string, string>, rels: Set<
       continue;
     }
     if (typeof json !== "object" || json === null) continue;
-    const fields = json as { bin?: unknown; scripts?: unknown };
+    const fields = json as { name?: unknown; bin?: unknown; scripts?: unknown };
+    if (typeof fields.name !== "string" || fields.name === "") continue;
     const dir = manifest === "package.json" ? "" : manifest.slice(0, -"/package.json".length);
-    const targets: string[] = [];
-    if (typeof fields.bin === "string") targets.push(fields.bin);
-    else if (typeof fields.bin === "object" && fields.bin !== null) targets.push(...Object.values(fields.bin).filter((v): v is string => typeof v === "string"));
-    if (typeof fields.scripts === "object" && fields.scripts !== null) {
-      for (const command of Object.values(fields.scripts)) {
-        if (typeof command === "string") targets.push(...scriptRunFiles(command));
+    parsed.push({ pkg: fields.name, dir, fields });
+  }
+  // Bins first, across every package, so a bin names a file before any script does.
+  const add = (entry: ProgramEntry, dir: string, target: string): void => {
+    const hit = packageTargetSource(dir, target, rels);
+    if (hit !== undefined && !out.has(hit)) out.set(hit, entry);
+  };
+  for (const { pkg, dir, fields } of parsed) {
+    if (typeof fields.bin === "string") add({ kind: "bin", pkg, name: pkg }, dir, fields.bin);
+    else if (typeof fields.bin === "object" && fields.bin !== null) {
+      for (const [command, target] of Object.entries(fields.bin)) {
+        if (typeof target === "string") add({ kind: "bin", pkg, name: command }, dir, target);
       }
     }
-    for (const target of targets) {
-      const hit = packageTargetSource(dir, target, rels);
-      if (hit !== undefined) out.add(hit);
+  }
+  for (const { pkg, dir, fields } of parsed) {
+    if (typeof fields.scripts !== "object" || fields.scripts === null) continue;
+    for (const [script, command] of Object.entries(fields.scripts)) {
+      if (typeof command !== "string") continue;
+      for (const target of scriptRunFiles(command)) add({ kind: "script", pkg, name: script }, dir, target);
     }
   }
   return out;
+}
+
+/**
+ * The indexed source files that the workspace packages run as programs (see workspaceProgramEntries). `manifests` is keyed
+ * like workspacePackages.
+ */
+export function workspaceProgramFiles(manifests: Map<string, string>, rels: Set<string>): Set<string> {
+  return new Set(workspaceProgramEntries(manifests, rels).keys());
 }
