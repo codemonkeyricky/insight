@@ -145,6 +145,23 @@ export interface ExecDispatch {
 }
 
 /**
+ * What a workspace package.json names a Node program as: a bin command (`kind` "bin", `name` the command, or the package
+ * name for a plain string bin), or a script (`kind` "script", `name` the script's name). `pkg` is the package name.
+ */
+export interface ExecProgramEntry {
+  kind: "bin" | "script";
+  pkg: string;
+  name: string;
+}
+
+function programEntryAttr(v: unknown): ExecProgramEntry | undefined {
+  if (typeof v !== "object" || v === null) return undefined;
+  const o = v as Record<string, unknown>;
+  if ((o.kind !== "bin" && o.kind !== "script") || typeof o.pkg !== "string" || typeof o.name !== "string") return undefined;
+  return { kind: o.kind, pkg: o.pkg, name: o.name };
+}
+
+/**
  * A program: a build target that links an executable (targetKind `add_executable` or a `*_binary` rule). Tests and
  * libraries are not programs. Only targets with a file inside the scope are listed.
  */
@@ -166,6 +183,8 @@ export interface ExecProgram {
    * script. Absent for a build target.
    */
   kind?: "browser" | "node";
+  /** A Node program that a workspace package names (a bin or a script). Absent for a file no package names. */
+  entry?: ExecProgramEntry;
   /**
    * The module entries that start the program's main thread. A browser program holds every page script of index.html;
    * a Node program holds its one script. Absent for a build target, whose main is `main`.
@@ -298,6 +317,8 @@ interface Fn {
   nodeEntry: boolean;
   /** A module a workspace package names as a program. It is an entry even when a spawn also runs it (see the frontend's packageEntry). */
   packageEntry: boolean;
+  /** What the package names the program as, with packageEntry (see the frontend's programEntry). */
+  programEntry?: ExecProgramEntry;
 }
 
 interface Dispatch {
@@ -419,6 +440,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     const file = n.span?.file;
     const anonymous = n.attrs?.anonymous === true;
     if (fold && anonymous) continue;
+    const entry = programEntryAttr(n.attrs?.programEntry);
     fns.set(n.id, {
       id: n.id,
       name: n.attrs?.module === true && file !== undefined ? basenameOf(file) : (strAttr(n.attrs, "name") ?? (n.id.split("#")[1] ?? n.id)),
@@ -432,6 +454,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       htmlEntry: n.attrs?.htmlEntry === true,
       nodeEntry: n.attrs?.nodeEntry === true,
       packageEntry: n.attrs?.packageEntry === true,
+      ...(entry !== undefined ? { programEntry: entry } : {}),
     });
   }
 
@@ -674,7 +697,17 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
   }
   for (const f of nodeFns) {
     const file = f.file ?? "";
-    programs.push({ id: `entry:node:${file}`, name: file, targetKind: "node-entry", files: closureOf([file]), kind: "node", entries: [f.id], threads: [] });
+    const entry = f.programEntry;
+    programs.push({
+      id: `entry:node:${file}`,
+      name: file,
+      targetKind: "node-entry",
+      files: closureOf([file]),
+      kind: "node",
+      entries: [f.id],
+      threads: [],
+      ...(entry !== undefined ? { entry } : {}),
+    });
   }
   programs.sort((a, b) => byText(a.id, b.id));
   const programMains = new Set(programs.flatMap((p) => (p.main !== undefined ? [p.main] : [])));

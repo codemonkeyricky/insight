@@ -1,6 +1,6 @@
 {
   "id": "frontend-typescript",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "TypeScript and JavaScript: structure, imports, calls, control flow and known effects.",
   "irVersion": "^1.0",
   "detect": [

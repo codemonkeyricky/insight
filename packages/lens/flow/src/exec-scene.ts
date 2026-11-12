@@ -9,6 +9,7 @@
 import type { ExecCoroutine, ExecFunctionRef, ExecModel, ExecProgram, ExecResourceSite, ExecSpawn, ExecThread } from "./exec-model.js";
 import type { Scene, SceneEdge, SceneEdgeKind, SceneLevel, SceneNode } from "./scene.js";
 import { LAYERED, ZOOM_SIZE } from "./zoom-layout.js";
+import { programHeaderNames } from "./names.js";
 
 /** The root node's id. The project holds the processes, or the plain code flow when no thread is grounded. */
 export const EXEC_PROJECT_ROOT = "project";
@@ -161,6 +162,8 @@ export function buildExecScene(model: ExecModel): Scene {
   const rootId = EXEC_PROJECT_ROOT;
   const unthreaded = model.unthreaded.filter((id) => fns.has(id));
   const programs = model.programs ?? [];
+  // A Node or browser program's header names it: "insight · Node — 1 thread". The names are fixed across the scene's programs.
+  const headerNames = programHeaderNames(programs);
   const root: SceneNode = {
     id: rootId,
     kind: "project",
@@ -198,10 +201,11 @@ export function buildExecScene(model: ExecModel): Scene {
   }
 
   let processCount = 0;
-  const addProcess = (id: string, label: string, detail: string, note?: string): string => {
+  const addProcess = (id: string, label: string, detail: string, note?: string, title?: string): string => {
     if (!nodes.has(id)) {
       const node: SceneNode = { id, kind: "program", label, parent: rootId, children: [], detail };
       if (note !== undefined) node.note = note;
+      if (title !== undefined) node.title = title;
       addNode(node);
       processCount += 1;
     }
@@ -219,10 +223,13 @@ export function buildExecScene(model: ExecModel): Scene {
       parts.push(main !== undefined ? `Main function: ${main}.` : "No main function in the IR.");
     }
     if (shared > 0) parts.push(`Shares ${plural(shared, "thread")} with other programs.`);
-    // A frame header names its kind, not its file: "Browser — 2 threads", "Node — 1 thread".
-    const label = p.kind === "browser" ? "Browser" : p.kind === "node" ? "Node" : p.name;
-    const named = p.kind === undefined ? label : `${label} — ${plural(p.threads.length, "thread")}`;
-    return addProcess(execProgramId(p.id), named, p.kind === undefined ? p.targetKind : "", parts.join(" "));
+    // A frame header names the program, then its kind and threads: "insight · Node — 1 thread", "index.html · Browser — 2 threads".
+    // Its title is the entry file (a browser page's page scripts). A build target keeps its name and its note.
+    if (p.kind === undefined) return addProcess(execProgramId(p.id), p.name, p.targetKind, parts.join(" "));
+    const kind = p.kind === "browser" ? "Browser" : "Node";
+    const named = `${headerNames.get(p.id) ?? p.name} · ${kind} — ${plural(p.threads.length, "thread")}`;
+    const title = p.kind === "node" ? p.name : [...new Set((p.entries ?? []).map((id) => fns.get(id)?.file ?? id))].join(", ");
+    return addProcess(execProgramId(p.id), named, "", parts.join(" "), title);
   };
 
   const threadName = (t: ExecThread): string => {
