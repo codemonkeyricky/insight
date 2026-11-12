@@ -26,6 +26,8 @@ export interface LoadedLens {
   manifest: PluginManifest;
   dir: string;
   lens: Lens;
+  /** The manifest's `hidden` flag: the lens has no tab in the web app. */
+  hidden?: boolean;
 }
 
 export interface DisabledPlugin {
@@ -63,24 +65,38 @@ interface Candidate {
   dir: string;
 }
 
+/** Folders that are never plugins or groups: build output, installed packages, and dot-directories. */
+function skippedDir(name: string): boolean {
+  return name === "node_modules" || name === "dist" || name.startsWith(".");
+}
+
 /** Lists the plugin folders directly inside a directory. */
 function childDirs(dir: string): string[] {
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
+    .filter((name) => !skippedDir(name))
     .map((name) => join(dir, name))
     .filter((p) => statSync(p).isDirectory())
     .sort();
 }
 
+/** True when a folder is a package: it has an insight-plugin.json or a package.json. */
+function isPackageDir(dir: string): boolean {
+  return existsSync(join(dir, MANIFEST_FILE)) || existsSync(join(dir, "package.json"));
+}
+
 /**
  * Lists the plugin folders of a built-in root: each direct child, and the children of a group folder. A group folder
- * is a child with neither a manifest nor a package.json, such as packages/lens/, which holds the lens packages.
+ * is a child with neither a manifest nor a package.json, such as packages/lens/, which holds the lens packages. It counts
+ * as a group only when one of its children is a package, so a stale folder holding only dist/ or node_modules/ is skipped.
  */
 function builtinDirs(dir: string): string[] {
   const out: string[] = [];
   for (const child of childDirs(dir)) {
     out.push(child);
-    if (!existsSync(join(child, MANIFEST_FILE)) && !existsSync(join(child, "package.json"))) out.push(...childDirs(child));
+    if (isPackageDir(child)) continue;
+    const members = childDirs(child);
+    if (members.some(isPackageDir)) out.push(...members);
   }
   return out;
 }
@@ -192,7 +208,7 @@ export async function loadPlugins(opts: LoadOptions): Promise<LoadedPlugins> {
         const lens = (mod.default ?? mod.lens) as Lens | undefined;
         if (!lens || typeof lens.run !== "function") throw new Error(`${manifest.roles.lens} must export a Lens (default export)`);
         if (lens.id !== manifest.id) throw new Error(`lens id "${lens.id}" does not match manifest id "${manifest.id}"`);
-        lenses.push({ manifest, dir, lens });
+        lenses.push({ manifest, dir, lens, hidden: manifest.hidden === true });
       }
     } catch (err) {
       fail(c, (err as Error).message);

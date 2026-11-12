@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Insight lens: processes, threads and coroutines, with the code that starts them",
   "irVersion": "^1.0",
+  "hidden": true,
   "roles": {
     "lens": "dist/index.js"
   }

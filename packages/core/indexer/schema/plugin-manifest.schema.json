@@ -19,6 +19,7 @@
       "items": { "type": "string", "pattern": "^(structure|packaging|flow|calls|concurrency|sync|effects|x-[a-z0-9-]+)$" },
       "uniqueItems": true
     },
+    "hidden": { "description": "A lens with no tab in the web app. It still runs and its results stay available to the CLI and API.", "type": "boolean" },
     "dependsOn": { "description": "Plugin ids that must load first.", "type": "array", "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" } },
     "kinds": { "description": "Path to a JSON file holding an array of kind definitions.", "type": "string", "minLength": 1 },
     "roles": {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { IRDocument, IRNode } from "@insight/ir";
-import { irFixtures as fx } from "@insight/sdk";
+import * as fx from "@insight/sdk/testing";
 import { buildProjectModel, loadModel, serializeModel, systemModel, type SystemModel } from "../src/index.js";
 
 const file = (path: string): IRNode => fx.node(path, "structure", "structure.file", { attrs: { path }, span: fx.span(path, 0, 0, 0, 0) });

@@ -17,6 +17,8 @@ export interface PluginManifest {
   inputs?: string[];
   provides?: string[];
   dependsOn?: string[];
+  /** A lens with no tab in the web app. It still runs and its results stay available to the CLI and API. */
+  hidden?: boolean;
   kinds?: string;
   roles: {
     frontend?: string;

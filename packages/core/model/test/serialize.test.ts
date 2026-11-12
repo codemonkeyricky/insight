@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { IRDocument, IRNode } from "@insight/ir";
-import { irFixtures as fx } from "@insight/sdk";
+import * as fx from "@insight/sdk/testing";
 import { buildProjectModel, loadModel, MODEL_SCHEMA, scopeView, serializeModel } from "../src/index.js";
 
 const A = "src/a.ts";

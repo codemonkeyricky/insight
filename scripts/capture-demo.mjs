@@ -40,7 +40,7 @@ const MAX_FILE_BYTES = 256 * 1024;
  * too. The project scope always keeps every lens.
  */
 const MAX_DEMO_BYTES = 40 * 1024 * 1024;
-// lens-execution is not here: the execution canvas replaced its tab, and its links redirect to the flow tab.
+// The budget picks lenses by id, since a manifest has no property saying which ones a demo keeps on file scopes.
 const KEEP_FILE_LENSES = new Set(["lens-flow-complexity"]);
 /** How far the budget trims: 0 keeps everything, 1 trims file scopes, 2 trims folder scopes too. */
 const TRIM_LEVELS = ["none", "file scopes", "file and folder scopes"];

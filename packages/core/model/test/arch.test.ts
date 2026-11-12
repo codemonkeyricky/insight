@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { irFixtures as fx } from "@insight/sdk";
+import * as fx from "@insight/sdk/testing";
 import { archModel, defaultLayerOf } from "../src/index.js";
 
 const sp = (file: string) => fx.span(file, 0, 0, 0, 20);

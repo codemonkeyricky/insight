@@ -219,6 +219,8 @@ export interface ScopeLensRow {
   findings: number | null;
   /** Demo captures only: false when the lens has no views or findings for the scope, so its tab is dimmed. */
   hasContent?: boolean;
+  /** A lens with no tab (its manifest's `hidden` flag). It still runs, and its results stay available. */
+  hidden?: boolean;
 }
 
 export interface ScopeLenses {

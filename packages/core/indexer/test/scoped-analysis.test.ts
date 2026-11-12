@@ -4,7 +4,8 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type IRDocument } from "@insight/ir";
 import { createCoreRegistry } from "@insight/ir/node";
-import { irFixtures as fx, type Lens, type LensResult, type ProjectRoot } from "@insight/sdk";
+import * as fx from "@insight/sdk/testing";
+import { type Lens, type LensResult, type ProjectRoot } from "@insight/sdk";
 import {
   ANALYSIS_SCHEMA,
   latestScopedRun,

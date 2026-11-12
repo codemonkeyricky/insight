@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { irFixtures as fx } from "@insight/sdk";
+import * as fx from "@insight/sdk/testing";
 import { archModel, DEFAULT_LAYERS, topDirLayerOf } from "../src/index.js";
 
 const file = (path: string) => fx.node(path, "structure", "structure.file");

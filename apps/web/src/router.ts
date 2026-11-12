@@ -1,4 +1,3 @@
-import { RETIRED_LENSES } from "./scopeLenses";
 import { isRefName, isRepoName } from "./hostedRepo";
 
 /**
@@ -141,14 +140,14 @@ export function hrefView(id: string, tab: string, opts: ViewOptions = {}): strin
 }
 
 /**
- * Where a route must be sent instead of shown, or undefined when it is shown as it is. A retired lens tab (the
- * execution lens) goes to the flow tab, whose canvas draws the same threads, coroutines and functions, for the same scope.
- * The retired Source and Findings views go to Overview. The scope and line ride along, so a link to a file's line still
- * opens that file in the code pane.
+ * Where a route must be sent instead of shown, or undefined when it is shown as it is. A hidden lens (one with no tab,
+ * listed in `hiddenLenses` from the loaded lens rows) goes to the flow tab, whose canvas draws the same threads, coroutines
+ * and functions, for the same scope. The retired Source and Findings views go to Overview. The scope and line ride along,
+ * so a link to a file's line still opens that file in the code pane.
  */
-export function redirectFor(route: Route): string | undefined {
+export function redirectFor(route: Route, hiddenLenses: readonly string[] = []): string | undefined {
   if (route.name !== "workspace") return undefined;
-  if (RETIRED_LENSES.includes(route.tab)) return hrefView(route.id, "flow", { scope: route.scope });
+  if (hiddenLenses.includes(route.tab)) return hrefView(route.id, "flow", { scope: route.scope });
   if (RETIRED_VIEWS.includes(route.tab)) return hrefView(route.id, "overview", { scope: route.scope, ...(route.line ? { line: route.line } : {}) });
   return undefined;
 }

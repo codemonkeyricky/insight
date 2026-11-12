@@ -132,8 +132,10 @@ export function Workspace({ id, tab, scope, line, fn, roots = true, base, head, 
     void load();
   }, [load]);
 
-  // A retired tab is replaced by its new home: the execution lens by the flow tab, and Source and Findings by Overview.
-  const redirect = redirectFor({ name: "workspace", id, tab, scope, ...(line !== undefined ? { line } : {}) });
+  // A hidden lens has no tab, so its link goes to the flow tab. The hidden flag comes from the loaded lens rows, so this
+  // waits for the listing; until then the lens page is not shown as a tab. Source and Findings go to Overview.
+  const hiddenLenses = listing ? listing.lenses.filter((r) => r.hidden).map((r) => r.id) : [];
+  const redirect = redirectFor({ name: "workspace", id, tab, scope, ...(line !== undefined ? { line } : {}) }, hiddenLenses);
   useEffect(() => {
     if (redirect !== undefined) window.location.replace(redirect);
   }, [redirect]);

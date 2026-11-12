@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { irFixtures as fx, trace, findCycles, enclosing, ownerOf } from "../src/index.js";
+import * as fx from "../src/testing.js";
+import { trace, findCycles, enclosing, ownerOf } from "../src/index.js";
 
 /** a -> b -> c, a -> x (x is unresolved), c -> a (cycle), b -> {d|e} (candidates), d -> stop. */
 function graph() {
