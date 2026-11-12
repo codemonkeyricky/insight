@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { ExtractContext, Frontend, IRBatch, ProjectRoot } from "@insight/sdk";
 import { buildProject, emitFile, FRONTEND_ID, SOURCE_RE } from "./extract.js";
 import { apiDigest } from "./digest.js";
+import { isWorkspaceManifest } from "./packages.js";
 
 const SKIP_DIRS = new Set(["node_modules", ".git", ".insight", "dist"]);
 
@@ -45,7 +46,12 @@ export const frontend: Frontend = {
     // The root package.json names the Node scripts of "bin" and "scripts" (see nodeEntryFiles).
     const manifests = new Map<string, string>();
     if (existsSync(join(ctx.root.path, "package.json"))) manifests.set("package.json", await ctx.readFile("package.json"));
-    const project = buildProject(ctx.root.path, rels, texts, html, manifests);
+    // Every workspace package.json, so a bare import of a workspace package resolves to its source (see packages.ts).
+    const packageJsons = new Map<string, string>();
+    for (const f of ctx.listFiles()) {
+      if (isWorkspaceManifest(f)) packageJsons.set(f, await ctx.readFile(f));
+    }
+    const project = buildProject(ctx.root.path, rels, texts, html, manifests, packageJsons);
     for (const rel of ctx.files) {
       yield emitFile(project, rel);
     }
