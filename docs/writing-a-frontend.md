@@ -20,7 +20,7 @@ interface Frontend {
 
 Frontends are plugins. The loader (`packages/core/indexer/src/loader.ts`) finds every folder that has an `insight-plugin.json` in:
 
-- `packages/*` in the repository (the cmake frontend is `packages/frontend/cmake`), and `plugins/*` for local plugins,
+- `packages/*` in the repository, with the group folders looked into one level (`packages/frontend/*` and `packages/lens/*`; the cmake frontend is `packages/frontend/cmake`), and `plugins/*` at the repository root if that folder exists,
 - `~/.insight/plugins`, and
 - `.insight/plugins` inside the project being indexed (scanned last).
 

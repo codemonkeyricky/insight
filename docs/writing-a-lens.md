@@ -171,7 +171,7 @@ Note that a function with no callers may still be an entry point. A lens that re
 
 ## Testing
 
-Build IR in the test with `irFixtures` from `@insight/sdk`, not by running a frontend:
+Build IR in the test with the fixtures at `@insight/sdk/testing`, not by running a frontend. Import them as a namespace, `import * as irFixtures from "@insight/sdk/testing"`:
 
 - `irFixtures.span(file, startLine, startCol, endLine, endCol)`
 - `irFixtures.node(id, facet, kind, { attrs, parent, span, confidence })`

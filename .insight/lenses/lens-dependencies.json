@@ -1,0 +1,115 @@
+{
+  "rules": [
+    {
+      "from": "packages/core/**/src/**",
+      "notDependOn": [
+        "packages/frontend/**",
+        "packages/lens/**",
+        "apps/**"
+      ],
+      "reason": "Rule 1: packages/core is the kernel and never depends on a frontend, a lens or an app"
+    },
+    {
+      "from": "packages/frontend/**/src/**",
+      "notDependOn": [
+        "apps/**",
+        "packages/core/indexer/**",
+        "packages/lens/**"
+      ],
+      "reason": "Rule 2: frontends depend only on ir, sdk, model and flow, never on the indexer, a lens or an app"
+    },
+    {
+      "from": "packages/lens/**/src/**",
+      "notDependOn": [
+        "apps/**",
+        "packages/core/indexer/**",
+        "packages/frontend/**"
+      ],
+      "reason": "Rule 2: lenses depend only on ir, sdk, model and flow, never on the indexer, a frontend or an app"
+    },
+    {
+      "from": "packages/frontend/bazel/src/**",
+      "notDependOn": [
+        "packages/frontend/!(bazel)/**"
+      ],
+      "reason": "Rule 2: frontend bazel must not depend on a sibling frontend; they meet only through the kernel"
+    },
+    {
+      "from": "packages/frontend/cmake/src/**",
+      "notDependOn": [
+        "packages/frontend/!(cmake)/**"
+      ],
+      "reason": "Rule 2: frontend cmake must not depend on a sibling frontend; they meet only through the kernel"
+    },
+    {
+      "from": "packages/frontend/cpp/src/**",
+      "notDependOn": [
+        "packages/frontend/!(cpp)/**"
+      ],
+      "reason": "Rule 2: frontend cpp must not depend on a sibling frontend; they meet only through the kernel"
+    },
+    {
+      "from": "packages/frontend/typescript/src/**",
+      "notDependOn": [
+        "packages/frontend/!(typescript)/**"
+      ],
+      "reason": "Rule 2: frontend typescript must not depend on a sibling frontend; they meet only through the kernel"
+    },
+    {
+      "from": "packages/lens/calls/src/**",
+      "notDependOn": [
+        "packages/lens/!(calls)/**"
+      ],
+      "reason": "Rule 2: lens calls must not depend on a sibling lens; they meet only through the kernel"
+    },
+    {
+      "from": "packages/lens/concurrency-map/src/**",
+      "notDependOn": [
+        "packages/lens/!(concurrency-map)/**"
+      ],
+      "reason": "Rule 2: lens concurrency-map must not depend on a sibling lens; they meet only through the kernel"
+    },
+    {
+      "from": "packages/lens/dependencies/src/**",
+      "notDependOn": [
+        "packages/lens/!(dependencies)/**"
+      ],
+      "reason": "Rule 2: lens dependencies must not depend on a sibling lens; they meet only through the kernel"
+    },
+    {
+      "from": "packages/lens/effects/src/**",
+      "notDependOn": [
+        "packages/lens/!(effects)/**"
+      ],
+      "reason": "Rule 2: lens effects must not depend on a sibling lens; they meet only through the kernel"
+    },
+    {
+      "from": "packages/lens/execution/src/**",
+      "notDependOn": [
+        "packages/lens/!(execution)/**"
+      ],
+      "reason": "Rule 2: lens execution must not depend on a sibling lens; they meet only through the kernel"
+    },
+    {
+      "from": "packages/lens/flow-complexity/src/**",
+      "notDependOn": [
+        "packages/lens/!(flow-complexity)/**"
+      ],
+      "reason": "Rule 2: lens flow-complexity must not depend on a sibling lens; they meet only through the kernel"
+    },
+    {
+      "from": "packages/lens/lock-order/src/**",
+      "notDependOn": [
+        "packages/lens/!(lock-order)/**"
+      ],
+      "reason": "Rule 2: lens lock-order must not depend on a sibling lens; they meet only through the kernel"
+    },
+    {
+      "from": "packages/**/src/**",
+      "notDependOn": [
+        "apps/**"
+      ],
+      "reason": "Rule 5: nothing under packages depends on apps"
+    }
+  ]
+}

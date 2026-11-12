@@ -8,7 +8,7 @@ package it draws that scope, as described under "Scoped view" below.
 
 ### Data flow
 
-- The model is built by `archModel(view)` in `packages/lens/dependencies/src/arch.ts`. It reads an `IRView` over the whole
+- The model is built by `archModel(view)` in `packages/core/model/src/arch/arch.ts`. It reads an `IRView` over the whole
   snapshot and returns plain JSON: `layers`, `packages`, `edges`, `unresolved`, `externals` and `violations`.
 - The server builds it in `scopeArchOf` (`apps/server/src/reader.ts`) and serves it at
   `GET /api/projects/:id/scope/arch?path=`. The path is required and names a scope as the other scope routes do. The
