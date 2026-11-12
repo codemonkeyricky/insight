@@ -363,15 +363,15 @@ describe("scoped IR routes", () => {
       });
     });
 
-    it("starts a folder's main thread at the functions no caller in the folder reaches, and keeps the functions outside it", async () => {
+    it("starts a folder's main thread at the functions no caller in the folder reaches, and lists no function outside it", async () => {
       const folder = await get<ExecListing>(execUrl("src"));
-      expect(folder.body.threads[0]).toMatchObject({ roots: ["src/b.ts#d"], reach: 4 });
+      // The folder's thread counts only the folder's own functions: d() -> a() -> b(). c() in lib is outside, so it is neither a root nor counted, and it is not listed.
+      expect(folder.body.threads[0]).toMatchObject({ roots: ["src/b.ts#d"], reach: 3 });
       expect(folder.body.stats).toMatchObject({ functionsInScope: 3, functionsThreaded: 3 });
-      // c() is in lib, outside the folder. It is listed because the thread reaches it, and it is not in scope.
-      expect(folder.body.functions.find((f) => f.id === "lib/c.ts#c")).toMatchObject({ inScope: false });
-      // a() has no caller inside its own file, so it is that file's root. It reaches b() and c() across the file's edge.
+      expect(folder.body.functions.find((f) => f.id === "lib/c.ts#c")).toBeUndefined();
+      // a() has no caller inside its own file, so it is that file's root. b() and c() are outside the file, so the thread counts only a().
       const file = await get<ExecListing>(execUrl("src/a.ts"));
-      expect(file.body.threads[0]).toMatchObject({ roots: ["src/a.ts#a"], reach: 3 });
+      expect(file.body.threads[0]).toMatchObject({ roots: ["src/a.ts#a"], reach: 1 });
       expect(file.body.stats).toMatchObject({ functionsInScope: 1, functionsThreaded: 1 });
     });
 

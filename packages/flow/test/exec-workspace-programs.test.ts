@@ -107,6 +107,24 @@ describe("workspace packages as program entries", () => {
     const m = execModel(nodes, edges, "packages/server");
     expect(m.programs.map((p) => p.id)).toEqual([SERVER]);
     expect(m.threads.some((t) => t.id === `main:${CLI}`)).toBe(false);
-    expect(runtimeOf(m, LIB_FN)).toBe("thread");
+    // The CLI's thread is not listed here, and the library function it runs is out of this scope, so it is not listed.
+    expect(m.functions.some((f) => f.id === LIB_FN)).toBe(false);
+  });
+
+  it("lists no out-of-scope function at a file's scope, and frames count only its own functions", () => {
+    const m = execModel(nodes, edges, "packages/lib/src/index.ts");
+    expect(m.functions.every((f) => f.inScope)).toBe(true);
+    const cli = threadOf(m, CLI);
+    // The CLI's module and run() are out of scope: the library function is the thread's root in this view.
+    expect(cli?.roots).toEqual([LIB_FN]);
+    expect(cli?.reached).toEqual([LIB_FN]);
+    expect(cli?.reach).toBe(1);
+    expect(m.calls).toEqual([]);
+  });
+
+  it("keeps the whole project's roots at the project scope", () => {
+    const m = execModel(nodes, edges, "");
+    expect(threadOf(m, CLI)?.roots).toEqual([CLI_MODULE]);
+    expect(m.functions.some((f) => f.id === LIB_FN && f.inScope)).toBe(true);
   });
 });

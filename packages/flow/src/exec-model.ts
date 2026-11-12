@@ -483,11 +483,17 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
   // count, so a function the scope's own code never calls is a root of the scope even when another folder calls it.
   // Test, fixture and sample code counts only in a noise scope, as its functions are roots only there.
   const referenced = new Set<string>();
+  // A function some out-of-scope caller calls, references or dispatches. An in-scope function that only such code reaches
+  // is a root of the scope's view of its thread, since the caller that starts it lies outside the scope.
+  const calledOutside = new Set<string>();
 
   for (const { e, ids, candidates } of keyed) {
     const from = foldId(e.from);
     const local = inScopeId(from);
     const counted = local && (scopeNoise || !noiseId(from));
+    if (!local && (e.kind === "calls.call" || e.kind === "calls.reference" || e.kind === "concurrency.dispatches")) {
+      for (const to of ids) calledOutside.add(to);
+    }
     if (e.kind === "calls.call" || e.kind === "calls.reference") {
       const closure = e.kind === "calls.reference" && strAttr(e.attrs, "how") === "closure";
       const out = closure ? closureOut : callOut;
@@ -861,20 +867,26 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     return true;
   };
 
+  // The scope's view of each shown thread. Membership and grounding are the whole project's (the plans above); what is
+  // listed is only the in-scope functions the thread runs. Its roots are its in-scope roots, plus the in-scope functions
+  // it runs that only out-of-scope code starts, so no out-of-scope function is a card or counted in a frame.
+  const inScopeFn = (id: string): boolean => fns.get(id)?.inScope === true;
   const threads: ExecThread[] = plans
     .filter((p) => p.spawn !== undefined || shownPlanIds.has(p.id))
     .map((p) => {
-    const roots = p.roots.filter(take);
-    const reached = [...p.reach].sort(byText).filter(take);
+    const extraRoots = [...p.reach].filter((id) => inScopeFn(id) && calledOutside.has(id) && !referenced.has(id) && !p.roots.includes(id));
+    const roots = [...p.roots.filter(inScopeFn), ...extraRoots.sort(byText)].filter(take);
+    const reachIn = [...p.reach].filter(inScopeFn).sort(byText);
+    const reached = reachIn.filter(take);
     // A subset of `reached`, so every id was already offered to the table: filter by it instead of taking again.
     const coroutineOnly = [...p.reach]
-      .filter((id) => !p.plain.has(id))
+      .filter((id) => !p.plain.has(id) && inScopeFn(id))
       .sort(byText)
       .filter((id) => table.has(id));
     const coroutines: ExecCoroutine[] = [];
     for (const co of p.coroutines) {
-      if (!take(co.target)) continue;
-      coroutines.push({ ...co, callees: co.callees.filter(take) });
+      if (!inScopeFn(co.target) || !take(co.target)) continue;
+      coroutines.push({ ...co, callees: co.callees.filter((id) => inScopeFn(id) && take(id)) });
     }
     // A main thread is grounded when a root is a program's main, a function named `main`, or a module entry; a spawn always is.
     const grounded = p.kind !== "main" || p.roots.some((r) => programMains.has(r) || fns.get(r)?.name === "main" || fns.get(r)?.module === true);
@@ -884,7 +896,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       grounded,
       ...(p.spawn !== undefined ? { spawn: p.spawn } : {}),
       roots,
-      reach: [...p.reach].filter((id) => fns.has(id)).length,
+      reach: reachIn.length,
       reached,
       coroutines,
       coroutineOnly,
@@ -894,7 +906,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
   const dispatches: ExecDispatch[] = dispatchSites.map((d) => ({
     from: d.from,
     how: d.how,
-    targets: d.targets.filter(take),
+    targets: d.targets.filter((id) => inScopeFn(id) && take(id)),
     candidates: d.candidates,
     file: d.file,
     line: d.line,
