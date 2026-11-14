@@ -9,7 +9,7 @@ import frontend from "../src/index.js";
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "fixtures", "sample-ts");
 const goldenFile = join(here, "golden", "sample-ts.ndjson");
-const files = ["src/app/main.ts", "src/lib/io.ts", "src/lib/math.ts", "src/lib/proc.ts"];
+const files = ["src/app/main.ts", "src/lib/channels.ts", "src/lib/io.ts", "src/lib/math.ts", "src/lib/os-effects.ts", "src/lib/proc.ts"];
 
 const root: ProjectRoot = { path: fixtureRoot, name: "sample-ts", allowBuildTools: false };
 const readFile = async (rel: string) => readFileSync(join(fixtureRoot, rel), "utf8");
