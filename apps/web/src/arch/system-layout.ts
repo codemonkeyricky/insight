@@ -1,4 +1,4 @@
-import type { SystemComponent, SystemEdge, SystemExternal, SystemModel, SystemRoute } from "@insight/model";
+import type { SystemComponent, SystemEdge, SystemExternal, SystemModel, SystemResource, SystemRoute, SystemSlice } from "@insight/model";
 
 // Pure geometry for the System view. The view draws what layoutSystem returns and keeps no sizes of its own. The layout is
 // deterministic: component columns follow the model's stages left to right, then one column of external systems grouped by
@@ -34,9 +34,52 @@ export const CATEGORY_TITLES: Record<SystemExternal["category"], string> = {
   worker: "Workers",
 };
 
+/** A frame of the grounded System view: a process, a thread, a coroutine, or the frame of code on no thread. */
+export interface SysFrame {
+  id: string;
+  kind: "process" | "thread" | "coroutine" | "unthreaded";
+  title: string;
+  /** The line under the title: the spawn API and status, the coroutine count, or the slice count. */
+  sub: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** Height of the header bar (the part that stays drawn when the frame is collapsed). */
+  hdrH: number;
+  collapsed: boolean;
+  /** The slices hidden behind the "+N more" chip. */
+  hidden: number;
+  /** The frame that holds this one, when it is nested. */
+  parent?: string;
+  spawn?: { file: string; line: number; api?: string; status: string; fn?: string };
+  coroutines?: number;
+  /** The root functions of the runtime, as Flow links (fn ids). */
+  roots?: string[];
+}
+
+/** The in-process strip of a process (or the strip of the flat view): its resources, drawn as cards. */
+export interface SysStrip {
+  id: string;
+  program?: string;
+  title: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** The kernel band: a full-height column between the in-process strips and the outside world. */
+export interface SysBand {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 export interface SysBox {
   id: string;
-  kind: "component" | "external";
+  kind: "component" | "external" | "slice" | "resource" | "os" | "chip" | "more";
   /** Index into SysLayout.columns. */
   column: number;
   x: number;
@@ -52,6 +95,18 @@ export interface SysBox {
   category?: SystemExternal["category"];
   component?: SystemComponent;
   external?: SystemExternal;
+  /** Slices and resources: the frame that holds the box, the runtime, and the model record behind it. */
+  frame?: string;
+  slice?: SystemSlice;
+  resource?: SystemResource;
+  /** The glyph of a resource card: queue, lock, semaphore, condvar, env or os. */
+  glyph?: string;
+  /** Awaited functions of a slice, when it has any. */
+  awaits?: number;
+  /** A slice holds a root of its runtime. */
+  root?: boolean;
+  /** The chip's label on the band, e.g. "connect" or "fs.readFile". */
+  chipLabel?: string;
 }
 
 export interface SysColumn {
@@ -79,8 +134,10 @@ export interface SysArrow {
   samples: Array<{ x: number; y: number }>;
   /** Set when the edge runs along a lane above or below the cards instead of straight between its columns. */
   lane?: "top" | "bottom";
-  /** The verb pill: its centre, size and text. */
+  /** The verb pill: its centre, size and text. An empty text draws no pill. */
   pill: { x: number; y: number; w: number; h: number; text: string };
+  /** Edges of the band: the slice-to-chip part (in) and the chip-to-outside part (out). Other edges have neither. */
+  band?: "in" | "out";
   /** runs and spawns are drawn dashed. */
   dashed: boolean;
   /** An inferred edge is drawn dashed and faded. */
@@ -96,6 +153,10 @@ export interface SysLayout {
   groups: SysGroup[];
   boxes: SysBox[];
   arrows: SysArrow[];
+  /** The grounded view's frames, strips and band. Absent in the Pipeline layout. */
+  frames?: SysFrame[];
+  strips?: SysStrip[];
+  band?: SysBand;
 }
 
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
