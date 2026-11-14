@@ -42,7 +42,8 @@ The rules:
   only counted when it runs code the System shows, so a spawn in a fixture or test file does not create a frame.
 - **Child processes.** A child process with a resolved program target is its own process frame, and the spawning
   slice's edge goes to that frame's header. A child process with an unresolved target is a box beyond the kernel band
-  (`git`, `tar`, or "dynamic command"). A C++ `fork()` is drawn as a "fork" process frame with no rows.
+  (`git`, `tar`, or "dynamic command"). A C++ `fork()` or `vfork()` has no resolved target, so it is not a process frame:
+  the call shows only as a Process control box in the kernel band.
 - **Only grounded threads.** A thread frame exists only where the IR grounds it: a program target, a real `main`, and a
   resolved spawn. This is the same rule the Flow tab uses.
 
@@ -86,6 +87,11 @@ Edges to a resource use these verbs: `enqueues` and `dequeues` (queues), `locks`
 same edge), `waits` and `notifies` (condvar, semaphore). Atomic operations are counted on the lock's or slice's panel
 and are not drawn.
 
+A resource named `<dynamic>` (a queue, lock, semaphore or condvar whose name the IR could not resolve) is not shared:
+each such site is its own resource, labelled `<dynamic> (api)` with the API that made it. Two unrelated threads that
+use a `<dynamic>` queue therefore do not appear to share it. Atomics waits with no name are drawn as one `Atomics`
+condvar.
+
 A strip with nothing to show is not drawn.
 
 ## Kernel band
@@ -103,12 +109,15 @@ Kernel-only operations (`effects.os.call`) end on boxes inside the band, one per
 | Op | Box label | Examples |
 | --- | --- | --- |
 | `signal` | Signals | `process.kill`, `process.on`, `process.once`, `kill`, `raise`, `sigaction` |
-| `process-control` | Process control | `process.exit`, `process.abort`, `fork`, `vfork` |
+| `process-control` | Process control | `process.exit`, `process.abort`, `fork`, `vfork`. Edges to this box use the verb **controls**. |
 | `memory` | Memory maps | `mmap`, `munmap`, `mprotect` |
 | `device` | Devices | `ioctl` |
 | `raw-syscall` | Raw syscalls | `syscall()` |
 | `info` | System info | `os.cpus`, `os.hostname`, `os.totalmem` and the other `os.*` reads |
 | `fd` | File descriptors | `open`, `close`, `dup`, `dup2`, `pipe`, and the `fs.open*` / `fs.close*` / `fs.fstat*` calls |
+
+An `fd` open on a literal path also draws an **opens** edge to the Filesystem box, so the file shows there. The File
+descriptors box stays for every `fd` call. An open whose path is `<dynamic>` only shows under File descriptors.
 
 Each op box lists the names it saw (signal names, for example), and the count. The band is sized from its labels.
 
@@ -120,7 +129,7 @@ The rightmost column holds what the process reaches beyond the kernel:
 
 | Group | What it holds |
 | --- | --- |
-| Filesystem | Reads and writes. |
+| Filesystem | Reads, writes and opens of a literal path. |
 | Network | Catalog services (GitHub, Cloudflare, Vercel, npm), dynamic URLs, and `Listens :port` boxes for `net.listen`. |
 | Processes | Child programs, named by the command. |
 | Stores | Key-value and object stores named by their service. |
@@ -161,6 +170,7 @@ The model is `systemModel(model, scope, { tests })` in `packages/core/model/src/
 | `effects.net.serve` (routes) | TypeScript | A route chip on the component that serves it, and the target of matching relative requests. Frameworks and exported handlers are both routes. |
 | `effects.net.listen` | TypeScript, C++ | A `listens` edge to a `Listens :port` box. |
 | `effects.fs.read`, `effects.fs.write` | TypeScript, C++ | `reads` or `writes` to the Filesystem external. |
+| `effects.os.call` with op `fd` and a literal `target` | TypeScript, C++ | An `opens` edge to the Filesystem external, as well as the File descriptors box. |
 | `effects.proc.exec` | TypeScript | `runs` to a Process external named by the program (`git`, `tar`), or "dynamic command". |
 | `effects.env.read` | TypeScript, C++ | `reads` from the In-process env resource. |
 | `effects.clock.read` | TypeScript, C++ | Hidden. Not drawn. |
@@ -283,7 +293,8 @@ From the design plan's out-of-scope list:
   that thread.
 - Cross-package calls in hosted indexes resolve through workspace specifiers (#53), but a bare npm import still ends
   at the package boundary.
-- C++ `fork()` children have no resolved target. The child is drawn as a "fork" process frame with no rows.
+- C++ `fork()` and `vfork()` children have no resolved target, so no child process frame is drawn. The call shows only
+  as a Process control box with a `controls` edge.
 - Native C++ programs are framed only through build targets plus `main` (`exec-model.ts:630`). A `main` with no build
   target is still a name match, and is labelled inferred.
 

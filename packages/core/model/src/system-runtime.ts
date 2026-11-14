@@ -118,7 +118,7 @@ function threadLabel(t: ExecThread): string {
   if (t.kind === "main") return "Main thread";
   const s = t.spawn;
   if (s?.script !== undefined && s.script !== "") return `Worker · ${basename(s.script)}`;
-  return `Thread · ${s?.api ?? "thread"}`;
+  return s?.api !== undefined && s.api !== "" ? `Thread · ${s.api}` : "Thread";
 }
 
 function spawnOf(s: ExecSpawn): SystemSpawn {

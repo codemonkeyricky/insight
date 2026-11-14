@@ -98,7 +98,7 @@ Base kinds shipped by the core:
 | `concurrency.dispatches` | concurrency | edge | – | Function to the coroutine, async function or callback it hands work to. `attrs.how` is `await`, `start`, `callback`, `timer`, `microtask` or `message`. `message` is a Web Worker `postMessage` (page to worker, or worker to page) to the `onmessage` or `addEventListener("message")` handler the other side registers at its top level or on the Worker object; the TypeScript frontend emits it only when both ends resolve, with confidence `inferred`. |
 | `sync.lock-acquire` | sync | node | – | Takes a lock. `attrs.lock` names the lock; the execution model and the lock-order lens group acquires by it. |
 | `sync.lock-release` | sync | node | – |  |
-| `sync.rwlock-acquire` | sync | node | `sync.lock-acquire` | `attrs.mode` (required) is `shared` or `exclusive`. `attrs.lock` names the mutex. The rwlock's own schema lists `lock` as optional, but it extends `sync.lock-acquire`, whose required `lock` still applies to the effective schema, so `lock` is in practice required. |
+| `sync.rwlock-acquire` | sync | node | `sync.lock-acquire` | `attrs.mode` and `attrs.lock` are required. `attrs.mode` is `shared` or `exclusive`, and `attrs.lock` names the mutex. |
 | `sync.semaphore` | sync | node | – | `attrs.op` (required) is `acquire`, `release`, `wait`, `notify` or `op`. Optional `attrs.name`, `attrs.lock` (the lock the operation is tied to) and `attrs.api`. |
 | `sync.atomic-op` | sync | node | – | `attrs.op` (required) is `acquire`, `release`, `wait`, `notify` or `op`. Optional `attrs.lock` and `attrs.api`. |
 | `sync.condvar` | sync | node | – | `attrs.op` (required) is `acquire`, `release`, `wait`, `notify` or `op`. Optional `attrs.lock` and `attrs.api`, e.g. `wait` with `lock` `m_`. |
@@ -133,7 +133,7 @@ Other attributes added with the System tab, all from the same schema files:
 | `sync.atomic-op` | `op` | yes | As for `sync.semaphore`. |
 | | `lock`, `api` | no | |
 | `sync.rwlock-acquire` | `mode` | yes | `shared` or `exclusive`. |
-| | `lock` | no in the rwlock schema; required in effect | See the note in the table above. |
+| | `lock` | yes | The mutex name the lock is taken on. |
 
 ### Which frontend emits each kind
 

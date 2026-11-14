@@ -934,6 +934,20 @@ describe("execModel: locks and channels", () => {
     expect(model.resources[0]).toMatchObject({ id: "lock:Store::mu", threads: ["main", spawnId("src/m.cc", 3)] });
   });
 
+  it("counts two shared_mutex guards as two sites, not four, when each guard is emitted as a scoped-lock and an rwlock", () => {
+    const nodes = [
+      fnNode("src/m.cc", "main", 0),
+      lockNode("src/m.cc", 1, "src/m.cc#main", "rw", "x-cpp.scoped-lock", "shared"),
+      lockNode("src/m.cc", 1, "src/m.cc#main", "rw", "sync.rwlock-acquire", "shared"),
+      lockNode("src/m.cc", 2, "src/m.cc#main", "rw", "x-cpp.scoped-lock", "exclusive"),
+      lockNode("src/m.cc", 2, "src/m.cc#main", "rw", "sync.rwlock-acquire", "exclusive"),
+    ];
+    const model = execModel(nodes, [], "src");
+    expect(model.resources).toHaveLength(1);
+    expect(model.resources[0]?.sites.map((s) => s.line)).toEqual([2, 3]);
+    expect(model.stats).toMatchObject({ locks: 1 });
+  });
+
   it("lists a channel with its send in one thread and its receive in another, sorted by id before the locks", () => {
     const nodes = [
       fnNode("src/m.ts", "main", 0),

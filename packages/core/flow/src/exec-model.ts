@@ -223,6 +223,8 @@ export interface ExecResourceSite {
   file: string;
   /** 1-based line. 0 when the node has no span. */
   line: number;
+  /** The API call that made the site (the node's `api` attribute), when it has one. */
+  api?: string;
 }
 
 /** Counts over the listed model. */
@@ -439,6 +441,7 @@ interface SiteRecord {
   op: ExecResourceSite["op"];
   file: string;
   line: number;
+  api?: string;
 }
 
 /**
@@ -815,6 +818,13 @@ function buildPlans(nodes: readonly IRNode[], edges: readonly IREdge[], fold: bo
 
   // Lock and channel sites: an acquire, send or receive whose parent is a function. Module-level code (a file parent) runs
   // on no thread, so it is not a site, and the caller also requires the function to be listed.
+  // A std::shared_mutex guard is emitted twice: as x-cpp.scoped-lock and as sync.rwlock-acquire, at the same span. The
+  // rwlock node carries the mode, so the scoped-lock copy is not a second site.
+  const rwlockSpans = new Set<string>();
+  for (const n of nodes) {
+    if (n.kind !== "sync.rwlock-acquire") continue;
+    rwlockSpans.add(`${n.parent ?? ""}\0${n.span?.file ?? ""}\0${n.span?.start.join(":") ?? ""}\0${strAttr(n.attrs, "lock") ?? ""}`);
+  }
   const sites: SiteRecord[] = [];
   for (const n of nodes) {
     const spec = RESOURCE_SITES[n.kind];
@@ -823,7 +833,18 @@ function buildPlans(nodes: readonly IRNode[], edges: readonly IREdge[], fold: bo
     if (fn === undefined || !fns.has(fn)) continue;
     const name = strAttr(n.attrs, spec.attr);
     if (name === undefined || name === "") continue;
-    sites.push({ id: `${spec.kind}:${name}`, kind: spec.kind, name, fn, op: spec.op, file: n.span?.file ?? "", line: n.span ? n.span.start[0] + 1 : 0 });
+    if (n.kind === "x-cpp.scoped-lock" && rwlockSpans.has(`${n.parent ?? ""}\0${n.span?.file ?? ""}\0${n.span?.start.join(":") ?? ""}\0${name}`)) continue;
+    const api = strAttr(n.attrs, "api");
+    sites.push({
+      id: `${spec.kind}:${name}`,
+      kind: spec.kind,
+      name,
+      fn,
+      op: spec.op,
+      file: n.span?.file ?? "",
+      line: n.span ? n.span.start[0] + 1 : 0,
+      ...(api !== undefined ? { api } : {}),
+    });
   }
 
   // Chart sizes by file, computed on first use: the chart layout is cheap, but only files with a listed function need it.
@@ -1144,7 +1165,7 @@ function execModelOf(P: ExecPlans, scope: string, opts: ExecModelOptions): ExecM
   for (const s of P.sites) {
     if (!table.has(s.fn)) continue;
     const r = sitesOf.get(s.id) ?? { kind: s.kind, name: s.name, sites: [] };
-    r.sites.push({ fn: s.fn, op: s.op, file: s.file, line: s.line });
+    r.sites.push({ fn: s.fn, op: s.op, file: s.file, line: s.line, ...(s.api !== undefined ? { api: s.api } : {}) });
     sitesOf.set(s.id, r);
   }
   const reachSets = threads.map((t) => ({ id: t.id, reached: new Set(t.reached) }));
