@@ -240,11 +240,11 @@ describe("systemModel rules", () => {
 
   it("gives an empty model for a scope with no files", () => {
     const sys = systemModel(modelOf(hostedDoc()), "no/such/folder");
-    expect(sys).toEqual({ scope: "no/such/folder", components: [], routes: [], externals: [], edges: [], stages: [] });
+    expect(sys).toEqual({ scope: "no/such/folder", components: [], routes: [], externals: [], edges: [], stages: [], runtime: "none" });
   });
 
   it("gives an empty model for an empty project", () => {
-    expect(systemModel(modelOf({ nodes: [], edges: [], findings: [] }), "")).toEqual({ scope: "", components: [], routes: [], externals: [], edges: [], stages: [] });
+    expect(systemModel(modelOf({ nodes: [], edges: [], findings: [] }), "")).toEqual({ scope: "", components: [], routes: [], externals: [], edges: [], stages: [], runtime: "none" });
   });
 
   it("is deterministic: the same model gives the same output", () => {
