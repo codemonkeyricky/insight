@@ -1,6 +1,6 @@
 {
   "id": "frontend-systemverilog",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Verilog and SystemVerilog via tree-sitter (syntactic): structure, instances, includes and imports, control flow, calls, system-task effects. No preprocessing.",
   "irVersion": "^1.0",
   "detect": ["**/*.v", "**/*.sv", "**/*.svh", "**/*.vh"],

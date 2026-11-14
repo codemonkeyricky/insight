@@ -1,11 +1,12 @@
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { type IRRecord, type IREdge, type IRNode, validateIR } from "@insight/ir";
 import { createCoreRegistry } from "@insight/ir/node";
 import { runFrontendConformance, type IRBatch, type ProjectRoot } from "@insight/sdk";
-import frontend from "../src/index.js";
+import frontend, { extractFiles } from "../src/index.js";
+import { buildProject } from "../src/project.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(here, "fixtures");
@@ -34,7 +35,10 @@ function sourcesUnder(dir: string): string[] {
     for (const e of readdirSync(d)) {
       if (e === ".git" || e === "node_modules" || e === ".insight") continue;
       const full = join(d, e);
-      if (statSync(full).isDirectory()) walk(full);
+      // lstat, not stat: a broken symlink has no target, and symlinks are not followed.
+      const st = lstatSync(full);
+      if (st.isSymbolicLink()) continue;
+      if (st.isDirectory()) walk(full);
       else if (/\.(sv|svh|v|vh)$/i.test(e)) out.push(relative(dir, full));
     }
   };
@@ -167,10 +171,13 @@ describe("review fixes", () => {
     expect(ctor?.parent).toBe("dv_env.sv#dv_child");
     expect(nodes.find((n) => n.id === "dv_env.sv#dv_child.step")?.attrs.name).toBe("dv_child.step");
     expect(nodes.find((n) => n.id === "dv_env.sv#other_c.run")?.attrs.name).toBe("other_c.run");
-    expect(nodes.find((n) => n.id === "dv_env.sv#dv_child.run")).toBeDefined();
+    expect(nodes.find((n) => n.id === "dv_env.sv#dv_child.run")?.attrs.name).toBe("dv_child.run");
     // The extern prototypes did not add a second node.
     expect(nodes.filter((n) => n.attrs.name === "other_c.run")).toHaveLength(1);
-    expect(edges).toBeDefined();
+    // The constructor's empty `super.new();` is a call to the base constructor. dv_base has none, so it stays unresolved.
+    const superNew = edges.find((e) => e.kind === "calls.call" && e.from === "dv_env.sv#dv_child.new");
+    expect(superNew?.attrs?.callee).toBe("super.new");
+    expect(superNew?.to).toEqual({ unresolved: { scheme: "sv.call", text: "super.new" } });
   });
 
   it("fix 4: functions in generate branches get the generate path, and same-named ones never share an id", async () => {
@@ -271,6 +278,125 @@ describe("review fixes", () => {
     const jumps = nodes.filter((n) => n.kind === "flow.jump");
     expect(jumps.some((n) => n.attrs.variant === "break" && n.attrs.label === "blk_x")).toBe(true);
     expect(jumps.some((n) => n.attrs.variant === "break" && n.parent === "rtl2.sv#rtl_nonansi.comb_blk")).toBe(true);
+  });
+});
+
+describe("round 2 fixes", () => {
+  const round2 = join(fixturesDir, "round2");
+  /** Extracts `targets` from a project whose files are all `all`, the way the pipeline's retry does. */
+  const extractSome = async (dir: string, all: string[], targets: string[], log: (m: string) => void = () => undefined) => {
+    const ctx = {
+      root: { path: dir, name: "x", allowBuildTools: false },
+      files: targets,
+      listFiles: () => [...all],
+      readFile: async (rel: string) => readFileSync(join(dir, rel), "utf8"),
+      log,
+    };
+    const out: IRBatch[] = [];
+    for await (const batch of extractFiles(ctx)) out.push(batch);
+    return out;
+  };
+  const callsFrom = (records: IRRecord[], from: string) => edgesOf(records).filter((e) => e.kind === "calls.call" && e.from === from);
+
+  it("fix 1: calls in a module instantiation's parameter and port connections are emitted and resolve to pk.f", async () => {
+    const records = allRecords(await extractDir(round2, ["pk.sv", "sub.sv", "inst.sv"]));
+    const calls = callsFrom(records, "inst.sv#top_inst");
+    expect(calls.map((e) => e.attrs?.callee).sort()).toEqual(["pk::f", "pk::f"]);
+    expect(calls.map((e) => e.to)).toEqual(["pk.sv#pk.f", "pk.sv#pk.f"]);
+  });
+
+  it("fix 2: $unit functions and file-level DPI imports resolve from a module; several project-wide matches are candidates", async () => {
+    const files = ["unit_dpi.sv", "unit_other.sv", "dup_a.sv", "dup_b.sv"];
+    const records = allRecords(await extractDir(round2, files));
+    const byCallee = (callee: string) => edgesOf(records).find((e) => e.kind === "calls.call" && e.attrs?.callee === callee);
+    // Same file: exact.
+    expect(byCallee("dpi_f")?.to).toBe("unit_dpi.sv#dpi_f");
+    expect(byCallee("dpi_f")?.provenance?.confidence).toBe("exact");
+    expect(byCallee("unit_fn")?.to).toBe("unit_dpi.sv#unit_fn");
+    expect(byCallee("unit_fn")?.provenance?.confidence).toBe("exact");
+    // Another file, unique: inferred.
+    expect(byCallee("other_unit_fn")?.to).toBe("unit_other.sv#other_unit_fn");
+    expect(byCallee("other_unit_fn")?.provenance?.confidence).toBe("inferred");
+    // Two files define it, neither is this one: candidates.
+    expect(byCallee("dupf")?.to).toEqual({ candidates: ["dup_a.sv#dupf", "dup_b.sv#dupf"] });
+    expect(byCallee("dupf")?.provenance?.confidence).toBe("heuristic");
+  });
+
+  it("fix 3: a retry over the same project gives the same facts as the full run, and the index is reused", async () => {
+    const all = ["pk.sv", "sub.sv", "inst.sv", "ctor.sv"];
+    const full = allRecords(await extractSome(round2, all, all));
+    const retry = allRecords(await extractSome(round2, all, ["inst.sv"]));
+    const forFile = (records: IRRecord[], file: string) => records.filter((r) => ("node" in r ? r.node.id : "edge" in r ? r.edge.from : "").toString().startsWith(file));
+    expect(retry.map((r) => JSON.stringify(r))).toEqual(forFile(full, "inst.sv").map((r) => JSON.stringify(r)));
+    // The same texts give back the same index object, so a retry does not rebuild it.
+    const texts = new Map(all.map((rel) => [rel, readFileSync(join(round2, rel), "utf8")]));
+    expect(await buildProject(texts)).toBe(await buildProject(new Map(texts)));
+  });
+
+  it("fix 3: sources over the cross-file limit are indexed one file at a time, with a logged reason", async () => {
+    const logs: string[] = [];
+    const all = ["pk.sv", "sub.sv", "inst.sv"];
+    const batches = await extractSome(round2, all, all, (m) => logs.push(m));
+    expect(logs.length).toBe(0);
+    const small: string[] = [];
+    const ctx = {
+      root: { path: round2, name: "x", allowBuildTools: false },
+      files: all,
+      listFiles: () => [...all],
+      readFile: async (rel: string) => readFileSync(join(round2, rel), "utf8"),
+      log: (m: string) => small.push(m),
+    };
+    const limited: IRBatch[] = [];
+    for await (const b of extractFiles(ctx, 10)) limited.push(b);
+    expect(small.length).toBe(1);
+    expect(small[0]).toContain("cross-file limit");
+    // Each file is still emitted, but pk::f is in another file, so it no longer resolves.
+    expect(limited.map((b) => b.file)).toEqual(all);
+    const calls = callsFrom(allRecords(limited), "inst.sv#top_inst");
+    expect(calls).toHaveLength(2);
+    expect(calls.every((e) => typeof e.to === "object" && "unresolved" in e.to)).toBe(true);
+    expect(batches.length).toBe(3);
+  });
+
+  it("fix 4: the fallback scan skips lifetime keywords, the class of interface class, and comments", async () => {
+    const records = allRecords(await extractDir(round2, ["lexer_err.sv"]));
+    const names = nodesOf(records).map((n) => n.attrs.name);
+    expect(names).toEqual(expect.arrayContaining(["lt_mod", "ifc_k", "lt_pkg"]));
+    for (const bad of ["class", "automatic", "static", "commented_line_mod", "commented_block_mod", "commented_pkg_x"]) {
+      expect(names).not.toContain(bad);
+    }
+  });
+
+  it("fix 5: a non-ANSI `output reg b;` keeps its output direction", async () => {
+    const nodes = nodesOf(allRecords(await extractDir(round2, ["nonansi_var.sv"])));
+    expect(nodes.find((n) => n.id === "nonansi_var.sv#nonansi_v")?.attrs.ports).toEqual([
+      { name: "a", dir: "input" },
+      { name: "b", dir: "output" },
+    ]);
+  });
+
+  it("fix 6: new() is a call to the declared class's constructor, super.new is the base constructor, and C::type_id::create stays unresolved", async () => {
+    const edges = edgesOf(allRecords(await extractDir(round2, ["ctor.sv"])));
+    const news = callsFrom(allRecords(await extractDir(round2, ["ctor.sv"])), "ctor.sv#child_c.run_it").filter((e) => e.attrs?.callee === "base_c.new");
+    expect(news.map((e) => e.to)).toEqual(["ctor.sv#base_c.new", "ctor.sv#base_c.new"]);
+    const supers = edges.filter((e) => e.kind === "calls.call" && e.attrs?.callee === "super.new");
+    expect(supers.map((e) => e.to)).toEqual(["ctor.sv#base_c.new", "ctor.sv#base_c.new"]);
+    // A handle of a type that is not in the project stays unresolved.
+    expect(edges.find((e) => e.attrs?.callee === "bi.new")?.to).toEqual({ unresolved: { scheme: "sv.call", text: "bi.new" } });
+    // C::type_id::create is not a constructor call.
+    expect(edges.find((e) => e.attrs?.callee === "base_c::type_id::create")?.to).toEqual({ unresolved: { scheme: "sv.call", text: "base_c::type_id::create" } });
+  });
+
+  it("fix 7: a caller in a generate branch takes that branch's definition; a caller outside them gets the candidates", async () => {
+    const edges = edgesOf(allRecords(await extractDir(round2, ["gen_pick.sv"])));
+    const g1 = edges.find((e) => e.kind === "calls.call" && e.from === "gen_pick.sv#gen_pick.g1.initial#1");
+    const g2 = edges.find((e) => e.kind === "calls.call" && e.from === "gen_pick.sv#gen_pick.g2.initial#2");
+    const top = edges.find((e) => e.kind === "calls.call" && e.from === "gen_pick.sv#gen_pick.initial#3");
+    expect(g1?.to).toBe("gen_pick.sv#gen_pick.g1.pick");
+    expect(g1?.provenance?.confidence).toBe("exact");
+    expect(g2?.to).toBe("gen_pick.sv#gen_pick.g2.pick");
+    expect(g2?.provenance?.confidence).toBe("exact");
+    expect(top?.to).toEqual({ candidates: ["gen_pick.sv#gen_pick.g1.pick", "gen_pick.sv#gen_pick.g2.pick"] });
   });
 });
 

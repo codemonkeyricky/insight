@@ -1,5 +1,6 @@
 import type { NodeId } from "@insight/ir";
-import { getParser, type SyntaxNode, type Tree } from "./parser.js";
+import { createHash } from "node:crypto";
+import { getParser, type SyntaxNode } from "./parser.js";
 
 export const FRONTEND_ID = "frontend-systemverilog";
 export const SV_RE = /\.(?:v|sv|svh|vh)$/i;
@@ -27,6 +28,8 @@ export interface FnRef {
   name: string;
   hdl: "function" | "task";
   scope?: string;
+  /** Generate labels around the definition, outermost first. Empty outside generate blocks. */
+  gen: string[];
   file: string;
   id: NodeId;
 }
@@ -56,15 +59,19 @@ export class Ids {
     this.seen.add(id);
     return id;
   }
+  /** A copy holding the same taken ids, so a later pass takes ids that do not clash with the first. */
+  fork(): Ids {
+    const copy = new Ids();
+    for (const id of this.seen) copy.seen.add(id);
+    return copy;
+  }
 }
 
 export interface Unit {
   rel: string;
   text: string;
-  root: SyntaxNode;
-  tree: Tree;
-  /** ERROR or MISSING nodes. A file with any has inferred facts and one info finding. */
-  errors: SyntaxNode[];
+  /** Count of ERROR or MISSING nodes. A file with any has inferred facts and one finding. The tree is not kept; emit parses again. */
+  errorCount: number;
   /** Ids of this file's declarations, functions and processes. Shared by the project pass and the emitter. */
   ids: Ids;
   /** Definitions found by scanning the text of a file with errors. */
@@ -150,7 +157,7 @@ function baseOf(n: SyntaxNode): BaseRef | undefined {
 }
 
 /** ERROR and MISSING nodes under a tree that has errors. Each one is returned once, at its top. */
-function errorNodes(root: SyntaxNode): SyntaxNode[] {
+export function errorNodes(root: SyntaxNode): SyntaxNode[] {
   const out: SyntaxNode[] = [];
   const visit = (n: SyntaxNode): void => {
     if (n.type === "ERROR" || n.isMissing) {
@@ -174,7 +181,7 @@ const addFn = (p: Project, scope: string, ref: FnRef): void => {
 };
 
 /** Indexes the definitions, functions, DPI imports, class bases and per-file ids of one unit. */
-function collectDecls(unit: Unit, p: Project, imports: Set<string>): void {
+function collectDecls(unit: Unit, root: SyntaxNode, p: Project, imports: Set<string>): void {
   const rel = unit.rel;
   const visit = (n: SyntaxNode, scope: string | undefined, gen: string[], inPackage: boolean): void => {
     const hdl = DECL_HDL[n.type];
@@ -200,7 +207,7 @@ function collectDecls(unit: Unit, p: Project, imports: Set<string>): void {
         const s = sub.scope ?? scope;
         const id = unit.ids.take(fnBase(rel, s, gen, sub.name));
         p.idOf.set(fileNodeKey(rel, n), id);
-        const ref: FnRef = { name: sub.name, hdl: sub.hdl, file: rel, id, ...(s !== undefined ? { scope: s } : {}) };
+        const ref: FnRef = { name: sub.name, hdl: sub.hdl, file: rel, id, gen, ...(s !== undefined ? { scope: s } : {}) };
         addFn(p, s ?? "", ref);
         if (inPackage && sub.scope === undefined) p.pkgFnsByName.set(sub.name, [...(p.pkgFnsByName.get(sub.name) ?? []), ref]);
       }
@@ -215,7 +222,7 @@ function collectDecls(unit: Unit, p: Project, imports: Set<string>): void {
           const hdlKind = proto.type === "task_prototype" ? "task" : "function";
           const id = unit.ids.take(fnBase(rel, scope, gen, name));
           p.idOf.set(fileNodeKey(rel, n), id);
-          const ref: FnRef = { name, hdl: hdlKind, file: rel, id, ...(scope !== undefined ? { scope } : {}) };
+          const ref: FnRef = { name, hdl: hdlKind, file: rel, id, gen, ...(scope !== undefined ? { scope } : {}) };
           addFn(p, scope ?? "", ref);
           if (inPackage) p.pkgFnsByName.set(name, [...(p.pkgFnsByName.get(name) ?? []), ref]);
         }
@@ -234,7 +241,7 @@ function collectDecls(unit: Unit, p: Project, imports: Set<string>): void {
     }
     for (const c of n.namedChildren) visit(c, scope, gen, inPackage);
   };
-  visit(unit.root, undefined, [], false);
+  visit(root, undefined, [], false);
 }
 
 /**
@@ -242,7 +249,7 @@ function collectDecls(unit: Unit, p: Project, imports: Set<string>): void {
  * variables, locals) and function arguments. The type is the first identifier of the declared type,
  * so `virtual bus_if.mst vif` has type `bus_if`.
  */
-function collectVars(unit: Unit): void {
+function collectVars(unit: Unit, root: SyntaxNode): void {
   const add = (scope: string, name: string, type: string | null): void => {
     let m = unit.varTypes.get(scope);
     if (!m) {
@@ -286,7 +293,7 @@ function collectVars(unit: Unit): void {
     }
     for (const c of n.namedChildren) visit(c, scope);
   };
-  visit(unit.root, "");
+  visit(root, "");
 }
 
 /**
@@ -294,11 +301,15 @@ function collectVars(unit: Unit): void {
  * scanned line by line, and only names that the tree did not already define are added.
  */
 function scanDefs(unit: Unit, p: Project): void {
-  if (unit.errors.length === 0) return;
+  if (unit.errorCount === 0) return;
   const known = new Set((p.declsByName.get("") ?? []).map((d) => d.name));
   for (const refs of p.declsByName.values()) for (const d of refs) if (d.file === unit.rel) known.add(d.name);
-  const re = /^[ \t]*(module|interface|package)\s+(\w+)/;
-  unit.text.split("\n").forEach((line, i) => {
+  // Lifetime keywords (`automatic`, `static`) and the `class` of `interface class` come before the name.
+  const re = /^[ \t]*(module|interface|package)\s+(?:(?:static|automatic|class)\s+)*(\w+)/;
+  // Comments are blanked to spaces, keeping line breaks and widths, so the line numbers and lengths stay true.
+  const stripped = unit.text.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, (c) => c.replace(/[^\n]/g, " "));
+  const rawLines = unit.text.split("\n");
+  stripped.split("\n").forEach((line, i) => {
     const m = re.exec(line);
     const name = m?.[2];
     if (!m || name === undefined || known.has(name)) return;
@@ -308,23 +319,18 @@ function scanDefs(unit: Unit, p: Project): void {
     const ref: DeclRef = { name, hdl, file: unit.rel, id };
     if (!p.decls.has(name)) p.decls.set(name, ref);
     p.declsByName.set(name, [...(p.declsByName.get(name) ?? []), ref]);
-    unit.scanned.push({ name, hdl, line: i, length: line.length, id });
+    unit.scanned.push({ name, hdl, line: i, length: rawLines[i]?.length ?? line.length, id });
   });
 }
 
-/** Parses every Verilog or SystemVerilog file and indexes the definitions that other files can refer to. */
-export async function buildProject(texts: Map<string, string>): Promise<Project> {
+/**
+ * Indexes the definitions of every file. Each file is parsed once here and its tree is freed at once; the
+ * emit step parses it again. Only plain data is kept.
+ */
+async function indexProject(texts: Map<string, string>, rels: string[]): Promise<Project> {
   const parser = await getParser();
-  const units = new Map<string, Unit>();
-  for (const rel of [...texts.keys()].sort()) {
-    const text = texts.get(rel) ?? "";
-    const tree = parser.parse(text);
-    if (!tree) throw new Error(`could not parse ${rel}`);
-    const root = tree.rootNode;
-    units.set(rel, { rel, text, root, tree, errors: root.hasError ? errorNodes(root) : [], ids: new Ids(), scanned: [], varTypes: new Map() });
-  }
   const p: Project = {
-    units,
+    units: new Map(),
     decls: new Map(),
     declsByName: new Map(),
     fnsByScope: new Map(),
@@ -333,14 +339,42 @@ export async function buildProject(texts: Map<string, string>): Promise<Project>
     bases: new Map(),
     idOf: new Map(),
   };
-  for (const unit of units.values()) {
-    const imports = new Set<string>();
-    collectDecls(unit, p, imports);
-    collectVars(unit);
-    p.importsByFile.set(unit.rel, [...imports].sort());
+  for (const rel of rels) {
+    const text = texts.get(rel) ?? "";
+    const tree = parser.parse(text);
+    if (!tree) throw new Error(`could not parse ${rel}`);
+    const root = tree.rootNode;
+    const unit: Unit = { rel, text, errorCount: root.hasError ? errorNodes(root).length : 0, ids: new Ids(), scanned: [], varTypes: new Map() };
+    try {
+      const imports = new Set<string>();
+      collectDecls(unit, root, p, imports);
+      collectVars(unit, root);
+      p.importsByFile.set(rel, [...imports].sort());
+    } finally {
+      tree.delete();
+    }
+    p.units.set(rel, unit);
   }
-  for (const unit of units.values()) scanDefs(unit, p);
+  for (const unit of p.units.values()) scanDefs(unit, p);
   return p;
+}
+
+/** The last project indexed, with the hash of the files it was built from. */
+let lastProject: { key: string; project: Project } | undefined;
+
+/**
+ * Indexes the project's definitions across its files. The last result is kept, keyed by a hash of the
+ * file names and contents, so a retry or a second extraction over the same files reuses it.
+ */
+export async function buildProject(texts: Map<string, string>): Promise<Project> {
+  const rels = [...texts.keys()].sort();
+  const hash = createHash("sha256");
+  for (const rel of rels) hash.update(rel).update("\u0000").update(texts.get(rel) ?? "").update("\u0000");
+  const key = hash.digest("hex");
+  if (lastProject?.key === key) return lastProject.project;
+  const project = await indexProject(texts, rels);
+  lastProject = { key, project };
+  return project;
 }
 
 /** The class and its base classes, nearest first. A base that is not in the project ends the chain, so it finds nothing. */
@@ -395,31 +429,58 @@ function finish(refs: FnRef[], exact: boolean): Callee | undefined {
   return { refs: sorted.slice(0, MAX_CANDIDATES), exact, truncated: sorted.length > MAX_CANDIDATES };
 }
 
+/** True when a definition in generate path `at` is visible from generate path `gen`: the caller sits inside that block. */
+const onPath = (at: string[], gen: string[]): boolean => at.length <= gen.length && at.every((g, i) => g === gen[i]);
+
+/**
+ * The definitions on the caller's own generate path. Of those, only the innermost block counts, so a caller in
+ * `g1` takes `g1`'s definition over the same name in `g2`. Empty when no definition is on the path.
+ */
+function onOwnPath(refs: FnRef[], gen: string[]): FnRef[] {
+  const on = refs.filter((r) => onPath(r.gen, gen));
+  if (on.length === 0) return [];
+  const deepest = Math.max(...on.map((r) => r.gen.length));
+  return on.filter((r) => r.gen.length === deepest);
+}
+
+/** The definitions to choose from: the caller's own generate path when it has one, otherwise all matches. */
+const narrow = (refs: FnRef[], gen: string[]): FnRef[] => {
+  const chosen = onOwnPath(refs, gen);
+  return chosen.length > 0 ? chosen : refs;
+};
+
+/** A callee from matches in the caller's own scope chain. Exact when every match is in the caller's file. */
+function pick(refs: FnRef[], rel: string, gen: string[]): Callee | undefined {
+  const set = narrow(refs, gen);
+  return finish(set, set.length > 0 && set.every((r) => r.file === rel));
+}
+
 /**
  * The functions a call names. Matches are looked up in the given target only, so a member call never
- * falls through to an unrelated function of the same name.
+ * falls through to an unrelated function of the same name. `gen` is the caller's generate path.
  */
-export function resolveCallee(p: Project, rel: string, scope: string | undefined, name: string, target: CallTarget): Callee | undefined {
+export function resolveCallee(p: Project, rel: string, scope: string | undefined, name: string, target: CallTarget, gen: string[] = []): Callee | undefined {
   switch (target.kind) {
     case "none":
       return undefined;
-    case "scoped": {
-      const refs = chainLookup(p, target.scope, name);
-      return finish(refs, refs.length > 0 && refs.every((r) => r.file === rel));
-    }
-    case "member": {
-      const refs = chainLookup(p, target.cls, name);
-      return finish(refs, refs.length > 0 && refs.every((r) => r.file === rel));
-    }
+    case "scoped":
+      return pick(chainLookup(p, target.scope, name), rel, gen);
+    case "member":
+      return pick(chainLookup(p, target.cls, name), rel, gen);
     case "plain": {
       if (scope !== undefined) {
         const own = chainLookup(p, scope, name);
-        if (own.length > 0) return finish(own, own.every((r) => r.file === rel));
+        if (own.length > 0) return pick(own, rel, gen);
       }
       for (const pkg of p.importsByFile.get(rel) ?? []) {
         const refs = lookup(p, pkg, name);
-        if (refs.length > 0) return finish(refs, false);
+        if (refs.length > 0) return finish(narrow(refs, gen), false);
       }
+      // File scope: `$unit` functions and DPI imports outside any package. The same file wins, then any file.
+      const unitFns = lookup(p, "", name);
+      const here = unitFns.filter((r) => r.file === rel);
+      if (here.length > 0) return pick(here, rel, gen);
+      if (unitFns.length > 0) return finish(narrow(unitFns, gen), false);
       return finish(p.pkgFnsByName.get(name) ?? [], false);
     }
   }
@@ -438,7 +499,3 @@ export function moduleDefs(p: Project, name: string): DeclRef[] {
   return (p.declsByName.get(name) ?? []).filter((d) => d.hdl === "module" || d.hdl === "interface" || d.hdl === "program");
 }
 
-/** Frees the parse trees. The WASM heap is not garbage collected with the JavaScript objects. */
-export function disposeProject(project: Project): void {
-  for (const unit of project.units.values()) unit.tree.delete();
-}

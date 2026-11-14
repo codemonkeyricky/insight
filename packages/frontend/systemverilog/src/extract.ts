@@ -1,9 +1,10 @@
 import type { IREdge, IRFinding, IRNode, IRRecord, NodeId, Provenance, Span, UnresolvedRef } from "@insight/ir";
 import type { IRBatch } from "@insight/sdk";
-import type { SyntaxNode } from "./parser.js";
+import { getParser, type SyntaxNode } from "./parser.js";
 import {
   declId,
   declName,
+  errorNodes,
   fnBase,
   FRONTEND_ID,
   genNameOf,
@@ -18,6 +19,7 @@ import {
   type CallTarget,
   type Hdl,
   type Project,
+  type Unit,
 } from "./project.js";
 
 const pt = (p: { row: number; column: number }): [number, number] => [p.row, p.column];
@@ -134,8 +136,13 @@ function portsOf(n: SyntaxNode, header: SyntaxNode | undefined): Array<{ name: s
       const decl = pd.namedChildren.find((c) => c.type.endsWith("_declaration"));
       const dir = decl?.type.replace(/_declaration$/, "");
       if (!decl || !dir) continue;
-      for (const id of [...decl.descendantsOfType("list_of_port_identifiers"), ...decl.descendantsOfType("list_of_variable_identifiers")]) {
-        for (const s of id.namedChildren) if (s.type === "simple_identifier") dirs.set(s.text, dir);
+      const lists = ["list_of_port_identifiers", "list_of_variable_port_identifiers", "list_of_variable_identifiers"];
+      for (const id of decl.descendantsOfType(lists)) {
+        // `output reg b;` lists its names as variable port identifiers, which may wrap the name in a node.
+        for (const s of id.namedChildren) {
+          const name = s.type === "simple_identifier" ? s.text : s.namedChildren.find((c) => c.type === "simple_identifier")?.text;
+          if (name !== undefined) dirs.set(name, dir);
+        }
       }
     }
     const list = header.namedChildren.find((c) => c.type === "list_of_ports");
@@ -163,16 +170,33 @@ function portsOf(n: SyntaxNode, header: SyntaxNode | undefined): Array<{ name: s
     .filter((p) => p.name !== "");
 }
 
-/** Facts for one file, from the project pass. Files with parse errors get inferred facts and one finding. */
-export function emitUnit(project: Project, rel: string): IRBatch {
+/**
+ * Facts for one file, from the project pass. The file is parsed here and its tree is freed before returning.
+ * Files with parse errors get inferred facts and one finding.
+ */
+export async function emitUnit(project: Project, rel: string): Promise<IRBatch> {
   const unit = project.units.get(rel);
   if (!unit) return { file: rel, records: [] };
+  const parser = await getParser();
+  const tree = parser.parse(unit.text);
+  if (!tree) throw new Error(`could not parse ${rel}`);
+  try {
+    return emitTree(project, unit, tree.rootNode);
+  } finally {
+    tree.delete();
+  }
+}
 
-  const prov: Provenance = { frontend: FRONTEND_ID, confidence: unit.errors.length > 0 ? "inferred" : "exact" };
+/** The facts of one parsed file. */
+function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
+  const rel = unit.rel;
+  const errors = root.hasError ? errorNodes(root) : [];
+  const prov: Provenance = { frontend: FRONTEND_ID, confidence: errors.length > 0 ? "inferred" : "exact" };
   const heuristic: Provenance = { frontend: FRONTEND_ID, confidence: "heuristic" };
   const records: IRRecord[] = [];
   const deps = new Set<string>();
-  const ids = unit.ids;
+  // Ids continue from the project pass, so a declaration keeps the id the project gave it.
+  const ids = unit.ids.fork();
   const node = (n: IRNode): void => {
     records.push({ node: n });
   };
@@ -195,7 +219,7 @@ export function emitUnit(project: Project, rel: string): IRBatch {
   const emitCall = (f: Frame, at: SyntaxNode, callee: string, name: string, target: CallTarget): void => {
     const from = f.fn ?? f.container;
     const span = spanOf(rel, at);
-    const hit = resolveCallee(project, rel, f.scope, name, target);
+    const hit = resolveCallee(project, rel, f.scope, name, target, f.gen);
     if (!hit) {
       const to: UnresolvedRef = { unresolved: { scheme: "sv.call", text: callee } };
       edge({ from, to, facet: "calls", kind: "calls.call", attrs: { callee }, span, provenance: prov });
@@ -212,9 +236,42 @@ export function emitUnit(project: Project, rel: string): IRBatch {
     }
   };
 
+  /** `super.new(args)` to the base class constructor. The class is the one whose extends clause names the base. */
+  const superCtor = (f: Frame, at: SyntaxNode): void => {
+    const base = f.scope !== undefined ? project.bases.get(f.scope) : undefined;
+    emitCall(f, at, "super.new", "new", base ? { kind: "member", cls: base.name } : { kind: "none" });
+  };
+
+  /** The variable a `new` expression is given to, when the expression is the whole right side of a declaration or assignment. */
+  const assignedName = (n: SyntaxNode): string | undefined => {
+    const cur = n.parent;
+    if (!cur) return undefined;
+    if (cur.type === "variable_decl_assignment") return cur.childForFieldName("name")?.text ?? cur.namedChildren.find((c) => c.type === "simple_identifier")?.text;
+    if (cur.type === "blocking_assignment" || cur.type === "nonblocking_assignment") {
+      const lhs = cur.descendantsOfType("hierarchical_identifier")[0]?.text.trim();
+      return lhs !== undefined && /^[A-Za-z_]\w*$/.test(lhs) ? lhs : undefined;
+    }
+    return undefined;
+  };
+
+  /** `c = new(args)`: a constructor call. The class is the declared type of the variable the object goes to. */
+  const classNew = (f: Frame, n: SyntaxNode): void => {
+    const args = n.namedChildren.find((c) => c.type === "list_of_arguments") ?? n;
+    const target = assignedName(n);
+    const cls = target !== undefined ? varClass(project, rel, f.scope, target) : undefined;
+    if (cls !== undefined) emitCall(f, args, `${cls}.new`, "new", { kind: "member", cls });
+    else emitCall(f, args, target !== undefined ? `${target}.new` : "new", "new", { kind: "none" });
+  };
+
   /** A method call written as `this.m()`, `super.m()`, `obj.m()` or a plain `m()` with a method-call body. */
   const methodCall = (f: Frame, n: SyntaxNode): void => {
     const body = n.namedChildren.find((c) => c.type === "method_call_body");
+    // `super.new(args)` in a task or function body: the grammar gives it the constructor keyword, not a name.
+    const newArgs = body?.namedChildren.find((c) => c.type === "new_method_call");
+    if (body && newArgs) {
+      if (n.namedChildren.find((c) => c.type === "implicit_class_handle")?.text.trim() === "super") superCtor(f, newArgs);
+      return;
+    }
     const nameNode = body?.childForFieldName("name");
     if (!body || !nameNode || !body.text.includes("(")) return;
     const name = nameNode.text;
@@ -410,7 +467,14 @@ export function emitUnit(project: Project, rel: string): IRBatch {
           span: spanOf(rel, n),
           provenance: prov,
         });
-        visitChildren(n, { ...f, fn: id, scope });
+        const inner: Frame = { ...f, fn: id, scope };
+        if (n.type === "class_constructor_declaration") {
+          // `super.new(args)` in a constructor is an argument list on the constructor node. An empty one leaves no node, so only the text shows it.
+          const args = n.namedChildren.find((c) => c.type === "list_of_arguments");
+          if (args) superCtor(inner, args);
+          else if (/\bsuper\s*\.\s*new\s*\(/.test(n.text)) superCtor(inner, n);
+        }
+        visitChildren(n, inner);
         break;
       }
       case "always_construct":
@@ -501,6 +565,7 @@ export function emitUnit(project: Project, rel: string): IRBatch {
             edge({ from, to: { candidates: cands }, facet: "structure", kind: "x-sv.instantiates", attrs, span, provenance: heuristic });
           }
         }
+        visitChildren(n, f);
         break;
       }
       case "package_import_declaration": {
@@ -612,6 +677,10 @@ export function emitUnit(project: Project, rel: string): IRBatch {
         systemCall(f, n);
         visitChildren(n, f);
         break;
+      case "class_new":
+        classNew(f, n);
+        visitChildren(n, f);
+        break;
       case "generate_block": {
         const name = genNameOf(n);
         visitChildren(n, name ? { ...f, gen: [...f.gen, name] } : f);
@@ -640,11 +709,11 @@ export function emitUnit(project: Project, rel: string): IRBatch {
     }
   }
 
-  visit(unit.root, { container: rel, gen: [] });
+  visit(root, { container: rel, gen: [] });
 
-  if (unit.errors.length > 0) {
-    const first = unit.errors[0];
-    const count = unit.errors.length;
+  if (errors.length > 0) {
+    const first = errors[0];
+    const count = errors.length;
     const finding: IRFinding = {
       severity: "warning",
       message: `${count} syntax ${count === 1 ? "region" : "regions"} not parsed (macros or unsupported syntax)`,
