@@ -16,6 +16,7 @@ import {
   expandCamera,
   revealCamera,
   sceneCamera,
+  stepRect,
   shiftAt,
   shiftOf,
   type Expansion,
@@ -365,5 +366,41 @@ describe("sceneCamera", () => {
     const cam = sceneCamera({ x: 300, y: 200, w: 400, h: 300 }, 300, 1, false);
     expect(300 * cam.k + cam.x).toBeCloseTo(pad, 6);
     expect(200 * cam.k + cam.y).toBeCloseTo(pad, 6);
+  });
+});
+
+describe("stepRect and revealing a nested frame", () => {
+  const node = { id: "n1", role: "step", shape: "step", label: "flag()", x: 40, y: 60, w: 120, h: 30 };
+  const expansion = {
+    fnId: "f#root",
+    anchor: { kind: "box", nodeId: "b", rect: box },
+    chart: { id: "f#root", name: "root", width: 400, height: 900, nodes: [node], edges: [] },
+    x: 100,
+    y: -400,
+    w: 400 + 2 * CHART_PAD,
+    h: CHART_HEAD + CHART_PAD + 900 + CHART_PAD,
+    index: 0,
+    pivot: 0,
+  } as unknown as Expansion;
+
+  it("stepRect is the step's rect moved to the chart's place in the box, and undefined for an unknown id", () => {
+    const o = contentOrigin(expansion);
+    expect(stepRect(expansion, "n1")).toEqual({ x: o.x + 40, y: o.y + 60, w: 120, h: 30 });
+    expect(stepRect(expansion, "nope")).toBeUndefined();
+  });
+
+  // The room is 1000 x 600 with a 16 px margin. The tall box starts 400 px above the room, so its header is off-screen.
+  const stage: Rect = { x: 0, y: 0, w: 1000, h: 600 };
+  const lim = { readK: 0, fitMinK: 0.5, headH: 30 };
+  const cam = { k: 1, x: 0, y: 0 };
+
+  it("revealing the small frame that is already on screen leaves the camera unchanged", () => {
+    const frame = { x: 300, y: 200, w: 200, h: 40 };
+    expect(expandCamera(cam, frame, stage, lim)).toEqual(cam);
+  });
+
+  it("revealing the whole tall box moves the camera (the old jump to the header)", () => {
+    const whole = { x: expansion.x, y: expansion.y, w: expansion.w, h: expansion.h };
+    expect(expandCamera(cam, whole, stage, lim).y).not.toBe(cam.y);
   });
 });

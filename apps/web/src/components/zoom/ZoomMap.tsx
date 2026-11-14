@@ -11,7 +11,7 @@ import { CHART_FIT_MAX_K, CHART_HEAD, MORE_SUFFIX, ZOOM_SIZE, fitCamera, fitChar
 import { nameOfId, runtimeLabel, stepRuntime } from "../../flowTargets";
 import { hrefView } from "../../router";
 import { CHART_MIN_PX } from "../../zoom/chart";
-import { anchoredTo, expandCamera, isInPlace, calloutOf, closeExpansion, footprintOf, isNested, NARROW_VIEW_PX, openExpansion, ownerOf, REVEAL_MIN_K, refresh, revealCamera, rootBoxOf, sameFootprint, sceneCamera, setInline, SLOT_PAD, shiftAt, type Expansion, type ExpandAnchor } from "../../zoom/expand";
+import { anchoredTo, expandCamera, isInPlace, calloutOf, closeExpansion, footprintOf, isNested, NARROW_VIEW_PX, openExpansion, ownerOf, REVEAL_MIN_K, refresh, revealCamera, rootBoxOf, sameFootprint, sceneCamera, setInline, SLOT_PAD, shiftAt, stepRect, type Expansion, type ExpandAnchor } from "../../zoom/expand";
 import { calloutD } from "../../zoom/connector";
 import { popDelay } from "../../zoom/pop";
 import { displayName } from "../../zoom/names";
@@ -581,14 +581,12 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
    * The camera that shows an expansion from `from`, the least it can move (see expandCamera). The room is the stage's room
    * in the camera's own units: left of the Layers inset and below the top reserve, above the minimap and the status pill.
    */
-  const revealOf = (from: Camera, e: Expansion, minPx = CHART_MIN_PX): Camera => {
+  const revealRect = (from: Camera, box: Rect, readK: number): Camera => {
     const room = roomOf();
-    return expandCamera(from, { x: e.x, y: e.y, w: e.w, h: e.h }, { x: leftRef.current, y: TOP_RESERVE, w: room.width, h: room.height }, {
-      readK: minPx / Math.max(e.chart.width, 1),
-      fitMinK: REVEAL_MIN_K,
-      headH: CHART_HEAD,
-    });
+    return expandCamera(from, box, { x: leftRef.current, y: TOP_RESERVE, w: room.width, h: room.height }, { readK, fitMinK: REVEAL_MIN_K, headH: CHART_HEAD });
   };
+  const revealOf = (from: Camera, e: Expansion, minPx = CHART_MIN_PX): Camera =>
+    revealRect(from, { x: e.x, y: e.y, w: e.w, h: e.h }, minPx / Math.max(e.chart.width, 1));
 
   /** The expansions as the build places them: the boxes they hang from, in the build's layout, placed on the current view. */
   const placeAll = (b: MapBuild, list: readonly Expansion[]): Expansion[] => refresh(list, (nodeId) => b.placed.rects.get(nodeId), placeView(b));
@@ -817,7 +815,9 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     }
     setExp(next);
     const grown = expRef.current.find((e) => e.fnId === fnId);
-    if (grown !== undefined) moveTo(revealOf(cameraRef.current, grown, 0), true);
+    const frame = grown !== undefined ? stepRect(grown, node.id) : undefined;
+    if (frame !== undefined) moveTo(revealRect(cameraRef.current, frame, 0), true);
+    else if (grown !== undefined) moveTo(revealOf(cameraRef.current, grown, 0), true);
     void selectFunction(callee);
   };
 

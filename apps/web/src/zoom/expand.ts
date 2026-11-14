@@ -91,6 +91,14 @@ export function contentOrigin(e: { x: number; y: number }): { x: number; y: numb
   return { x: e.x + CHART_PAD, y: e.y + CHART_HEAD + CHART_PAD };
 }
 
+/** The world rect of a step of an expansion's chart: the step's rect in chart units, moved to the chart's place in the box. */
+export function stepRect(e: Expansion, nodeId: string): Rect | undefined {
+  const n = e.chart.nodes.find((x) => x.id === nodeId);
+  if (n === undefined) return undefined;
+  const o = contentOrigin(e);
+  return { x: o.x + n.x, y: o.y + n.y, w: n.w, h: n.h };
+}
+
 /**
  * The top of an expansion whose anchor is at `desired`, kept on the view: its header never starts below the view's bottom
  * edge less two header heights, so an expansion opened low on the map is pulled up into view. Clamped once, when it is
