@@ -49,8 +49,11 @@ export interface CallerGraph {
   stats: { callers: number; levels: number; possible: number; blind: number; outsideScope: number };
 }
 
-/** Sized on the insight and cognition indexes: depth 10 holds the whole chain for 97% of functions, 250 nodes holds the largest chain seen (203). */
-export const CALLER_DEFAULTS = { maxDepth: 10, maxNodes: 250, hardMaxNodes: 1000 };
+/**
+ * Sized on the insight and cognition indexes: depth 10 holds the whole chain for 97% of functions, 250 nodes holds the largest
+ * chain seen (203). hardMaxDepth and hardMaxNodes are the ceilings a caller's maxDepth and maxNodes are clamped to.
+ */
+export const CALLER_DEFAULTS = { maxDepth: 10, maxNodes: 250, hardMaxDepth: 50, hardMaxNodes: 1000 };
 
 /** Hows of a reference that are calls in effect. Every other reference is a possible caller. */
 const CALL_LIKE_HOWS = new Set(["new", "jsx", "handler"]);
@@ -106,22 +109,35 @@ export function callerGraph(view: ScopeView, id: NodeId, opts: CallerOptions = {
   if (!model.byId.has(id)) return { root: id, nodes: [], edges: [], cycles: [], stats: { callers: 0, levels: 0, possible: 0, blind: 0, outsideScope: 0 } };
 
   const cfg: Config = {
-    maxDepth: Math.max(1, numberOr(opts.maxDepth, CALLER_DEFAULTS.maxDepth)),
+    maxDepth: Math.max(1, Math.min(CALLER_DEFAULTS.hardMaxDepth, Math.floor(numberOr(opts.maxDepth, CALLER_DEFAULTS.maxDepth)))),
     maxNodes: Math.max(1, Math.floor(Math.min(numberOr(opts.maxNodes, CALLER_DEFAULTS.maxNodes), CALLER_DEFAULTS.hardMaxNodes))),
     possible: opts.possible === true,
     stayInScope: opts.stayInScope === true,
   };
 
-  // A node reached only through possible relations is not expanded, unless the walk later finds an exact path to it.
-  // Each pass adds such nodes to `forced`, so the loop ends when no possible-off node is exactly reachable.
+  // A node reached only through possible relations is not expanded, unless the walk finds an exact path to it.
+  // Each pass adds such nodes to `forced`. A forced node that a later pass no longer reaches exactly (its exact path was
+  // cut by maxNodes) is dropped from `forced` and banned from being forced again, so every expanded node is exact in the
+  // final walk. A node is forced at most once and banned at most once, so the loop ends. The groups of each node are the
+  // same in every pass, so the passes share one cache.
+  const groupCache = new Map<NodeId, Group[]>();
+  const banned = new Set<NodeId>();
   let forced = new Set<NodeId>();
-  let walked = walk(view, id, cfg, forced);
+  let walked = walk(view, id, cfg, forced, groupCache);
   for (;;) {
     const exact = exactSet(walked);
-    const more = walked.nodes.filter((n, i) => n.stop === "possible-off" && exact.has(i) && !forced.has(n.row.id)).map((n) => n.row.id);
-    if (more.length === 0) break;
-    forced = new Set([...forced, ...more]);
-    walked = walk(view, id, cfg, forced);
+    const admitted = new Map<NodeId, number>(walked.nodes.map((n, i) => [n.row.id, i]));
+    const stale = [...forced].filter((fid) => {
+      const i = admitted.get(fid);
+      return i === undefined || !exact.has(i);
+    });
+    const more = walked.nodes
+      .filter((n, i) => n.stop === "possible-off" && exact.has(i) && !forced.has(n.row.id) && !banned.has(n.row.id))
+      .map((n) => n.row.id);
+    if (more.length === 0 && stale.length === 0) break;
+    for (const fid of stale) banned.add(fid);
+    forced = new Set([...forced].filter((fid) => !banned.has(fid)).concat(more));
+    walked = walk(view, id, cfg, forced, groupCache);
   }
   const exact = exactSet(walked);
   const { nodes: work, edges: walkEdges } = walked;
@@ -223,7 +239,7 @@ function numberOr(value: number | undefined, fallback: number): number {
 }
 
 /** One breadth-first pass. Nodes are admitted in queue order, so a level is complete before the next one starts. */
-function walk(view: ScopeView, id: NodeId, cfg: Config, forced: ReadonlySet<NodeId>): Walk {
+function walk(view: ScopeView, id: NodeId, cfg: Config, forced: ReadonlySet<NodeId>, groupCache: Map<NodeId, Group[]>): Walk {
   const { model } = view;
   const nodes: Work[] = [{ row: describe(view, id, "call"), depth: 0, isFile: isFile(model, id) }];
   const index = new Map<NodeId, number>([[id, 0]]);
@@ -235,19 +251,10 @@ function walk(view: ScopeView, id: NodeId, cfg: Config, forced: ReadonlySet<Node
     const root = i === 0;
     const xid = x.row.id;
 
+    // The checks that stop a node's expansion run before the depth cap, so a node that would not be expanded anyway is
+    // not reported as cut off by depth.
     if (x.isFile || !(x.row.isFunction || root)) {
       x.stop = "module";
-      continue;
-    }
-    if (x.depth >= cfg.maxDepth) {
-      const hidden = new Set(groupsOf(view, xid).map((g) => g.row.id)).size;
-      if (hidden > 0) {
-        x.stop = "depth";
-        x.hidden = hidden;
-        truncated ??= { reason: "depth", at: cfg.maxDepth };
-      } else {
-        x.stop = "none";
-      }
       continue;
     }
     if (cfg.stayInScope && !root && !x.row.inScope) {
@@ -258,8 +265,19 @@ function walk(view: ScopeView, id: NodeId, cfg: Config, forced: ReadonlySet<Node
       x.stop = "possible-off";
       continue;
     }
+    if (x.depth >= cfg.maxDepth) {
+      const hidden = new Set(groupsOf(view, xid, groupCache).map((g) => g.row.id)).size;
+      if (hidden > 0) {
+        x.stop = "depth";
+        x.hidden = hidden;
+        truncated ??= { reason: "depth", at: cfg.maxDepth };
+      } else {
+        x.stop = "none";
+      }
+      continue;
+    }
 
-    const groups = groupsOf(view, xid);
+    const groups = groupsOf(view, xid, groupCache);
     if (groups.length === 0) {
       x.stop = "none";
       continue;
@@ -290,7 +308,15 @@ function walk(view: ScopeView, id: NodeId, cfg: Config, forced: ReadonlySet<Node
 }
 
 /** The (caller, kind, label) groups of the relations into `id`, folded as refsOf folds them, in a fixed order. */
-function groupsOf(view: ScopeView, id: NodeId): Group[] {
+function groupsOf(view: ScopeView, id: NodeId, cache: Map<NodeId, Group[]>): Group[] {
+  const cached = cache.get(id);
+  if (cached) return cached;
+  const groups = computeGroups(view, id);
+  cache.set(id, groups);
+  return groups;
+}
+
+function computeGroups(view: ScopeView, id: NodeId): Group[] {
   const { model } = view;
   const raw = new Map<string, { other: NodeId; kind: RelKind; label?: string; how?: string; candidate: boolean; count: number; site?: Site }>();
   for (const rel of model.in.get(id) ?? []) {

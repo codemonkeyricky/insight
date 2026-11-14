@@ -212,6 +212,57 @@ describe("callerGraph: scope and caps", () => {
   });
 });
 
+describe("callerGraph: a forced node cut by maxNodes", () => {
+  // f0 reaches f3 exactly only through f6, and f6 is forced into the walk in an earlier pass. With maxNodes 5 the final walk
+  // no longer admits f6, so f0 has no exact path. It must not be expanded as a possible caller.
+  const pairs: Array<[number, number | number[]]> = [
+    [2, [1, 0]], [5, [0, 6]], [6, [5, 0]], [0, [4, 3]], [1, [1, 5]], [4, [0, 6]], [0, 1], [3, [1, 3]], [4, 3], [6, 4],
+    [5, [2, 6]], [5, [0, 2]], [2, [5, 5]], [0, 6], [1, 2],
+  ];
+  const f = (n: number): NodeId => `${F}#f${n}`;
+  const nodes = [fileNode(F), ...[0, 1, 2, 3, 4, 5, 6].map((n) => fnNode(F, `f${n}`, n * 3))];
+  const edges = pairs.map(([from, to], i) => fx.edge(f(from), Array.isArray(to) ? to.map(f) : f(to), "calls", "calls.call", { span: fx.span(F, i + 1, 0, i + 1, 1) }));
+  const m = buildProjectModel({ nodes, edges, findings: [] });
+
+  it("never expands a node whose certainty is possible when possible is off", () => {
+    const g = callerGraph(scopeView(m, ""), f(3), { maxNodes: 5, maxDepth: 3 });
+    const expandedPossible = g.nodes.filter((n, i) => i > 0 && n.certainty === "possible" && n.stop === undefined);
+    expect(expandedPossible.map((n) => n.id)).toEqual([]);
+    expect(g.nodes.find((n) => n.id === f(0))).toMatchObject({ certainty: "possible", stop: "possible-off" });
+  });
+});
+
+describe("callerGraph: stop order before the depth cap", () => {
+  it("gives a possible-only caller at maxDepth stop possible-off, with no hidden count and no truncation", () => {
+    // B calls T exactly. P is a candidate caller of B (possible only), and X calls P exactly, so P has a caller of its own.
+    const m = modelOf(["T", "B", "P", "Q", "X"], [call(fid("B"), fid("T"), 2), fx.edge(fid("P"), [fid("B"), fid("Q")], "calls", "calls.call", { span: fx.span(F, 3, 0, 3, 1) }), call(fid("X"), fid("P"), 4)]);
+    const g = callerGraph(scopeView(m, ""), fid("T"), { maxDepth: 2 });
+    expect(g.nodes.find((n) => n.id === fid("P"))).toMatchObject({ depth: 2, certainty: "possible", stop: "possible-off" });
+    expect(g.nodes.find((n) => n.id === fid("P"))?.hidden).toBeUndefined();
+    expect(g.nodes.some((n) => n.id === fid("X"))).toBe(false);
+    expect(g.truncated).toBeUndefined();
+  });
+
+  it("gives an exact caller at maxDepth with callers of its own stop depth, a hidden count and a depth truncation", () => {
+    const chain = modelOf(["A", "B", "T", "Z"], [call(fid("A"), fid("B")), call(fid("B"), fid("T"), 2), call(fid("Z"), fid("A"), 4)]);
+    const g = callerGraph(scopeView(chain, ""), fid("T"), { maxDepth: 2 });
+    expect(g.nodes.find((n) => n.id === fid("A"))).toMatchObject({ depth: 2, certainty: "exact", stop: "depth", hidden: 1 });
+    expect(g.truncated).toEqual({ reason: "depth", at: 2 });
+  });
+
+  it("gives an outside-scope caller at maxDepth stop outside-scope, not depth, with stayInScope on", () => {
+    const m = modelOf(
+      ["T", "B", "inner"],
+      [call(fid("B"), fid("T"), 2), call(`${G}#outer`, fid("B"), 4), call(fid("inner"), `${G}#outer`, 9)],
+      [fnNode(G, "outer", 0)],
+    );
+    const g = callerGraph(scopeView(m, "src"), fid("T"), { maxDepth: 2, stayInScope: true });
+    expect(g.nodes.find((n) => n.id === `${G}#outer`)).toMatchObject({ depth: 2, inScope: false, stop: "outside-scope" });
+    expect(g.nodes.find((n) => n.id === `${G}#outer`)?.hidden).toBeUndefined();
+    expect(g.truncated).toBeUndefined();
+  });
+});
+
 /**
  * A fixture with every relation kind: a direct call, an anonymous caller, a closure, a candidate set, module-level
  * code (a call and a dispatch), a `new` reference, a value reference, and a spawn of a module worker.

@@ -149,13 +149,29 @@ describe("the refs route", () => {
     expect(missing.body.error).toBe("no node nope#missing");
     expect((await get<{ error: string }>(`/api/projects/${id}/refs?id=${c}`)).body.error).toBe("path is required");
   });
-  it("answers the caller graph of a node at /callers: 400 without id, 400 for a bad depth, 404 for an unknown node, 200 for a real one", async () => {
+  it("answers the caller graph of a node at /callers: 400 without id, clamped depth and nodes, 400 for a non-integer limit, 404 for an unknown node, 200 for a real one", async () => {
     const c = fnIdOf("c");
     const noId = await get<{ error: string }>(`/api/projects/${id}/callers?path=src`);
     expect(noId.status).toBe(400);
     expect(noId.body.error).toBe("id is required");
-    expect((await get<{ error: string }>(`/api/projects/${id}/callers?path=src&id=${encodeURIComponent(c)}&depth=0`)).status).toBe(400);
-    expect((await get<{ error: string }>(`/api/projects/${id}/callers?path=src&id=${encodeURIComponent(c)}&depth=abc`)).status).toBe(400);
+    // depth and nodes are clamped, not rejected: 0 reads as 1, and a value past the hard limit reads as the limit.
+    const callers = (query: string) => get<unknown>(`/api/projects/${id}/callers?path=src&id=${encodeURIComponent(c)}${query}`);
+    const depth1 = await callers("&depth=1");
+    const depth0 = await callers("&depth=0");
+    expect(depth0.status).toBe(200);
+    expect(depth0.body).toEqual(depth1.body);
+    const depth999 = await callers("&depth=999");
+    expect(depth999.status).toBe(200);
+    expect(depth999.body).toEqual((await callers("&depth=50")).body);
+    const nodes1 = await callers("&nodes=1");
+    const nodes0 = await callers("&nodes=0");
+    expect(nodes0.status).toBe(200);
+    expect(nodes0.body).toEqual(nodes1.body);
+    expect((await callers("&nodes=999999")).status).toBe(200);
+    for (const bad of ["abc", "-1", "1.5"]) {
+      expect((await callers(`&depth=${bad}`)).status, `depth=${bad}`).toBe(400);
+      expect((await callers(`&nodes=${bad}`)).status, `nodes=${bad}`).toBe(400);
+    }
     const missing = await get<{ error: string }>(`/api/projects/${id}/callers?path=src&id=nope%23missing`);
     expect(missing.status).toBe(404);
     const ok = await get<{ snapshot: string; scope: string; kind: string; id: string; nodes: Array<{ id: string }> }>(

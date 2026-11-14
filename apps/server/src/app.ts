@@ -23,7 +23,7 @@ import {
   updateAnnotation,
 } from "@insight/indexer";
 import type { ProjectRoot } from "@insight/sdk";
-import type { CallerOptions } from "@insight/model";
+import { CALLER_DEFAULTS, type CallerOptions } from "@insight/model";
 import {
   allFindings,
   analysisFor,
@@ -133,17 +133,20 @@ function scopePathOf(raw: unknown): string {
   return raw;
 }
 
-/** A positive integer query value, or a 400 with the server's message. Absent gives undefined. */
-function positiveIntOf(raw: unknown, name: string): number | undefined {
+/** A non-negative integer query value, clamped to [1, max], or a 400 with the server's message. Absent gives undefined. */
+function clampedIntOf(raw: unknown, name: string, max: number): number | undefined {
   if (raw === undefined) return undefined;
-  if (typeof raw !== "string" || !/^[1-9]\d*$/.test(raw)) throw new ProjectError(400, `${name} must be a positive integer`);
-  return Number(raw);
+  if (typeof raw !== "string" || !/^\d+$/.test(raw)) throw new ProjectError(400, `${name} must be a non-negative integer`);
+  return Math.min(max, Math.max(1, Number(raw)));
 }
 
-/** The caller-graph options of a /callers query: depth and nodes as positive integers, possible and stayInScope as flags. */
+/**
+ * The caller-graph options of a /callers query: depth and nodes as non-negative integers clamped to the hard limits (0 reads
+ * as 1), possible and stayInScope as flags.
+ */
 function callerOptionsOf(q: { depth?: string; nodes?: string; possible?: string; stayInScope?: string }): CallerOptions {
-  const maxDepth = positiveIntOf(q.depth, "depth");
-  const maxNodes = positiveIntOf(q.nodes, "nodes");
+  const maxDepth = clampedIntOf(q.depth, "depth", CALLER_DEFAULTS.hardMaxDepth);
+  const maxNodes = clampedIntOf(q.nodes, "nodes", CALLER_DEFAULTS.hardMaxNodes);
   const flag = (raw: string | undefined): boolean => raw === "1" || raw === "true";
   return {
     ...(maxDepth !== undefined ? { maxDepth } : {}),

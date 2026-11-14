@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { api } from "../src/api";
+import { ApiError, api } from "../src/api";
 import { staticApi } from "../src/staticApi";
 // The server is not a web dependency; its built output is the same code the app runs. Run `pnpm build` first.
 import { buildServer, type InsightServer } from "../../server/dist/index.js";
@@ -91,6 +91,64 @@ describe("browser scope payloads equal the server's", () => {
     const server400 = await server.app.inject({ method: "GET", url: `/api/projects/${id}/scope/flow?path=${encodeURIComponent("../x")}` });
     await expect(api.scopeFlow(id, "../x")).rejects.toMatchObject({ status: 400, message: server400.json().error });
   });
+
+  it("the live api, the demo api and the callers route agree on a leaf, a hub, a recursive function and bad inputs", async () => {
+    const scope = "packages/core/model";
+    const liveFetch = globalThis.fetch;
+    const fns = (await api.getScopeExec(id, scope)).functions;
+    const graphs = await Promise.all(fns.map(async (f) => ({ f, g: await api.getCallerGraph(id, scope, f.id) })));
+    const leaf = graphs.find(({ g }) => g.nodes.length === 1)?.f;
+    const hub = graphs.reduce((best, cur) => (best === undefined || cur.g.stats.callers > best.g.stats.callers ? cur : best), graphs[0])?.f;
+    const recursive = graphs.find(({ g }) => g.cycles.length > 0)?.f;
+    // The shapes must exist for the comparison to mean something.
+    expect(leaf, "a function with no callers").toBeDefined();
+    expect(hub, "a function with callers").toBeDefined();
+    expect(graphs.find(({ f }) => f.id === hub?.id)?.g.stats.callers, "the hub has callers").toBeGreaterThan(0);
+    expect(recursive, "a function in a caller cycle").toBeDefined();
+
+    // The demo api, fed the demo capture's model.json, with the live fetch restored afterwards.
+    const modelText = JSON.stringify(await serverJson(`/api/projects/${id}/model`));
+    const projectText = JSON.stringify({ project: { id }, overview: {} });
+    const demo = async <T>(run: () => Promise<T>): Promise<T> => {
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/demo/model.json")) return new Response(modelText, { headers: { "content-type": "application/json" } });
+        if (url.endsWith("/demo/project.json")) return new Response(projectText, { headers: { "content-type": "application/json" } });
+        return new Response("missing", { status: 404, headers: { "content-type": "text/html" } });
+      }) as typeof fetch;
+      try {
+        return await run();
+      } finally {
+        globalThis.fetch = liveFetch;
+      }
+    };
+    /** The status and message of a call that fails, or "ok" when it answers. */
+    const outcome = async (run: () => Promise<unknown>): Promise<unknown> => {
+      try {
+        await run();
+        return "ok";
+      } catch (e) {
+        return { status: (e as ApiError).status, message: (e as Error).message };
+      }
+    };
+
+    for (const f of [leaf, hub, recursive]) {
+      const route = await serverJson(`/api/projects/${id}/callers?path=${encodeURIComponent(scope)}&id=${encodeURIComponent(f!.id)}`);
+      expect(await api.getCallerGraph(id, scope, f!.id), `live ${f!.name}`).toEqual(route);
+      expect(await demo(() => staticApi.getCallerGraph(id, scope, f!.id)), `demo ${f!.name}`).toEqual(route);
+    }
+
+    for (const [label, path, fnId] of [
+      ["a bad scope", "../x", fns[0]!.id],
+      ["an unknown id", scope, "nope#missing"],
+    ] as const) {
+      const res = await server.app.inject({ method: "GET", url: `/api/projects/${id}/callers?path=${encodeURIComponent(path)}&id=${encodeURIComponent(fnId)}` });
+      const routeOutcome = res.statusCode === 200 ? "ok" : { status: res.statusCode, message: res.json().error };
+      expect(routeOutcome, `${label}, route`).not.toBe("ok");
+      expect(await outcome(() => api.getCallerGraph(id, path, fnId)), `${label}, live`).toEqual(routeOutcome);
+      expect(await demo(() => outcome(() => staticApi.getCallerGraph(id, path, fnId))), `${label}, demo`).toEqual(routeOutcome);
+    }
+  }, 600_000);
 
   it("the demo api computes the same payloads from the demo's model.json", async () => {
     // What the capture writes: the server's model route, as JSON text. The demo fetches it under /demo/.

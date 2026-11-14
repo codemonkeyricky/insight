@@ -98,8 +98,9 @@ export function callerGraphFor(snapshot: string, model: ProjectModel, path: stri
   const scope = canonical(model, path);
   const kind = kindOf(model, scope);
   if (!model.byId.has(id)) throw new ApiError(404, `no node ${id}`);
-  const maxDepth = opts.maxDepth ?? CALLER_DEFAULTS.maxDepth;
-  const maxNodes = opts.maxNodes ?? CALLER_DEFAULTS.maxNodes;
+  // The limits are clamped here as callerGraph clamps them, so requests that the graph treats alike share one entry.
+  const maxDepth = Math.max(1, Math.min(CALLER_DEFAULTS.hardMaxDepth, Math.floor(opts.maxDepth ?? CALLER_DEFAULTS.maxDepth)));
+  const maxNodes = Math.max(1, Math.min(CALLER_DEFAULTS.hardMaxNodes, Math.floor(opts.maxNodes ?? CALLER_DEFAULTS.maxNodes)));
   const possible = opts.possible === true;
   const stayInScope = opts.stayInScope === true;
   const key = `callers\0${scope}\0${id}\0${maxDepth}\0${maxNodes}\0${possible ? 1 : 0}\0${stayInScope ? 1 : 0}`;
