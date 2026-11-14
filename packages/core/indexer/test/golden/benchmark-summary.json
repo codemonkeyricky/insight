@@ -56,7 +56,7 @@
       "filesScanned": 121,
       "filesWithRecords": 84,
       "filesWithErrors": 0,
-      "nodes": 923,
+      "nodes": 1517,
       "edges": 0
     },
     {
@@ -71,6 +71,17 @@
       "filesWithErrors": 0,
       "nodes": 63,
       "edges": 1173
+    },
+    {
+      "facet": "state",
+      "providers": [
+        "frontend-cpp"
+      ],
+      "filesScanned": 121,
+      "filesWithRecords": 6,
+      "filesWithErrors": 0,
+      "nodes": 15,
+      "edges": 0
     },
     {
       "facet": "structure",
@@ -131,6 +142,11 @@
       "id": "lens-lock-order",
       "status": "ok",
       "findings": 0
+    },
+    {
+      "id": "lens-states",
+      "status": "ok",
+      "findings": 0
     }
   ],
   "lockOrder": {
@@ -157,6 +173,7 @@
     "effects.proc.exec": 2,
     "finding": 47,
     "flow.branch": 536,
+    "flow.branch-arm": 594,
     "flow.loop": 366,
     "flow.switch": 12,
     "flow.throw": 8,
@@ -165,6 +182,8 @@
     "packaging.dep-edge": 99,
     "packaging.include": 889,
     "packaging.target-contains": 185,
+    "state.holder": 7,
+    "state.write": 8,
     "structure.file": 225,
     "structure.function": 1038,
     "structure.namespace": 191,
