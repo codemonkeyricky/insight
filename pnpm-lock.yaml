@@ -84,6 +84,9 @@ importers:
       '@insight/lens-lock-order':
         specifier: workspace:*
         version: link:../../packages/lens/lock-order
+      '@insight/lens-states':
+        specifier: workspace:*
+        version: link:../../packages/lens/states
       '@vercel/functions':
         specifier: ^3.11.1
         version: 3.11.1
@@ -384,6 +387,19 @@ importers:
       '@insight/sdk':
         specifier: workspace:*
         version: link:../../core/sdk
+
+  packages/lens/states:
+    dependencies:
+      '@insight/ir':
+        specifier: workspace:*
+        version: link:../../core/ir
+      '@insight/sdk':
+        specifier: workspace:*
+        version: link:../../core/sdk
+    devDependencies:
+      '@insight/indexer':
+        specifier: workspace:*
+        version: link:../../core/indexer
 
 packages:
 

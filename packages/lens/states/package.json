@@ -1,0 +1,31 @@
+{
+  "name": "@insight/lens-states",
+  "version": "0.1.0",
+  "description": "Insight lens: explicit finite state machines (holders, writes, tests) drawn as state diagrams",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "insight-plugin.json"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@insight/ir": "workspace:*",
+    "@insight/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@insight/indexer": "workspace:*"
+  }
+}

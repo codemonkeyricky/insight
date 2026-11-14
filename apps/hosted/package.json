@@ -41,6 +41,7 @@
     "@insight/lens-execution": "workspace:*",
     "@insight/lens-flow-complexity": "workspace:*",
     "@insight/lens-lock-order": "workspace:*",
+    "@insight/lens-states": "workspace:*",
     "@vercel/functions": "^3.11.1",
     "aws4fetch": "^1.0.20",
     "tar": "^7.5.22"
