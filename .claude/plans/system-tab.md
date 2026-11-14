@@ -230,6 +230,41 @@ interface SystemEdge     { /* + */ evidence: Array<{ api: string; syscall?: stri
 
 IDs must be stable across runs (sorted inputs, no counters). `SITE_CAP = 20` is unchanged.
 
+## P0 results
+
+Measured by `scripts/probe-exec-sizing.mjs` (raw JSON: `results.json` in the P0 job folder). Times are the median of 3
+`execModel` runs with `maxFunctions: Infinity` (default cap in the last column). Indexed copies: the worktree at 06e5f24,
+cognition at HEAD (archived copy), `samples/benchmark`. Machine: the P0 sandbox, unloaded apart from the probe.
+
+Component approximation: a function's component is the folder of its file (dirname of `span.file`). A thread's slices are the
+distinct components among the functions it reaches. A thread's coroutines are split by `how`: `start` (started coroutines)
+and `await` (awaited coroutines). The limits below count the awaited ones, since that is the list `COROUTINE_LIMIT` cuts.
+
+| project + scope | IR nodes | functions in scope | listed (Inf) | exec ms (Inf) | exec ms (default) | default truncated | threads (grounded) | programs | coroutines start / await | max per thread start / await / threads over 16 await | slices per thread median / max | largest thread (slices) | unthreaded | dispatches timer / microtask / callback / message / other | `effects.message.post` | `sync.*` | `x-cpp.scoped-lock` |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| worktree `""` | 34835 | 4062 | 2141 | 1812 | 1562 | yes | 84 (84) | 9 | 40 / 189 | 11 / 46 / 6 | 1 / 24 | 24 | 1029 | 15 / 4 / 139 / 6 / 1055 | 11 | 18 | 8 |
+| worktree `packages` | 34835 | 1644 | 933 | 863 | 743 | no | 66 (66) | 6 | 17 / 91 | 4 / 16 / 0 | 1 / 20 | 20 | 166 | 4 / 4 / 7 / 6 / 349 | 11 | 18 | 8 |
+| worktree `apps/web/src` | 34835 | 821 | 821 | 636 | 925 | no | 1 (1) | 1 | 0 / 0 | 0 / 0 / 0 | 2 / 2 | 2 | 808 | 4 / 0 / 104 / 0 / 137 | 11 | 18 | 8 |
+| cognition `""` | 34432 | 3374 | 3374 | 1178 | 556 | yes | 39 (39) | 30 | 29 / 75 | 17 / 24 / 1 | 5 / 14 | 14 | 1338 | 10 / 0 / 60 / 5 / 270 | 18 | 0 | 0 |
+| cognition `src` | 34432 | 1797 | 1797 | 440 | 681 | no | 30 (30) | 26 | 24 / 68 | 17 / 24 / 1 | 6 / 14 | 14 | 193 | 8 / 0 / 46 / 5 / 107 | 18 | 0 | 0 |
+| benchmark `""` | 2601 | 967 | 469 | 45 | 28 | no | 6 (6) | 1 | 0 / 0 | 0 / 0 / 0 | 2 / 6 | 6 | 0 | 0 / 0 / 0 / 0 / 0 | 0 | 9 | 1 |
+
+Notes: the "sync.*" and "x-cpp.scoped-lock" columns are whole-project counts; in-scope counts are in `results.json`. In the
+benchmark, all 9 `sync.*` nodes and the one scoped lock lie in scope. The worktree `""` default run hits the 2000 cap
+(2141 listed under Infinity), so the cap drops functions there.
+
+**Proposed limits**
+
+- **SLICE_LIMIT = 12 (keep the plan default).** The median thread touches 1 to 6 components, and only the largest threads
+  exceed 12 (max 24 in the worktree, 14 in cognition, 6 in the benchmark), so 12 folds a few rows and leaves most unchanged.
+- **COROUTINE_LIMIT = 16 (keep the plan default).** Awaited coroutines per thread reach 46 in the worktree and 24 in
+  cognition, but only 6 worktree threads and 1 cognition thread exceed 16, so frames are drawn for most threads and the
+  largest ones stay awaited-only glyphs.
+- **D3 cap: add `threadsOf`.** The root scope `""` takes 1812 ms (worktree) and 1178 ms (cognition) with no cap, far above the
+  300 ms bar, and the default cap truncates the worktree root. Scoped views also exceed 300 ms (440 to 863 ms with no cap, except
+  the 45 ms benchmark), so the rule triggers at the root and at most scopes. Build `threadsOf` (the threads that reach one
+  function) and keep `maxFunctions` as a fallback only.
+
 ## Phases
 
 ### P0: Sizing probe (read-only, about 1 h)
