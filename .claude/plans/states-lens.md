@@ -455,6 +455,32 @@ it is. This matters for the threshold.
   read (accept as limit); the `as any` casts are stripped as D5 says; `_intendedState` and similar flags draw as
   `* -> X` pairs (accept).
 
+## Amendments after P0 (decided 2026-11-14)
+
+These override the decisions above where they differ.
+
+- **A1 (S1). Stale re-test replaces.** A test on a *stale* known set replaces the set (positive test: the tested
+  values; negative: the domain minus them) and clears `stale`. On a fresh set it intersects as before. An empty set after
+  any intersection becomes `*`. `knownState` never carries an empty list.
+- **A2 (S2). Catch entry.** A `catch` starts from the `try` entry set ∪ the values written in the `try` that are followed,
+  later in the same `try`, by a call, `await`, `new` or `throw`. A write after which nothing in the `try` can throw adds
+  nothing. (Logging calls count as calls, so SignalR may keep its `Connected` twin. That is accepted, and the arc is
+  inferred.)
+- **A3 (S3). Predicates.** A getter, or a zero-argument method, whose body is one `return <test>`, where `<test>`
+  compares `this.h` with literals (`===`/`!==`) or is `!` of another predicate, is a *predicate* for `h`. A use of it in
+  a condition (`this.p`, `this.p()`, `!this.p`) emits a `state.test` at the use site with the predicate's values and
+  `negated` flipped as needed. It then guards like a direct test, including early exits. The getter limit is removed.
+- **A4 (S4).** The `unentered` finding is raised only for holders with ≥ 3 distinct written values. The diagram still
+  greys unentered domain values for every machine.
+- **A5 (S5).** The legend reads "dashed = inferred: written after an await, or start state taken from the callers".
+- **A6 (S6).** D7's example is corrected: `HttpConnection._stopConnection` is exact
+  `Connected | Disconnecting → Disconnected` from its own early exits. The "a callback caller keeps `*`" rule is tested
+  with a function that has no early exit, called both from inside an `if (=== X)` arm and from a callback.
+- **A7. Machine threshold.** A holder is drawn when it has ≥ 2 distinct written values (init included) **and** ≥ 1
+  `op: "set"` write. Tests are not required, so `ProjectRecord.status` qualifies.
+- The expected lists in "Example repos" predate A1–A3. P5 compares against them as adjusted by these rules. Every
+  difference is explained in the P5 report. For example, A3 removes stompjs's spurious `ACTIVE → ACTIVE`.
+
 ## Phases
 
 ### P0: Sizing probe (read-only, about 1 h)
