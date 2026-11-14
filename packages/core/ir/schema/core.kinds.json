@@ -362,6 +362,33 @@
     }
   },
   {
+    "kind": "state.holder",
+    "facet": "state",
+    "on": "node",
+    "description": "A field, variable or useState slot whose declared type is a finite set of values (enum or literal union).",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/state.json#/$defs/StateHolder"
+    }
+  },
+  {
+    "kind": "state.write",
+    "facet": "state",
+    "on": "node",
+    "description": "One site that sets a holder: an assignment, an object-literal property, an initializer, or a call to a setter helper. from is the set of values the holder is known to have just before.",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/state.json#/$defs/StateWrite"
+    }
+  },
+  {
+    "kind": "state.test",
+    "facet": "state",
+    "on": "node",
+    "description": "One comparison of a holder against literal values (===, !==, ==, !=, or a switch case group), with the branch arms where it holds or doesn't.",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/state.json#/$defs/StateTest"
+    }
+  },
+  {
     "kind": "effects.fs.read",
     "facet": "effects",
     "on": "node",

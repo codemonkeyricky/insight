@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://insight.dev/ir/facets/state.json",
+  "title": "StateFacet",
+  "description": "Explicit finite state: holders, writes and tests.",
+  "$defs": {
+    "StateHolder": {
+      "type": "object",
+      "required": ["name", "domainKind", "values"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "domainKind": { "enum": ["enum", "union", "open"] },
+        "values": { "type": "array", "items": { "type": "string" } },
+        "declaredType": { "type": "string" }
+      }
+    },
+    "StateWrite": {
+      "type": "object",
+      "required": ["holder", "op"],
+      "properties": {
+        "holder": { "type": "string", "minLength": 1 },
+        "op": { "enum": ["init", "set"] },
+        "value": { "type": "string" },
+        "dynamic": { "type": "boolean" },
+        "receiver": { "type": "string" },
+        "from": { "type": "array", "items": { "type": "string" } },
+        "stale": { "type": "boolean" },
+        "guards": { "type": "array", "items": { "type": "string" } },
+        "guardMatch": { "enum": ["receiver", "holder"] },
+        "event": { "type": "string" },
+        "guardText": { "type": "string" },
+        "via": { "type": "string" }
+      },
+      "if": { "properties": { "op": { "const": "set" } }, "required": ["op"] },
+      "then": {
+        "anyOf": [
+          { "required": ["value"] },
+          { "required": ["dynamic"], "properties": { "dynamic": { "const": true } } }
+        ]
+      }
+    },
+    "StateTest": {
+      "type": "object",
+      "required": ["holder", "values"],
+      "properties": {
+        "holder": { "type": "string", "minLength": 1 },
+        "values": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "negated": { "type": "boolean" },
+        "receiver": { "type": "string" },
+        "arm": { "type": "string" },
+        "elseArm": { "type": "string" },
+        "exitGuard": { "type": "boolean" }
+      }
+    }
+  }
+}

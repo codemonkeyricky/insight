@@ -101,6 +101,38 @@ export interface TableView {
   title: string;
   columns: string[];
   rows: (string | number | boolean | null)[][];
+  /** One per row: a source link for that row. */
+  spans?: (ViewSpan | null)[];
+}
+
+/** A source range: file path plus [line, column] start and end. */
+export type ViewSpan = { file: string; start: [number, number]; end: [number, number] };
+
+export interface StateMachineState {
+  id: string;
+  label: string;
+  kind: "initial" | "any" | "state" | "unentered";
+  span?: ViewSpan;
+}
+
+export interface StateMachineTransition {
+  id: string;
+  from: string;
+  to: string;
+  label?: string;
+  confidence: Confidence;
+  sites: { span?: ViewSpan; fn?: string; guard?: string }[];
+}
+
+/** A finite state holder drawn as a state diagram: states are its values, transitions are its writes. */
+export interface StateMachineView {
+  type: "state-machine";
+  id: string;
+  title: string;
+  holder: { id: string; name: string; file?: string; domainKind: "enum" | "union" | "open"; span?: ViewSpan };
+  states: StateMachineState[];
+  transitions: StateMachineTransition[];
+  notes?: string[];
 }
 
 /** A node of a tree view. `kind` picks the badge the web app draws (process, thread, coroutine, module, function, ...). */
@@ -120,7 +152,7 @@ export interface TreeView {
   root: TreeNode;
 }
 
-export type LensView = GraphView | TableView | TreeView;
+export type LensView = GraphView | TableView | TreeView | StateMachineView;
 
 export interface LensResult {
   findings: LensFinding[];

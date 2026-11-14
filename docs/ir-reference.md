@@ -39,6 +39,7 @@ Facets are optional and declared. A frontend lists the facets it fills, and a le
 | `concurrency` | Things that run alongside other things |
 | `sync` | Coordination: locks, semaphores, atomics, condition variables |
 | `effects` | Contact with the outside world: fs, net, process, env, clock |
+| `state` | Explicit finite state: holders whose type is a finite set of values, the writes that set them, and the tests that compare them |
 | `x-*` | Open namespace for plugin facets |
 
 ## Kinds
@@ -84,7 +85,7 @@ Base kinds shipped by the core:
 | `calls.call-site` | calls | node | – |  |
 | `calls.dynamic-dispatch` | calls | node | – |  |
 | `calls.callback-registration` | calls | node | – |  |
-| `calls.call` | calls | edge | – | Caller function to callee function. A call through an interface member, or an abstract class member, has no body to call, so its `to` is `{"candidates": [...]}` with the implementations (`attrs.how` is `interface`, provenance `heuristic`). The candidates are every indexed class that implements the interface, directly, through an extended interface, or through a base class, and that declares the member or inherits it from its nearest base class; or, for an abstract member, every indexed concrete subclass of the abstract class and what it inherits or overrides. A receiver typed by an interface is matched against that interface's implementers, not the interface that declares the member. A set is sorted by id and holds at most 32 targets; `attrs.truncated` is `true` when the set was cut. A set always has at least one target, even when there is one implementation. Not covered: structural matches (a class that fits an interface without `implements`), classes in files outside the index, class expressions, and a new implementer in another file, which reaches a call site only when that call site's file is extracted again. |
+| `calls.call` | calls | edge | – | Caller function to callee function. A call through an interface member, or an abstract class member, has no body to call, so its `to` is `{"candidates": [...]}` with the implementations (`attrs.how` is `interface`, provenance `heuristic`). The candidates are every indexed class that implements the interface, directly, through an extended interface, or through a base class, and that declares the member or inherits it from its nearest base class; or, for an abstract member, every indexed concrete subclass of the abstract class and what it inherits or overrides. A receiver typed by an interface is matched against that interface's implementers, not the interface that declares the member. A set is sorted by id and holds at most 32 targets; `attrs.truncated` is `true` when the set was cut. A set always has at least one target, even when there is one implementation. Not covered: structural matches (a class that fits an interface without `implements`), classes in files outside the index, class expressions, and a new implementer in another file, which reaches a call site only when that call site's file is extracted again. Optional `attrs.knownState` maps a holder id to the values it is known to hold at the call site, and `attrs.knownStale` lists the holders whose value there may be out of date. |
 | `calls.reference` | calls | edge | – | Caller to a function it refers to without calling it. `attrs.how` is `new`, `jsx`, `value`, `closure` or `handler`. Caller is the enclosing function, or the file for module-level code. `closure` runs from a function to an anonymous function created inside it, so the creator still reaches what the closure calls. `handler` runs from the code that installs a project function as an event or message handler, such as `worker.onmessage = fn` or `addEventListener("message", fn)`, to that function. |
 | `calls.contains-call` | calls | edge | – |  |
 | `concurrency.spawn-thread` | concurrency | node | – |  |
@@ -102,6 +103,9 @@ Base kinds shipped by the core:
 | `sync.semaphore` | sync | node | – |  |
 | `sync.atomic-op` | sync | node | – |  |
 | `sync.condvar` | sync | node | – |  |
+| `state.holder` | state | node | – | A field, variable or useState slot whose declared type is a finite set of values (enum or literal union). |
+| `state.write` | state | node | – | One site that sets a holder: an assignment, an object-literal property, an initializer, or a call to a setter helper. `from` is the set of values the holder is known to have just before. |
+| `state.test` | state | node | – | One comparison of a holder against literal values (`===`, `!==`, `==`, `!=`, or a switch case group), with the branch arms where it holds or doesn't. |
 | `effects.fs.read` | effects | node | – |  |
 | `effects.fs.write` | effects | node | – |  |
 | `effects.net.connect` | effects | node | – |  |
