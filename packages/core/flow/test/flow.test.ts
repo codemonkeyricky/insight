@@ -154,7 +154,7 @@ describe("buildFileFlow", () => {
     expect(edge(f, "back")).toHaveLength(1);
     expect(edge(f, "exit").map((e) => e.style)).toEqual(["done"]);
     expect(edge(f, "back").map((e) => e.style)).toEqual(["back"]);
-    expect(f.nodes.filter((n) => n.shape === "turn")).toHaveLength(1);
+    expect(f.nodes.some((n) => n.label === "next")).toBe(false);
     expect(edge(f, "each")).toHaveLength(1);
     expect(f.nodes.some((n) => n.role === "continue")).toBe(true);
     const loop = f.nodes.find((n) => n.role === "loop");

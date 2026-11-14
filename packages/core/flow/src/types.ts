@@ -26,7 +26,7 @@ export type FlowRole =
   | "continue";
 
 /** How the renderer draws a node. */
-export type FlowShape = "terminator" | "step" | "decision" | "loop" | "label" | "join" | "exit" | "nest" | "turn" | "fork" | "line";
+export type FlowShape = "terminator" | "step" | "decision" | "loop" | "label" | "join" | "exit" | "nest" | "fork" | "line";
 
 export interface FlowNode {
   id: string;

@@ -27,19 +27,15 @@ afterEach(() => {
 });
 
 describe("FlowChart motion", () => {
-  it("with motion on, only the back-edge marches and no overlay or pulse is drawn", () => {
-    const html = render(<FlowChart id="p" fn={fn} scope="." motion />);
-    expect(html.match(/marching/g)?.length).toBe(1);
-    expect(html).toContain("back-edge");
-    expect(html).not.toContain("flow-march");
-    expect(html).not.toContain("animateMotion");
-    expect(html).not.toContain("flow-pulse");
-  });
-
-  it("with Flow motion off, the back-edge keeps its dashes but does not march", () => {
-    const html = render(<FlowChart id="p" fn={fn} scope="." motion={false} />);
-    expect(html).not.toContain("marching");
-    expect(html).toContain("back-edge");
+  it("the return line never animates, with motion on or off", () => {
+    for (const motion of [true, false]) {
+      const html = render(<FlowChart id="p" fn={fn} scope="." motion={motion} />);
+      expect(html).not.toContain("marching");
+      expect(html).toContain("back-edge");
+      expect(html).not.toContain("flow-march");
+      expect(html).not.toContain("animateMotion");
+      expect(html).not.toContain("flow-pulse");
+    }
   });
 
   it("under reduced motion, nothing marches", () => {

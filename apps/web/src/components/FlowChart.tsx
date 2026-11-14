@@ -22,7 +22,7 @@ const CHEV_INSET = 6;
  * to the right. The rows and edge paths come from the layout in @insight/flow; this only draws them. A call into a function
  * in scope links to that function's chart. A call outside the scope is drawn unresolved. Any other step with a source span
  * links to its line. `onNodeClick` takes over the clicks (the zoom map does, so a click selects in place); `onNodeOpen` takes
- * the gestures that open or fold a step (double-click, Enter or Space, a click on the ▸/▾ chevron); `selectedId` marks one step. `motion` (default on) makes a loop's return track march toward its head and a token walk the chart's control
+ * the gestures that open or fold a step (double-click, Enter or Space, a click on the ▸/▾ chevron); `selectedId` marks one step. `motion` (default on) makes a token walk the chart's control
  * flow along the edge paths (see zoom/flowToken.ts). Motion is off under reduced motion, while the page is hidden, and
  * while the chart is off screen (see zoom/flowMotion.ts). The token runs on the most recently opened charts only.
  */
@@ -69,7 +69,7 @@ export function FlowChart({ id, fn, scope, onNodeClick, onNodeOpen, selectedId, 
       </g>
       <g>
         {fn.edges.map((e, i) => (
-          <Edge key={`${e.from}>${e.to}>${i}`} edge={e} index={i} arrow={arrowId} back={back[i] === true} march={on} delay={(nodeDelay.get(e.from) ?? 140) + 80} />
+          <Edge key={`${e.from}>${e.to}>${i}`} edge={e} index={i} arrow={arrowId} back={back[i] === true} delay={(nodeDelay.get(e.from) ?? 140) + 80} />
         ))}
       </g>
       <g>
@@ -184,7 +184,7 @@ function NestFrame({ node, onNodeClick, onNodeOpen, selected, delay }: { node: F
 }
 
 /** One edge as a single path, drawn from the layout's `d` (or its points on a chart exported before the line map). */
-function Edge({ edge, index, arrow, back, march, delay }: { edge: FlowEdge; index: number; arrow: (lane: number) => string; back: boolean; march: boolean; delay: number }) {
+function Edge({ edge, index, arrow, back, delay }: { edge: FlowEdge; index: number; arrow: (lane: number) => string; back: boolean; delay: number }) {
   const style = back || edge.style === "back" || edge.kind === "back" ? "back" : (edge.style ?? (edge.kind === "exception" ? "throws" : "solid"));
   const lane = laneOf(edge.lane);
   const d = edge.d ?? edge.points.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x} ${y}`).join(" ");
@@ -192,7 +192,7 @@ function Edge({ edge, index, arrow, back, march, delay }: { edge: FlowEdge; inde
   return (
     <path
       d={d}
-      className={`flow-edge ${style} c${lane}${isBack ? ` back-edge${march ? " marching" : ""}` : ""}`}
+      className={`flow-edge ${style} c${lane}${isBack ? " back-edge" : ""}`}
       data-edge={index}
       style={delayStyle(delay)}
       pathLength={style === "solid" ? 1 : undefined}
@@ -224,7 +224,6 @@ function Station({ node, cx, cy, resolved }: { node: FlowNode; cx: number; cy: n
     // The header of a parallel line: a square for a process, a round dot for a thread.
     return node.line?.kind === "process" ? <rect className="st head" x={cx - 5.5} y={cy - 5.5} width={11} height={11} rx={2.5} /> : <circle className="st head" cx={cx} cy={cy} r={5} />;
   }
-  if (shape === "turn") return <path className="st turn" transform={`translate(${cx} ${cy})`} d="M4.1 -1A4.2 4.2 0 1 0 2.4 3.5M4.6 -4.8V-.9H.7" />;
   if (shape === "exit") return <rect className="st exit" x={cx - 7} y={cy - 3} width={14} height={6} rx={3} />;
   if (shape === "loop") return <circle className="st loop" cx={cx} cy={cy} r={5} />;
   if (shape === "decision") return <path className="st diamond" d={`M${cx} ${cy - 6}L${cx + 6} ${cy}L${cx} ${cy + 6}L${cx - 6} ${cy}Z`} />;

@@ -23,9 +23,12 @@ describe("flow line map CSS", () => {
     expect(dotted).toContain("opacity");
   });
 
-  it("dashes the back edge and marches only it", () => {
-    expect(ruleBody(".flow-edge.back")).toContain("stroke-dasharray: 4 5");
-    expect(ruleBody(".flow-edge.back.marching")).toContain("animation: flow-march");
+  it("draws the return line quiet: thin, solid, still and faint", () => {
+    const body = ruleBody(".flow-edge.back");
+    expect(body).toContain("stroke-width: 1.25");
+    expect(body).toContain("opacity: 0.6");
+    expect(body).not.toContain("stroke-dasharray");
+    expect(css).not.toContain("flow-march");
     expect(css).not.toContain("flow-pulse");
     expect(css).not.toMatch(/\.flow-edge path/);
   });
@@ -36,9 +39,8 @@ describe("flow line map CSS", () => {
     expect(r).toContain("stroke-dasharray");
   });
 
-  it("stops the march and hides the token under reduced motion", () => {
+  it("hides the token under reduced motion", () => {
     const block = css.slice(css.indexOf("@media (prefers-reduced-motion: reduce)"));
-    expect(block).toContain(".flow-edge.marching");
     expect(block).toContain(".flow-token");
   });
 });

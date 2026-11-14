@@ -43,32 +43,40 @@ describe("line map layout", () => {
     expect(by(falls, "e()").lane).toBe(by(ends, "e()").lane);
   });
 
-  it("(d) gives a loop a turn node, a back edge and a dotted exit", () => {
+  it("(d) gives a loop no turn row: the last step has the back edge, with a track, and a dotted exit", () => {
     const head = by(fixture, "for x of xs");
-    const turn = fixture.nodes.find((n) => n.id === `${head.id}t`)!;
-    expect(turn.shape).toBe("turn");
-    expect(turn.label).toBe("next");
-    expect(turn.lane).toBe(head.lane! + 1);
-    const back = fixture.edges.filter((e) => e.kind === "back" && e.from === turn.id);
-    expect(back.map((e) => e.to)).toEqual([head.id]);
+    const last = by(fixture, "use(x)");
+    expect(fixture.nodes.some((n) => n.shape === ("turn" as string) || n.id === `${head.id}t`)).toBe(false);
+    const back = fixture.edges.filter((e) => e.kind === "back" && e.to === head.id);
+    expect(back.map((e) => e.from)).toEqual([last.id]);
     expect(back[0]?.style).toBe("back");
+    expect(back[0]?.track).toBeGreaterThan(stationOf(last)[0]);
     const exit = fixture.edges.find((e) => e.kind === "exit" && e.from === head.id)!;
     expect(exit.style).toBe("done");
-    // A body that ends in break or return has no turn.
+    // A body that ends in break or return has no back edge.
     const w = by(fixture, "while ok");
-    expect(fixture.nodes.some((n) => n.id === `${w.id}t`)).toBe(false);
     expect(fixture.edges.some((e) => e.kind === "back" && e.to === w.id)).toBe(false);
     const r = make("f#r", [{ t: "loop", label: "loop", body: [call("a()"), ret] }]);
-    expect(r.nodes.some((n) => n.shape === "turn")).toBe(false);
+    expect(r.edges.some((e) => e.kind === "back")).toBe(false);
+  });
+
+  it("(d2) returns from each arm that falls through, and nested loops nest", () => {
+    const b = make("f#b", [{ t: "loop", label: "loop", body: [branch("c", [call("t()")], [call("e()")])] }]);
+    const head = by(b, "loop");
+    expect(b.edges.filter((e) => e.kind === "back" && e.to === head.id).map((e) => e.from).sort()).toEqual([by(b, "e()").id, by(b, "t()").id].sort());
+    const n = make("f#n", [{ t: "loop", label: "outer", body: [{ t: "loop", label: "inner", body: [call("a()")] }] }]);
+    const inner = n.edges.find((e) => e.kind === "back" && e.to === by(n, "inner").id)!;
+    const outer = n.edges.find((e) => e.kind === "back" && e.to === by(n, "outer").id)!;
+    expect(inner.track).toBeLessThan(outer.track!);
+    expect(outer.from).toBe(by(n, "inner").id);
   });
 
   it("(e) makes no join nodes and keeps every other node's id", () => {
     expect(fixture.nodes.some((n) => n.shape === "join" || n.role === "join")).toBe(false);
-    expect(fixture.nodes.filter((n) => n.shape !== "turn").map((n) => `${n.id}:${n.label}`)).toEqual([
+    expect(fixture.nodes.map((n) => `${n.id}:${n.label}`)).toEqual([
       "n1:f#x", "n2:prep()", "n3:a > 0", "n4:t1()", "n5:e1()", "n6:e2()", "n8:for x of xs", "n9:x < 0", "n10:neg()", "n12:use(x)",
       "n14:while ok", "n15:tick()", "n16:break", "n18:switch", "n19:doA()", "n20:return", "n22:try", "n23:risky()", "n24:recover()", "n26:tail()", "n27:return",
     ]);
-    expect(fixture.nodes.filter((n) => n.shape === "turn").map((n) => n.id)).toEqual(["n8t"]);
   });
 
   it("(g) gives every edge a path that runs from its source to its target", () => {
@@ -186,15 +194,17 @@ describe("line map layout", () => {
       return cross(s, t) || on(s[0], t) || on(s[1], t) || on(t[0], s) || on(t[1], s);
     };
     const nested = make("f#nested", NESTED);
-    interface Ring { head: FlowNode; track: number; ys: [number, number]; body: FlowNode[]; points: [number, number][] }
+    interface Ring { head: FlowNode; track: number; ys: [number, number]; body: FlowNode[]; points: [number, number][]; fromHead: boolean }
+    // One ring per back edge. The ring's lower end is where the line leaves the body (a nested loop's exit leaves below its last row).
     const rings = (f: FunctionFlow): Ring[] =>
       f.edges
         .filter((e) => e.kind === "back")
         .map((e) => {
           const head = f.nodes.find((n) => n.id === e.to)!;
-          const turn = f.nodes.find((n) => n.id === e.from)!;
-          const body = f.nodes.filter((n) => n.y > head.y && n.y <= turn.y);
-          return { head, track: e.track!, ys: [head.y + ROW_H / 2, turn.y + ROW_H / 2] as [number, number], body, points: e.points };
+          const src = f.nodes.find((n) => n.id === e.from)!;
+          const low = e.points.reduce((m, p) => Math.max(m, p[1]), 0);
+          const body = f.nodes.filter((n) => n.y > head.y && n.y <= Math.max(src.y, low - ROW_H / 2));
+          return { head, track: e.track!, ys: [head.y + ROW_H / 2, low] as [number, number], body, points: e.points, fromHead: src.shape === "loop" };
         });
 
     it("(r1) keeps every point of a back edge right of its track except the ends, and the track right of the body", () => {
@@ -203,7 +213,7 @@ describe("line map layout", () => {
         expect(rs.length).toBeGreaterThan(0);
         for (const r of rs) {
           expect(r.track).toBeTypeOf("number");
-          for (const p of r.points.slice(1, -2)) expect(p[0]).toBeGreaterThanOrEqual(r.track - 0.01);
+          for (const p of r.points.slice(-4, -2)) expect(p[0]).toBeGreaterThanOrEqual(r.track - 0.01);
           const end = r.points[r.points.length - 1]!;
           expect(end[0]).toBeLessThan(r.track);
           expect(end[1]).toBeCloseTo(r.head.y + ROW_H / 2);
@@ -232,8 +242,9 @@ describe("line map layout", () => {
     it("(r3) does not let the head's way into the body meet the back edge", () => {
       for (const f of [fixture, nested]) {
         for (const r of rings(f)) {
+          if (r.fromHead) continue;
           const into = f.edges.find((e) => e.from === r.head.id && e.kind === "each")!;
-          const back = segs(r.points);
+          const back = segs(r.points).slice(1); // the first run starts at the step the way in may end on
           for (const s of segs(into.points)) for (const t of back) expect(touch(s, t)).toBe(false);
         }
       }
@@ -249,7 +260,8 @@ describe("line map layout", () => {
 
     it("(r5) keeps the exit on the head's lane, clear of the ring", () => {
       for (const r of rings(nested)) {
-        const exit = nested.edges.find((e) => e.from === r.head.id && e.kind === "exit")!;
+        const exit = nested.edges.find((e) => e.from === r.head.id && e.kind === "exit");
+        if (exit === undefined) continue;
         for (const p of exit.points.slice(0, 2)) expect(p[0]).toBeLessThan(r.track);
       }
     });

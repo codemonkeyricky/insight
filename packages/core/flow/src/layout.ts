@@ -79,6 +79,8 @@ interface Pend {
   kind: FlowEdgeKind;
   style: FlowEdgeStyle;
   trunk?: number;
+  /** Where the line really leaves (a loop's exit leaves from the loop's last row, not its head). */
+  y?: number;
 }
 
 /** What the walk builds. */
@@ -139,17 +141,21 @@ function link(c: Ctx, p: Pend, to: FlowNode): void {
 }
 
 /**
- * The loop's back edge: out of the turn going down, round to the return track `ret` (in lanes, outside everything the body
- * used), straight up to the head's row, round the corner and left into the head from the right.
+ * The loop's back edge: out of the body's last step (or `p.y` for a nested loop's exit) to the right across to the return
+ * track `ret` (in lanes, outside everything the body used), straight up to the head's row, round the corner and left into
+ * the head from the right.
  */
-function backEdge(c: Ctx, turn: FlowNode, head: FlowNode, ret: number): void {
-  const [xa, ya] = stationOf(turn);
+function backEdge(c: Ctx, p: Pend, head: FlowNode, ret: number): void {
+  const [xa, ya0] = stationOf(p.from);
+  const ya = p.y ?? ya0;
   const [xb, yb] = stationOf(head);
   const tx = LINE_X0 + ret * LANE_W;
-  const H = ROW_H;
   const r = 10;
-  const d = `M${xa} ${ya}C${xa} ${ya + H * 0.9} ${tx} ${ya + H * 0.9} ${tx} ${ya}L${tx} ${yb + r}Q${tx} ${yb} ${tx - r} ${yb}L${xb + 9} ${yb}`;
-  c.edges.push({ from: turn.id, to: head.id, kind: "back", style: "back", lane: turn.lane ?? 0, d, track: tx, points: [[xa, ya], [tx, ya], [tx, yb + r], [tx - r, yb], [xb + 9, yb]] });
+  const d = `M${xa} ${ya0}${ya > ya0 ? `L${xa} ${ya}` : ""}L${tx - r} ${ya}Q${tx} ${ya} ${tx} ${ya - r}L${tx} ${yb + r}Q${tx} ${yb} ${tx - r} ${yb}L${xb + 9} ${yb}`;
+  const points: Pt[] = [[xa, ya0]];
+  if (ya > ya0) points.push([xa, ya]);
+  points.push([tx - r, ya], [tx, ya - r], [tx, yb + r], [tx - r, yb], [xb + 9, yb]);
+  c.edges.push({ from: p.from.id, to: head.id, kind: "back", style: "back", lane: p.from.lane ?? 0, d, track: tx, points });
 }
 
 /** Puts a node on the next row and links what was waiting for it. */
@@ -265,8 +271,6 @@ function loop(c: Ctx, mk: Maker, item: Extract<Item, { t: "loop" }>, lane: numbe
   c.hi = inner;
   const body = item.body.length > 0 ? walkList(c, mk, item.body, inner, labelLane, 0, [{ from: head, kind: "each", style: "solid" }]) : [];
   if (body.length > 0) {
-    const turn = mk.make(`${head.id}t`, "marker", "turn", "next");
-    row(c, turn, inner, labelLane, 0, body);
     // The return track runs half a lane outside everything the body used (nested lanes and nested tracks), so it never
     // crosses the body and an inner loop's ring sits inside the outer one. Labels in the loop clear it.
     const ret = c.hi + 0.5;
@@ -276,12 +280,12 @@ function loop(c: Ctx, mk: Maker, item: Extract<Item, { t: "loop" }>, lane: numbe
       const n = c.nodes[i] as FlowNode;
       n.labelX = Math.max(n.labelX ?? 0, clear);
     }
-    backEdge(c, turn, head, ret);
+    for (const p of body) backEdge(c, p, head, ret);
   } else c.hi = item.body.length === 0 ? before : Math.max(before, c.hi);
   c.y += LOOP_GAP;
   // The id a join used to take.
   mk.reserve();
-  return [{ from: head, kind: "exit", style: "done" }];
+  return [{ from: head, kind: "exit", style: "done", y: c.y - LOOP_GAP / 2 }];
 }
 
 /** A step, taking the target a viewer gave the chart it was built from, and nested when its callee is expanded. */
