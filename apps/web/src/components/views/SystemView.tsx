@@ -685,7 +685,8 @@ function runtimeLabel(sys: SystemModel, rt: string): string {
 }
 
 function FrameDetail({ id, sys, frame, onToggle, onWiden }: { id: string; sys: SystemModel; frame: SysFrame; onToggle: (id: string) => void; onWiden: (id: string) => void }) {
-  const roots = (sys.slices ?? []).filter((s) => s.runtime === frame.id && s.root);
+  // The functions the frame starts in, each linked to its Flow chart.
+  const rootFns = sys.runtimes?.find((r) => r.id === frame.id)?.roots ?? [];
   const spawn = frame.spawn;
   return (
     <>
@@ -703,13 +704,15 @@ function FrameDetail({ id, sys, frame, onToggle, onWiden }: { id: string; sys: S
           <SiteLinks id={id} sites={[{ file: spawn.file, line: spawn.line, ...(spawn.fn !== undefined ? { fn: spawn.fn } : {}) }]} />
         </>
       )}
-      {roots.length > 0 && (
+      {rootFns.length > 0 && (
         <>
           <h3>Roots</h3>
           <ul className="arch-list">
-            {roots.map((r) => (
-              <li key={r.id} className="small mono">
-                {r.component}
+            {rootFns.map((fn) => (
+              <li key={fn} className="small">
+                <a className="mono" href={hrefView(id, "flow", { scope: dirname(fn.slice(0, fn.indexOf("#"))), fn, roots: true })} title={`Open ${fnName(fn)} in Flow`}>
+                  {fnName(fn)}
+                </a>
               </li>
             ))}
           </ul>
@@ -743,6 +746,7 @@ function SliceDetail({ id, sys, box, layout, onSelect }: { id: string; sys: Syst
       <h2 className="mono">{slice.component}</h2>
       <p className="small muted">
         {runtimeLabel(sys, slice.runtime)} · {plural(slice.functions, "function")}
+        {slice.atomics !== undefined ? ` · ${plural(slice.atomics, "atomic op")}` : ""}
       </p>
       <p className="small">
         Placement: {basis}. Placement is inferred from calls, so a function reached only through a call may sit on another thread than the one that runs it.

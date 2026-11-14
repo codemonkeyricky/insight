@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SystemDiagram, SystemView } from "../src/components/views/SystemView";
 import { model } from "./systemFixtures";
@@ -48,5 +48,25 @@ describe("keyboard on a frame header", () => {
     await user.keyboard("{Enter}");
     expect(header.getAttribute("aria-expanded")).toBe("true");
     expect(document.querySelector('[data-node="program:svc|A"]')).not.toBeNull();
+  });
+});
+
+describe("frame and slice panels", () => {
+  it("links a frame's roots to their Flow charts", () => {
+    const sys = model();
+    sys.runtimes = (sys.runtimes ?? []).map((r) => (r.id === "program:svc" ? { ...r, roots: ["svc/src/main.ts#main"] } : r));
+    render(<SystemDiagram id="p" sys={sys} tests={false} onTests={() => {}} />);
+    fireEvent.click(document.querySelector('[data-frame="program:svc"]') as Element);
+    const link = screen.getByRole("link", { name: "main" });
+    expect(link.getAttribute("href")).toContain("flow");
+    expect(link.getAttribute("href")).toContain("svc%2Fsrc%2Fmain.ts%23main");
+  });
+
+  it("shows a slice's atomics count", () => {
+    const sys = model();
+    sys.slices = (sys.slices ?? []).map((x) => (x.id === "program:svc|A" ? { ...x, atomics: 2 } : x));
+    render(<SystemDiagram id="p" sys={sys} tests={false} onTests={() => {}} />);
+    fireEvent.click(document.querySelector('[data-node="program:svc|A"]') as Element);
+    expect(screen.getByText(/2 atomic ops/)).toBeTruthy();
   });
 });
