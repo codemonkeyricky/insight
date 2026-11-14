@@ -230,6 +230,16 @@ describe("callerGraph: a forced node cut by maxNodes", () => {
     expect(expandedPossible.map((n) => n.id)).toEqual([]);
     expect(g.nodes.find((n) => n.id === f(0))).toMatchObject({ certainty: "possible", stop: "possible-off" });
   });
+
+  it("never labels an exact node possible-off, for any maxNodes from 1 to 15", () => {
+    for (let maxNodes = 1; maxNodes <= 15; maxNodes++) {
+      const g = callerGraph(scopeView(m, ""), f(3), { maxNodes, maxDepth: 3 });
+      expect(
+        g.nodes.filter((n) => n.certainty === "exact" && n.stop === "possible-off").map((n) => n.id),
+        `maxNodes ${maxNodes}`,
+      ).toEqual([]);
+    }
+  });
 });
 
 describe("callerGraph: stop order before the depth cap", () => {

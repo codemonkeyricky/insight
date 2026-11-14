@@ -6,7 +6,7 @@ import { api } from "../../api";
 import { readLambdas } from "../../zoom/lambdaPref";
 import { hrefView } from "../../router";
 import type { MapSelection } from "./ZoomMap";
-import { KindTag, refHref } from "./RefLists";
+import { KindTag, refHref } from "./refLink";
 import {
   blindTip,
   completeness,

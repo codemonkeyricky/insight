@@ -150,6 +150,18 @@ export function callerGraph(view: ScopeView, id: NodeId, opts: CallerOptions = {
     if (first?.group.site) n.row = { ...n.row, line: first.group.site.line };
   }
 
+  // A node the fixpoint banned from re-forcing can end exact while still stopped as possible-off. It was cut by the node
+  // cap, not by the possible-relation rule, so it reads as capped: its hidden callers are the distinct callers of its groups.
+  let truncated = walked.truncated;
+  for (let i = 0; i < work.length; i++) {
+    const n = work[i] as Work;
+    if (n.stop !== "possible-off" || !exact.has(i)) continue;
+    n.stop = "nodes";
+    const hidden = new Set(groupsOf(view, n.row.id, groupCache).map((g) => g.row.id)).size;
+    if (hidden > 0) n.hidden = hidden;
+    truncated ??= { reason: "nodes", at: cfg.maxNodes };
+  }
+
   // Nodes sort by depth, then refsOf's order() within a depth. The root is the only node at depth 0.
   const sorted = work.map((_, i) => i).sort((a, b) => {
     const x = work[a] as Work;
@@ -223,7 +235,7 @@ export function callerGraph(view: ScopeView, id: NodeId, opts: CallerOptions = {
     nodes,
     edges,
     cycles,
-    ...(walked.truncated ? { truncated: walked.truncated } : {}),
+    ...(truncated ? { truncated } : {}),
     stats: {
       callers: nodes.length - 1,
       levels: Math.max(0, ...nodes.map((n) => n.depth)),

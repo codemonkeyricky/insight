@@ -6,9 +6,9 @@ import { readLambdas } from "../../zoom/lambdaPref";
 import { useEffect, useState } from "react";
 import type { RefRow, Refs } from "@insight/model";
 import { api } from "../../api";
-import { hrefFlow, hrefView } from "../../router";
 import type { MapSelection } from "./ZoomMap";
 import { CallerChain } from "./CallerChain";
+import { KindTag, refHref } from "./refLink";
 
 /** What every part of the lists needs: the project, the scope the map shows (its rows inside it, the scope a link keeps), and roots-only. */
 interface Base {
@@ -50,30 +50,6 @@ export function FunctionRefs({ id, sel, roots, trace }: { id: string; sel: MapSe
         <RefLists id={id} scope={scope} roots={roots} refs={shown.refs} />
       )}
       <CallerChain id={id} sel={sel} roots={roots} {...(trace !== undefined ? { trace } : {})} />
-    </>
-  );
-}
-
-/** The link of a reverse reference row or a caller row: a function opens in its scope, or its file's scope when outside it; a file opens its flow. */
-export function refHref(
-  id: string,
-  scope: string,
-  roots: boolean,
-  row: { id: string; file: string; isFunction: boolean; inScope: boolean },
-  trace?: string,
-): string {
-  return row.isFunction
-    ? hrefView(id, "flow", { scope: row.inScope ? scope : row.file, fn: row.id, roots, ...(trace ? { trace } : {}) })
-    : hrefFlow(id, row.file);
-}
-
-/** The kind tag of a reference: its kind, or "message" for a message dispatch. Call is the default and is not tagged. */
-export function KindTag({ kind, how }: { kind: string; how?: string | undefined }) {
-  if (kind === "call") return null;
-  return (
-    <>
-      {" "}
-      <span className={`kind ${kind}`}>{kind === "dispatch" && how === "message" ? "message" : kind}</span>
     </>
   );
 }
