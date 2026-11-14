@@ -71,6 +71,79 @@ export function runtimeRootsScene(full: Scene, model: ExecModel, expanded: Reado
     root.children.push(UNTHREADED_ID);
   }
 
+  // The scope entry functions of a thread (or of the plain code flow) that holds no root card: execRootsOnly keeps only the
+  // roots, and a thread whose entry lies outside the scope has none inside it. Left alone it would draw as a closed leaf.
+  const entriesFor = (container: SceneNode): string[] => {
+    const fnsOf = (id: string, out: string[]): string[] => {
+      for (const c of full.nodes.get(id)?.children ?? []) {
+        const k = full.nodes.get(c);
+        if (k?.kind === "function") out.push(c);
+        else if (k?.kind === "coroutine") fnsOf(c, out);
+      }
+      return out;
+    };
+    const placed = fnsOf(container.id, []);
+    const set = new Set(placed);
+    const called = new Set<string>();
+    for (const e of full.edges) if (e.kind === "call" && set.has(e.from) && set.has(e.to) && e.from !== e.to) called.add(e.to);
+    const pool = placed.filter((id) => !called.has(id));
+    const chosen = pool.length > 0 ? pool : placed;
+    const seen = new Set<string>();
+    return chosen.filter((id) => {
+      const ref = full.nodes.get(id)?.ref ?? id;
+      if (seen.has(ref)) return false;
+      seen.add(ref);
+      return true;
+    });
+  };
+  const adopt = (container: SceneNode, ids: readonly string[]): void => {
+    for (const id of ids) {
+      const f = full.nodes.get(id);
+      if (f === undefined) continue;
+      nodes.set(id, { ...f, parent: container.id, children: [] });
+      container.children.push(id);
+    }
+  };
+  const dropNode = (id: string): void => {
+    const n = nodes.get(id);
+    if (n === undefined) return;
+    nodes.delete(id);
+    const parent = n.parent !== undefined ? nodes.get(n.parent) : undefined;
+    if (parent === undefined) return;
+    parent.children = parent.children.filter((c) => c !== id);
+    // A program left with no thread is dropped too.
+    if (parent.kind === "program" && parent.children.length === 0) dropNode(parent.id);
+  };
+  for (const n of [...nodes.values()]) {
+    if (n.kind !== "thread" || n.external === true || n.children.some((c) => nodes.get(c)?.kind === "function")) continue;
+    const entries = entriesFor(n);
+    if (entries.length === 0) dropNode(n.id);
+    else adopt(n, entries);
+  }
+  // The plain code flow with no root of its own (it only calls itself in a cycle) shows its entry functions.
+  if (flat.length === 0) {
+    const rootNode = full.nodes.get(cut.root);
+    if (rootNode !== undefined && rootNode.children.some((c) => full.nodes.get(c)?.kind === "function")) {
+      const entries = entriesFor(rootNode);
+      if (entries.length > 0) {
+        for (const id of entries) {
+          const f = full.nodes.get(id);
+          if (f !== undefined) nodes.set(id, { ...f, parent: UNTHREADED_ID, children: [] });
+        }
+        nodes.set(UNTHREADED_ID, {
+          id: UNTHREADED_ID,
+          kind: "group",
+          label: UNTHREADED_LABEL,
+          parent: cut.root,
+          children: [...entries].sort(),
+          detail: `${entries.length} function${entries.length === 1 ? "" : "s"}`,
+          note: "Plain call with no runtime context. Zoom out to see where it runs.",
+        });
+        root.children.push(UNTHREADED_ID);
+      }
+    }
+  }
+
   // The entry programs lead the processes: the Browser program first, then the Node programs by name. The others keep their order.
   const BROWSER_ID = execProgramId("entry:browser");
   const NODE_PREFIX = execProgramId("entry:node:");
@@ -120,7 +193,7 @@ export function runtimeRootsScene(full: Scene, model: ExecModel, expanded: Reado
   return {
     root: cut.root,
     nodes,
-    edges: cut.edges.filter((e) => !hidden.has(e.from) && !hidden.has(e.to)).map((e) => ({ ...e })),
+    edges: cut.edges.filter((e) => !hidden.has(e.from) && !hidden.has(e.to) && nodes.has(e.from) && nodes.has(e.to)).map((e) => ({ ...e })),
     levels: { ...cut.levels, group: { box: { w: 300, h: 64 } }, more: { box: { w: 160, h: 56 } } },
   };
 }

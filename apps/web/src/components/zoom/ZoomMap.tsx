@@ -1643,7 +1643,10 @@ export function BoxShape({
   const fontPx = small ? Math.min(13, Math.max(10, Math.round(rect.h * k * 0.42))) : 0;
   const label = bare ? null : small ? fitLabel(shown, labelChars(rect.w * k, fontPx * 0.6, 10)) : fitLabel(shown, labelChars(rect.w * k));
   const holdsChart = node.chart !== undefined;
-  if (node.external === true) {
+  // A container that ended up a leaf in a card grid (a thread or group with no card) has no chart and no action: it is
+  // drawn as the muted chip too, never as a function card.
+  const deadLeaf = card && node.kind !== "function" && node.kind !== "more" && node.chart === undefined;
+  if (node.external === true || deadLeaf) {
     // An external command: a muted chip with its name and a caption, no function glyph. It opens nothing, so a click is a no-op.
     const name = fitLabel(shown, labelChars(rect.w * k, 8, 20));
     const caption = rect.h >= 40;
@@ -1658,7 +1661,7 @@ export function BoxShape({
         )}
         {caption && (
           <text x={rect.x + 12} y={rect.y + rect.h / 2 + 9} dominantBaseline="central" className="zm-external-caption">
-            external command
+            {node.external === true ? "external command" : node.kind}
           </text>
         )}
       </g>

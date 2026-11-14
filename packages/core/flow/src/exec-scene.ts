@@ -516,12 +516,12 @@ export function buildExecScene(model: ExecModel): Scene {
 }
 
 /**
- * The containers open in an execution scene's first view: the project, and every program and thread box, so the view
+ * The containers open in an execution scene's first view: the project, and every program, thread and group box, so the view
  * shows process ▸ thread ▸ function boxes. Coroutines stay closed, and so does everything under them. The demo capture
  * lays out this set, and the web store's base layout is this set too (see layoutScene's `open`).
  */
 export function execDefaultOpen(scene: Scene): Set<string> {
   const open = new Set<string>([scene.root]);
-  for (const n of scene.nodes.values()) if ((n.kind === "program" || n.kind === "thread") && n.children.length > 0) open.add(n.id);
+  for (const n of scene.nodes.values()) if ((n.kind === "program" || n.kind === "thread" || n.kind === "group") && n.children.length > 0) open.add(n.id);
   return open;
 }
