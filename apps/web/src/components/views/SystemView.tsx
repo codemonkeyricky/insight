@@ -584,7 +584,7 @@ export function boxLabel(b: SysBox): string {
     case "chip":
       return `${b.title}, call into the kernel or an outside system`;
     case "more":
-      return `${b.title} slices, show all`;
+      return `${b.title} ${b.frame?.startsWith("res:") ? "resources" : "slices"}, show all`;
     case "os":
       return `${b.title}, kernel operation${b.sub !== "" ? `, ${b.sub}` : ""}`;
     case "resource":

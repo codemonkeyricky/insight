@@ -2,7 +2,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { SystemDiagram, SystemView } from "../src/components/views/SystemView";
+import { boxLabel, SystemDiagram, SystemView } from "../src/components/views/SystemView";
+import type { SysBox } from "../src/arch/system-layout";
 import type { SystemModel, SystemSlice } from "@insight/model";
 import { SLICE_LIMIT } from "../src/arch/system-frames";
 import { PA, TW, CO, A, B, C, runtimes, model, slice } from "./systemFixtures";
@@ -100,6 +101,8 @@ describe("keyboard on a frame header", () => {
     const more = document.querySelector('[data-node="more:program:svc"]') as HTMLElement;
     expect(more).not.toBeNull();
     expect(more.getAttribute("aria-label")).toBe("+2 more slices, show all");
+    // A strip's "+N more" row names its resources, not its slices.
+    expect(boxLabel({ kind: "more", title: "+13 more", sub: "", frame: "res:program:svc" } as SysBox)).toBe("+13 more resources, show all");
     more.focus();
     await user.keyboard("{Enter}");
     expect(document.querySelector('[data-node="more:program:svc"]')).toBeNull();

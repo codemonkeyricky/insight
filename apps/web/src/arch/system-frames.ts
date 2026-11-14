@@ -610,13 +610,27 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
     toId: string;
   }
   const pending: Pending[] = [];
+  // Edges that end on a strip's "+N more" row, keyed by their ends and verb: one arrow per key, with the counts summed.
+  const throughMore = new Map<string, Pending>();
   for (const e of sys.edges) {
     const from = resolve(e.from);
     let toEdgeId = e.to;
     if (!grounded && e.to === "env" && envRes !== undefined) toEdgeId = envRes.id;
     const to = resolve(toEdgeId);
     if (from === undefined || to === undefined || from === to) continue;
-    pending.push({ edge: e, from, to, toId: toEdgeId });
+    const p: Pending = { edge: e, from, to, toId: toEdgeId };
+    if (!hiddenMore.has(e.from) && !hiddenMore.has(toEdgeId)) {
+      pending.push(p);
+      continue;
+    }
+    const key = `${from.id}\0${to.id}\0${e.verb}`;
+    const first = throughMore.get(key);
+    if (first === undefined) {
+      throughMore.set(key, p);
+      pending.push(p);
+    } else {
+      first.edge = mergeEdges(first.edge, e);
+    }
   }
   const outside = (b: SysBox | SysFrame): boolean => !("hdrH" in b) && b.kind === "external";
   const isOs = (b: SysBox | SysFrame): b is SysBox => !("hdrH" in b) && b.kind === "os";
@@ -966,6 +980,24 @@ function resourceBox(r: SystemResource, x: number, y: number, w: number, frame: 
   const narrow = w < 200;
   return { id: r.id, kind: "resource", column: 0, x, y, w, h: RES_H, title: shortLabel(r.label, narrow ? 12 : 24), sub: shortLabel(sub, narrow ? 15 : 26), chips: [], frame, resource: r, glyph: resourceGlyph(r.kind) };
 }
+
+/**
+ * Two edges that now share one arrow (both end on the same "+N more" row): the counts add, the sites are kept up to the
+ * model's cap, and the edge is inferred only when every merged edge is.
+ */
+function mergeEdges(a: SystemEdge, b: SystemEdge): SystemEdge {
+  const count = a.count + b.count;
+  const evidence = a.evidence !== undefined || b.evidence !== undefined ? [...(a.evidence ?? []), ...(b.evidence ?? [])] : undefined;
+  return {
+    ...a,
+    count,
+    label: `${a.verb} ×${count}`,
+    sites: [...a.sites, ...b.sites].slice(0, MERGED_SITE_CAP),
+    confidence: a.confidence === "inferred" && b.confidence === "inferred" ? "inferred" : "exact",
+    ...(evidence !== undefined ? { evidence } : {}),
+  };
+}
+const MERGED_SITE_CAP = 20;
 
 /** The stacking offset of a flat card: the sum of the heights of the cards above it in its column. */
 function stackOffset(comps: Array<{ id: string }>, col: number, id: string, colOf: (c: string) => number, used: Set<string>, routesBy: Map<string, SystemRoute[]>, maxChips: number): number {

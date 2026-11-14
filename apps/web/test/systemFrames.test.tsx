@@ -175,6 +175,21 @@ describe("grounded frames", () => {
     expect(wide.boxes.find((b) => b.kind === "more")).toBeUndefined();
   });
 
+  it("merges the edges three slices draw into a capped strip's +N more row: one arrow per slice and verb, with summed counts", () => {
+    const locks: SystemResource[] = Array.from({ length: 20 }, (_, i) => ({ id: `lock:${PA}:l${i}`, kind: "lock" as const, label: `l${i}`, program: PA, source: "sync" as const }));
+    const parts = [slice(PA, A, 1, { root: true }), slice(PA, B, 1), slice(PA, C, 1)];
+    const edges = parts.flatMap((s) => locks.map((r) => edge(s.id, r.id, "locks", "acquire")));
+    const big: SystemModel = { ...model(), slices: parts, resources: locks, edges };
+    const l = layoutSystemFrames(big);
+    const more = `more:res:${PA}`;
+    expect(l.boxes.find((b) => b.id === more)?.title).toBe(`+${locks.length - RES_LIMIT} more`);
+    const arrows = l.arrows.filter((a) => a.to === more);
+    // 3 slices x 12 hidden locks: one arrow per slice (not 36), each counting its 12 edges.
+    expect(arrows.map((a) => a.from).sort()).toEqual(parts.map((s) => s.id).sort());
+    expect(arrows.map((a) => a.edge.count)).toEqual([12, 12, 12]);
+    expect(arrows.every((a) => a.edge.verb === "locks" && a.inferred === false)).toBe(true);
+  });
+
   it("caps a process strip at RES_LIMIT resource cards, then a +N more row, and draws them all when widened", () => {
     const extra: SystemResource[] = Array.from({ length: RES_LIMIT }, (_, i) => ({ id: `queue:${PA}:q${i}`, kind: "queue" as const, label: `q${i}`, program: PA, source: "message" as const }));
     const big: SystemModel = { ...model(), resources: [...resources, ...extra] };
