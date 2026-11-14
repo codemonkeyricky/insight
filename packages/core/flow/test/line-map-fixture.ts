@@ -44,4 +44,20 @@ export const FIXTURE: Item[] = [
   ret,
 ];
 
+/** A loop with a branch, a loop nested in it, and a sibling loop after that. */
+export const NESTED: Item[] = [
+  call("start()"),
+  {
+    t: "loop",
+    label: "for a of as",
+    body: [
+      branch("a.ok", [call("okA()")], [call("noA()")]),
+      { t: "loop", label: "for b of a.bs", body: [call("useB(b)"), { t: "loop", label: "for c of b.cs", body: [call("useC(c)")] }] },
+      { t: "loop", label: "for d of a.ds", body: [call("useD(d)")] },
+      call("endA()"),
+    ],
+  },
+  call("tail()"),
+];
+
 export { call, ret, brk, branch };

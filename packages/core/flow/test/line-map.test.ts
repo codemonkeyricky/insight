@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Item } from "../src/build.js";
 import { layoutFunction, relayout, ROW_H, LANE_W, LINE_X0, stationOf, type InlineTree } from "../src/index.js";
 import type { FlowNode, FunctionFlow } from "../src/index.js";
-import { FIXTURE, branch, brk, call, ret } from "./line-map-fixture.js";
+import { FIXTURE, NESTED, branch, brk, call, ret } from "./line-map-fixture.js";
 
 const make = (id: string, items: Item[]): FunctionFlow => layoutFunction({ id, name: id, async: false, items });
 const by = (f: FunctionFlow, label: string): FlowNode => {
@@ -168,6 +168,90 @@ describe("line map layout", () => {
       expect(deep.shape).toBe("nest");
       expect(deep.lane).toBe(1);
       expect(o.nodes.find((n) => n.id === "n2/n2/n2")?.lane).toBe(2);
+    });
+  });
+
+  describe("loop return tracks", () => {
+    type Seg = [[number, number], [number, number]];
+    const segs = (pts: [number, number][]): Seg[] => pts.slice(1).map((p, i) => [pts[i]!, p] as Seg);
+    const ccw = (a: number[], b: number[], c: number[]) => (c[1]! - a[1]!) * (b[0]! - a[0]!) - (b[1]! - a[1]!) * (c[0]! - a[0]!);
+    const cross = (s: Seg, t: Seg) => {
+      const [a, b] = s;
+      const [c, d] = t;
+      return ccw(a, c, d) * ccw(b, c, d) < 0 && ccw(a, b, c) * ccw(a, b, d) < 0;
+    };
+    const touch = (s: Seg, t: Seg) => {
+      // collinear overlap or a point of one lying on the other
+      const on = (p: number[], q: Seg) => Math.abs(ccw(q[0], q[1], p)) < 1e-6 && p[0]! >= Math.min(q[0][0], q[1][0]) - 1e-6 && p[0]! <= Math.max(q[0][0], q[1][0]) + 1e-6 && p[1]! >= Math.min(q[0][1], q[1][1]) - 1e-6 && p[1]! <= Math.max(q[0][1], q[1][1]) + 1e-6;
+      return cross(s, t) || on(s[0], t) || on(s[1], t) || on(t[0], s) || on(t[1], s);
+    };
+    const nested = make("f#nested", NESTED);
+    interface Ring { head: FlowNode; track: number; ys: [number, number]; body: FlowNode[]; points: [number, number][] }
+    const rings = (f: FunctionFlow): Ring[] =>
+      f.edges
+        .filter((e) => e.kind === "back")
+        .map((e) => {
+          const head = f.nodes.find((n) => n.id === e.to)!;
+          const turn = f.nodes.find((n) => n.id === e.from)!;
+          const body = f.nodes.filter((n) => n.y > head.y && n.y <= turn.y);
+          return { head, track: e.track!, ys: [head.y + ROW_H / 2, turn.y + ROW_H / 2] as [number, number], body, points: e.points };
+        });
+
+    it("(r1) keeps every point of a back edge right of its track except the ends, and the track right of the body", () => {
+      for (const f of [fixture, nested]) {
+        const rs = rings(f);
+        expect(rs.length).toBeGreaterThan(0);
+        for (const r of rs) {
+          expect(r.track).toBeTypeOf("number");
+          for (const p of r.points.slice(1, -2)) expect(p[0]).toBeGreaterThanOrEqual(r.track - 0.01);
+          const end = r.points[r.points.length - 1]!;
+          expect(end[0]).toBeLessThan(r.track);
+          expect(end[1]).toBeCloseTo(r.head.y + ROW_H / 2);
+          expect(end[0]).toBeGreaterThan(stationOf(r.head)[0]);
+          for (const n of r.body) expect(r.track).toBeGreaterThan(stationOf(n)[0]);
+        }
+      }
+    });
+
+    it("(r2) puts an inner ring strictly inside its outer ring", () => {
+      const rs = rings(nested);
+      const outer = rs.find((r) => r.head.label === "for a of as")!;
+      for (const label of ["for b of a.bs", "for c of b.cs", "for d of a.ds"]) {
+        const inner = rs.find((r) => r.head.label === label)!;
+        expect(inner.track).toBeLessThan(outer.track);
+        expect(inner.ys[0]).toBeGreaterThan(outer.ys[0]);
+        expect(inner.ys[1]).toBeLessThan(outer.ys[1]);
+      }
+      const b = rs.find((r) => r.head.label === "for b of a.bs")!;
+      const cc = rs.find((r) => r.head.label === "for c of b.cs")!;
+      expect(cc.track).toBeLessThan(b.track);
+      expect(cc.ys[0]).toBeGreaterThan(b.ys[0]);
+      expect(cc.ys[1]).toBeLessThan(b.ys[1]);
+    });
+
+    it("(r3) does not let the head's way into the body meet the back edge", () => {
+      for (const f of [fixture, nested]) {
+        for (const r of rings(f)) {
+          const into = f.edges.find((e) => e.from === r.head.id && e.kind === "each")!;
+          const back = segs(r.points);
+          for (const s of segs(into.points)) for (const t of back) expect(touch(s, t)).toBe(false);
+        }
+      }
+    });
+
+    it("(r4) puts the labels of rows inside a loop right of its track", () => {
+      for (const f of [fixture, nested]) {
+        for (const r of rings(f)) {
+          for (const n of [r.head, ...r.body]) expect(n.labelX).toBeGreaterThan(r.track);
+        }
+      }
+    });
+
+    it("(r5) keeps the exit on the head's lane, clear of the ring", () => {
+      for (const r of rings(nested)) {
+        const exit = nested.edges.find((e) => e.from === r.head.id && e.kind === "exit")!;
+        for (const p of exit.points.slice(0, 2)) expect(p[0]).toBeLessThan(r.track);
+      }
     });
   });
 });

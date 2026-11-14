@@ -70,6 +70,8 @@ export interface FlowEdge {
   style?: FlowEdgeStyle;
   /** SVG path data; the renderer draws this. */
   d?: string;
+  /** A back edge: x of its return track, outside every lane the loop body uses. */
+  track?: number;
   /** The path's vertices in order: start, bends, end. */
   points: [number, number][];
 }

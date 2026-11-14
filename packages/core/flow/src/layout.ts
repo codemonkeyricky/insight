@@ -86,6 +86,8 @@ interface Ctx {
   edges: FlowEdge[];
   /** Tag for the next row placed. */
   tag?: string;
+  /** The right-most lane or return track (in lanes) used by any row placed so far. */
+  hi: number;
 }
 
 type Pt = [number, number];
@@ -134,14 +136,18 @@ function link(c: Ctx, p: Pend, to: FlowNode): void {
   c.edges.push({ from: p.from.id, to: to.id, kind: p.kind, style: p.style, lane, d: r.d, points: r.points });
 }
 
-/** The loop's back edge: down from the turn, into the gutter right of the head's line, up, and pointing at the head. */
-function backEdge(c: Ctx, turn: FlowNode, head: FlowNode): void {
+/**
+ * The loop's back edge: out of the turn going down, round to the return track `ret` (in lanes, outside everything the body
+ * used), straight up to the head's row, round the corner and left into the head from the right.
+ */
+function backEdge(c: Ctx, turn: FlowNode, head: FlowNode, ret: number): void {
   const [xa, ya] = stationOf(turn);
   const [xb, yb] = stationOf(head);
-  const bx = xb + LANE_W / 2;
+  const tx = LINE_X0 + ret * LANE_W;
   const H = ROW_H;
-  const d = `M${xa} ${ya}C${xa} ${ya + H * 0.9} ${bx} ${ya + H * 0.9} ${bx} ${ya}L${bx} ${yb + H * 0.85}Q${bx} ${yb + H * 0.3} ${xb + 8} ${yb + 5}`;
-  c.edges.push({ from: turn.id, to: head.id, kind: "back", style: "back", lane: turn.lane ?? 0, d, points: [[xa, ya], [bx, ya], [bx, yb + H * 0.85], [xb + 8, yb + 5]] });
+  const r = 10;
+  const d = `M${xa} ${ya}C${xa} ${ya + H * 0.9} ${tx} ${ya + H * 0.9} ${tx} ${ya}L${tx} ${yb + r}Q${tx} ${yb} ${tx - r} ${yb}L${xb + 9} ${yb}`;
+  c.edges.push({ from: turn.id, to: head.id, kind: "back", style: "back", lane: turn.lane ?? 0, d, track: tx, points: [[xa, ya], [tx, ya], [tx, yb + r], [tx - r, yb], [xb + 9, yb]] });
 }
 
 /** Puts a node on the next row and links what was waiting for it. */
@@ -150,6 +156,7 @@ function row(c: Ctx, node: FlowNode, lane: number, labelLane: number, skip: numb
   node.y = c.y;
   node.h = ROW_H;
   c.y += ROW_H;
+  if (lane > c.hi) c.hi = lane;
   node.labelX = LINE_X0 + Math.max(labelLane, lane + skip) * LANE_W + LABEL_GAP;
   if (c.tag !== undefined) {
     node.tag = c.tag;
@@ -251,12 +258,24 @@ function loop(c: Ctx, mk: Maker, item: Extract<Item, { t: "loop" }>, lane: numbe
   const head = mk.node("loop", "loop", clipLabel(item.label, LABEL_MAX), { title: item.title ?? item.label, ...(item.span ? { span: item.span } : {}) });
   row(c, head, lane, labelLane, skip, into);
   const inner = lane + 1 + skip;
+  const first = c.nodes.length - 1;
+  const before = c.hi;
+  c.hi = inner;
   const body = item.body.length > 0 ? walkList(c, mk, item.body, inner, labelLane, 0, [{ from: head, kind: "each", style: "solid" }]) : [];
   if (body.length > 0) {
     const turn = mk.make(`${head.id}t`, "marker", "turn", "next");
     row(c, turn, inner, labelLane, 0, body);
-    backEdge(c, turn, head);
-  }
+    // The return track runs half a lane outside everything the body used (nested lanes and nested tracks), so it never
+    // crosses the body and an inner loop's ring sits inside the outer one. Labels in the loop clear it.
+    const ret = c.hi + 0.5;
+    c.hi = Math.max(before, ret);
+    const clear = LINE_X0 + Math.ceil(ret) * LANE_W + LABEL_GAP;
+    for (let i = first; i < c.nodes.length; i++) {
+      const n = c.nodes[i] as FlowNode;
+      n.labelX = Math.max(n.labelX ?? 0, clear);
+    }
+    backEdge(c, turn, head, ret);
+  } else c.hi = item.body.length === 0 ? before : Math.max(before, c.hi);
   c.y += LOOP_GAP;
   // The id a join used to take.
   mk.reserve();
@@ -349,7 +368,7 @@ export function layoutFunction(fn: FunctionFacts, opts: { inline?: InlineTree; b
   const count = countNodes(fn.items);
   if (count > MAX_NODES) return { ...base, tooLarge: true, width: 0, height: 0, nodes: [], edges: [] };
   const mk = new Maker("", opts.inline, opts.base === undefined ? undefined : new Map(opts.base.nodes.map((n) => [n.id, n])), { budget: { used: count }, ancestors: new Set([fn.id]) });
-  const c: Ctx = { y: 0, nodes: [], edges: [] };
+  const c: Ctx = { y: 0, nodes: [], edges: [], hi: 0 };
   const start = mk.node("start", "terminator", clipLabel(`${fn.async ? "async " : ""}${displayName(fn.name, fn.id)}`, LABEL_MAX), { title: fn.name, ...(fn.span ? { span: fn.span } : {}) });
   row(c, start, 0, 0, 0, []);
   const out = walkList(c, mk, fn.items, 0, 0, 0, [next(start)]);
