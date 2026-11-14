@@ -95,3 +95,27 @@ describe("FlowChart line map", () => {
     expect(nested).toContain('tabindex="0"');
   });
 });
+
+describe("FlowChart parallel line", () => {
+  const spawn = { t: "step" as const, role: "spawn" as const, label: "spawn process job", target: "f#job" };
+  const root = layoutFunction({ id: "f#main", name: "main", async: false, items: [call("a()"), spawn, call("b()")] });
+  const job = layoutFunction({ id: "f#job", name: "job", async: false, items: [call("work()")] });
+  const id = root.nodes.find((n) => n.role === "spawn")!.id;
+  const open = (kind: "thread" | "process") => relayout(root, new Map([[id, { flow: job, runtime: { kind, label: `Process · ${kind}` } }]]));
+
+  it("draws a double fork bar, a square header and a band for a process", () => {
+    const html = render(open("process"));
+    expect(html).toContain("st dbar");
+    expect(html).toContain("flow-band");
+    expect(html).toMatch(/<rect class="st head"/);
+    expect(html).toContain("Process · process");
+    expect(html).toContain('aria-label="Fold spawn process job"');
+  });
+
+  it("draws a single fork bar, a round header and no band for a thread", () => {
+    const html = render(open("thread"));
+    expect(html).toContain("st bar");
+    expect(html).not.toContain("flow-band");
+    expect(html).toMatch(/<circle class="st head"/);
+  });
+});

@@ -239,7 +239,7 @@ export function ownerOf(e: Expansion | undefined, nodeId: string): string {
 
 /** Whether the call step `nodeId` of an expansion's chart is drawn nested. */
 export function isNested(e: Expansion, nodeId: string): boolean {
-  return e.chart.nodes.some((n) => n.id === nodeId && n.shape === "nest");
+  return e.chart.nodes.some((n) => n.id === nodeId && (n.shape === "nest" || n.shape === "fork"));
 }
 
 /**
@@ -249,14 +249,14 @@ export function isNested(e: Expansion, nodeId: string): boolean {
  * itself when nothing changes: no such step, a callee that cannot nest (it is already in the chain, or the chart would
  * be too large), or a step that is not nested.
  */
-export function setInline(list: readonly Expansion[], fnId: string, nodeId: string, callee: FunctionFlow | undefined, view: Rect | undefined): Expansion[] {
+export function setInline(list: readonly Expansion[], fnId: string, nodeId: string, callee: FunctionFlow | undefined, view: Rect | undefined, runtime?: ExpansionRuntime): Expansion[] {
   const e = list.find((x) => x.fnId === fnId);
   if (e === undefined) return list as Expansion[];
   const base = e.base ?? e.chart;
-  const tree = withEntry(e.inline, pathOf(nodeId), callee === undefined ? undefined : { flow: callee });
+  const tree = withEntry(e.inline, pathOf(nodeId), callee === undefined ? undefined : { flow: callee, ...(runtime !== undefined ? { runtime } : {}) });
   if (tree === undefined || (callee === undefined && !isNested(e, nodeId))) return list as Expansion[];
   const chart = relayout(base, tree);
-  if (callee !== undefined && !chart.nodes.some((n) => n.id === nodeId && n.shape === "nest")) return list as Expansion[];
+  if (callee !== undefined && !chart.nodes.some((n) => n.id === nodeId && (n.shape === "nest" || n.shape === "fork"))) return list as Expansion[];
   const resized: Expansion = { ...e, base, inline: tree, chart, ...expansionSize(chart) };
   let out = list.map((x) => (x === e ? resized : x));
   // A box opened from a step of this chart follows the step; one whose step is gone closes with its chain.

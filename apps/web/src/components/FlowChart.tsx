@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import type { FlowEdge, FlowNode, FunctionFlow } from "../api";
 import { outsideScope, outsideText } from "../flowTargets";
-import { NEST_HEAD, ROW_H, stationOf } from "@insight/flow";
+import { LANE_W, NEST_HEAD, ROW_H, stationOf } from "@insight/flow";
 import { hrefFile, hrefView } from "../router";
 import { backEdgeFlags, prefersReducedMotion, useOnScreen, usePageVisible } from "../zoom/flowMotion";
 import { runFlowToken, useTokenSlot } from "../zoom/flowToken";
@@ -60,6 +60,9 @@ export function FlowChart({ id, fn, scope, onNodeClick, onNodeOpen, selectedId, 
         ))}
       </defs>
       <g>
+        {fn.nodes.filter((n) => n.line?.band !== undefined).map((n) => (
+          <rect key={`band-${n.id}`} x={n.line!.band!.x} y={n.line!.band!.y} width={n.line!.band!.w} height={n.line!.band!.h} rx={10} className={`flow-band c${laneOf(n.lane)}`} data-band={n.id} style={delayStyle(nodeDelay.get(n.id) ?? 140)} />
+        ))}
         {fn.nodes.filter(isNest).map((n) => (
           <NestFrame key={n.id} node={n} onNodeClick={onNodeClick} onNodeOpen={onNodeOpen} selected={n.id === selectedId} delay={nodeDelay.get(n.id) ?? 140} />
         ))}
@@ -211,6 +214,16 @@ function CallStation({ cx, cy, open = true }: { cx: number; cy: number; open?: b
 /** The station mark of a step, by its shape and role. */
 function Station({ node, cx, cy, resolved }: { node: FlowNode; cx: number; cy: number; resolved: boolean }): ReactNode {
   const { shape, role } = node;
+  if (shape === "fork" && node.fork !== undefined) {
+    // The fork bar: from the spawning row's station across to the new line's lane. A process is a double bar.
+    const w = (node.fork.to - (node.lane ?? 0)) * LANE_W + 10;
+    if (node.fork.kind === "process") return <path className="st dbar" d={`M${cx - 4} ${cy - 3}H${cx - 4 + w - 2}M${cx - 4} ${cy + 3}H${cx - 4 + w - 2}`} />;
+    return <rect className="st bar" x={cx - 5} y={cy - 3.5} width={w} height={7} rx={3.5} />;
+  }
+  if (shape === "line") {
+    // The header of a parallel line: a square for a process, a round dot for a thread.
+    return node.line?.kind === "process" ? <rect className="st head" x={cx - 5.5} y={cy - 5.5} width={11} height={11} rx={2.5} /> : <circle className="st head" cx={cx} cy={cy} r={5} />;
+  }
   if (shape === "turn") return <path className="st turn" transform={`translate(${cx} ${cy})`} d="M4.1 -1A4.2 4.2 0 1 0 2.4 3.5M4.6 -4.8V-.9H.7" />;
   if (shape === "exit") return <rect className="st exit" x={cx - 7} y={cy - 3} width={14} height={6} rx={3} />;
   if (shape === "loop") return <circle className="st loop" cx={cx} cy={cy} r={5} />;
@@ -235,7 +248,7 @@ function Node({ id, node, fnId, scope, width, onNodeClick, onNodeOpen, selected,
   const [cx, cy] = station(node);
   const target = node.target;
   const outside = target !== undefined && outsideScope(target, scope);
-  const inside = target !== undefined && !outside && target !== fnId;
+  const inside = (target !== undefined && !outside && target !== fnId) || shape === "fork";
   const kw = keywordOf(node);
   const body = (
     <>
@@ -248,7 +261,7 @@ function Node({ id, node, fnId, scope, width, onNodeClick, onNodeOpen, selected,
         {node.label}
         {outside && <tspan className="flow-mark">{" ↗"}</tspan>}
       </text>
-      {inside && <Chevron node={node} x={width - 4 - CHEV_INSET - CHEV_HIT / 2} y={node.y} fold={false} onNodeOpen={onNodeOpen} />}
+      {inside && <Chevron node={node} x={width - 4 - CHEV_INSET - CHEV_HIT / 2} y={node.y} fold={shape === "fork"} onNodeOpen={onNodeOpen} />}
     </>
   );
   const cls = `flow-node ${shape} role-${node.role} c${laneOf(node.lane)}${outside ? " unresolved" : ""}${inside ? " resolves" : ""}${selected ? " selected" : ""}`;

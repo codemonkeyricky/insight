@@ -26,7 +26,7 @@ export type FlowRole =
   | "continue";
 
 /** How the renderer draws a node. */
-export type FlowShape = "terminator" | "step" | "decision" | "loop" | "label" | "join" | "exit" | "nest" | "turn";
+export type FlowShape = "terminator" | "step" | "decision" | "loop" | "label" | "join" | "exit" | "nest" | "turn" | "fork" | "line";
 
 export interface FlowNode {
   id: string;
@@ -47,6 +47,10 @@ export interface FlowNode {
   labelX?: number;
   /** A word shown before the label: `else`, a case label, `catch`. */
   tag?: string;
+  /** A spawn row opened as a parallel line (shape "fork"): what it starts and the absolute lane the fork bar reaches. */
+  fork?: { kind: "thread" | "process"; to: number };
+  /** The header row of a parallel line (shape "line"). A process has a band: the faint rectangle behind the line's rows. */
+  line?: { kind: "thread" | "process"; band?: { x: number; y: number; w: number; h: number } };
   x: number;
   y: number;
   w: number;

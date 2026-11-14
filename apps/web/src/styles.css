@@ -244,6 +244,15 @@ a.flow-node { cursor: pointer; }
 .flow-node .st.loop { fill: none; stroke-width: 2.5; }
 .flow-node .st.turn { fill: none; stroke-width: 1.75; }
 .flow-node .st.exit { fill: var(--red-text); stroke: none; }
+.flow-node .st.bar { fill: var(--lc); stroke: none; }
+.flow-node .st.dbar { fill: none; stroke: var(--lc); stroke-width: 3; }
+.flow-node .st.head { fill: var(--lc); stroke: none; }
+.flow-node:is(.fork, .line) .flow-text { font-weight: 600; }
+.flow-band { fill: var(--lane-0); fill-opacity: 0.06; stroke: var(--graphite); stroke-opacity: 0.35; stroke-width: 1; pointer-events: none; animation: zm-fade-in 200ms ease-out backwards; }
+.flow-band.c1 { fill: var(--lane-1); }
+.flow-band.c2 { fill: var(--lane-2); }
+.flow-band.c3 { fill: var(--lane-3); }
+.flow-band.c4 { fill: var(--lane-4); }
 .flow-node .st.tick { fill: none; opacity: 0.6; }
 .flow-station .st.ring { fill: var(--sheet); stroke: var(--accent); stroke-width: 2.5; }
 .flow-station .st.ring.dashed { stroke: var(--warn-text); stroke-width: 2; stroke-dasharray: 3 2.5; }

@@ -33,6 +33,8 @@ export function stationOf(node: FlowNode): [number, number] {
 /** A callee drawn inside the call step that calls it. `inline` holds the calls nested inside it, by the ids of its steps. */
 export interface InlineEntry {
   flow: FunctionFlow;
+  /** Set for a callee that runs on another thread or in another process: it is drawn as a parallel line, not inside the step. */
+  runtime?: { kind: "thread" | "process"; label: string };
   inline?: InlineTree;
 }
 
@@ -296,7 +298,7 @@ function stepRow(c: Ctx, mk: Maker, node: FlowNode, lane: number, labelLane: num
     else delete node.handler;
   }
   const entry = mk.inline?.get(local);
-  const nested = entry !== undefined ? nest(c, mk, node, entry, lane, labelLane, skip, into) : undefined;
+  const nested = entry === undefined ? undefined : entry.runtime !== undefined ? spawn(c, mk, node, entry, entry.runtime, lane, labelLane, skip, into) : nest(c, mk, node, entry, lane, labelLane, skip, into);
   if (nested !== undefined) return nested;
   row(c, node, lane, labelLane, skip, into);
   return [next(node)];
@@ -327,6 +329,45 @@ function nest(c: Ctx, mk: Maker, node: FlowNode, entry: InlineEntry, lane: numbe
   node.h = bottom - node.y;
   // A callee that always returns or throws does not end the caller's line: it goes on from the header.
   return out.length === 0 ? [next(node)] : out;
+}
+
+/**
+ * A spawn step whose callee is expanded: the step's row becomes a fork row with a bar across to a new lane, and the callee's
+ * rows run on that lane under a header row that names the line. The caller's line goes straight down past it (the caller
+ * does not wait, and the index has no join), so the caller's next row comes after the line's last row. The lane is right
+ * of the caller's lane, so a loop's return track (outside every lane the body used) clears it. Undefined when the callee
+ * cannot be drawn (as for nest).
+ */
+function spawn(c: Ctx, mk: Maker, node: FlowNode, entry: InlineEntry, runtime: NonNullable<InlineEntry["runtime"]>, lane: number, labelLane: number, skip: number, into: Pend[]): Pend[] | undefined {
+  const flow = entry.flow;
+  const { scope } = mk;
+  if (flow.items === undefined || flow.tooLarge || scope.ancestors.has(flow.id)) return undefined;
+  const add = countNodes(flow.items) + 3;
+  if (scope.budget.used + add > MAX_NODES) return undefined;
+  scope.budget.used += add;
+  const sub = new Maker(`${node.id}/`, entry.inline, new Map(flow.nodes.map((n) => [n.id, n])), { budget: scope.budget, ancestors: new Set([...scope.ancestors, flow.id]) });
+  const childLane = lane + 1 + skip;
+  node.shape = "fork";
+  node.fork = { kind: runtime.kind, to: childLane };
+  row(c, node, lane, labelLane, skip, into);
+  // The label sits after the bar.
+  node.labelX = Math.max(node.labelX ?? 0, LINE_X0 + childLane * LANE_W + 5 + LABEL_GAP);
+  // The header takes the id of the start terminator a nested chart does not draw.
+  const head = sub.make(`${sub.prefix}n1`, "marker", "line", clipLabel(runtime.label, LABEL_MAX), { title: runtime.label, ...(flow.span ? { span: flow.span } : {}) });
+  sub.reserve();
+  head.line = { kind: runtime.kind };
+  row(c, head, childLane, childLane, 0, []);
+  const [hx, hy] = stationOf(head);
+  const [, fy] = stationOf(node);
+  c.edges.push({ from: node.id, to: head.id, kind: "next", style: "solid", lane: childLane, d: `M${hx} ${fy}L${hx} ${hy}`, points: [[hx, fy], [hx, hy]] });
+  const out = walkList(c, sub, flow.items, childLane, childLane, 0, [next(head)]);
+  if (out.length > 0) row(c, sub.node("end", "terminator", "end"), childLane, childLane, 0, out);
+  if (runtime.kind === "process") {
+    const bottom = c.nodes.reduce((m, n) => (n.id.startsWith(sub.prefix) ? Math.max(m, n.y + n.h) : m), head.y + ROW_H);
+    head.line.band = { x: hx - 13, y: head.y, w: 0, h: bottom - head.y };
+  }
+  // The caller's line goes on from the fork row.
+  return [next(node)];
 }
 
 function countNodes(items: Item[]): number {
@@ -384,7 +425,10 @@ export function layoutFunction(fn: FunctionFacts, opts: { inline?: InlineTree; b
     bottom = Math.max(bottom, n.y + n.h);
   }
   const width = Math.max(260, right + CHART_PAD_R);
-  for (const n of c.nodes) if (n.shape === "nest") n.w = width - 4 - n.x;
+  for (const n of c.nodes) {
+    if (n.shape === "nest") n.w = width - 4 - n.x;
+    if (n.line?.band) n.line.band.w = width - 4 - n.line.band.x;
+  }
   return { ...base, width, height: bottom + 8, nodes: c.nodes, edges: c.edges, ...(opts.inline === undefined ? { items: fn.items } : {}) };
 }
 

@@ -789,7 +789,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
 
   /**
    * Opens or folds a step: a call on the caller's thread nests in the step; one on another thread or in another process opens
-   * its own box beside it; a nest header folds; a lambda is highlighted. Returns whether the step took the gesture.
+   * as a parallel line under its step; a nest header folds; a lambda is highlighted. Returns whether the step took the gesture.
    */
   const chartOpen = (fnId: string, node: FlowNode): boolean => {
     stageRef.current?.focus({ preventScroll: true });
@@ -798,9 +798,9 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     if (action === "fold") void inlineStep(fnId, node, callee);
     else if (action === "lambda") void highlightLambda(fnId, node, callee);
     else if (action === "inline") void inlineStep(fnId, node, callee);
-    else if (action === "side") {
+    else if (action === "fork") {
       const kind = stepRuntime(node);
-      void openStep(fnId, node, callee, kind === "same" ? undefined : kind);
+      void inlineStep(fnId, node, callee, kind === "same" ? undefined : kind);
     }
     return action !== "none";
   };
@@ -811,19 +811,20 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
    * chart would be too large, or the chart has no pre-layout steps) opens beside the step instead. A click on a frame
    * folds it back, with every call nested in it.
    */
-  const inlineStep = async (fnId: string, node: FlowNode, callee: string) => {
+  const inlineStep = async (fnId: string, node: FlowNode, callee: string, runtimeKind?: "thread" | "process") => {
     const b = buildRef.current;
     if (!b) return;
-    if (node.shape === "nest") {
+    if (node.shape === "nest" || node.shape === "fork") {
       setExp(setInline(placeAll(b, expRef.current), fnId, node.id, undefined, placeView(b)));
       return;
     }
     const chart = await loadChart(callee);
     if (chart === undefined) return;
     const list = placeAll(b, expRef.current);
-    const next = setInline(list, fnId, node.id, chart, placeView(b));
+    const runtime = runtimeKind === undefined ? undefined : { kind: runtimeKind, label: runtimeLabel(runtimeKind, callee, displayName(chart.name, chart.id)) };
+    const next = setInline(list, fnId, node.id, chart, placeView(b), runtime);
     if (next === list) {
-      if (chart.items === undefined) void openStep(fnId, node, callee);
+      if (chart.items === undefined || runtime !== undefined) void openStep(fnId, node, callee, runtimeKind);
       return;
     }
     setExp(next);

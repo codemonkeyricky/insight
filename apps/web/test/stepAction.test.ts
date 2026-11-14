@@ -20,9 +20,10 @@ describe("stepAction click", () => {
 describe("stepAction open", () => {
   it("nests a same-thread call", () => expect(stepAction(call, "open", ctx())).toBe("inline"));
   it("folds a nest header", () => expect(stepAction({ shape: "nest" }, "open", ctx({ hasCallee: false }))).toBe("fold"));
-  it("opens a side box for a thread or process step", () => {
-    expect(stepAction(call, "open", ctx({ runtime: "thread" }))).toBe("side");
-    expect(stepAction(call, "open", ctx({ runtime: "process" }))).toBe("side");
+  it("folds a fork row", () => expect(stepAction({ shape: "fork" }, "open", ctx({ runtime: "thread" }))).toBe("fold"));
+  it("opens a parallel line for a thread or process step", () => {
+    expect(stepAction(call, "open", ctx({ runtime: "thread" }))).toBe("fork");
+    expect(stepAction(call, "open", ctx({ runtime: "process" }))).toBe("fork");
   });
   it("highlights a lambda, unless it is a handler", () => {
     expect(stepAction(call, "open", ctx({ isLambda: true }))).toBe("lambda");
