@@ -384,6 +384,9 @@ a.flow-node { cursor: pointer; }
 .chain-toggle { background: none; border: 0; padding: 0; width: 1rem; color: var(--muted); cursor: pointer; flex: 0 0 1rem; }
 .chain-note { color: var(--muted); }
 .chain-note.complete { color: var(--graphite); }
+.chain-anchor { font-size: var(--t-sm); margin: 0 0 0.25rem; }
+.chain-clear { color: var(--muted); text-decoration: none; margin-inline-start: 0.25rem; }
+.chain-pin { font-size: var(--t-xs); }
 .sh-pinned:has(.caller-chain[open]) { max-height: 60%; }
 
 /* Lens tree */
@@ -859,6 +862,10 @@ table.grid th { background: var(--faint); }
 .sh-find-label { font-family: var(--font-code); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sh-find-detail { color: var(--muted); font-family: var(--font-code); font-size: var(--t-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sh-find-empty { margin: 0; padding: 8px 10px; color: var(--muted); font-size: var(--t-sm); }
+.sh-find-list li { display: flex; align-items: center; }
+.sh-find-list li > a { flex: 1 1 auto; min-width: 0; }
+.find-callers { font-size: var(--t-xs); margin-inline-start: auto; flex: 0 0 auto; }
+.find-hint { margin: 0.25rem 0 0; }
 
 /* The grab region is a phone-only header: its handle and label are the drag target of the bottom sheet. */
 .sh-grab { display: none; }

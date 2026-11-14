@@ -10,6 +10,8 @@ import { SidePanel } from "./SidePanel";
 interface Props {
   id: string;
   roots: boolean;
+  /** The function whose caller chain the side panel anchors (`trace=`), if any. */
+  trace?: string;
   store: ZoomStore;
   /** What the pane shows. Undefined before anything was picked. */
   target: CodeTarget | undefined;
@@ -27,7 +29,7 @@ interface Props {
  * names it: the file's path, or a function's name and location. For a function, the callers and callees are pinned above its
  * source. The exec slot sits above the code, where the flow map draws the focused function's or container's panel.
  */
-export function CodePane({ id, roots, store, target, open, docked, onClose, onSlot }: Props) {
+export function CodePane({ id, roots, trace, store, target, open, docked, onClose, onSlot }: Props) {
   const fn = target?.kind === "function" ? target : undefined;
   const path = target ? targetPath(target) : "";
   // A file's facts (language, line count) come from its loaded source; they show only once it has loaded for this path.
@@ -57,7 +59,7 @@ export function CodePane({ id, roots, store, target, open, docked, onClose, onSl
       label="Code"
       onClose={onClose}
       head={head}
-      pinned={fn ? <FunctionRefs id={id} sel={fn.sel} roots={roots} /> : undefined}
+      pinned={fn ? <FunctionRefs id={id} sel={fn.sel} roots={roots} {...(trace !== undefined ? { trace } : {})} /> : undefined}
     >
       <div className="sh-slot" ref={onSlot} />
       {target === undefined && <p className="muted">Click a file or function to see its code.</p>}

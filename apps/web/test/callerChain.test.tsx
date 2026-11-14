@@ -5,7 +5,8 @@ import { CallerChain, CallerChainView, callerHref } from "../src/components/zoom
 import type { MapSelection } from "../src/components/zoom/ZoomMap";
 import { blindTip, completeness, expandAllKeys, summaryLine, treeKey, visibleRows, childEdges } from "../src/components/zoom/callerTree";
 import { api } from "../src/api";
-import { parseRoute } from "../src/router";
+import { hrefView, parseRoute } from "../src/router";
+import { findKeyAction, type FindItem } from "../src/components/sheet/FindPalette";
 
 // Hand-built graphs: node ids are short names, so a row's key reads as its path (B, then B\u0001C, and so on).
 
@@ -293,5 +294,99 @@ describe("childEdges", () => {
   it("groups the edges by callee in graph order", () => {
     const map = childEdges(diamondB);
     expect(map.get("T")?.map((e) => e.from)).toEqual(["B", "C"]);
+  });
+});
+
+describe("trace anchor", () => {
+  it("parses trace from the view route", () => {
+    expect(parseRoute("#/projects/p/view/flow?scope=src&fn=a&trace=b")).toMatchObject({ name: "workspace", fn: "a", trace: "b" });
+  });
+
+  it("round-trips trace through hrefView and parseRoute", () => {
+    const href = hrefView("p", "flow", { scope: "src", fn: "src/a.ts#a", trace: "src/b.ts#b", roots: true });
+    expect(href).toContain("trace=");
+    expect(parseRoute(href)).toMatchObject({ trace: "src/b.ts#b", fn: "src/a.ts#a", scope: "src" });
+  });
+
+  it("keeps trace in callerHref for in-scope and out-of-scope function rows", () => {
+    const inside = node("src/x.ts#f", 1, { file: "src/x.ts" });
+    const outside = node("lib/y.ts#g", 1, { file: "lib/y.ts", inScope: false });
+    expect(parseRoute(callerHref("p1", "src", true, inside, "src/t.ts#t"))).toMatchObject({ trace: "src/t.ts#t", scope: "src" });
+    expect(parseRoute(callerHref("p1", "src", true, outside, "src/t.ts#t"))).toMatchObject({ trace: "src/t.ts#t", scope: "lib/y.ts" });
+  });
+
+  it("drops trace for a non-function row", () => {
+    const file = node("src/z.ts", 1, { isFunction: false, file: "src/z.ts" });
+    expect(callerHref("p1", "src", true, file, "src/t.ts#t")).not.toContain("trace=");
+  });
+
+  it("shows trace in the row links of a traced view", () => {
+    const html = renderToStaticMarkup(
+      <CallerChainView
+        id="p1"
+        scope="src"
+        roots={true}
+        graph={chainA}
+        expanded={new Set(["B"])}
+        possible={false}
+        stayInScope={false}
+        depth={6}
+        lambdas={true}
+        trace="T"
+      />,
+    );
+    expect(html).toContain("trace=T");
+    expect(html).not.toContain("Anchor here");
+  });
+
+  it("offers Anchor here in the untraced view", () => {
+    const html = renderToStaticMarkup(
+      <CallerChainView id="p1" scope="src" roots={true} graph={chainA} expanded={new Set()} possible={false} stayInScope={false} depth={6} lambdas={true} pin="T" />,
+    );
+    expect(html).toContain('class="chain-pin"');
+    expect(html).toContain("trace=T");
+  });
+
+  it("renders the traced container open with the Callers header and a clearing link without trace", () => {
+    const sel = { build: { path: "src" }, selected: { ref: "src/a.ts#walk", name: "walk" } } as unknown as MapSelection;
+    const html = renderToStaticMarkup(<CallerChain id="p1" sel={sel} roots={true} trace="src/t.ts#target" />);
+    expect(html).toMatch(/<details class="ref-list caller-chain" open="">/);
+    expect(html).toContain("Callers of");
+    expect(html).toContain("target");
+    const clear = html.match(/<a class="chain-clear" href="([^"]*)"/);
+    expect(clear).not.toBeNull();
+    expect(clear?.[1]).toContain("fn=");
+    expect(clear?.[1]).not.toContain("trace=");
+  });
+});
+
+describe("findKeyAction", () => {
+  const fnRow: FindItem = {
+    key: "fn:src/a.ts#run",
+    label: "run",
+    detail: "src/a.ts:3",
+    href: hrefView("p1", "flow", { scope: "src/a.ts", fn: "src/a.ts#run" }),
+    callersHref: hrefView("p1", "flow", { scope: "src/a.ts", fn: "src/a.ts#run", trace: "src/a.ts#run" }),
+    kind: "function",
+  };
+  const fileRow: FindItem = { key: "file:src/a.ts", label: "a.ts", detail: "src/a.ts", href: hrefView("p1", "flow", { scope: "src/a.ts" }), kind: "file" };
+
+  it("opens the callers view on Shift+Enter for a function, with trace", () => {
+    const act = findKeyAction(fnRow, { key: "Enter", shiftKey: true });
+    expect(act?.href).toContain("trace=");
+    expect(parseRoute(act?.href ?? "")).toMatchObject({ fn: "src/a.ts#run", scope: "src/a.ts", trace: "src/a.ts#run" });
+  });
+
+  it("keeps the plain link on Enter", () => {
+    expect(findKeyAction(fnRow, { key: "Enter", shiftKey: false })).toEqual({ href: fnRow.href });
+  });
+
+  it("treats Shift+Enter on a file row as Enter", () => {
+    expect(findKeyAction(fileRow, { key: "Enter", shiftKey: true })).toEqual({ href: fileRow.href });
+  });
+
+  it("ignores other keys and a missing row", () => {
+    expect(findKeyAction(fnRow, { key: "ArrowDown", shiftKey: false })).toBeUndefined();
+    expect(findKeyAction(undefined, { key: "Enter", shiftKey: false })).toBeUndefined();
   });
 });

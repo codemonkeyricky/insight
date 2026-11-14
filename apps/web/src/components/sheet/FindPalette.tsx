@@ -10,6 +10,18 @@ export interface FindItem {
   detail: string;
   href: string;
   kind: "page" | "file" | "function";
+  /** A function's callers view (Shift+Enter): the function's flow with its caller chain anchored (`trace=`). */
+  callersHref?: string;
+}
+
+/**
+ * What a key does on the highlighted row: Enter opens its link, and Shift+Enter opens a function's callers view. A row with no
+ * callers view (a page or a file) takes Shift+Enter as Enter. Undefined when there is no row.
+ */
+export function findKeyAction(row: FindItem | undefined, e: { key: string; shiftKey: boolean }): { href: string } | undefined {
+  if (!row || e.key !== "Enter") return undefined;
+  if (e.shiftKey && row.callersHref !== undefined) return { href: row.callersHref };
+  return { href: row.href };
 }
 
 const KIND_LABEL: Record<FindItem["kind"], string> = { page: "Page", file: "File", function: "Function" };
@@ -26,6 +38,7 @@ function functionItems(id: string): Promise<FindItem[]> {
         label: f.name,
         detail: `${f.file}:${f.line}`,
         href: hrefView(id, "flow", { scope: f.file, fn: f.id }),
+        callersHref: hrefView(id, "flow", { scope: f.file, fn: f.id, trace: f.id }),
         kind: "function" as const,
       })),
     );
@@ -108,13 +121,18 @@ export function FindPalette({ id, files, onClose }: Props) {
       e.preventDefault();
       setActive((a) => Math.max(a - 1, 0));
     } else if (e.key === "Enter") {
-      const row = shown[active];
-      if (row) {
+      const act = findKeyAction(shown[active], e);
+      if (act) {
         e.preventDefault();
-        window.location.hash = row.href;
+        window.location.hash = act.href;
         onClose();
       }
     }
+  };
+
+  const openCallers = (href: string) => {
+    window.location.hash = href;
+    onClose();
   };
 
   return (
@@ -152,9 +170,20 @@ export function FindPalette({ id, files, onClose }: Props) {
                 <span className="sh-find-label">{it.label}</span>
                 <span className="sh-find-detail">{it.detail}</span>
               </a>
+              {i === active && it.callersHref !== undefined && (
+                <button
+                  type="button"
+                  className="find-callers"
+                  tabIndex={-1}
+                  onClick={() => openCallers(it.callersHref as string)}
+                >
+                  ⇧↵ Callers
+                </button>
+              )}
             </li>
           ))}
         </ul>
+        <p className="find-hint muted small">↵ open · ⇧↵ callers</p>
         {shown.length === 0 && <p className="sh-find-empty">Nothing matches “{query}”.</p>}
       </div>
     </div>

@@ -9,11 +9,14 @@ import type { MapSelection } from "./ZoomMap";
 import { blindTip, completeness, expandAllKeys, isTreeKey, summaryLine, treeKey, visibleRows, type Row, type TreeRow } from "./callerTree";
 
 /** The link of a chain row, as RefItem links a reverse reference row: a function opens in its scope, or its file's scope when outside it. */
-export function callerHref(id: string, scope: string, roots: boolean, node: CallerNode): string {
+export function callerHref(id: string, scope: string, roots: boolean, node: CallerNode, trace?: string): string {
   return node.isFunction
-    ? hrefView(id, "flow", { scope: node.inScope ? scope : node.file, fn: node.id, roots })
+    ? hrefView(id, "flow", { scope: node.inScope ? scope : node.file, fn: node.id, roots, ...(trace ? { trace } : {}) })
     : hrefFlow(id, node.file);
 }
+
+/** The short name of a function id: the tail after its last ":" or "#", or the id itself. */
+const shortName = (id: string) => id.split(/[:#]/).pop() || id;
 
 const DEPTHS: Array<{ value: number; label: string }> = [
   { value: 1, label: "1" },
@@ -35,6 +38,10 @@ interface ViewProps {
   depth: number;
   lambdas: boolean;
   capped?: boolean;
+  /** The anchored function, when the chain is traced: its row links keep it. */
+  trace?: string;
+  /** The selected function, offered as an "Anchor here" link while the chain is not traced. */
+  pin?: string;
   onToggle?(key: string): void;
   onKey?(key: string): void;
   onFocus?(key: string): void;
@@ -45,7 +52,7 @@ interface ViewProps {
 
 /** The chain's controls, summary, tree and completeness note. Presentational: it renders from its props only. */
 export function CallerChainView(props: ViewProps) {
-  const { id, scope, roots, graph, expanded, possible, stayInScope, depth, lambdas, capped, onOption } = props;
+  const { id, scope, roots, graph, expanded, possible, stayInScope, depth, lambdas, capped, trace, pin, onOption } = props;
   const rows = visibleRows(graph, expanded, { lambdas });
   const focusKey = props.focus ?? rows[0]?.key;
   const note = completeness(graph, possible);
@@ -73,7 +80,17 @@ export function CallerChainView(props: ViewProps) {
           <input type="checkbox" checked={stayInScope} onChange={(e) => onOption?.({ stayInScope: e.target.checked })} /> Stay in scope
         </label>
       </div>
-      <p className="chain-summary muted small">{summaryLine(graph)}</p>
+      <p className="chain-summary muted small">
+        {summaryLine(graph)}
+        {trace === undefined && pin !== undefined && (
+          <>
+            {" "}
+            <a className="chain-pin" href={hrefView(id, "flow", { scope, fn: pin, roots, trace: pin })}>
+              Anchor here
+            </a>
+          </>
+        )}
+      </p>
       <ul
         role="tree"
         aria-label="Caller chain"
@@ -127,7 +144,7 @@ export function CallerChainView(props: ViewProps) {
               row={r}
               tab={tab}
               indent={indent}
-              href={callerHref(id, scope, roots, r.node)}
+              href={callerHref(id, scope, roots, r.node, trace)}
               onToggle={props.onToggle}
               onFocus={props.onFocus}
             />
@@ -209,35 +226,46 @@ function ChainRow({
 }
 
 /** The caller chain section of the side panel: collapsed until opened, then fetched once for the selected function. */
-export function CallerChain({ id, sel, roots }: { id: string; sel: MapSelection; roots: boolean }) {
+export function CallerChain({ id, sel, roots, trace }: { id: string; sel: MapSelection; roots: boolean; trace?: string }) {
   const scope = sel.build.path;
   const fn = sel.selected.ref;
+  // A traced chain is the anchored function's, whatever function the reader walks to; the anchor's chain is kept while it stays.
+  const target = trace ?? fn;
   const fnKey = `${id}\0${scope}\0${fn}`;
-  const [opened, setOpened] = useState(false);
+  const chainKey = trace !== undefined ? `${id}\0${scope}\0trace\0${trace}` : fnKey;
+  // A traced chain starts open: the state is read once at mount, so a later trace opens the element by hand (see below).
+  const [startOpen] = useState(trace !== undefined);
+  const [opened, setOpened] = useState(startOpen);
+  const started = opened || trace !== undefined;
   const [possible, setPossible] = useState(false);
   const [stayInScope, setStayInScope] = useState(false);
   const [depth, setDepth] = useState<number>(CALLER_DEFAULTS.maxDepth);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [focus, setFocus] = useState<string>();
   const [capped, setCapped] = useState(false);
-  const [lastFn, setLastFn] = useState(fnKey);
+  const [lastFn, setLastFn] = useState(chainKey);
   const [loaded, setLoaded] = useState<{ key: string; graph?: CallerGraph; error?: string }>();
   const treeRef = useRef<HTMLDetailsElement>(null);
-  const reqKey = `${fnKey}\0${possible}\0${stayInScope}`;
+  const reqKey = `${id}\0${scope}\0${target}\0${possible}\0${stayInScope}`;
 
-  // A different function starts with its own expansion and focus.
-  if (lastFn !== fnKey) {
-    setLastFn(fnKey);
+  // A different chain starts with its own expansion and focus. Walking to another function keeps an anchored chain's.
+  if (lastFn !== chainKey) {
+    setLastFn(chainKey);
     setExpanded(new Set());
     setFocus(undefined);
     setCapped(false);
   }
 
+  // Anchoring a chain from an untraced view opens the element that is already mounted.
   useEffect(() => {
-    if (!opened) return;
+    if (trace !== undefined && treeRef.current) treeRef.current.open = true;
+  }, [trace]);
+
+  useEffect(() => {
+    if (!started) return;
     let cancelled = false;
-    const key = `${id}\0${scope}\0${fn}\0${possible}\0${stayInScope}`;
-    api.getCallerGraph(id, scope, fn, { possible, stayInScope }).then(
+    const key = reqKey;
+    api.getCallerGraph(id, scope, target, { possible, stayInScope }).then(
       (graph) => {
         if (!cancelled) setLoaded({ key, graph });
       },
@@ -248,7 +276,7 @@ export function CallerChain({ id, sel, roots }: { id: string; sel: MapSelection;
     return () => {
       cancelled = true;
     };
-  }, [opened, id, scope, fn, possible, stayInScope]);
+  }, [started, reqKey, id, scope, target, possible, stayInScope]);
 
   // Keyboard moves move the DOM focus too, to the row the state names.
   useEffect(() => {
@@ -269,61 +297,84 @@ export function CallerChain({ id, sel, roots }: { id: string; sel: MapSelection;
     setFocus(r.focus);
     if (r.open !== undefined) {
       const row = rows.find((x) => x.key === r.open);
-      if (row?.type === "node") window.location.assign(callerHref(id, scope, roots, row.node));
+      if (row?.type === "node") window.location.assign(callerHref(id, scope, roots, row.node, trace));
     }
   };
+
+  const clearHref = hrefView(id, "flow", { scope, fn, roots });
+  const anchorHeader =
+    trace === undefined ? null : (
+      <p className="chain-anchor">
+        Callers of <strong className="mono">{graph?.nodes[0]?.name ?? shortName(trace)}</strong>{" "}
+        <a className="chain-clear" href={clearHref} aria-label="Clear the caller chain anchor" title="Clear">
+          ×
+        </a>
+      </p>
+    );
 
   return (
     <details
       ref={treeRef}
       className="ref-list caller-chain"
+      open={startOpen || undefined}
       onToggle={(e) => {
         if (e.currentTarget.open) setOpened(true);
       }}
     >
       <summary>Caller chain</summary>
-      {!opened ? null : current?.error !== undefined ? (
-        <p className="muted small">The caller chain is not available: {current.error}</p>
+      {!started ? null : current?.error !== undefined ? (
+        <>
+          {anchorHeader}
+          <p className="muted small">The caller chain is not available: {current.error}</p>
+        </>
       ) : graph === undefined ? (
-        <p className="muted small">Loading the caller chain</p>
+        <>
+          {anchorHeader}
+          <p className="muted small">Loading the caller chain</p>
+        </>
       ) : (
-        <CallerChainView
-          id={id}
-          scope={scope}
-          roots={roots}
-          graph={graph}
-          expanded={expanded}
-          focus={focus}
-          possible={possible}
-          stayInScope={stayInScope}
-          depth={depth}
-          lambdas={lambdas}
-          capped={capped}
-          onToggle={(key) =>
-            setExpanded((prev) => {
-              const next = new Set(prev);
-              if (next.has(key)) next.delete(key);
-              else next.add(key);
-              return next;
-            })
-          }
-          onKey={onKey}
-          onFocus={(key) => setFocus(key)}
-          onOption={(o) => {
-            if (o.possible !== undefined) setPossible(o.possible);
-            if (o.stayInScope !== undefined) setStayInScope(o.stayInScope);
-            if (o.depth !== undefined) setDepth(o.depth);
-          }}
-          onExpandAll={() => {
-            const r = expandAllKeys(graph, depth, { lambdas });
-            setExpanded(new Set(r.keys));
-            setCapped(r.capped);
-          }}
-          onCollapseAll={() => {
-            setExpanded(new Set());
-            setCapped(false);
-          }}
-        />
+        <>
+          {anchorHeader}
+          <CallerChainView
+            id={id}
+            scope={scope}
+            roots={roots}
+            graph={graph}
+            trace={trace}
+            pin={fn}
+            expanded={expanded}
+            focus={focus}
+            possible={possible}
+            stayInScope={stayInScope}
+            depth={depth}
+            lambdas={lambdas}
+            capped={capped}
+            onToggle={(key) =>
+              setExpanded((prev) => {
+                const next = new Set(prev);
+                if (next.has(key)) next.delete(key);
+                else next.add(key);
+                return next;
+              })
+            }
+            onKey={onKey}
+            onFocus={(key) => setFocus(key)}
+            onOption={(o) => {
+              if (o.possible !== undefined) setPossible(o.possible);
+              if (o.stayInScope !== undefined) setStayInScope(o.stayInScope);
+              if (o.depth !== undefined) setDepth(o.depth);
+            }}
+            onExpandAll={() => {
+              const r = expandAllKeys(graph, depth, { lambdas });
+              setExpanded(new Set(r.keys));
+              setCapped(r.capped);
+            }}
+            onCollapseAll={() => {
+              setExpanded(new Set());
+              setCapped(false);
+            }}
+          />
+        </>
       )}
     </details>
   );

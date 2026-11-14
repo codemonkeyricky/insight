@@ -21,6 +21,8 @@ export type Route =
       line?: number;
       /** The function open in the flow tab (its IR id). */
       fn?: string;
+      /** The function whose caller chain the Caller chain section shows; kept while the reader walks up the chain. Written as `trace=`. */
+      trace?: string;
       /** The flow tab's canvas shows only the functions each thread starts in. */
       roots?: boolean;
       /** The overview tab's full page (`full=1`), rather than the flow sheet with its title block. */
@@ -38,6 +40,8 @@ export interface ViewOptions {
   scope?: string;
   line?: number;
   fn?: string;
+  /** The function whose caller chain the Caller chain section shows; kept while the reader walks up the chain. Written as `trace=`. */
+  trace?: string;
   /** The flow tab's roots-only canvas, on by default. Written as `roots=0` when false, and left out when true. */
   roots?: boolean;
   /** The overview tab's full page. Written as `full=1`, and only when true. */
@@ -80,6 +84,7 @@ export function parseRoute(hash: string): Route {
       scope: query.get("scope") ?? "",
       ...(line ? { line } : {}),
       ...opt("fn", query.get("fn")),
+      ...opt("trace", query.get("trace")),
       // The flow tab's map is roots-only unless the link says roots=0.
       ...(parts[3] === "flow" ? { roots: query.get("roots") !== "0" } : {}),
       ...(query.get("full") === "1" ? { full: true } : {}),
@@ -129,6 +134,7 @@ export function hrefView(id: string, tab: string, opts: ViewOptions = {}): strin
   if (opts.scope) params.set("scope", opts.scope);
   if (opts.line) params.set("line", String(opts.line));
   if (opts.fn) params.set("fn", opts.fn);
+  if (opts.trace) params.set("trace", opts.trace);
   if (opts.roots === true) params.set("roots", "1");
   if (opts.roots === false) params.set("roots", "0");
   if (opts.full) params.set("full", "1");

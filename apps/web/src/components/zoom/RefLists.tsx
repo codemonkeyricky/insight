@@ -18,7 +18,7 @@ interface Base {
 }
 
 /** The references of the selected function, fetched for its scope, with the loading and error states the panel shows. */
-export function FunctionRefs({ id, sel, roots }: { id: string; sel: MapSelection; roots: boolean }) {
+export function FunctionRefs({ id, sel, roots, trace }: { id: string; sel: MapSelection; roots: boolean; trace?: string }) {
   const { selected } = sel;
   const scope = sel.build.path;
   const [refState, setRefState] = useState<{ key: string; refs?: Refs; error?: string }>();
@@ -44,7 +44,7 @@ export function FunctionRefs({ id, sel, roots }: { id: string; sel: MapSelection
   return (
     <>
       <RefLists id={id} scope={scope} roots={roots} refs={shown.refs} />
-      <CallerChain id={id} sel={sel} roots={roots} />
+      <CallerChain id={id} sel={sel} roots={roots} {...(trace !== undefined ? { trace } : {})} />
     </>
   );
 }
