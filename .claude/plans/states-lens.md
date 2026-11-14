@@ -20,6 +20,11 @@ Changing the IR is allowed (user, 2026-11-14).
 
 Found by web search and read at source on 2026-11-14 (`main` / `develop` HEAD; pin a commit sha in P0).
 
+**Pinned (P0, 2026-11-14):**
+- `dotnet/aspnetcore` `main` at `37e809ead5824bc753a1c3d56f11615bdb1296c5` (check out this sha for P5; the sparse
+  clone is `--depth 1`, so fetch it with `git fetch --depth 1 origin <sha>` if `main` has moved).
+- `stomp-js/stompjs` `develop` at `f05a6387c4c2e7e9ee1fe0457a6c6e8e6845bdee`.
+
 **Primary: the SignalR TypeScript client.** `dotnet/aspnetcore`, folder `src/SignalR/clients/ts/signalr/src`. The
 monorepo is huge and mostly C#, so index only that folder from a sparse clone:
 
@@ -51,17 +56,44 @@ the whole monorepo.
   - `_startInternal`: `if (=== Connecting) { … = Connected }`, and `Disconnected` in its `catch`;
   - `_stopConnection` writes `Disconnected` and is called from `stop` paths and from transport `onclose` callbacks.
 
-Expected `HubConnectionState` diagram (P5 checks this; P0 confirms or corrects it from the real index):
-- `● → Disconnected`;
-- `Disconnected → Connecting` (start);
-- `Connecting → Connected`;
-- `Connecting|Connected → Disconnected` (catch);
-- `Connecting|Connected|Reconnecting → Disconnecting` (stop);
-- `Disconnecting → Disconnected` (`_completeClose`, inferred via the caller's branch);
-- `Connected → Reconnecting` (inferred via `_connectionClosed`);
-- `Reconnecting → Connected`.
+Expected diagrams, hand-traced in P0 against D4-D7 from the pinned shas (line numbers are in those files). Notation:
+`from -> to (label, confidence)`. "inferred" always means either a write after an `await` (stale), or an entry set
+taken from callers (cross-call). There are no `*` arcs in either SignalR machine.
 
-This is hand-traced from source, not taken from docs; P0 is where it gets confirmed.
+`HubConnection._connectionState` (`HubConnection.ts`; 8 writes: 162, 216, 227, 231, 347, 929, 961, 999):
+- `● -> Disconnected` (constructor, :162, init);
+- `Disconnected -> Connecting` (`_startWithStateTransitions`, :216, exact: early exit `!== Disconnected` at :212);
+- `Connecting -> Connected` (`_startWithStateTransitions`, :227, **inferred**: stale after `await` at :220);
+- `Connecting -> Disconnected`, `Connected -> Disconnected` (`_startWithStateTransitions` catch, :231, inferred;
+  catch set = try entry {Connecting} + try-written {Connected});
+- `Connecting -> Disconnecting`, `Connected -> Disconnecting`, `Reconnecting -> Disconnecting` (`_stopInternal`, :347,
+  exact: early exits :336/:341 leave {Connecting, Connected, Reconnecting});
+- `Disconnecting -> Disconnected`, `Connected -> Disconnected`, `Reconnecting -> Disconnected` (`_completeClose`, :929,
+  inferred via callers: :360 and :912 give Disconnecting, :917 and :957 give Connected, :1031 gives Reconnecting; :1018
+  needs surprise S1);
+- `Connected -> Reconnecting` (`_reconnect`, :961, inferred: entry {Connected} from `_connectionClosed` :915);
+- `Reconnecting -> Connected` (`_reconnect`, :999, inferred: stale after `await` at :997).
+
+Corrections to the earlier hand list: `Connected -> Disconnected` (no reconnect policy, or null first delay) and
+`Reconnecting -> Disconnected` (retries exhausted) are real edges via `_completeClose` and were missing;
+`Connecting|Connected -> Disconnected` is two arcs, and `Connected -> Disconnected` from the catch is a spurious twin
+of the real one (S2). Most arcs are dashed (8 of 13 arcs are inferred, for the stale or cross-call reason), because
+SignalR writes after awaits. That is correct under D6 and the legend must say why.
+
+`HttpConnection._connectionState` (`HttpConnection.ts`; 6 writes: 128, 149, 198, 314, 322, 662):
+- `● -> Disconnected` (constructor, :128, init);
+- `Disconnected -> Connecting` (`start`, :149, exact: early exit :145);
+- `Connecting -> Connected` (`_startInternal`, :314, exact: wrapping test `=== Connecting` :310 re-tests after awaits);
+- `Connecting -> Disconnected`, `Connected -> Disconnected` (`_startInternal` catch, :322, inferred: entry {Connecting}
+  from the one caller `start` :151; the `Connected` twin is spurious, S2);
+- `Connecting -> Disconnecting`, `Connected -> Disconnecting` (`stop`, :198, exact: early exits :188/:193);
+- `Connected -> Disconnected`, `Disconnecting -> Disconnected` (`_stopConnection`, :662, **exact**: early exits at :627
+  (`=== Disconnected` return) and :632 (`=== Connecting` throw) leave {Connected, Disconnecting}).
+
+No `* -> Disconnected` arc for `_stopConnection`: the earlier text assumed one because its callers are callbacks
+(:566, :571, :575) and a catch (:231), but the function's own early exits already bound `from`, so cross-call
+inference is not consulted. The "keeps `*`" example in D7 is therefore wrong for `HttpConnection`, and the P4 test for
+the callback-keeps-`*` rule needs a fixture whose function has no early exits.
 
 **Secondary: stompjs.** `stomp-js/stompjs`, `src/client.ts` + `src/types.ts`, small enough for the hosted path
 (`/stomp-js/stompjs@develop`).
@@ -71,6 +103,23 @@ This is hand-traced from source, not taken from docs; P0 is where it gets confir
 - The only wrapping guard is `if (this.state === DEACTIVATING) _changeState(INACTIVE)`. The rest are early exits, some
   through the getter `get active() { return this.state === ACTIVE }`, which is not followed (limit).
 - A second field `_intendedState: ActivationState` is a second machine.
+
+Expected `Client.state` (`src/client.ts`; pinned sha above). Writes are all through `_changeState` (setter, :655-657)
+at :788, :880, :1002 and :1025, plus the field initialiser at :671:
+- `● -> INACTIVE` (field initialiser, :671, init);
+- `INACTIVE -> ACTIVE` (`_startActivate`, :788, inferred: no local guard; entry from the two callers `activate` :785
+  and the `onWebSocketClose` callback in `_connect` :889; both carry {ACTIVE, INACTIVE} because the `this.active`
+  early exit (:779) is a getter and is not followed, so the set is {ACTIVE, INACTIVE} not {INACTIVE});
+- `ACTIVE -> ACTIVE` (`_startActivate`, :788, inferred) is a **spurious self-loop** from the same cause (S3);
+- `ACTIVE -> DEACTIVATING`, `DEACTIVATING -> DEACTIVATING` (`deactivate`, :1002, exact: early exit `=== INACTIVE`
+  :997, no `await` before; the self-loop is real, a second `deactivate()` call re-enters it);
+- `DEACTIVATING -> INACTIVE` (`deactivate`, :1025, exact: follows the :1002 write, so from {DEACTIVATING});
+- `DEACTIVATING -> INACTIVE` (`onWebSocketClose` arrow inside `_connect`, :880, exact: wrapping
+  `if (=== DEACTIVATING)` :878). Same from/to as the previous arc but a different label, so two arcs.
+
+`Client._intendedState` (:617 init, :769, :995) qualifies by the >=2-values rule but is really a flag: `● -> INACTIVE`,
+`* -> ACTIVE` (`activate`, no guard), `* -> INACTIVE` (`deactivate`, no guard), one test (:889). It would be drawn with
+`DEACTIVATING` as an `unentered` state and a D8 warning, which is a false positive (S4).
 
 **Third: this repo** (`ProjectRecord.status`, object-literal patches).
 
@@ -319,6 +368,92 @@ other lenses and old indexes are unaffected. Lenses that hash `calls` for reuse 
 after the frontend bump, which is expected. `holder` is an id string, not an edge, so a scope cut never stubs it (D11). The schema rejects
 `set` with neither `value` nor `dynamic`. Value encoding: strings JSON-quoted (`"idle"`), numbers bare (`3`), enum
 members `Type.Member`, so `"3"` and `3` stay distinct.
+
+## P0 results
+
+Run on 2026-11-14 with `/home/richard/.claude/jobs/34e94741/tmp/probe/probe.mjs` (TypeScript compiler API, one Program
+per folder; skips `node_modules`, `dist`, `*.d.ts`, `test`/`tests`/`__tests__`/`fixtures`/`samples`/`e2e` folders and
+`*.test.ts`; not committed). It is approximate: holders need an explicit type annotation or a `useState<T>` type
+argument; tests count `===`/`!==`/`==`/`!=` and `switch` case groups; boolean tests via bare `if (flag)` are not counted,
+so boolean test counts are a floor. Insight was probed at this worktree's head, `~/cognition/src` as it is today.
+
+| Project | Files | AST nodes | Holders: enum / union / useState | Booleans (separate) | Writes: assign / literal / init / setter (dynamic) | Tests: cmp / switch | Guard: whole / conjunct / early / none | Projected state nodes (% of AST) |
+|---|---|---|---|---|---|---|---|---|
+| SignalR `src` | 34 | 20,669 | 5 / 2 / 0 | 20 holders, 41 writes, 11 tests | 18 / 0 / 1 / 0 (4 = 21 %) | 30 / 0 | 8 / 2 / 18 / 2 | 56 (0.27 %) |
+| stompjs `src` | 19 | 7,831 | 8 / 0 / 0 | 33 holders, 29 writes, 0 tests | 3 / 0 / 5 / 4 (2 = 17 %) | 6 / 0 | 3 / 0 / 2 / 1 | 26 (0.33 %) |
+| insight (this repo) | 231 | 274,517 | 0 / 186 / 5 | 302 holders, 302 writes, 60 tests | 17 / 130 / 160 / 7 (115 = 37 %) | 216 / 12 | 80 / 18 / 43 / 87 | 733 (0.27 %) |
+| `~/cognition/src` | 134 | 278,407 | 0 / 79 / 3 | 153 holders, 220 writes, 23 tests | 8 / 74 / 209 / 7 (51 = 17 %) | 192 / 6 | 72 / 21 / 29 / 76 | 578 (0.21 %) |
+
+"Projected state nodes" = holders + writes + tests for non-boolean holders. Against the real IR: `~/cognition`'s last
+index is 34,451 nodes (`~/.insight/projects.json`), so 578 is about 1.7 %; the AST-to-IR ratio there is about 8:1, which
+puts insight at roughly 2 %, SignalR at about 2 % and stompjs at about 3 %. All are under the 5 % budget.
+
+Candidate machines under three thresholds (non-boolean holders):
+
+| Project | holders | A: >=2 written values | B: >=1 write and >=1 test | C: >=2 values and >=1 test | A or B |
+|---|---|---|---|---|---|
+| SignalR `src` | 7 | 2 | 2 | 2 | 2 |
+| stompjs `src` | 8 | 2 | 3 | 2 | 3 |
+| insight | 191 | 43 | 52 | 22 | 73 |
+| `~/cognition/src` | 82 | 28 | 34 | 16 | 46 |
+
+Top holders by write count:
+- SignalR: `HubConnection._connectionState` (8 writes, 5 values, 17 tests), `HttpConnection._connectionState` (6, 4, 13),
+  then only `HttpRequest.responseType` and the error `transport` fields (construction, 1-2 writes).
+- stompjs: `Client.state` (5 writes, 3 values, 4 tests), `Client._intendedState` (3, 2, 1), then config enums written once.
+- insight: `Ev.type` (15 writes, 12 values, 18 tests, `packages/core/flow/src/build.ts`), `SystemExternal.category`
+  (9), `Pend.kind`/`Pend.style` (8 each), `PhaseProgress.phase` (8, 5 values), `LensRecord.status` (7, 3 values, 5
+  tests), `IndexStatus.state` (6, 3 values, 3 tests).
+- cognition: `PhysicsIssue.severity` (109 writes, 2 values, 3 tests), `AssemblyEdge.coupling` (13, 5, 7),
+  `AssemblyEdge.kind` (10 writes, 9 values, 12 tests).
+
+**`ProjectRecord.status`** (`apps/server/src/registry.ts`) is found: 4 writes, 3 distinct values (`"idle"`,
+`"indexing"`, `"error"`), as the plan expects (the `jobs.ts` patches `:192,247,252` plus the construction in the
+registry). The probe finds **0 tests** of it, because readers compare through other types (API DTOs, UI state), so the
+checker resolves to a different property symbol. Under threshold B alone it would not be drawn; under A or C-without-tests
+it is. This matters for the threshold.
+
+**Recommendation.**
+- Machine threshold: **>=2 distinct written values AND at least one write that is not `op: "init"`** (a `set`), tests
+  not required. Counting by the probe, A alone draws 43 machines in insight and 28 in cognition, but most are data tags
+  assigned once at construction (`PhysicsIssue.severity`: 109 writes, all literals in object literals). Requiring a
+  non-init write removes those. The probe cannot separate construction from update exactly (an object literal with
+  spread counts as a patch), so P2a should log the real split; the fallback is C (+ >=1 test), which gives 22 / 16 /
+  2 / 2 machines but loses `ProjectRecord.status`. Going with A + non-init write keeps all four expected examples
+  (`ProjectRecord.status`, Hub, Http, `Client.state`).
+- `includeBooleans` default **`false`**. 302 boolean holders and 302 writes in insight alone (more than the 191 finite
+  ones), mostly loading flags tested by a bare `if (flag)` that D5 does not parse. Keep as an opt-in.
+- Dynamic share is high in insight (37 %), so the "dynamic writes" metric will show; no change to D7.
+
+**Rule surprises (S1-S6) and proposed fixes.**
+- **S1. `as any` re-test narrows to nothing** (`HubConnection.ts:1017-1018`, same shape at `HttpConnection.ts:155,164`).
+  Inside `catch` after an `await`, the known set is {Reconnecting, Connected}; `!== Reconnecting` leaves {Connected};
+  `(x as any) === Disconnecting` then intersects to the empty set. The author's own comment says the compiler's
+  narrowing is wrong here. Fix: **a test on a stale set replaces the set with the tested values (or the domain minus
+  them) instead of intersecting**; this also matches D6's "a re-test makes it fresh again". The `_completeClose()` call
+  at :1018 then carries {Disconnecting}. And an empty set after any intersection should be treated as `*` (never emit
+  `knownState: []`).
+- **S2. Spurious `Connected -> X` from `catch`** (`HubConnection.ts:231`, `HttpConnection.ts:322`). The catch set
+  includes the value written last in the `try`, but nothing after that write can throw. Fix: **accept as limit**, or
+  drop try-written values written after the last call or `await` in the `try` (cheap and sound enough). Prefer the
+  cheaper rule if P2a has time; the arc is inferred so it is flagged anyway.
+- **S3. Getter guards not followed give a spurious self-loop** (`client.ts:636` `get active()`, used at :779 and :887).
+  `INACTIVE -> ACTIVE` gets an `ACTIVE -> ACTIVE` twin. Fix: **follow a getter or method whose body is a single
+  `return this.h === V` (or `!==`, or `!this.getter`) as a test at its call sites**. This is small, covers stompjs,
+  and removes the limit from the list. Without it, accept the extra inferred arc.
+- **S4. `unentered` false positive on a narrowed use of a shared enum** (`client.ts:617`, `_intendedState` never
+  becomes `DEACTIVATING`). D8 would warn. Fix: **drop `unentered` for a holder whose written values are fewer than
+  half its domain**, or when the enum is the declared type of another holder. Simplest: only warn when the holder has
+  >=3 distinct written values.
+- **S5. A stale write is `inferred`, so most SignalR arcs are dashed** (`HubConnection.ts:227,999`: the `await` sits
+  between the re-test and the write). Correct under D6, but a legend must say "written after an await". Fix: **accept**;
+  optionally label the reason (`stale` vs `via caller`) in the arc's site list, which D9 already stores.
+- **S6. D7's `_stopConnection` example is wrong** (`HttpConnection.ts:627,632`). Its early exits already give `from`,
+  so it has no `*` arc. Fix: **edit D7/P4 so the callback-keeps-`*` example uses a function with no early exit**, and
+  add that case to the P2a fixture's `connection.ts`.
+- Not surprises, but notes: a local `const state = this._connectionState` (`HubConnection.ts:346,364`) is not a holder
+  read (accept as limit); the `as any` casts are stripped as D5 says; `_intendedState` and similar flags draw as
+  `* -> X` pairs (accept).
 
 ## Phases
 
