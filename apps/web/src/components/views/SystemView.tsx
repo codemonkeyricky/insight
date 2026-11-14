@@ -21,7 +21,7 @@ const MAX_K = 2.5;
 /** The smallest scale a fit settles on: a card title is 18 px, so it stays at 10 px or more. A wider graph is panned. */
 export const FIT_MIN_K = 0.56;
 /** The System view's fit floor: a deep process tree is shown whole (readable once zoomed in), not cut at FIT_MIN_K. */
-export const SYSTEM_FIT_MIN_K = 0.06;
+export const SYSTEM_FIT_MIN_K = 0.02;
 /** Edges above this count show a verb pill only on the edges of the hovered or selected node. */
 export const PILL_LIMIT = 30;
 const FIT_MAX_K = 1.15;
@@ -127,7 +127,9 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
     const h = expanded ? (el?.clientHeight ?? 700) : Math.max(420, vh * 0.6, room);
     setStageH(expanded ? null : h);
     // The legend sits along the bottom edge, so the diagram is fitted above it.
-    setCam(fitCamera(layout, w, h - LEGEND_H, pipeline === undefined ? SYSTEM_FIT_MIN_K : FIT_MIN_K));
+    // On a phone the legend wraps onto several lines, so measure it rather than assume one row.
+    const legendH = Math.max(LEGEND_H, (el?.querySelector<HTMLElement>(".sysv-legend")?.offsetHeight ?? 0) + 16);
+    setCam(fitCamera(layout, w, h - legendH, pipeline === undefined ? SYSTEM_FIT_MIN_K : FIT_MIN_K));
   }, [layout, expanded, pipeline]);
   // Fits when a layout arrives (a new scope, the tests flag) or the view expands, and clears the selection of the old layout.
   useLayoutEffect(() => {
