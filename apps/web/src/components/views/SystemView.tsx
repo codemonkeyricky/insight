@@ -55,16 +55,20 @@ export function SystemView({ id, scope }: { id: string; scope: string }) {
   const key = `${id}\0${scope}\0${tests}`;
   useEffect(() => {
     let cancelled = false;
-    api.getSystem(id, scope, tests).then(
-      (sys) => {
-        if (!cancelled) setDone({ key, sys });
-      },
-      (e: unknown) => {
-        if (!cancelled) setDone({ key, error: e instanceof Error ? e.message : String(e) });
-      },
-    );
+    // The model is computed on a later task, so "Computing runtime…" paints before the work starts.
+    const timer = setTimeout(() => {
+      api.getSystem(id, scope, tests).then(
+        (sys) => {
+          if (!cancelled) setDone({ key, sys });
+        },
+        (e: unknown) => {
+          if (!cancelled) setDone({ key, error: e instanceof Error ? e.message : String(e) });
+        },
+      );
+    }, 0);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
   }, [id, scope, tests, key]);
   if (done === null) return <p className="muted" role="status">Computing runtime…</p>;
