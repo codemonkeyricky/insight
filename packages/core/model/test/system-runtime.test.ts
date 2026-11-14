@@ -554,6 +554,22 @@ describe("system model: review fixes", () => {
     expect((s.edges ?? []).filter((e) => e.to === "condvar:Atomics").map((e) => e.verb).sort()).toEqual(["notifies", "waits"]);
   });
 
+  it("keys a nameless condvar with no API by its site, so unrelated waits do not merge into one 'condvar'", () => {
+    const s = systemModel(
+      buildProjectModel(
+        libDoc(
+          inFn("lib/a.ts", "helper", 3, "sync", "sync.condvar", { op: "wait" }),
+          inFn("lib/a.ts", "helper", 4, "sync", "sync.condvar", { op: "notify" }),
+        ),
+      ),
+      "",
+    );
+    const cv = (s.resources ?? []).filter((r) => r.kind === "condvar");
+    expect(cv).toHaveLength(2);
+    expect(cv.every((r) => r.label === "<dynamic>")).toBe(true);
+    expect(new Set(cv.map((r) => r.id)).size).toBe(2);
+  });
+
   it("keys each <dynamic> semaphore by its site, so unrelated sites do not share one resource", () => {
     const s = systemModel(
       buildProjectModel(

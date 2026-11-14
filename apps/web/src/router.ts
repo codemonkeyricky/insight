@@ -1,10 +1,7 @@
 import { isRefName, isRepoName } from "./hostedRepo";
 
-/**
- * The tabs every project has. Any other tab id is a lens id. The Source and Findings tabs are gone: their old URLs
- * redirect to Overview (see redirectFor), and their links open the code pane instead.
- */
-export const BUILTIN_TABS = ["overview", "flow", "system", "arch", "compare", "review"] as const;
+// The built-in tab ids live in a dependency-free module (see builtinTabs.ts); re-exported here for the router's callers.
+export { BUILTIN_TABS } from "./builtinTabs.ts";
 
 /** The views that were tabs once and now redirect to Overview, keeping the scope and line of the link. */
 const RETIRED_VIEWS: readonly string[] = ["source", "findings"];

@@ -560,16 +560,8 @@ export function emitUnit(project: Project, rel: string): IRBatch {
     const locks = declArgs(decl).filter((p) => !NO_LOCK_ARGS.has(norm(p.text)));
     locks.forEach((arg, i) => {
       const lock = lockIdentity(arg.text, cls, project.members);
-      node({
-        id: ids.take(`${rel}@guard:${decl.startPosition.row}:${decl.startPosition.column}:${i}`),
-        facet: "sync",
-        kind: "x-cpp.scoped-lock",
-        parent: container,
-        attrs: { lock, mode, api: base },
-        span: spanOf(rel, decl),
-        provenance: syncProv,
-      });
-      // A shared_mutex taken by any guard is a read-write lock: shared for shared_lock, exclusive otherwise.
+      // A shared_mutex taken by any guard is a read-write lock: shared for shared_lock, exclusive otherwise. It is
+      // emitted as sync.rwlock-acquire alone, which extends sync.lock-acquire, so each guard is one acquire node.
       const ref = refOf(arg);
       const mutexType = ref ? resolveVar(project, ref.name, decl, cls, ref.viaThis)?.type : undefined;
       if (mutexType === "std::shared_mutex") {
@@ -577,6 +569,16 @@ export function emitUnit(project: Project, rel: string): IRBatch {
           id: ids.take(`${rel}@rwlock:${decl.startPosition.row}:${decl.startPosition.column}:${i}`),
           facet: "sync",
           kind: "sync.rwlock-acquire",
+          parent: container,
+          attrs: { lock, mode, api: base },
+          span: spanOf(rel, decl),
+          provenance: syncProv,
+        });
+      } else {
+        node({
+          id: ids.take(`${rel}@guard:${decl.startPosition.row}:${decl.startPosition.column}:${i}`),
+          facet: "sync",
+          kind: "x-cpp.scoped-lock",
           parent: container,
           attrs: { lock, mode, api: base },
           span: spanOf(rel, decl),

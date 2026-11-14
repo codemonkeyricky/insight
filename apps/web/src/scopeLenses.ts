@@ -1,7 +1,8 @@
-// Logic for the lens tabs and lens pages of a scope. Only type imports, so the capture script can
-// load the content rule (resultHasContent) directly, the same as scopeKey.ts.
+// Logic for the lens tabs and lens pages of a scope. The only value import is builtinTabs.ts, which has no imports
+// and carries its explicit extension, so the capture script can load the content rule (resultHasContent) directly,
+// the same as scopeKey.ts. Keep every other import type-only.
 import type { LensView, ScopeLensRow, ScopeStats, TreeNode, TreeView } from "./api";
-import { BUILTIN_TABS } from "./router";
+import { BUILTIN_TABS } from "./builtinTabs.ts";
 
 const BUILTIN_IDS: ReadonlySet<string> = new Set(BUILTIN_TABS);
 

@@ -934,12 +934,10 @@ describe("execModel: locks and channels", () => {
     expect(model.resources[0]).toMatchObject({ id: "lock:Store::mu", threads: ["main", spawnId("src/m.cc", 3)] });
   });
 
-  it("counts two shared_mutex guards as two sites, not four, when each guard is emitted as a scoped-lock and an rwlock", () => {
+  it("counts two shared_mutex guards as two sites, one rwlock acquire each", () => {
     const nodes = [
       fnNode("src/m.cc", "main", 0),
-      lockNode("src/m.cc", 1, "src/m.cc#main", "rw", "x-cpp.scoped-lock", "shared"),
       lockNode("src/m.cc", 1, "src/m.cc#main", "rw", "sync.rwlock-acquire", "shared"),
-      lockNode("src/m.cc", 2, "src/m.cc#main", "rw", "x-cpp.scoped-lock", "exclusive"),
       lockNode("src/m.cc", 2, "src/m.cc#main", "rw", "sync.rwlock-acquire", "exclusive"),
     ];
     const model = execModel(nodes, [], "src");

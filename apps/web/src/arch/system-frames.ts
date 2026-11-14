@@ -22,6 +22,8 @@ const STRIP_GAP = 26;
 const STRIP_TITLE_H = 26;
 const RES_H = 40;
 const RES_GAP = 6;
+/** Resource cards a strip draws before its "+N more" row. Widened (the key "res:<strip>"), it draws them all. */
+export const RES_LIMIT = 8;
 const BAND_MIN_W = 184;
 const BAND_MAX_W = 380;
 const PORT_GAP = 16;
@@ -154,6 +156,19 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
   // Slices a coroutine shares with its thread are not drawn: item id -> the frame whose header carries their edges.
   const hiddenAt = new Map<string, string>();
   const portKeys = new Map<string, Set<string>>(); // top frame id -> the band targets its edges bundle into
+  // A strip draws at most RES_LIMIT resource cards, then a "+N more" row that widens it. A resource the strip does not
+  // draw maps to that row, so its edges still end on the strip.
+  const resWidened = (owner: string): boolean => widened.has(`res:${owner}`);
+  const stripRows = (total: number, owner: string): number => (resWidened(owner) || total <= RES_LIMIT ? total : RES_LIMIT + 1);
+  const hiddenMore = new Map<string, string>(); // resource id -> the id of the "+N more" row that stands for it
+  const drawStrip = (list: readonly SystemResource[], owner: string, x: number, y: number, w: number): void => {
+    const all = resWidened(owner) || list.length <= RES_LIMIT;
+    (all ? list : list.slice(0, RES_LIMIT)).forEach((r, i) => boxes.push(resourceBox(r, x, y + i * (RES_H + RES_GAP), w, owner)));
+    if (all) return;
+    const id = `more:res:${owner}`;
+    boxes.push({ id, kind: "more", column: 0, x, y: y + RES_LIMIT * (RES_H + RES_GAP), w: Math.min(w, 220), h: CHIP_H, title: `+${list.length - RES_LIMIT} more`, sub: "", chips: [], frame: `res:${owner}` });
+    for (const r of list.slice(RES_LIMIT)) hiddenMore.set(r.id, id);
+  };
 
   if (grounded) {
     const rts = new Map((sys.runtimes ?? []).map((r) => [r.id, r] as const));
@@ -328,7 +343,7 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
       const rows = Math.max(...perCol.values());
       return rows * (SLICE_H + SLICE_GAP) - SLICE_GAP + (n.hidden > 0 ? CHIP_H + SLICE_GAP : 0);
     };
-    const stripH = (n: FNode): number => (n.resources.length === 0 ? 24 : STRIP_TITLE_H + n.resources.length * (RES_H + RES_GAP) - RES_GAP);
+    const stripH = (n: FNode): number => (n.resources.length === 0 ? 24 : STRIP_TITLE_H + stripRows(n.resources.length, n.id) * (RES_H + RES_GAP) - RES_GAP);
     // Heights, bottom-up.
     const sizeOf = (n: FNode): number => {
       if (isCol(n.id)) return HDR_H;
@@ -398,7 +413,7 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
         const stripHeight = n.h - HDR_H - 2 * PAD;
         strips.push({ id: `strip:${n.id}`, program: n.id, title: "In process", x: stripX, y: stripY, w: STRIP_W, h: stripHeight });
         n.portTop = stripY + stripH(n) + 14;
-        n.resources.forEach((r, i) => boxes.push(resourceBox(r, stripX + 8, stripY + STRIP_TITLE_H + i * (RES_H + RES_GAP), STRIP_W - 16, n.id)));
+        drawStrip(n.resources, n.id, stripX + 8, stripY + STRIP_TITLE_H, STRIP_W - 16);
       }
       const childW = w - 2 * PAD - (isProc ? STRIP_W + STRIP_GAP : 0);
       for (const c of n.children) {
@@ -463,13 +478,11 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
     const orphan = resources.filter((r) => r.kind !== "os" && !frameOfItem.has(r.id));
     if (orphan.length > 0) {
       const stripY = y;
-      const h = STRIP_TITLE_H + orphan.length * (RES_H + RES_GAP) + PAD;
+      const h = STRIP_TITLE_H + stripRows(orphan.length, "strip:orphan") * (RES_H + RES_GAP) + PAD;
       const x = MARGIN;
       strips.push({ id: "strip:orphan", title: "In process (no program)", x, y: stripY, w: STRIP_W, h });
-      orphan.forEach((r, i) => {
-        boxes.push(resourceBox(r, x + 8, stripY + STRIP_TITLE_H + i * (RES_H + RES_GAP), STRIP_W - 16, "strip:orphan"));
-        frameOfItem.set(r.id, "strip:orphan");
-      });
+      drawStrip(orphan, "strip:orphan", x + 8, stripY + STRIP_TITLE_H, STRIP_W - 16);
+      for (const r of orphan) frameOfItem.set(r.id, "strip:orphan");
       H = Math.max(H, stripY + h - FRAME_GAP);
     }
   }
@@ -504,12 +517,10 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
     const colsBottom = Math.max(TOP, ...boxes.map((b) => b.y + b.h));
     const flatRes = resources.filter((r) => r.kind !== "os");
     const stripX = colsRight + STRIP_GAP;
-    const stripH = Math.max(colsBottom - TOP, STRIP_TITLE_H + flatRes.length * (RES_H + RES_GAP) + PAD, 120);
+    const stripH = Math.max(colsBottom - TOP, STRIP_TITLE_H + stripRows(flatRes.length, "strip:flat") * (RES_H + RES_GAP) + PAD, 120);
     strips.push({ id: "strip:flat", title: "In process (no entry found)", x: stripX, y: TOP, w: STRIP_W, h: stripH });
-    flatRes.forEach((r, i) => {
-      boxes.push(resourceBox(r, stripX + 8, TOP + STRIP_TITLE_H + i * (RES_H + RES_GAP), STRIP_W - 16, "strip:flat"));
-      frameOfItem.set(r.id, "strip:flat");
-    });
+    drawStrip(flatRes, "strip:flat", stripX + 8, TOP + STRIP_TITLE_H, STRIP_W - 16);
+    for (const r of flatRes) frameOfItem.set(r.id, "strip:flat");
     colsRight = stripX + STRIP_W;
     H = Math.max(H, TOP + stripH - FRAME_GAP, colsBottom);
   }
@@ -582,6 +593,8 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
   const resolve = (id: string): SysBox | SysFrame | undefined => {
     const direct = endpoint(id);
     if (direct !== undefined) return direct;
+    const more = hiddenMore.get(id);
+    if (more !== undefined) return boxById.get(more);
     const fr = frameOfItem.get(id) ?? (frameById.has(id) ? id : undefined);
     const collapsedHeader = headerOf(fr);
     if (collapsedHeader !== undefined) return collapsedHeader;
@@ -984,11 +997,12 @@ function endY(n: SysBox | SysFrame, slot: number, count: number): number {
 interface Rect { x: number; y: number; w: number; h: number }
 
 const GRID_CELL = 128;
-const cellKey = (cx: number, cy: number): number => (cx + 32768) * 65536 + (cy + 32768);
+/** A string key, so no cell index can collide with another however large the layout gets. */
+const cellKey = (cx: number, cy: number): string => `${cx},${cy}`;
 
 /** Rectangles bucketed on a coarse grid, so a query looks only at the rectangles near it. */
 class RectGrid {
-  private readonly cells = new Map<number, Rect[]>();
+  private readonly cells = new Map<string, Rect[]>();
   add(r: Rect): void {
     const x0 = Math.floor(r.x / GRID_CELL), x1 = Math.floor((r.x + r.w) / GRID_CELL);
     const y0 = Math.floor(r.y / GRID_CELL), y1 = Math.floor((r.y + r.h) / GRID_CELL);
@@ -1017,7 +1031,7 @@ class RectGrid {
 
 /** The routing obstacles (cards and frame headers) keyed by the id of the box or frame, so an edge can skip its own ends. */
 class ObstacleGrid {
-  private readonly cells = new Map<number, Array<Rect & { id: string }>>();
+  private readonly cells = new Map<string, Array<Rect & { id: string }>>();
   private readonly all: Array<Rect & { id: string }> = [];
   add(id: string, r: Rect): void {
     const o = { ...r, id };

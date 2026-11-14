@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { SystemEdge, SystemExternal, SystemModel, SystemResource, SystemRuntime, SystemSlice } from "@insight/model";
-import { GROUP_MIN, layoutSystemFrames, SLICE_LIMIT } from "../src/arch/system-frames";
+import { GROUP_MIN, layoutSystemFrames, RES_LIMIT, SLICE_LIMIT } from "../src/arch/system-frames";
 import type { SysArrow, SysBox, SysFrame, SysLayout } from "../src/arch/system-layout";
 import { SystemDiagram } from "../src/components/views/SystemView";
 
@@ -173,6 +173,22 @@ describe("grounded frames", () => {
     const wide = layoutSystemFrames(big, { widened: new Set([PA]) });
     expect(wide.boxes.filter((b) => b.kind === "slice" && b.frame === PA).length).toBe(SLICE_LIMIT + 1);
     expect(wide.boxes.find((b) => b.kind === "more")).toBeUndefined();
+  });
+
+  it("caps a process strip at RES_LIMIT resource cards, then a +N more row, and draws them all when widened", () => {
+    const extra: SystemResource[] = Array.from({ length: RES_LIMIT }, (_, i) => ({ id: `queue:${PA}:q${i}`, kind: "queue" as const, label: `q${i}`, program: PA, source: "message" as const }));
+    const big: SystemModel = { ...model(), resources: [...resources, ...extra] };
+    const inStrip = (l: SysLayout) => l.boxes.filter((b) => b.kind === "resource" && b.frame === PA);
+    const capped = layoutSystemFrames(big);
+    expect(inStrip(capped)).toHaveLength(RES_LIMIT);
+    // Three program resources, plus the eight extra ones, make eleven: eight are drawn and three are behind the row.
+    expect(capped.boxes.find((b) => b.kind === "more" && b.frame === `res:${PA}`)?.title).toBe("+3 more");
+    const wide = layoutSystemFrames(big, { widened: new Set([`res:${PA}`]) });
+    expect(inStrip(wide)).toHaveLength(RES_LIMIT + 3);
+    expect(wide.boxes.find((b) => b.kind === "more" && b.frame === `res:${PA}`)).toBeUndefined();
+    const strip = wide.strips?.find((s) => s.program === PA);
+    expect(strip).toBeDefined();
+    for (const b of inStrip(wide)) expect(b.y + b.h).toBeLessThanOrEqual((strip?.y ?? 0) + (strip?.h ?? 0));
   });
 
   it("keeps the spawn site, api and status on the child frame", () => {
