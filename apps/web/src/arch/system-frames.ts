@@ -37,6 +37,7 @@ const TOP = 74;
 const MARGIN = 28;
 const MAX_CHIPS = 4;
 const PILL_H = 24;
+const ROUTE_GUTTER = 7;
 
 export interface FrameOptions {
   /** Frames drawn collapsed: their header only, their edges re-attached to the header. */
@@ -457,6 +458,11 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
     const chip = chips.get(row.chipId)?.box as SysBox;
     addPlanned(idx++, chip, row.ext, row.edge, "out", "");
   }
+  // Obstacles for routing: every card and every frame header, except the edge's own ends.
+  const obstacles = (fromId: string, toId: string): Rect[] => [
+    ...boxes.filter((b) => b.id !== fromId && b.id !== toId).map((b) => ({ x: b.x, y: b.y, w: b.w, h: b.h })),
+    ...frames.filter((f) => f.id !== fromId && f.id !== toId).map((f) => ({ x: f.x, y: f.y, w: f.w, h: f.hdrH })),
+  ];
   const portAt = new Map<number, { x1: number; y1: number; x2: number; y2: number }>();
   const slot = (n: SysBox | SysFrame, side: "l" | "r", planIdx: number): number => {
     const list = (sidePorts.get(portKey(n, side)) ?? []).slice().sort((p, q) => p.other - q.other || p.idx - q.idx);
@@ -482,8 +488,17 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
     const c1x = same ? x1 + (p.sides[0] === "r" ? 1 : -1) * 44 : x1 + dir * k;
     const c2x = same ? x2 + (p.sides[1] === "r" ? 1 : -1) * 44 : x2 - dir * k;
     const segs = [x1, y1, c1x, y1, c2x, y2, x2, y2];
-    const d = `M${num(x1)} ${num(y1)} C${num(c1x)} ${num(y1)} ${num(c2x)} ${num(y2)} ${num(x2)} ${num(y2)}`;
-    const samples = bezierSamples(segs);
+    let d = `M${num(x1)} ${num(y1)} C${num(c1x)} ${num(y1)} ${num(c2x)} ${num(y2)} ${num(x2)} ${num(y2)}`;
+    let samples = bezierSamples(segs);
+    // A curve that crosses a card or a frame header it does not end at is redrawn as an orthogonal route around them,
+    // in the gutters, entering each end from its side. Headers are obstacles, so no edge runs through a frame's title band.
+    if (samples.slice(1, -1).some((q) => obstacleAt(q, obstacles(p.fromNode, p.toNode)))) {
+      const pts = routeAround([x1, y1], [x2, y2], obstacles(p.fromNode, p.toNode));
+      if (pts !== undefined) {
+        d = `M${pts.map((q) => `${num(q[0])} ${num(q[1])}`).join(" L")}`;
+        samples = polyline(pts);
+      }
+    }
     const edge = p.edge;
     const text = p.text;
     arrows.push({
@@ -608,6 +623,127 @@ function endY(n: SysBox | SysFrame, slot: number, count: number): number {
   return n.y + h / 2 - span / 2 + (span * slot) / (count - 1);
 }
 
+interface Rect { x: number; y: number; w: number; h: number }
+
+/** True when a point is inside (or on the border of) one of the rectangles. */
+function obstacleAt(q: { x: number; y: number }, rects: Rect[]): boolean {
+  return rects.some((r) => q.x >= r.x && q.x <= r.x + r.w && q.y >= r.y && q.y <= r.y + r.h);
+}
+
+/** True when an axis-aligned segment passes strictly through a rectangle's interior. */
+function segmentHits(ax: number, ay: number, bx: number, by: number, r: Rect): boolean {
+  const lo = Math.min(ax, bx), hi = Math.max(ax, bx), top = Math.min(ay, by), bot = Math.max(ay, by);
+  return lo < r.x + r.w && hi > r.x && top < r.y + r.h && bot > r.y;
+}
+
+/**
+ * Orthogonal route from a to b that keeps off every rectangle. Candidate lines sit ROUTE_GUTTER outside each
+ * rectangle's edges, and a Dijkstra search over those lines charges a fixed cost per bend. Undefined when none exists.
+ */
+function routeAround(a: [number, number], b: [number, number], obs: Rect[]): Array<[number, number]> | undefined {
+  const M = 80;
+  const minX = Math.min(a[0], b[0]) - M, maxX = Math.max(a[0], b[0]) + M;
+  const minY = Math.min(a[1], b[1]) - M, maxY = Math.max(a[1], b[1]) + M;
+  const near = obs.filter((r) => r.x < maxX && r.x + r.w > minX && r.y < maxY && r.y + r.h > minY);
+  const xs = [...new Set([a[0], b[0], ...near.flatMap((r) => [r.x - ROUTE_GUTTER, r.x + r.w + ROUTE_GUTTER])])].sort((p, q) => p - q);
+  const ys = [...new Set([a[1], b[1], ...near.flatMap((r) => [r.y - ROUTE_GUTTER, r.y + r.h + ROUTE_GUTTER])])].sort((p, q) => p - q);
+  const nx = xs.length, ny = ys.length;
+  const si = xs.indexOf(a[0]), sj = ys.indexOf(a[1]), ti = xs.indexOf(b[0]), tj = ys.indexOf(b[1]);
+  if (si < 0 || sj < 0 || ti < 0 || tj < 0) return undefined;
+  const DX = [1, -1, 0, 0], DY = [0, 0, 1, -1];
+  const NONE = 4, STATES = nx * ny * 5;
+  const key = (i: number, j: number, d: number): number => (j * nx + i) * 5 + d;
+  const dist = new Float64Array(STATES).fill(Infinity);
+  const prev = new Int32Array(STATES).fill(-1);
+  // Binary heap of [cost, state].
+  const heap: Array<[number, number]> = [];
+  const push = (c: number, k: number): void => {
+    heap.push([c, k]);
+    let i = heap.length - 1;
+    while (i > 0) {
+      const par = (i - 1) >> 1;
+      if ((heap[par] as [number, number])[0] <= (heap[i] as [number, number])[0]) break;
+      [heap[par], heap[i]] = [heap[i] as [number, number], heap[par] as [number, number]];
+      i = par;
+    }
+  };
+  const pop = (): [number, number] | undefined => {
+    const top = heap[0];
+    const last = heap.pop();
+    if (heap.length > 0 && last !== undefined) {
+      heap[0] = last;
+      let i = 0;
+      for (;;) {
+        const l = 2 * i + 1, r = l + 1;
+        let m = i;
+        if (l < heap.length && (heap[l] as [number, number])[0] < (heap[m] as [number, number])[0]) m = l;
+        if (r < heap.length && (heap[r] as [number, number])[0] < (heap[m] as [number, number])[0]) m = r;
+        if (m === i) break;
+        [heap[m], heap[i]] = [heap[i] as [number, number], heap[m] as [number, number]];
+        i = m;
+      }
+    }
+    return top;
+  };
+  const start = key(si, sj, NONE);
+  dist[start] = 0;
+  push(0, start);
+  let goal = -1;
+  while (heap.length > 0) {
+    const [c, k] = pop() as [number, number];
+    if (c > (dist[k] as number)) continue;
+    const d = k % 5;
+    const cell = (k - d) / 5;
+    const i = cell % nx, j = Math.floor(cell / nx);
+    if (i === ti && j === tj) { goal = k; break; }
+    for (let nd = 0; nd < 4; nd++) {
+      const ni = i + (DX[nd] as number), nj = j + (DY[nd] as number);
+      if (ni < 0 || nj < 0 || ni >= nx || nj >= ny) continue;
+      const x0 = xs[i] as number, y0 = ys[j] as number, x1 = xs[ni] as number, y1 = ys[nj] as number;
+      if (near.some((r) => segmentHits(x0, y0, x1, y1, r))) continue;
+      const turn = d !== NONE && d !== nd ? 80 : 0;
+      const nc = c + Math.abs(x1 - x0) + Math.abs(y1 - y0) + turn;
+      const nk = key(ni, nj, nd);
+      if (nc < (dist[nk] as number)) {
+        dist[nk] = nc;
+        prev[nk] = k;
+        push(nc, nk);
+      }
+    }
+  }
+  if (goal < 0) return undefined;
+  const cells: Array<[number, number]> = [];
+  for (let k = goal; k !== -1; k = prev[k] as number) {
+    const cell = (k - (k % 5)) / 5;
+    cells.push([xs[cell % nx] as number, ys[Math.floor(cell / nx)] as number]);
+  }
+  cells.reverse();
+  // Drop repeated points and interior points on a straight run.
+  const out: Array<[number, number]> = [];
+  for (const q of cells) {
+    const last = out[out.length - 1];
+    if (last !== undefined && last[0] === q[0] && last[1] === q[1]) continue;
+    out.push(q);
+    if (out.length >= 3) {
+      const u = out[out.length - 3] as [number, number], v = out[out.length - 2] as [number, number];
+      if ((u[0] === v[0] && v[0] === q[0]) || (u[1] === v[1] && v[1] === q[1])) out.splice(out.length - 2, 1);
+    }
+  }
+  return out;
+}
+
+/** Points along a polyline, eight per leg, for pill placement and the edge test. */
+function polyline(pts: Array<[number, number]>): Array<{ x: number; y: number }> {
+  const out: Array<{ x: number; y: number }> = [];
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const [ax, ay] = pts[i] as [number, number];
+    const [bx, by] = pts[i + 1] as [number, number];
+    for (let j = 0; j < 8; j++) out.push({ x: ax + ((bx - ax) * j) / 8, y: ay + ((by - ay) * j) / 8 });
+  }
+  const last = pts[pts.length - 1] as [number, number];
+  out.push({ x: last[0], y: last[1] });
+  return out;
+}
 function bezierSamples(p: number[]): Array<{ x: number; y: number }> {
   const out: Array<{ x: number; y: number }> = [];
   for (let j = 0; j <= 24; j++) {
