@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import frontend from "@insight/frontend-typescript";
 import type { IREdge, IRNode } from "@insight/ir";
-import { buildFileFlow, type FileFlow, type FunctionFlow } from "../src/index.js";
+import { buildFileFlow, stationOf, type FileFlow, type FunctionFlow } from "../src/index.js";
 
 const SOURCE = `import { execFileSync } from "node:child_process";
 
@@ -125,17 +125,25 @@ describe("buildFileFlow", () => {
     expect(labels(f)).toContain("n < 0");
     expect(labels(f)).toContain("n === 0");
     expect(labels(f)).toContain("helper()");
-    const arms = [...edge(f, "true"), ...edge(f, "false")].map((e) => e.label);
-    expect(arms.sort()).toEqual(["no", "no", "yes", "yes"]);
+    // Two decisions, each with a true and a false path. Rows carry the words now: the false arm's first row is tagged else.
+    expect([...edge(f, "true"), ...edge(f, "false")].map((e) => e.kind).sort()).toEqual(["false", "false", "true", "true"]);
+    expect(f.nodes.filter((n) => n.tag === "else").length).toBeGreaterThanOrEqual(1);
     // The else-if sits inside the else arm of the first decision: its decision node is below the first.
     const first = f.nodes.find((n) => n.label === "n < 0");
     const second = f.nodes.find((n) => n.label === "n === 0");
     expect(second!.y).toBeGreaterThan(first!.y);
+    // The false arm continues on the head's lane; the true arm sits one lane right.
+    expect(second!.lane).toBe(first!.lane);
+    expect(f.nodes.find((n) => n.label === "helper()")!.lane).toBe(second!.lane! + 1);
   });
 
   it("charts a switch with one column per case and the implicit no-match path", () => {
     const f = fn("pick");
-    expect(edge(f, "case").map((e) => e.label)).toEqual(["case \"a\"", "case \"b\"", "default"]);
+    // One siding per case on the lane beside the trunk, each first row tagged with its case.
+    expect(f.nodes.filter((n) => n.tag !== undefined).map((n) => n.tag)).toEqual(["case \"a\"", "case \"b\"", "default"]);
+    expect(edge(f, "case")).toHaveLength(3);
+    const sw = f.nodes.find((n) => n.role === "switch")!;
+    for (const n of f.nodes.filter((x) => x.tag !== undefined)) expect(n.lane).toBe(sw.lane! + 1);
     expect(f.nodes.filter((n) => n.role === "break")).toHaveLength(1);
     expect(f.nodes.filter((n) => n.role === "throw")).toHaveLength(1);
   });
@@ -144,7 +152,9 @@ describe("buildFileFlow", () => {
     const f = fn("walk");
     expect(f.stats.loops).toBe(1);
     expect(edge(f, "back")).toHaveLength(1);
-    expect(edge(f, "exit").map((e) => e.label)).toEqual(["done"]);
+    expect(edge(f, "exit").map((e) => e.style)).toEqual(["done"]);
+    expect(edge(f, "back").map((e) => e.style)).toEqual(["back"]);
+    expect(f.nodes.filter((n) => n.shape === "turn")).toHaveLength(1);
     expect(edge(f, "each")).toHaveLength(1);
     expect(f.nodes.some((n) => n.role === "continue")).toBe(true);
     const loop = f.nodes.find((n) => n.role === "loop");
@@ -154,7 +164,8 @@ describe("buildFileFlow", () => {
   it("charts try, catch and finally with an exception path", () => {
     const f = fn("load");
     expect(f.async).toBe(true);
-    expect(edge(f, "exception").map((e) => e.label)).toEqual(["throws"]);
+    expect(edge(f, "exception").map((e) => e.style)).toEqual(["throws"]);
+    expect(f.nodes.filter((n) => n.tag === "catch")).toHaveLength(1);
     expect(labels(f)).toContain("finally");
     // The wrapped call is one step: await fetchIt(), not an await step plus a call step.
     expect(labels(f).filter((l) => l.includes("fetchIt"))).toEqual(["await fetchIt()"]);
@@ -171,31 +182,28 @@ describe("buildFileFlow", () => {
     expect(f.nodes.filter((n) => n.label.includes("git"))).toHaveLength(1);
   });
 
-  it("gives every edge two or more points that start and end on its nodes", () => {
+  it("gives every edge a path whose points start at its source station and end at its target station", () => {
     for (const f of flow.functions) {
       const byId = new Map(f.nodes.map((n) => [n.id, n]));
       for (const e of f.edges) {
         expect(e.points.length).toBeGreaterThanOrEqual(2);
+        expect(e.d).toMatch(/^M/);
         const from = byId.get(e.from)!;
         const to = byId.get(e.to)!;
         expect(from).toBeDefined();
         expect(to).toBeDefined();
-        const [sx, sy] = e.points[0]!;
-        const [tx, ty] = e.points[e.points.length - 1]!;
-        // Edges leave a node from its bottom or side and arrive at its top or side.
-        expect(sx).toBeGreaterThanOrEqual(from.x - 0.5);
-        expect(sx).toBeLessThanOrEqual(from.x + from.w + 0.5);
-        expect(sy).toBeGreaterThanOrEqual(from.y - 0.5);
-        expect(sy).toBeLessThanOrEqual(from.y + from.h + 0.5);
-        expect(tx).toBeGreaterThanOrEqual(to.x - 0.5);
-        expect(tx).toBeLessThanOrEqual(to.x + to.w + 0.5);
-        expect(ty).toBeGreaterThanOrEqual(to.y - 0.5);
-        expect(ty).toBeLessThanOrEqual(to.y + to.h + 0.5);
+        expect(e.points[0]).toEqual(stationOf(from));
+        const [tx, ty] = stationOf(to);
+        const last = e.points[e.points.length - 1]!;
+        // A back edge points at the head's station from the gutter beside it.
+        const tol = e.kind === "back" ? 12 : 0.01;
+        expect(Math.abs(last[0] - tx)).toBeLessThanOrEqual(tol);
+        expect(Math.abs(last[1] - ty)).toBeLessThanOrEqual(tol);
       }
     }
   });
 
-  it("keeps nodes inside the chart and does not overlap them", () => {
+  it("keeps nodes inside the chart, one row each", () => {
     for (const f of flow.functions) {
       for (const n of f.nodes) {
         expect(n.x).toBeGreaterThanOrEqual(0);
@@ -203,14 +211,8 @@ describe("buildFileFlow", () => {
         expect(n.x + n.w).toBeLessThanOrEqual(f.width + 0.5);
         expect(n.y + n.h).toBeLessThanOrEqual(f.height + 0.5);
       }
-      for (let i = 0; i < f.nodes.length; i++) {
-        for (let j = i + 1; j < f.nodes.length; j++) {
-          const a = f.nodes[i]!;
-          const b = f.nodes[j]!;
-          const apart = a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y;
-          expect(apart, `${f.name}: ${a.label} overlaps ${b.label}`).toBe(true);
-        }
-      }
+      const ys = f.nodes.map((n) => n.y);
+      expect(new Set(ys).size, `${f.name}: two rows share a y`).toBe(ys.length);
     }
   });
 

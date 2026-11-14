@@ -4,7 +4,7 @@ import { layoutFunction, measure } from "./layout.js";
 import type { FileFlow } from "./types.js";
 
 export * from "./types.js";
-export { layoutFunction, MAX_NODES, NEST_HEAD, NEST_PAD, NEST_TOP, relayout, type InlineEntry, type InlineTree } from "./layout.js";
+export { CHAR_W, CHART_PAD_R, LABEL_GAP, LABEL_MAX, LANE_W, LINE_X0, LOOP_GAP, ROW_H, layoutFunction, MAX_NODES, NEST_HEAD, NEST_PAD, NEST_TOP, relayout, stationOf, type InlineEntry, type InlineTree } from "./layout.js";
 export { SCOPE_FUNCTION_LIMIT, isNoisePath, summarizeScope } from "./scope.js";
 export * from "./scope-map.js";
 export * from "./zoom-layout.js";

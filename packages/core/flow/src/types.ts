@@ -26,7 +26,7 @@ export type FlowRole =
   | "continue";
 
 /** How the renderer draws a node. */
-export type FlowShape = "terminator" | "step" | "decision" | "loop" | "label" | "join" | "exit" | "nest";
+export type FlowShape = "terminator" | "step" | "decision" | "loop" | "label" | "join" | "exit" | "nest" | "turn";
 
 export interface FlowNode {
   id: string;
@@ -41,6 +41,12 @@ export interface FlowNode {
   target?: string;
   /** The step is a handler the code installs (`onmessage = …`): it opens its target, even a folded lambda. */
   handler?: true;
+  /** Absolute lane of the node's station (line map layout). */
+  lane?: number;
+  /** Absolute x where the label text starts. */
+  labelX?: number;
+  /** A word shown before the label: `else`, a case label, `catch`. */
+  tag?: string;
   x: number;
   y: number;
   w: number;
@@ -49,14 +55,22 @@ export interface FlowNode {
 
 export type FlowEdgeKind = "next" | "true" | "false" | "case" | "back" | "exit" | "exception" | "each";
 
+export type FlowEdgeStyle = "solid" | "skip" | "done" | "back" | "throws";
+
 export interface FlowEdge {
   from: string;
   to: string;
   kind: FlowEdgeKind;
+  /** Not set by the line map layout (rows carry tags instead). */
   label?: string;
   /** Where the label sits. */
   labelAt?: [number, number];
-  /** Polyline from the source node to the target node. */
+  /** The lane whose colour the edge takes. */
+  lane?: number;
+  style?: FlowEdgeStyle;
+  /** SVG path data; the renderer draws this. */
+  d?: string;
+  /** The path's vertices in order: start, bends, end. */
   points: [number, number][];
 }
 
