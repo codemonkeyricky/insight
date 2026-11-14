@@ -1,44 +1,69 @@
 import type { IREdge, IRFinding, IRNode, IRRecord, NodeId, Provenance, Span, UnresolvedRef } from "@insight/ir";
 import type { IRBatch } from "@insight/sdk";
 import type { SyntaxNode } from "./parser.js";
-import { declId, declName, FRONTEND_ID, fnId, nodeKey, resolveCallee, subroutineOf, type Project, type Hdl } from "./project.js";
+import {
+  declId,
+  declName,
+  fnBase,
+  FRONTEND_ID,
+  genNameOf,
+  MAX_CANDIDATES,
+  moduleDefs,
+  nodeKey,
+  fileNodeKey,
+  qualify,
+  resolveCallee,
+  subroutineOf,
+  varClass,
+  type CallTarget,
+  type Hdl,
+  type Project,
+} from "./project.js";
 
 const pt = (p: { row: number; column: number }): [number, number] => [p.row, p.column];
 const spanOf = (file: string, n: SyntaxNode): Span => ({ file, start: pt(n.startPosition), end: pt(n.endPosition) });
 const rangeOf = (file: string, from: SyntaxNode, to: SyntaxNode): Span => ({ file, start: pt(from.startPosition), end: pt(to.endPosition) });
 const clip = (text: string, max: number): string => text.replace(/\s+/g, " ").trim().slice(0, max);
 
-/** Keeps node IDs unique within one file. Two nodes with the same base get `~2`, `~3`, and so on. */
-class Ids {
-  private readonly seen = new Set<string>();
-  take(base: string): string {
-    let id = base;
-    let n = 2;
-    while (this.seen.has(id)) id = `${base}~${n++}`;
-    this.seen.add(id);
-    return id;
-  }
-}
-
 /** Process keywords that start a procedural block. */
 const PROCESS_TYPES = ["always_construct", "initial_construct", "final_construct"];
+/** Definitions that own their own processes, so a module does not count them. */
+const OWNER_TYPES = new Set(["module_declaration", "interface_declaration", "program_declaration", "class_declaration", "package_declaration"]);
 const processKeyword = (p: SyntaxNode): string =>
   p.type === "always_construct" ? (p.namedChildren.find((c) => c.type === "always_keyword")?.text ?? "always") : p.type === "initial_construct" ? "initial" : "final";
 
 /** Statement wrappers between a process and its body, so the label and the timing control can be found. */
 const WRAPPERS = new Set(["statement", "statement_or_null", "statement_item", "procedural_timing_control_statement"]);
+/** Sequential and parallel blocks, whose first named child is the label when they have one. */
+const BLOCKS = new Set(["seq_block", "par_block"]);
 
-/** The label of a process body `begin : label`, when the body is a labelled sequential block. */
+/** The label of a process body `begin : label`, when the body is a labelled block. */
 function labelOf(construct: SyntaxNode): string | undefined {
-  let cur: SyntaxNode | undefined = construct;
-  while (cur) {
-    if (cur.type === "seq_block") {
-      const first = cur.namedChildren[0];
+  let cur: SyntaxNode = construct;
+  for (;;) {
+    const next = cur.namedChildren.find((c) => BLOCKS.has(c.type) || WRAPPERS.has(c.type));
+    if (!next) return undefined;
+    if (BLOCKS.has(next.type)) {
+      const first = next.namedChildren[0];
       return first?.type === "simple_identifier" ? first.text : undefined;
     }
-    cur = cur.namedChildren.find((c) => WRAPPERS.has(c.type));
+    cur = next;
   }
-  return undefined;
+}
+
+/** The processes directly owned by a module: those not inside a nested definition. */
+function ownProcesses(n: SyntaxNode): SyntaxNode[] {
+  const out: SyntaxNode[] = [];
+  const visit = (c: SyntaxNode): void => {
+    if (PROCESS_TYPES.includes(c.type)) {
+      out.push(c);
+      return;
+    }
+    if (OWNER_TYPES.has(c.type)) return;
+    for (const k of c.namedChildren) visit(k);
+  };
+  for (const k of n.namedChildren) visit(k);
+  return out;
 }
 
 /**
@@ -67,9 +92,10 @@ function sensitivityOf(construct: SyntaxNode): { list: string[]; clock?: string 
   return clock === undefined ? { list } : { list, clock };
 }
 
-const FS_WRITE = ["$fopen", "$fwrite", "$fdisplay", "$fstrobe", "$fmonitor", "$fclose"];
+const FS_WRITE = ["$fwrite", "$fdisplay", "$fstrobe", "$fmonitor"];
 const FS_READ = ["$readmemh", "$readmemb", "$fread", "$fscanf", "$fgets", "$fgetc"];
 const CLOCK = ["$time", "$stime", "$realtime"];
+/** System tasks with an effect. `$fopen` is classified by its mode, and `$fclose` has no effect of its own. */
 const SYSTEM_EFFECTS = new Map<string, { kind: string; key?: "path" | "command" | "name" }>([
   ...FS_WRITE.map((n) => [n, { kind: "effects.fs.write", key: "path" as const }] as const),
   ...FS_READ.map((n) => [n, { kind: "effects.fs.read", key: "path" as const }] as const),
@@ -83,11 +109,13 @@ const SYSTEM_EFFECTS = new Map<string, { kind: string; key?: "path" | "command" 
 /** Loop keywords and the flow variant each one maps to. */
 const LOOP_VARIANT: Record<string, string> = { for: "for", foreach: "for-in", while: "while", do: "do", repeat: "while", forever: "while" };
 
+const DPI_FN = "dpi";
+
 /** Where the code being walked sits. */
 interface Frame {
   /** Parent for structure nodes and for facts outside any function: the file, a module, a package, a class or a type. */
   container: NodeId;
-  /** Name of the nearest enclosing class, package or module. Qualifies function ids. */
+  /** Name of the nearest enclosing class, package or module, or the class a function is defined out of. Qualifies function ids. */
   scope?: string;
   /** The nearest enclosing module, interface or program. Owns its processes and instances. */
   module?: { name: string; id: NodeId; ords: Map<string, number> };
@@ -97,15 +125,54 @@ interface Frame {
   fn?: NodeId;
 }
 
+/** Ports of a module-like definition. A non-ANSI header takes its directions from the body. */
+function portsOf(n: SyntaxNode, header: SyntaxNode | undefined): Array<{ name: string; dir?: string }> {
+  if (header === undefined) return [];
+  if (header.type.includes("nonansi")) {
+    const dirs = new Map<string, string>();
+    for (const pd of n.descendantsOfType("port_declaration")) {
+      const decl = pd.namedChildren.find((c) => c.type.endsWith("_declaration"));
+      const dir = decl?.type.replace(/_declaration$/, "");
+      if (!decl || !dir) continue;
+      for (const id of [...decl.descendantsOfType("list_of_port_identifiers"), ...decl.descendantsOfType("list_of_variable_identifiers")]) {
+        for (const s of id.namedChildren) if (s.type === "simple_identifier") dirs.set(s.text, dir);
+      }
+    }
+    const list = header.namedChildren.find((c) => c.type === "list_of_ports");
+    return (list?.namedChildren ?? [])
+      .filter((c) => c.type === "port")
+      .map((p) => p.namedChildren.find((c) => c.type === "simple_identifier")?.text)
+      .filter((name): name is string => name !== undefined)
+      .map((name) => {
+        const dir = dirs.get(name);
+        return dir ? { name, dir } : { name };
+      });
+  }
+  let dir = "";
+  return (header.namedChildren.find((c) => c.type === "list_of_port_declarations")?.namedChildren ?? [])
+    .filter((c) => c.type === "ansi_port_declaration")
+    .map((p) => {
+      if (p.descendantsOfType("interface_port_header").length > 0) dir = "interface";
+      else {
+        const d = p.descendantsOfType("port_direction")[0]?.text;
+        if (d) dir = d;
+      }
+      const name = p.childForFieldName("port_name")?.text ?? p.namedChildren.find((c) => c.type === "simple_identifier")?.text ?? "";
+      return dir ? { name, dir } : { name };
+    })
+    .filter((p) => p.name !== "");
+}
+
 /** Facts for one file, from the project pass. Files with parse errors get inferred facts and one finding. */
 export function emitUnit(project: Project, rel: string): IRBatch {
   const unit = project.units.get(rel);
   if (!unit) return { file: rel, records: [] };
 
   const prov: Provenance = { frontend: FRONTEND_ID, confidence: unit.errors.length > 0 ? "inferred" : "exact" };
+  const heuristic: Provenance = { frontend: FRONTEND_ID, confidence: "heuristic" };
   const records: IRRecord[] = [];
   const deps = new Set<string>();
-  const ids = new Ids();
+  const ids = unit.ids;
   const node = (n: IRNode): void => {
     records.push({ node: n });
   };
@@ -116,61 +183,120 @@ export function emitUnit(project: Project, rel: string): IRBatch {
     if (file !== rel) deps.add(file);
   };
   const basename = rel.slice(rel.lastIndexOf("/") + 1).replace(/\.[^.]+$/, "");
-  const seenImports = new Set<string>();
 
   const flow = (owner: NodeId, tag: string, kind: string, span: Span, attrs: Record<string, unknown>): void => {
     node({ id: ids.take(`${owner}/${tag}`), facet: "flow", kind, parent: owner, attrs, span, provenance: prov });
   };
 
-  /** A call from the current function or process to the function it names, or an unresolved reference. */
-  const emitCall = (f: Frame, nameNode: SyntaxNode, name: string, explicit: string | undefined): void => {
-    if (!f.fn) return;
-    const hit = resolveCallee(project, rel, f.scope, name, explicit);
-    const span = spanOf(rel, nameNode);
-    const callee = explicit !== undefined ? `${explicit}::${name}` : name;
-    if (hit) {
-      depend(hit.ref.file);
+  /**
+   * A call from the current function, or from the enclosing definition at module level, to what it names.
+   * Several matches are candidates. No match is an unresolved reference.
+   */
+  const emitCall = (f: Frame, at: SyntaxNode, callee: string, name: string, target: CallTarget): void => {
+    const from = f.fn ?? f.container;
+    const span = spanOf(rel, at);
+    const hit = resolveCallee(project, rel, f.scope, name, target);
+    if (!hit) {
+      const to: UnresolvedRef = { unresolved: { scheme: "sv.call", text: callee } };
+      edge({ from, to, facet: "calls", kind: "calls.call", attrs: { callee }, span, provenance: prov });
+      return;
+    }
+    for (const r of hit.refs) depend(r.file);
+    const [first, ...rest] = hit.refs.map((r) => r.id) as [NodeId, ...NodeId[]];
+    if (rest.length === 0) {
       const provenance: Provenance = { frontend: FRONTEND_ID, confidence: hit.exact ? prov.confidence : "inferred" };
-      edge({ from: f.fn, to: hit.ref.id, facet: "calls", kind: "calls.call", attrs: { callee }, span, provenance });
+      edge({ from, to: first, facet: "calls", kind: "calls.call", attrs: { callee }, span, provenance });
     } else {
-      const to: UnresolvedRef = { unresolved: { scheme: "sv.call", text: name } };
-      edge({ from: f.fn, to, facet: "calls", kind: "calls.call", attrs: { callee }, span, provenance: prov });
+      const to = { candidates: [first, ...rest] as [NodeId, ...NodeId[]] };
+      edge({ from, to, facet: "calls", kind: "calls.call", attrs: { callee, ...(hit.truncated ? { truncated: true } : {}) }, span, provenance: heuristic });
     }
   };
 
-  /** A call written as obj.m(...) or pkg::f(...). Without parentheses it is a reference to a constant, not a call. */
+  /** A method call written as `this.m()`, `super.m()`, `obj.m()` or a plain `m()` with a method-call body. */
   const methodCall = (f: Frame, n: SyntaxNode): void => {
     const body = n.namedChildren.find((c) => c.type === "method_call_body");
     const nameNode = body?.childForFieldName("name");
     if (!body || !nameNode || !body.text.includes("(")) return;
+    const name = nameNode.text;
+    const receiver = n.namedChildren.find((c) => c.type === "implicit_class_handle")?.text.trim();
+    if (receiver === "this") {
+      emitCall(f, nameNode, `this.${name}`, name, f.scope !== undefined ? { kind: "member", cls: f.scope } : { kind: "none" });
+      return;
+    }
+    if (receiver === "super") {
+      const base = f.scope !== undefined ? project.bases.get(f.scope) : undefined;
+      emitCall(f, nameNode, `super.${name}`, name, base ? { kind: "member", cls: base.name } : { kind: "none" });
+      return;
+    }
     const primary = n.namedChildren.find((c) => c.type === "primary")?.text.trim();
-    const explicit = primary !== undefined && /^[A-Za-z_]\w*$/.test(primary) ? primary : undefined;
-    emitCall(f, nameNode, nameNode.text, explicit);
+    if (primary === undefined) {
+      emitCall(f, nameNode, name, name, { kind: "plain" });
+      return;
+    }
+    // `pkg::f()` parses as a method call on `pkg`. Only the separator tells a scope from an object.
+    const head = n.text.slice(0, body.startIndex - n.startIndex);
+    if (head.includes("::")) {
+      emitCall(f, nameNode, `${primary}::${name}`, name, /^[A-Za-z_]\w*$/.test(primary) ? { kind: "scoped", scope: primary } : { kind: "none" });
+      return;
+    }
+    const cls = /^[A-Za-z_]\w*$/.test(primary) ? varClass(project, rel, f.scope, primary) : undefined;
+    emitCall(f, nameNode, `${primary}.${name}`, name, cls !== undefined ? { kind: "member", cls } : { kind: "none" });
   };
 
-  /** A plain call such as f(x), or obj.m(x) through a hierarchical name. System tasks are not calls. */
+  /** A plain call such as f(x), a scoped call pkg::f(x), or a method call through a variable, obj.m(x). System tasks are not calls. */
   const tfCall = (f: Frame, n: SyntaxNode): void => {
     const hi = n.namedChildren.find((c) => c.type === "hierarchical_identifier");
     if (!hi) return;
-    const parts = hi.text.split(/::|\./);
-    const name = parts[parts.length - 1] ?? hi.text;
-    const explicit = parts.length > 1 ? parts[parts.length - 2] : undefined;
-    emitCall(f, hi, name, explicit);
+    const text = hi.text.replace(/\s+/g, "");
+    if (text.includes("::")) {
+      const parts = text.split("::");
+      const name = parts[parts.length - 1] ?? text;
+      const scope = parts.length === 2 ? parts[0] : undefined;
+      emitCall(f, hi, text, name, scope !== undefined ? { kind: "scoped", scope } : { kind: "none" });
+      return;
+    }
+    const parts = text.split(".");
+    const name = parts[parts.length - 1] ?? text;
+    if (parts.length === 1) {
+      emitCall(f, hi, name, name, { kind: "plain" });
+      return;
+    }
+    const recv = parts[0] ?? "";
+    const cls = parts.length === 2 ? varClass(project, rel, f.scope, recv) : undefined;
+    emitCall(f, hi, text, name, cls !== undefined ? { kind: "member", cls } : { kind: "none" });
   };
 
   /** A system task: an effect when it is in the catalog, otherwise nothing. */
   const systemCall = (f: Frame, n: SyntaxNode): void => {
     const name = n.namedChildren.find((c) => c.type === "system_tf_identifier")?.text;
-    const spec = name !== undefined ? SYSTEM_EFFECTS.get(name) : undefined;
-    if (!name || !spec) return;
-    const first = n.namedChildren.find((c) => c.type === "list_of_arguments")?.namedChildren[0]?.text;
-    const literal = first !== undefined && first.startsWith('"') ? first.slice(1, -1) : undefined;
+    if (!name) return;
+    const args = n.namedChildren.find((c) => c.type === "list_of_arguments")?.namedChildren ?? [];
+    const literalOf = (e: SyntaxNode | undefined): string | undefined => {
+      const t = e?.text;
+      return t !== undefined && t.length >= 2 && t.startsWith('"') && t.endsWith('"') ? t.slice(1, -1) : undefined;
+    };
     const attrs: Record<string, unknown> = { api: name };
-    if (spec.key !== undefined && literal !== undefined) attrs[spec.key] = literal;
+    let kind: string | undefined;
+    let key: "path" | "command" | "name" | undefined;
+    if (name === "$fopen") {
+      // Only w, a and + write. A missing or read-only mode reads, as the review requires.
+      const mode = literalOf(args[1]);
+      kind = mode !== undefined && /[wa+]/.test(mode) ? "effects.fs.write" : "effects.fs.read";
+      key = "path";
+      if (mode !== undefined) attrs.mode = mode;
+    } else {
+      const spec = SYSTEM_EFFECTS.get(name);
+      if (!spec) return;
+      kind = spec.kind;
+      key = spec.key;
+    }
+    if (kind === undefined) return;
+    const literal = literalOf(args[0]);
+    if (key !== undefined && literal !== undefined) attrs[key] = literal;
     node({
       id: ids.take(`${f.fn ?? f.container}/effect`),
       facet: "effects",
-      kind: spec.kind,
+      kind,
       parent: f.fn ?? f.container,
       attrs,
       span: spanOf(rel, n),
@@ -210,25 +336,17 @@ export function emitUnit(project: Project, rel: string): IRBatch {
       case "program_declaration": {
         const name = declName(n);
         if (!name) break;
-        const id = declId(rel, name);
+        const id = project.idOf.get(fileNodeKey(rel, n)) ?? ids.take(declId(rel, name));
         const hdl: Hdl = n.type === "interface_declaration" ? "interface" : n.type === "program_declaration" ? "program" : "module";
         const header = n.namedChildren.find((c) => c.type.endsWith("_header"));
-        const params = (header?.namedChildren.find((c) => c.type === "parameter_port_list")?.descendantsOfType("param_assignment") ?? [])
+        const params = (header?.namedChildren.find((c) => c.type === "parameter_port_list")?.descendantsOfType(["param_assignment", "type_assignment"]) ?? [])
           .map((a) => a.namedChildren.find((c) => c.type === "simple_identifier")?.text)
           .filter((p): p is string => p !== undefined);
-        let dir = "";
-        const ports = (header?.namedChildren.find((c) => c.type === "list_of_port_declarations")?.namedChildren ?? [])
-          .filter((c) => c.type === "ansi_port_declaration")
-          .map((p) => {
-            const d = p.descendantsOfType("port_direction")[0]?.text;
-            if (d) dir = d;
-            return { name: p.childForFieldName("port_name")?.text ?? "", dir };
-          })
-          .filter((p) => p.name !== "");
+        const ports = portsOf(n, header);
         // Every process of a module gets its ordinal per keyword, in source order, generate blocks included.
         const ords = new Map<string, number>();
         const counts = new Map<string, number>();
-        for (const p of n.descendantsOfType(PROCESS_TYPES)) {
+        for (const p of ownProcesses(n)) {
           const kw = processKeyword(p);
           const c = (counts.get(kw) ?? 0) + 1;
           counts.set(kw, c);
@@ -251,7 +369,7 @@ export function emitUnit(project: Project, rel: string): IRBatch {
       case "package_declaration": {
         const name = declName(n);
         if (!name) break;
-        const id = declId(rel, name);
+        const id = project.idOf.get(fileNodeKey(rel, n)) ?? ids.take(declId(rel, name));
         node({ id, facet: "structure", kind: "structure.module", parent: f.container, attrs: { name, hdl: "package" }, span: spanOf(rel, n), provenance: prov });
         visitChildren(n, { container: id, scope: name, gen: [] });
         break;
@@ -259,7 +377,7 @@ export function emitUnit(project: Project, rel: string): IRBatch {
       case "class_declaration": {
         const name = declName(n);
         if (!name) break;
-        const id = declId(rel, name);
+        const id = project.idOf.get(fileNodeKey(rel, n)) ?? ids.take(declId(rel, name));
         node({
           id,
           facet: "structure",
@@ -269,24 +387,26 @@ export function emitUnit(project: Project, rel: string): IRBatch {
           span: spanOf(rel, n),
           provenance: prov,
         });
-        visitChildren(n, { ...f, container: id, scope: name });
+        visitChildren(n, { container: id, scope: name, gen: [] });
         break;
       }
       case "function_declaration":
-      case "task_declaration": {
+      case "task_declaration":
+      case "class_constructor_declaration": {
         const sub = subroutineOf(n);
         if (!sub) break;
-        const id = fnId(rel, f.scope, sub.name);
+        const scope = sub.scope ?? f.scope;
+        const id = project.idOf.get(fileNodeKey(rel, n)) ?? ids.take(fnBase(rel, scope, f.gen, sub.name));
         node({
           id,
           facet: "structure",
           kind: "structure.function",
           parent: f.container,
-          attrs: { name: f.scope ? `${f.scope}.${sub.name}` : sub.name, hdl: sub.hdl },
+          attrs: { name: qualify(scope, ...f.gen, sub.name), hdl: sub.hdl },
           span: spanOf(rel, n),
           provenance: prov,
         });
-        visitChildren(n, { ...f, fn: id });
+        visitChildren(n, { ...f, fn: id, scope });
         break;
       }
       case "always_construct":
@@ -312,16 +432,42 @@ export function emitUnit(project: Project, rel: string): IRBatch {
             ...(clock !== undefined ? { clock } : {}),
           },
           span: spanOf(rel, n),
-          provenance: clock !== undefined ? { frontend: FRONTEND_ID, confidence: "heuristic" } : prov,
+          provenance: clock !== undefined ? heuristic : prov,
         });
         visitChildren(n, { ...f, fn: id });
+        break;
+      }
+      case "dpi_import_export": {
+        const id = project.idOf.get(fileNodeKey(rel, n));
+        if (id === undefined) break;
+        const proto = n.descendantsOfType(["function_prototype", "task_prototype"])[0];
+        const name = proto?.childForFieldName("name")?.text ?? proto?.namedChildren.find((c) => c.type === "simple_identifier")?.text ?? "";
+        const scope = f.scope;
+        node({
+          id,
+          facet: "structure",
+          kind: "structure.function",
+          parent: f.container,
+          attrs: { name: qualify(scope, ...f.gen, name), hdl: proto?.type === "task_prototype" ? "task" : "function", dpi: true },
+          span: spanOf(rel, n),
+          provenance: prov,
+        });
+        node({
+          id: ids.take(`${id}/${DPI_FN}`),
+          facet: "effects",
+          kind: "effects.unknown",
+          parent: id,
+          attrs: { api: name },
+          span: spanOf(rel, n),
+          provenance: prov,
+        });
         break;
       }
       case "module_instantiation": {
         const type = n.childForFieldName("instance_type")?.text;
         if (!type) break;
         const modName = f.module?.name ?? basename;
-        const target = project.decls.get(type);
+        const defs = moduleDefs(project, type);
         for (const hi of n.namedChildren.filter((c) => c.type === "hierarchical_instance")) {
           const inst = hi.namedChildren.find((c) => c.type === "name_of_instance")?.childForFieldName("instance_name")?.text;
           if (!inst) continue;
@@ -336,10 +482,20 @@ export function emitUnit(project: Project, rel: string): IRBatch {
             span: spanOf(rel, hi),
             provenance: prov,
           });
-          const resolved = target !== undefined && target.hdl !== "package" && target.hdl !== "class";
-          if (resolved) depend(target.file);
-          const to: NodeId | UnresolvedRef = resolved ? target.id : { unresolved: { scheme: "sv.module", text: type } };
-          edge({ from: f.container, to, facet: "structure", kind: "x-sv.instantiates", attrs: { instance: inst }, span: spanOf(rel, hi), provenance: { frontend: FRONTEND_ID, confidence: "exact" } });
+          const span = spanOf(rel, hi);
+          const attrs = { instance: inst };
+          const from = f.container;
+          const [first, ...rest] = defs.map((d) => d.id) as NodeId[];
+          if (first === undefined) {
+            edge({ from, to: { unresolved: { scheme: "sv.module", text: type } }, facet: "structure", kind: "x-sv.instantiates", attrs, span, provenance: prov });
+          } else if (rest.length === 0) {
+            for (const d of defs) depend(d.file);
+            edge({ from, to: first, facet: "structure", kind: "x-sv.instantiates", attrs, span, provenance: { frontend: FRONTEND_ID, confidence: "exact" } });
+          } else {
+            for (const d of defs) depend(d.file);
+            const cands = [...defs.map((d) => d.id)].sort().slice(0, MAX_CANDIDATES) as [NodeId, ...NodeId[]];
+            edge({ from, to: { candidates: cands }, facet: "structure", kind: "x-sv.instantiates", attrs, span, provenance: heuristic });
+          }
         }
         break;
       }
@@ -347,9 +503,6 @@ export function emitUnit(project: Project, rel: string): IRBatch {
         for (const item of n.namedChildren.filter((c) => c.type === "package_import_item")) {
           const pkg = item.namedChildren.find((c) => c.type === "simple_identifier")?.text;
           if (!pkg) continue;
-          const key = `${f.container}|${pkg}`;
-          if (seenImports.has(key)) continue;
-          seenImports.add(key);
           const decl = project.decls.get(pkg);
           const isPkg = decl !== undefined && decl.hdl === "package";
           if (isPkg) depend(decl.file);
@@ -372,22 +525,6 @@ export function emitUnit(project: Project, rel: string): IRBatch {
         const text = m[1] ?? "";
         const to: UnresolvedRef = { unresolved: { scheme: "sv.include", text } };
         edge({ from: rel, to, facet: "packaging", kind: "packaging.include", attrs: { text }, span: spanOf(rel, n), provenance: prov });
-        break;
-      }
-      case "dpi_import_export": {
-        const spec = n.namedChildren.find((c) => c.type === "dpi_spec_string")?.text ?? "";
-        if (!/^import\b/.test(n.text) || !/DPI/.test(spec)) break;
-        const name = n.descendantsOfType(["function_prototype", "task_prototype"])[0]?.childForFieldName("name")?.text;
-        if (!name) break;
-        node({
-          id: ids.take(`${f.container}@dpi:${name}`),
-          facet: "effects",
-          kind: "effects.unknown",
-          parent: f.container,
-          attrs: { api: name },
-          span: spanOf(rel, n),
-          provenance: prov,
-        });
         break;
       }
       case "conditional_statement": {
@@ -450,6 +587,15 @@ export function emitUnit(project: Project, rel: string): IRBatch {
         visitChildren(n, f);
         break;
       }
+      case "disable_statement": {
+        // `disable name` leaves a named block; `disable fork` leaves the fork. Both end the enclosing region, so they are a break.
+        if (f.fn) {
+          const target = clip(n.text.replace(/^disable\b/, "").replace(/;$/, ""), 120);
+          flow(f.fn, "jump", "flow.jump", spanOf(rel, n), { variant: "break", ...(target !== "" ? { label: target } : {}) });
+        }
+        visitChildren(n, f);
+        break;
+      }
       case "method_call":
         methodCall(f, n);
         visitChildren(n, f);
@@ -463,7 +609,7 @@ export function emitUnit(project: Project, rel: string): IRBatch {
         visitChildren(n, f);
         break;
       case "generate_block": {
-        const name = n.childForFieldName("name")?.text;
+        const name = genNameOf(n);
         visitChildren(n, name ? { ...f, gen: [...f.gen, name] } : f);
         break;
       }
@@ -471,6 +617,24 @@ export function emitUnit(project: Project, rel: string): IRBatch {
         visitChildren(n, f);
     }
   };
+
+  // Definitions the grammar could not parse, found by text. They are structure only; their bodies are unknown.
+  for (const s of unit.scanned) {
+    const span: Span = { file: rel, start: [s.line, 0], end: [s.line, s.length] };
+    if (s.hdl === "package") {
+      node({ id: s.id, facet: "structure", kind: "structure.module", parent: rel, attrs: { name: s.name, hdl: "package" }, span, provenance: heuristic });
+    } else {
+      node({
+        id: s.id,
+        facet: "structure",
+        kind: "structure.type",
+        parent: rel,
+        attrs: { name: s.name, typeKind: s.hdl === "interface" ? "interface" : "struct", hdl: s.hdl, params: [], ports: [] },
+        span,
+        provenance: heuristic,
+      });
+    }
+  }
 
   visit(unit.root, { container: rel, gen: [] });
 
