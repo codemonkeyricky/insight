@@ -1,4 +1,4 @@
-// The runtime of one scope's System model: the processes, threads and coroutines its code runs on, the slices (one
+// The runtime of one scope's System model: the programs, threads and coroutines its code runs on, the slices (one
 // component on one runtime), and the in-process resources (queues, locks, semaphores, condvars, env) and kernel ops.
 // Built from execModel with the Flow grounding rules, so a thread exists only where the IR grounds it. Pure: the same
 // model and scope give the same plan, whatever order the IR arrives in (every list is sorted by id).
@@ -10,7 +10,7 @@ import type { Site } from "./system.js";
 /** grounded: runtimes exist and edges are drawn per slice. none: no runtime context, the flat model. truncated: the exec model was cut. */
 export type SystemRuntimeMode = "grounded" | "none" | "truncated";
 
-/** The spawn that started a thread or process: where it is, the API it calls, and whether its target was found. */
+/** The spawn that started a thread or program: where it is, the API it calls, and whether its target was found. */
 export interface SystemSpawn extends Site {
   api?: string;
   status: ExecSpawnStatus;
@@ -20,11 +20,12 @@ export interface SystemRuntime {
   id: string;
   kind: "program" | "thread" | "coroutine" | "unthreaded";
   label: string;
-  /** The program a thread runs in, or the thread a coroutine runs on. */
+  /** The program a thread runs in, or the thread a coroutine runs on. Absent for a program (and for the unthreaded runtime). */
   parent?: string;
   /** The main thread of a program that has no other thread: not drawn, its children sit in the program frame. */
   implicit?: true;
   programKind?: "node" | "browser" | "native";
+  /** A program started by a spawn or a command: where it was started. A thread's spawn is the one that started it. */
   spawn?: SystemSpawn;
   /** Started (not awaited) coroutines the thread runs. */
   coroutines?: number;
@@ -50,7 +51,10 @@ export interface SystemResource {
   id: string;
   kind: SystemResourceKind;
   label: string;
-  /** The owning program (or thread, when it has no program). Absent for kernel ops; "unthreaded" when no thread runs it. */
+  /**
+   * The program of the runtimes that use the resource. Absent when none of them has a program (a flat scope, or code no
+   * program runs). One resource per program: the same name used by two programs gives two resources.
+   */
   program?: string;
   source: "message" | "event-loop" | "channel" | "sync" | "env" | "os";
   /** Env var names, signal names or other operation targets, sorted. */
@@ -74,13 +78,17 @@ export interface RuntimePlan {
   owners(fn: NodeId | undefined, file: string | undefined): string[];
   /** The slice id of a component on a runtime. Created with no functions when it does not exist yet. */
   sliceId(runtime: string, component: string): string;
-  /** The program a runtime belongs to: a program, a thread's program (or the thread itself), a coroutine's thread's program. */
-  programOf(runtime: string): string;
+  /** The program a runtime belongs to, or undefined when it has none (a thread with no program, the unthreaded runtime). */
+  programOf(runtime: string): string | undefined;
   /** The thread a runtime is or runs on, when it is one. */
   threadOf(runtime: string): string | undefined;
   label(runtime: string): string;
-  /** The thread a spawn node starts, when the spawn is grounded. */
+  /** The thread a thread spawn node starts, when the spawn is grounded. */
   threadOfSpawn(node: NodeId): string | undefined;
+  /** The program runtime a process spawn starts, when its target is a project program. */
+  programOfSpawn(node: NodeId): string | undefined;
+  /** The program runtime a command runs, when exactly one project program has that name. Records the spawn that ran it. */
+  programOfCommand(command: string, spawn: SystemSpawn): string | undefined;
   /** Adds a resource unless one with its id exists; returns the stored one. */
   putResource(res: SystemResource): SystemResource;
   addName(resourceId: string, name: string): void;
@@ -94,16 +102,15 @@ function basename(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1);
 }
 
-function programKindOf(p: ExecProgram | undefined): SystemRuntime["programKind"] {
-  if (p?.kind === "browser") return "browser";
-  if (p?.kind === "node" || p?.entry !== undefined) return "node";
+function programKindOf(p: ExecProgram): NonNullable<SystemRuntime["programKind"]> {
+  if (p.kind === "browser") return "browser";
+  if (p.kind === "node" || p.entry !== undefined) return "node";
   return "native";
 }
 
 function threadLabel(t: ExecThread): string {
   if (t.kind === "main") return "Main thread";
   const s = t.spawn;
-  if (t.kind === "process") return `Process · ${s?.command ?? s?.api ?? "child"}`;
   if (s?.script !== undefined && s.script !== "") return `Worker · ${basename(s.script)}`;
   return `Thread · ${s?.api ?? "thread"}`;
 }
@@ -116,6 +123,11 @@ function spawnOf(s: ExecSpawn): SystemSpawn {
     ...(s.owner !== undefined ? { fn: s.owner } : {}),
     ...(s.api !== undefined ? { api: s.api } : {}),
   };
+}
+
+/** A total order on spawns, so the spawn that names a program does not depend on the order the IR arrives in. */
+function spawnKey(s: SystemSpawn): string {
+  return `${s.file}\0${String(s.line).padStart(8, "0")}\0${s.fn ?? ""}\0${s.api ?? ""}`;
 }
 
 function addTo(map: Map<string, Set<string>>, key: string, value: string): void {
@@ -138,9 +150,11 @@ export function buildRuntimePlan(model: ProjectModel, scope: string, compOfFile:
   const resources = new Map<string, SystemResource>();
   const fnById = new Map<string, ExecFunctionRef>(exec.functions.map((f) => [f.id, f] as const));
   const threadOfSpawnMap = new Map<string, string>();
+  const programOfSpawnMap = new Map<string, string>();
   const threadsOfFn = new Map<string, Set<string>>();
   const coroutinesOfFn = new Map<string, Set<string>>();
   const rootKeys = new Set<string>();
+  const spawnOfProgram = new Map<string, SystemSpawn>();
 
   const sliceId = (runtime: string, component: string): string => {
     const id = `${runtime}|${component}`;
@@ -148,13 +162,13 @@ export function buildRuntimePlan(model: ProjectModel, scope: string, compOfFile:
     return id;
   };
 
-  const programOf = (rt: string): string => {
+  const programOf = (rt: string): string | undefined => {
     const r = runtimes.get(rt);
-    if (r === undefined) return UNTHREADED_ID;
-    if (r.kind === "coroutine") return r.parent === undefined ? UNTHREADED_ID : programOf(r.parent);
-    if (r.kind === "thread") return r.parent ?? r.id;
+    if (r === undefined) return undefined;
+    if (r.kind === "coroutine") return r.parent === undefined ? undefined : programOf(r.parent);
+    if (r.kind === "thread") return r.parent;
     if (r.kind === "program") return r.id;
-    return UNTHREADED_ID;
+    return undefined;
   };
 
   const threadOf = (rt: string): string | undefined => {
@@ -174,38 +188,102 @@ export function buildRuntimePlan(model: ProjectModel, scope: string, compOfFile:
     return [...owners].sort(cmp);
   };
 
+  /** The program runtime of an exec program. A spawn that starts it is kept when it sorts first, so the choice is stable. */
+  const ensureProgram = (p: ExecProgram, spawn?: SystemSpawn): string => {
+    const id = execProgramId(p.id);
+    let r = runtimes.get(id);
+    if (r === undefined) {
+      r = { id, kind: "program", label: p.name, programKind: programKindOf(p) };
+      runtimes.set(id, r);
+    }
+    if (spawn !== undefined) {
+      const have = spawnOfProgram.get(id);
+      if (have === undefined || spawnKey(spawn) < spawnKey(have)) {
+        spawnOfProgram.set(id, spawn);
+        r.spawn = spawn;
+      }
+    }
+    return id;
+  };
+
+  const programOfCommand = (command: string, spawn: SystemSpawn): string | undefined => {
+    if (!grounded) return undefined;
+    const matches = exec.programs.filter((p) => p.name === command && p.targetKind !== "html-entry");
+    if (matches.length !== 1) return undefined;
+    return ensureProgram(matches[0] as ExecProgram, spawn);
+  };
+
   if (grounded) {
-    const threads = exec.threads.filter((t) => t.grounded);
-    const threadIds = new Set(threads.map((t) => t.id));
+    // The threads that run code: every grounded thread but a process. A process is a program: one an exec program names
+    // is that program (its own main thread runs the code); a resolved one no exec program names gets its own program and
+    // an implicit main thread. An unresolved process is no runtime: the spawn stays an external process box.
+    interface ThreadSpec {
+      rt: string;
+      t: ExecThread;
+      parent?: string;
+      label: string;
+      implicit: boolean;
+      spawn?: SystemSpawn;
+    }
+    const specs: ThreadSpec[] = [];
+    const threadIds = new Set(exec.threads.filter((t) => t.grounded && t.kind !== "process").map((t) => t.id));
     const programOfThread = new Map<string, string>();
     for (const p of exec.programs) {
-      for (const tid of p.threads) if (threadIds.has(tid) && !programOfThread.has(tid)) programOfThread.set(tid, execProgramId(p.id));
+      for (const tid of p.threads) {
+        if (!threadIds.has(tid) || programOfThread.has(tid)) continue;
+        programOfThread.set(tid, ensureProgram(p));
+      }
     }
-    const progById = new Map(exec.programs.map((p) => [execProgramId(p.id), p] as const));
-    for (const prt of new Set(programOfThread.values())) {
-      const p = progById.get(prt);
-      runtimes.set(prt, { id: prt, kind: "program", label: p?.name ?? prt, ...(programKindOf(p) !== undefined ? { programKind: programKindOf(p) } : {}) });
+    const programNaming = (roots: readonly string[]): ExecProgram | undefined =>
+      exec.programs.find((prog) => (prog.main !== undefined && roots.includes(prog.main)) || (prog.entries ?? []).some((e) => roots.includes(e)));
+    for (const t of exec.threads) {
+      if (!t.grounded || t.kind !== "process" || t.spawn === undefined) continue;
+      const spawn = spawnOf(t.spawn);
+      const named = programNaming(t.roots);
+      if (named !== undefined) {
+        programOfSpawnMap.set(t.spawn.node, ensureProgram(named, spawn));
+        continue;
+      }
+      if (t.spawn.status !== "resolved") continue;
+      const rootFile = fnById.get(t.roots[0] ?? "")?.file ?? t.roots[0] ?? "";
+      const pid = `program:${t.spawn.node}`;
+      runtimes.set(pid, { id: pid, kind: "program", label: rootFile, programKind: "node", spawn });
+      spawnOfProgram.set(pid, spawn);
+      programOfSpawnMap.set(t.spawn.node, pid);
+      specs.push({ rt: execThreadId(t.id), t, parent: pid, label: "Main thread", implicit: true });
     }
     const groupSize = new Map<string, number>();
-    for (const t of threads) {
+    for (const t of exec.threads) {
+      if (!threadIds.has(t.id)) continue;
       const key = programOfThread.get(t.id) ?? "";
       groupSize.set(key, (groupSize.get(key) ?? 0) + 1);
     }
-    for (const t of threads) {
-      const rt = execThreadId(t.id);
+    for (const t of exec.threads) {
+      if (!threadIds.has(t.id)) continue;
       const parent = programOfThread.get(t.id);
+      const spawn = t.spawn !== undefined ? spawnOf(t.spawn) : undefined;
+      specs.push({
+        rt: execThreadId(t.id),
+        t,
+        ...(parent !== undefined ? { parent } : {}),
+        label: threadLabel(t),
+        implicit: t.kind === "main" && groupSize.get(parent ?? "") === 1,
+        ...(spawn !== undefined ? { spawn } : {}),
+      });
+    }
+    for (const sp of specs) {
+      const { rt, t } = sp;
       const started = t.coroutines.filter((c) => c.how === "start");
-      const implicit = t.kind === "main" && groupSize.get(parent ?? "") === 1;
       runtimes.set(rt, {
         id: rt,
         kind: "thread",
-        label: threadLabel(t),
-        ...(parent !== undefined ? { parent } : {}),
-        ...(implicit ? { implicit: true as const } : {}),
-        ...(t.spawn !== undefined ? { spawn: spawnOf(t.spawn) } : {}),
+        label: sp.label,
+        ...(sp.parent !== undefined ? { parent: sp.parent } : {}),
+        ...(sp.implicit ? { implicit: true as const } : {}),
+        ...(sp.spawn !== undefined ? { spawn: sp.spawn } : {}),
         ...(started.length > 0 ? { coroutines: started.length } : {}),
       });
-      if (t.spawn !== undefined) threadOfSpawnMap.set(t.spawn.node, rt);
+      if (t.spawn !== undefined && t.kind !== "process") threadOfSpawnMap.set(t.spawn.node, rt);
       // Functions a coroutine alone runs are owned by the coroutine, not by the thread that awaits it.
       const coOnly = new Set(t.coroutineOnly);
       for (const fn of t.reached) if (!coOnly.has(fn) && fnById.get(fn)?.inScope) addTo(threadsOfFn, fn, rt);
@@ -228,13 +306,12 @@ export function buildRuntimePlan(model: ProjectModel, scope: string, compOfFile:
         if (rootKeys.has(`${rt}\0${f.id}`)) s.root = true;
       }
     }
-    for (const t of threads) {
-      const rt = execThreadId(t.id);
-      for (const c of t.coroutines) {
+    for (const sp of specs) {
+      for (const c of sp.t.coroutines) {
         if (c.how !== "await") continue;
         const f = fnById.get(c.target);
         const comp = f?.inScope === true ? compOfFile(f.file) : undefined;
-        const s = comp === undefined ? undefined : slices.get(`${rt}|${comp}`);
+        const s = comp === undefined ? undefined : slices.get(`${sp.rt}|${comp}`);
         if (s !== undefined) s.awaits = (s.awaits ?? 0) + 1;
       }
     }
@@ -254,7 +331,7 @@ export function buildRuntimePlan(model: ProjectModel, scope: string, compOfFile:
   };
 
   const finish = (): { runtimes: SystemRuntime[]; slices: SystemSlice[] } => {
-    const usesUnthreaded = [...slices.values()].some((s) => s.runtime === UNTHREADED_ID) || [...resources.values()].some((r) => r.program === UNTHREADED_ID);
+    const usesUnthreaded = [...slices.values()].some((s) => s.runtime === UNTHREADED_ID);
     if (usesUnthreaded && !runtimes.has(UNTHREADED_ID)) runtimes.set(UNTHREADED_ID, { id: UNTHREADED_ID, kind: "unthreaded", label: UNTHREADED_LABEL });
     const owned = new Map<string, string[]>();
     for (const r of resources.values()) {
@@ -271,7 +348,6 @@ export function buildRuntimePlan(model: ProjectModel, scope: string, compOfFile:
     };
   };
 
-  // The spawn nodes of the grounded threads: a spawn starts the thread it names.
   const label = (rt: string): string => runtimes.get(rt)?.label ?? rt;
 
   return {
@@ -285,6 +361,8 @@ export function buildRuntimePlan(model: ProjectModel, scope: string, compOfFile:
     threadOf,
     label,
     threadOfSpawn: (node) => threadOfSpawnMap.get(node),
+    programOfSpawn: (node) => programOfSpawnMap.get(node),
+    programOfCommand,
     putResource,
     addName,
     finish,

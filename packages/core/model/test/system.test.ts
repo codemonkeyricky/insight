@@ -155,7 +155,8 @@ describe("systemModel rules", () => {
     ]);
     expect(sys.components.find((c) => c.id === "scripts")?.entry).toBe(true);
     expect(sys.stages[0]).toEqual(["scripts"]);
-    expect(sys.edges.map((e) => `${e.from}>${e.to}`)).toEqual(["packages/b>packages/a", "scripts>packages/b"]);
+    // Grounded (the script's main is a program entry): calls are drawn per slice, so each edge runs on the callee's runtime.
+    expect(sys.edges.map((e) => `${e.from}>${e.to}`)).toEqual(["thread:main|packages/b>thread:main|packages/a", "thread:main|scripts>thread:main|packages/b"]);
   });
 
   it("maps a relative fetch to the matching route, with :param segments and a leading substitution", () => {

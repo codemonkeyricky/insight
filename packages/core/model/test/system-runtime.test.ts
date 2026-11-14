@@ -79,7 +79,7 @@ function tsDoc(order: "forward" | "reverse" = "forward"): IRDocument {
     moduleFn(worker),
     fn(worker, "handle"),
     fn(util, "shared"),
-    moduleFn(child),
+    moduleFn(child, { nodeEntry: true }),
     fn(child, "run"),
     moduleFn(build, { nodeEntry: true }),
     fn(build, "buildAll"),
@@ -145,7 +145,8 @@ describe("runtime model: TypeScript fixture", () => {
     expect(labels).toContain("program:src/main.ts");
     expect(labels).toContain("thread:Main thread");
     expect(labels).toContain("thread:Thread · Worker");
-    expect(labels).toContain("thread:Process · fork");
+    expect(labels).toContain("program:tools/child.ts");
+    expect(labels).not.toContain("thread:Process · fork");
     const script = (s.runtimes ?? []).find((r) => r.label === "scripts/build.ts" && r.kind === "program");
     expect(script).toBeDefined();
     const scriptMain = (s.runtimes ?? []).find((r) => r.kind === "thread" && r.parent === script?.id);
@@ -204,6 +205,88 @@ describe("runtime model: TypeScript fixture", () => {
     expect(env?.names).toEqual(["API_KEY"]);
   });
 
+  it("runs a resolved child process as a program with its spawn, and draws the spawn to that program", () => {
+    const s = sys();
+    const prog = (s.runtimes ?? []).find((r) => r.kind === "program" && r.label === "tools/child.ts");
+    expect(prog).toBeDefined();
+    expect(prog?.parent).toBeUndefined();
+    expect(prog?.spawn).toMatchObject({ api: "fork", status: "resolved", file: TS.main });
+    const spawns = (s.edges ?? []).filter((e) => e.verb === "spawns" && e.to === prog?.id);
+    expect(spawns.map((e) => e.from.split("|")[0])).toEqual([(s.runtimes ?? []).find((r) => r.kind === "thread" && r.label === "Main thread" && r.parent?.includes("src/main.ts"))?.id]);
+    expect((s.externals ?? []).some((x) => x.id === "proc:fork")).toBe(false);
+  });
+
+  it("keeps a child process the IR cannot resolve as an external process box, by its API name", () => {
+    const base = tsDoc();
+    const missing = spawn(TS.main, "main", 13, "fork", `${TS.child}#missing`, "process");
+    const doc: IRDocument = { ...base, nodes: [...base.nodes, missing.node], edges: [...base.edges, missing.edge], findings: [] };
+    const s = tsSystem("", doc);
+    const box = (s.externals ?? []).find((x) => x.id === "proc:fork");
+    expect(box?.category).toBe("process");
+    expect((s.edges ?? []).some((e) => e.verb === "spawns" && e.to === "proc:fork")).toBe(true);
+    expect((s.runtimes ?? []).some((r) => r.kind === "program" && r.label === "tools/child.ts")).toBe(true);
+  });
+
+  it("never gives a thread or a coroutine the program kind, and gives every program no parent", () => {
+    const s = sys();
+    const rts = s.runtimes ?? [];
+    expect(rts.filter((r) => r.kind === "program").every((r) => r.parent === undefined)).toBe(true);
+    expect(rts.filter((r) => r.kind === "thread" || r.kind === "coroutine").every((r) => r.kind !== "program")).toBe(true);
+  });
+
+  it("counts a fact that runs on two runtimes once in the external's ops, but once per edge", () => {
+    const base = tsDoc();
+    const shared = effect(TS.util, "shared", 3, "effects.fs.read", { api: "fs.readFileSync", path: "shared.json" });
+    const s = tsSystem("", { ...base, nodes: [...base.nodes, shared], findings: [] });
+    const fs = (s.externals ?? []).find((x) => x.id === "fs");
+    // readConfig and shared are the two facts.
+    expect(fs?.ops?.find((o) => o.api === "fs.readFileSync")?.count).toBe(2);
+    // Per edge, shared counts once on each runtime that runs it: the main thread, the worker, and the refresh coroutine.
+    const edgeCounts = (s.edges ?? []).filter((e) => e.verb === "reads" && e.to === "fs").flatMap((e) => e.evidence ?? []).filter((o) => o.api === "fs.readFileSync");
+    expect(edgeCounts.reduce((n, o) => n + o.count, 0)).toBe(4);
+  });
+
+  it("draws a call from the caller's slice to the callee's slice on the runtime that runs the caller", () => {
+    const base = tsDoc();
+    const pkgs: IRNode[] = [file("packages/a/package.json"), file("packages/b/package.json"), file("packages/a/src/main.ts"), file("packages/b/src/lib.ts"), file("packages/b/src/w.ts")];
+    const extra: IRNode[] = [
+      ...pkgs,
+      moduleFn("packages/a/src/main.ts", { nodeEntry: true }),
+      fn("packages/a/src/main.ts", "main"),
+      fn("packages/b/src/lib.ts", "shared"),
+      fn("packages/b/src/w.ts", "work"),
+      spawn("packages/a/src/main.ts", "main", 5, "Worker", "packages/b/src/w.ts#work").node,
+    ];
+    const extraEdges: IREdge[] = [
+      call("packages/a/src/main.ts#(module)", "packages/a/src/main.ts#main", "packages/a/src/main.ts", 1),
+      call("packages/a/src/main.ts#main", "packages/b/src/lib.ts#shared", "packages/a/src/main.ts", 3),
+      call("packages/b/src/w.ts#work", "packages/b/src/lib.ts#shared", "packages/b/src/w.ts", 4),
+      spawn("packages/a/src/main.ts", "main", 5, "Worker", "packages/b/src/w.ts#work").edge,
+    ];
+    const s = tsSystem("packages", { ...base, nodes: [...base.nodes, ...extra], edges: [...base.edges, ...extraEdges], findings: [] });
+    expect(s.runtime).toBe("grounded");
+    const calls = (s.edges ?? []).filter((e) => e.verb === "calls");
+    expect(calls.length).toBeGreaterThan(0);
+    // Each call stays on one runtime: the shared function runs on the main thread, and the call from main lands there.
+    for (const e of calls) expect(e.from.split("|")[0]).toBe(e.to.split("|")[0]);
+  });
+
+  it("keeps the component-level calls in the flat model", () => {
+    const doc: IRDocument = {
+      nodes: [file("packages/a/package.json"), file("packages/b/package.json"), file("packages/a/a.ts"), file("packages/b/b.ts"), fn("packages/a/a.ts", "run"), fn("packages/b/b.ts", "help")],
+      edges: [call("packages/a/a.ts#run", "packages/b/b.ts#help", "packages/a/a.ts", 2)],
+      findings: [],
+    };
+    const s = systemModel(buildProjectModel(doc), "");
+    expect(s.runtime).toBe("none");
+    expect(s.edges.map((e) => `${e.from}>${e.verb}>${e.to}`)).toEqual(["packages/a>calls>packages/b"]);
+  });
+
+  it("matches the committed snapshot of the grounded TypeScript runtime", () => {
+    const s = sys();
+    expect({ runtimes: s.runtimes, slices: s.slices, resources: s.resources, edges: s.edges }).toMatchSnapshot();
+  });
+
   it("gives the same JSON for the same code, whatever the input order, and across two builds", () => {
     const a = JSON.stringify(tsSystem("", tsDoc("forward")));
     expect(JSON.stringify(tsSystem("", tsDoc("reverse")))).toBe(a);
@@ -241,6 +324,13 @@ function cppDoc(): IRDocument {
     fx.edge(`${main}@concurrency.spawn-thread:5`, `${work}#produce`, "concurrency", "concurrency.spawns", { attrs: { how: "thread" }, span: fx.span(main, 5, 2, 5, 20) }),
     fx.edge(`${main}@concurrency.spawn-thread:6`, `${work}#consume`, "concurrency", "concurrency.spawns", { attrs: { how: "thread" }, span: fx.span(main, 6, 2, 6, 20) }),
   ];
+  // The native program: a cc_binary that links the three files, and its main() starts the threads.
+  nodes.push(fx.node("cpp:app", "packaging", "packaging.build-target", { attrs: { name: "app", targetKind: "cc_binary" } }));
+  edges.push(
+    fx.edge("cpp:app", main, "packaging", "packaging.target-contains"),
+    fx.edge("cpp:app", work, "packaging", "packaging.target-contains"),
+    fx.edge("cpp:app", queue, "packaging", "packaging.target-contains"),
+  );
   return { nodes, edges, findings: [] };
 }
 
@@ -252,6 +342,25 @@ describe("runtime model: C++ fixture", () => {
     expect(s.runtime).toBe("grounded");
     const labels = (s.runtimes ?? []).filter((r) => r.kind === "thread").map((t) => t.label).sort();
     expect(labels).toEqual(["Main thread", "Thread · std::thread", "Thread · std::thread"]);
+  });
+
+  it("makes the native program the parent of both threads, and of every resource's program", () => {
+    const s = sys();
+    const prog = (s.runtimes ?? []).find((r) => r.kind === "program");
+    expect(prog?.programKind).toBe("native");
+    expect(prog?.label).toBe("app");
+    const threads = (s.runtimes ?? []).filter((r) => r.kind === "thread");
+    expect(threads.length).toBe(3);
+    expect(threads.every((r) => r.parent === prog?.id)).toBe(true);
+    const lock = (s.resources ?? []).find((r) => r.kind === "lock" && r.label === "m");
+    expect(lock?.program).toBe(prog?.id);
+    for (const r of s.resources ?? []) expect(r.program === undefined || r.program === prog?.id).toBe(true);
+    expect((s.resources ?? []).some((r) => r.id.includes("thread:"))).toBe(false);
+  });
+
+  it("matches the committed snapshot of the grounded C++ runtime", () => {
+    const s = sys();
+    expect({ runtimes: s.runtimes, slices: s.slices, resources: s.resources, edges: s.edges }).toMatchSnapshot();
   });
 
   it("gives the one component two slices, one per thread", () => {
@@ -311,6 +420,33 @@ describe("runtime model: stability and scope", () => {
 });
 
 describe("runtime model: no concurrency", () => {
+  it("keeps the flat resources, listens and kernel ops from component ids, with no program", () => {
+    const doc: IRDocument = {
+      nodes: [
+        file("lib/a.ts"),
+        fn("lib/a.ts", "helper"),
+        effect("lib/a.ts", "helper", 3, "effects.net.listen", { port: 8080 }),
+        effect("lib/a.ts", "helper", 4, "effects.os.call", { api: "process.kill", op: "signal", syscall: "kill", target: "SIGTERM" }),
+        effect("lib/a.ts", "helper", 5, "effects.env.read", { api: "process.env", name: "HOME" }),
+      ],
+      edges: [dispatch("lib/a.ts#helper", "lib/a.ts#helper", "lib/a.ts", 6, "timer")],
+      findings: [],
+    };
+    const s = systemModel(buildProjectModel(doc), "");
+    expect(s.runtime).toBe("none");
+    expect(s.runtimes).toBeUndefined();
+    const listen = (s.edges ?? []).find((e) => e.verb === "listens");
+    expect(listen?.from).toBe("lib/a.ts");
+    expect(listen?.to).toBe("listen:8080");
+    const os = (s.resources ?? []).find((r) => r.id === "os:signal");
+    expect(os?.program).toBeUndefined();
+    expect((s.edges ?? []).some((e) => e.verb === "signals" && e.from === "lib/a.ts")).toBe(true);
+    const timers = (s.resources ?? []).find((r) => r.id === "queue:Timers");
+    expect(timers?.program).toBeUndefined();
+    expect((s.edges ?? []).some((e) => e.verb === "enqueues" && e.from === "lib/a.ts" && e.to === "queue:Timers")).toBe(true);
+    expect((s.resources ?? []).some((r) => r.kind === "env" && r.program === undefined)).toBe(true);
+  });
+
   it("falls back to runtime none, with no runtime-only fields", () => {
     const doc: IRDocument = {
       nodes: [file("lib/a.ts"), fn("lib/a.ts", "helper"), effect("lib/a.ts", "helper", 3, "effects.fs.read", { api: "fs.readFileSync" })],

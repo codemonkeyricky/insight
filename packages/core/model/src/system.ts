@@ -2,7 +2,7 @@
 // verbs between them. Computed from the whole-project model, so a scope is a closed world: a fact that leaves it is not drawn.
 // When the scope has runtime context, the facts are drawn per slice (a component on one thread or coroutine); see system-runtime.ts.
 import type { IRNode, NodeId, Span } from "@insight/ir";
-import { execThreadId, isNoisePath, UNTHREADED_ID } from "@insight/flow";
+import { isNoisePath } from "@insight/flow";
 import { edgeTargets } from "@insight/sdk";
 import type { ProjectModel } from "./model.js";
 import { inScope, normalizeScope, ROOT_SCOPE } from "./scope.js";
@@ -208,6 +208,19 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
 
   // The node a fact lands on: the slice of its component on its runtime when grounded, else the component.
   const targetOf = (rt: string | undefined, comp: string): string => (grounded && rt !== undefined ? plan.sliceId(rt, comp) : comp);
+  // The program a runtime belongs to: undefined in the flat model, for a thread no program started, and for the unthreaded runtime.
+  const progOf = (rt: string | undefined): string | undefined => (grounded && rt !== undefined ? plan.programOf(rt) : undefined);
+  // A resource's id is keyed by its program, never by a thread: `kind:program:name`, or `kind:name` when no program owns it.
+  const resId = (kind: string, name: string, prog: string | undefined): string => (prog === undefined ? `${kind}:${name}` : `${kind}:${prog}:${name}`);
+  // The slice a callee runs in, from a caller running on `rt`: the caller's runtime when the callee runs there, else its first runtime.
+  const calleeSlice = (rt: string | undefined, fn: NodeId | undefined, file: string, comp: string): string => {
+    const owners = plan.owners(fn, file);
+    const on = rt !== undefined && owners.includes(rt) ? rt : (owners[0] as string);
+    return plan.sliceId(on, comp);
+  };
+  // Processes started by a spawn node (their threads are of kind "process" in the exec model).
+  const processSpawns = new Set<string>();
+  for (const t of plan.exec.threads) if (t.kind === "process" && t.spawn !== undefined) processSpawns.add(t.spawn.node);
 
   // Where a fact owned by `owner` (in `file`, component `comp`) starts: one source per runtime that runs it when grounded.
   const sourcesOf = (owner: NodeId | undefined, file: string, comp: string): Source[] => {
@@ -217,7 +230,11 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
 
   const buckets = new Map<string, Bucket>();
   const externals = new Map<string, SystemExternal>();
-  const addFact = (from: string, to: string, verb: SystemEdge["verb"], tag: string, site: Site, exact: boolean, extra?: { names?: string[]; ev?: Ev }): void => {
+  // Evidence per target, per API: the IR facts behind it. An external's op counts are the distinct facts, however many
+  // runtimes each one runs on.
+  const evFacts = new Map<string, Map<string, { ev: SystemEvidence; facts: Set<string> }>>();
+  let factSeq = 0;
+  const addFact = (from: string, to: string, verb: SystemEdge["verb"], tag: string, site: Site, exact: boolean, extra?: { names?: string[]; ev?: Ev; fact?: string }): void => {
     const key = `${from}\0${verb}\0${to}`;
     let b = buckets.get(key);
     if (!b) {
@@ -239,6 +256,12 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
       const cur = b.evidence.get(evKey);
       if (cur) cur.count++;
       else b.evidence.set(evKey, { api: e.api, ...(e.syscall !== undefined ? { syscall: e.syscall } : {}), level: e.level, count: 1 });
+      const fact = extra.fact ?? `#${++factSeq}`;
+      let perTo = evFacts.get(to);
+      if (perTo === undefined) evFacts.set(to, (perTo = new Map()));
+      let rec = perTo.get(evKey);
+      if (rec === undefined) perTo.set(evKey, (rec = { ev: { api: e.api, ...(e.syscall !== undefined ? { syscall: e.syscall } : {}), level: e.level, count: 0 }, facts: new Set() }));
+      rec.facts.add(fact);
     }
   };
   const ensureExternal = (ext: SystemExternal): string => {
@@ -246,6 +269,8 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
     return ext.id;
   };
   const putResource = (res: SystemResource): string => plan.putResource(res).id;
+  // Grounded: the env resource of a program, or `env` when no program runs the code. Flat: `env:flat`, with no edge of its own.
+  const envId = (prog: string | undefined, flat = false): string => (flat ? "env:flat" : prog === undefined ? "env" : `env:${prog}`);
 
   // The effect and route facts of the scope, owned by the file that holds them.
   const routes: SystemRoute[] = [];
@@ -281,15 +306,13 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
       continue;
     }
     if (node.kind === "effects.net.listen") {
-      if (!grounded) continue;
       const port = attrs.port === undefined ? "" : String(attrs.port);
       const label = port === "" ? "Listens" : `Listens :${port}`;
       const id = ensureExternal({ id: `listen:${port}`, label, category: "service" });
-      for (const s of sourcesOf(owner, file, comp)) addFact(s.from, id, "listens", "listen", site, exact);
+      for (const s of sourcesOf(owner, file, comp)) addFact(s.from, id, "listens", "listen", site, exact, { fact: node.id });
       continue;
     }
     if (node.kind === "effects.os.call") {
-      if (!grounded) continue;
       const op = typeof attrs.op === "string" ? attrs.op : "info";
       const target = typeof attrs.target === "string" ? attrs.target : undefined;
       const rid = `os:${op}`;
@@ -298,7 +321,7 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
       const verb: SystemEdge["verb"] = op === "signal" || op === "process-control" ? "signals" : op === "memory" || op === "device" ? "maps" : "calls";
       const ev = evidenceOf(attrs, target === "<dynamic>");
       const tag = typeof attrs.api === "string" ? attrs.api : op;
-      for (const s of sourcesOf(owner, file, comp)) addFact(s.from, rid, verb, tag, site, exact, ev ? { ev } : undefined);
+      for (const s of sourcesOf(owner, file, comp)) addFact(s.from, rid, verb, tag, site, exact, ev ? { ev, fact: node.id } : { fact: node.id });
       continue;
     }
     if (node.kind === "effects.fs.read" || node.kind === "effects.fs.write") {
@@ -306,22 +329,28 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
       const api = typeof attrs.api === "string" ? attrs.api : "fs";
       const id = ensureExternal({ id: "fs", label: "Filesystem", category: "filesystem" });
       const ev = grounded ? evidenceOf(attrs, attrs.path === "<dynamic>") : undefined;
-      for (const s of sourcesOf(owner, file, comp)) addFact(s.from, id, verb, api, site, exact, ev ? { ev } : undefined);
+      for (const s of sourcesOf(owner, file, comp)) addFact(s.from, id, verb, api, site, exact, ev ? { ev, fact: node.id } : undefined);
     } else if (node.kind === "effects.proc.exec") {
       const command = commandName(attrs.command);
-      const id = ensureExternal({ id: `proc:${command}`, label: command, category: "process", command });
       const ev = grounded ? evidenceOf(attrs, command === "dynamic command") : undefined;
-      for (const s of sourcesOf(owner, file, comp)) addFact(s.from, id, "runs", command, site, exact, ev ? { ev } : undefined);
+      // A command that names one project program runs that program; any other is a process box by its name.
+      const api = typeof attrs.api === "string" ? attrs.api : undefined;
+      const prog = grounded ? plan.programOfCommand(command, { file: site.file, line: site.line, ...(site.fn !== undefined ? { fn: site.fn } : {}), status: "resolved", ...(api !== undefined ? { api } : {}) }) : undefined;
+      const to = prog ?? ensureExternal({ id: `proc:${command}`, label: command, category: "process", command });
+      for (const s of sourcesOf(owner, file, comp)) addFact(s.from, to, "runs", command, site, exact, ev ? { ev, fact: node.id } : undefined);
     } else if (node.kind === "effects.env.read") {
       const name = typeof attrs.name === "string" ? attrs.name : "";
       if (grounded) {
         for (const s of sourcesOf(owner, file, comp)) {
-          const prog = plan.programOf(s.rt as string);
-          const rid = putResource({ id: `env:${prog}`, kind: "env", label: "Environment", program: prog, source: "env" });
+          const prog = progOf(s.rt);
+          const rid = putResource({ id: envId(prog), kind: "env", label: "Environment", ...(prog !== undefined ? { program: prog } : {}), source: "env" });
           plan.addName(rid, name);
           addFact(s.from, rid, "reads", name, site, exact, { names: name === "" ? [] : [name] });
         }
       } else {
+        // The flat model keeps its one environment box and holds the names on the resource alone.
+        const rid = putResource({ id: envId(undefined, true), kind: "env", label: "Environment", source: "env" });
+        plan.addName(rid, name);
         const id = ensureExternal({ id: "env", label: "Environment", category: "config", names: [] });
         const ext = externals.get(id) as SystemExternal;
         if (name !== "" && !ext.names?.includes(name)) ext.names = [...(ext.names ?? []), name].sort();
@@ -332,8 +361,8 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
         // A post with a dispatch from the same function is routed by that dispatch; any other goes to a peer box.
         if (!messageFrom.has(owner ?? "")) {
           for (const s of sourcesOf(owner, file, comp)) {
-            const prog = plan.programOf(s.rt as string);
-            const rid = putResource({ id: `queue:${prog}:peer`, kind: "queue", label: "inbox (unknown peer)", program: prog, source: "message" });
+            const prog = progOf(s.rt);
+            const rid = putResource({ id: resId("queue", "peer", prog), kind: "queue", label: "inbox (unknown peer)", ...(prog !== undefined ? { program: prog } : {}), source: "message" });
             addFact(s.from, rid, "enqueues", "postMessage", site, exact);
           }
         }
@@ -378,16 +407,19 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
       const ext: SystemExternal = env !== undefined
         ? { id: `config:${env}`, label: `URL from ${env}`, category: "service" }
         : { id: "dynamic-url", label: "Dynamic URL", category: "service" };
-      for (const s of sources) addFact(s.from, ensureExternal(ext), verb, tag, site, exact, ev ? { ev } : undefined);
+      for (const s of sources) addFact(s.from, ensureExternal(ext), verb, tag, site, exact, ev ? { ev, fact: node.id } : undefined);
       continue;
     }
     const svc = classifyHost(host, path);
     const id = ensureExternal({ id: svc.id, label: svc.label, category: svc.category, host: svc.host });
-    for (const s of sources) addFact(s.from, id, verb, tag, site, exact, ev ? { ev } : undefined);
+    for (const s of sources) addFact(s.from, id, verb, tag, site, exact, ev ? { ev, fact: node.id } : undefined);
   }
 
   // Code-level facts between components: calls (candidates included), references, and spawns (a worker or child process).
-  // In the grounded model a spawn starts at the caller's slice and ends at the spawned thread's slice; calls stay between components.
+  // Grounded: a call or spawn starts at the caller's slice and ends at the callee's slice on the runtime that runs it; a
+  // spawned program is its own runtime, so a process spawn ends at that program. Flat: component to component, as before.
+  // The component pairs that have a call, so an import is only drawn where no call joins the two.
+  const callPairs = new Set<string>();
   for (const rel of model.relations) {
     const fromFile = model.fileOf(rel.from);
     const toFile = model.fileOf(rel.to);
@@ -400,8 +432,20 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
       const src = model.byId.get(rel.from);
       const api = typeof src?.attrs.api === "string" ? src.attrs.api : "thread";
       const spawnSite = siteOf(fromFile, rel.edge.span ?? src?.span, src?.parent);
+      const processSpawn = processSpawns.has(rel.from);
       const spawned = plan.threadOfSpawn(rel.from);
+      const program = grounded && processSpawn ? plan.programOfSpawn(rel.from) : undefined;
+      const apiTail = api.slice(api.lastIndexOf(".") + 1);
       for (const s of sourcesOf(owner, fromFile, a)) {
+        if (program !== undefined) {
+          addFact(s.from, program, "spawns", `spawns ${api}`, spawnSite, exact, { fact: `${rel.from}>${rel.to}` });
+          continue;
+        }
+        if (grounded && processSpawn) {
+          // A process the IR cannot resolve to a project program is a process box by its API name.
+          addFact(s.from, ensureExternal({ id: `proc:${apiTail}`, label: apiTail, category: "process", command: apiTail }), "spawns", `spawns ${api}`, spawnSite, exact, { fact: `${rel.from}>${rel.to}` });
+          continue;
+        }
         if (inside(toFile)) {
           const b = compOf.get(toFile)?.id as string;
           if (a === b) continue;
@@ -416,80 +460,86 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
     if (!inside(toFile)) continue;
     const b = compOf.get(toFile)?.id as string;
     if (a === b) continue;
-    // A call is code structure, drawn between components as before; the runtime shows where the callee runs.
-    addFact(a, b, "calls", "calls", site, exact);
+    callPairs.add(`${a}\0${b}`);
+    // A call is drawn from the caller's slice to the callee's slice on the runtime that runs it (component-level when flat).
+    const calleeFn = ownerOfId(rel.to);
+    for (const s of sourcesOf(owner, fromFile, a)) {
+      const to = grounded ? calleeSlice(s.rt, calleeFn, toFile, b) : b;
+      addFact(s.from, to, "calls", "calls", site, exact);
+    }
   }
 
-  // Message handoffs and event-loop queues, per the runtime's dispatches (grounded only).
-  if (grounded) {
-    for (const d of plan.exec.dispatches) {
-      if (!inside(d.file)) continue;
-      const comp = compOf.get(d.file)?.id as string;
-      const site: Site = { file: d.file, line: d.line, ...(fnOf(d.from) !== undefined ? { fn: fnOf(d.from) as string } : {}) };
-      if (d.how === "timer" || d.how === "microtask" || d.how === "callback") {
-        const queue = d.how === "timer" ? "Timers" : d.how === "microtask" ? "Microtasks" : "Callbacks";
-        for (const s of sourcesOf(fnOf(d.from), d.file, comp)) {
-          const prog = plan.programOf(s.rt as string);
-          const rid = putResource({ id: `queue:${prog}:${queue}`, kind: "queue", label: queue, program: prog, source: "event-loop" });
-          addFact(s.from, rid, "enqueues", d.how, site, true);
-        }
-      } else if (d.how === "message") {
-        for (const s of sourcesOf(fnOf(d.from), d.file, comp)) {
-          for (const target of d.targets) {
-            const tfile = fileOfFn.get(target);
-            if (!inside(tfile)) continue;
-            const tcomp = compOf.get(tfile)?.id as string;
+  // Message handoffs and event-loop queues, per the runtime's dispatches. Flat: one inbox per receiving component.
+  for (const d of plan.exec.dispatches) {
+    if (!inside(d.file)) continue;
+    const comp = compOf.get(d.file)?.id as string;
+    const site: Site = { file: d.file, line: d.line, ...(fnOf(d.from) !== undefined ? { fn: fnOf(d.from) as string } : {}) };
+    if (d.how === "timer" || d.how === "microtask" || d.how === "callback") {
+      const queue = d.how === "timer" ? "Timers" : d.how === "microtask" ? "Microtasks" : "Callbacks";
+      for (const s of sourcesOf(fnOf(d.from), d.file, comp)) {
+        const prog = progOf(s.rt);
+        const rid = putResource({ id: resId("queue", queue, prog), kind: "queue", label: queue, ...(prog !== undefined ? { program: prog } : {}), source: "event-loop" });
+        addFact(s.from, rid, "enqueues", d.how, site, true);
+      }
+    } else if (d.how === "message") {
+      for (const s of sourcesOf(fnOf(d.from), d.file, comp)) {
+        for (const target of d.targets) {
+          const tfile = fileOfFn.get(target);
+          if (!inside(tfile)) continue;
+          const tcomp = compOf.get(tfile)?.id as string;
+          if (grounded) {
             const tRt = plan.owners(target, tfile)[0];
             const recv = tRt === undefined ? undefined : plan.threadOf(tRt);
             if (recv === undefined || recv === s.rt) continue;
-            const prog = plan.programOf(recv);
-            const inbox = putResource({ id: `queue:${recv}:inbox`, kind: "queue", label: `${plan.label(recv)} inbox`, program: prog, source: "message" });
+            const inbox = putResource({ id: `queue:${recv}:inbox`, kind: "queue", label: `${plan.label(recv)} inbox`, ...(progOf(recv) !== undefined ? { program: progOf(recv) as string } : {}), source: "message" });
             addFact(s.from, inbox, "enqueues", "message", site, true);
             addFact(inbox, plan.sliceId(tRt as string, tcomp), "dequeues", "message", site, true);
+          } else {
+            if (s.from === tcomp) continue;
+            const inbox = putResource({ id: `queue:${tcomp}:inbox`, kind: "queue", label: `${tcomp} inbox`, source: "message" });
+            addFact(s.from, inbox, "enqueues", "message", site, true);
+            addFact(inbox, tcomp, "dequeues", "message", site, true);
           }
         }
       }
     }
+  }
 
-    // Locks and channels the exec model lists, with each site's operation.
-    for (const r of plan.exec.resources) {
-      const first = r.threads[0];
-      const prog = first === undefined ? UNTHREADED_ID : plan.programOf(execThreadId(first));
-      const res: SystemResource =
-        r.kind === "lock"
-          ? { id: `lock:${prog}:${r.name}`, kind: "lock", label: r.name, program: prog, source: "sync" }
-          : { id: `queue:${prog}:${r.name}`, kind: "queue", label: r.name, program: prog, source: "channel" };
-      const rid = putResource(res);
-      for (const site of r.sites) {
-        if (!inside(site.file)) continue;
-        const comp = compOf.get(site.file)?.id as string;
-        const verb: SystemEdge["verb"] = site.op === "acquire" ? "locks" : site.op === "send" ? "enqueues" : "dequeues";
-        const at: Site = { file: site.file, line: site.line, fn: site.fn };
-        for (const s of sourcesOf(site.fn, site.file, comp)) {
-          // A dequeue runs from the queue to the thread that takes the item, as an inbox does.
-          if (verb === "dequeues") addFact(rid, s.from, verb, site.op, at, true);
-          else addFact(s.from, rid, verb, site.op, at, true);
-        }
+  // Locks and channels the exec model lists, with each site's operation. One resource per program that uses it.
+  for (const r of plan.exec.resources) {
+    const kind = r.kind === "lock" ? "lock" : "queue";
+    const source = r.kind === "lock" ? "sync" : "channel";
+    for (const site of r.sites) {
+      if (!inside(site.file)) continue;
+      const comp = compOf.get(site.file)?.id as string;
+      const verb: SystemEdge["verb"] = site.op === "acquire" ? "locks" : site.op === "send" ? "enqueues" : "dequeues";
+      const at: Site = { file: site.file, line: site.line, fn: site.fn };
+      for (const s of sourcesOf(site.fn, site.file, comp)) {
+        const prog = progOf(s.rt);
+        const rid = putResource({ id: resId(kind, r.name, prog), kind, label: r.name, ...(prog !== undefined ? { program: prog } : {}), source });
+        // A dequeue runs from the queue to the thread that takes the item, as an inbox does.
+        if (verb === "dequeues") addFact(rid, s.from, verb, site.op, at, true);
+        else addFact(s.from, rid, verb, site.op, at, true);
       }
     }
+  }
 
-    // Semaphores and condvars are read from the IR: the exec model does not list them.
-    for (const node of model.doc.nodes) {
-      if (node.kind !== "sync.semaphore" && node.kind !== "sync.condvar") continue;
-      const file = model.fileOf(node.id);
-      if (!inside(file)) continue;
-      const attrs = node.attrs as Record<string, unknown>;
-      const op = typeof attrs.op === "string" ? attrs.op : "";
-      const verb: SystemEdge["verb"] | undefined = op === "acquire" || op === "wait" ? "waits" : op === "release" || op === "notify" ? "notifies" : undefined;
-      if (verb === undefined) continue;
-      const name = typeof attrs.name === "string" ? attrs.name : typeof attrs.lock === "string" ? attrs.lock : "";
-      const kind = node.kind === "sync.semaphore" ? "semaphore" : "condvar";
-      const comp = compOf.get(file)?.id as string;
-      for (const s of sourcesOf(ownerOfId(node.id), file, comp)) {
-        const prog = plan.programOf(s.rt as string);
-        const rid = putResource({ id: `${kind}:${prog}:${name}`, kind, label: name, program: prog, source: "sync" });
-        addFact(s.from, rid, verb, op, siteOf(file, node.span, node.parent), node.provenance.confidence === "exact");
-      }
+  // Semaphores and condvars are read from the IR: the exec model does not list them.
+  for (const node of model.doc.nodes) {
+    if (node.kind !== "sync.semaphore" && node.kind !== "sync.condvar") continue;
+    const file = model.fileOf(node.id);
+    if (!inside(file)) continue;
+    const attrs = node.attrs as Record<string, unknown>;
+    const op = typeof attrs.op === "string" ? attrs.op : "";
+    const verb: SystemEdge["verb"] | undefined = op === "acquire" || op === "wait" ? "waits" : op === "release" || op === "notify" ? "notifies" : undefined;
+    if (verb === undefined) continue;
+    const name = typeof attrs.name === "string" ? attrs.name : typeof attrs.lock === "string" ? attrs.lock : "";
+    const kind = node.kind === "sync.semaphore" ? "semaphore" : "condvar";
+    const comp = compOf.get(file)?.id as string;
+    for (const s of sourcesOf(ownerOfId(node.id), file, comp)) {
+      const prog = progOf(s.rt);
+      const rid = putResource({ id: resId(kind, name, prog), kind, label: name, ...(prog !== undefined ? { program: prog } : {}), source: "sync" });
+      addFact(s.from, rid, verb, op, siteOf(file, node.span, node.parent), node.provenance.confidence === "exact");
     }
   }
 
@@ -504,18 +554,19 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
       if (!inside(toFile)) continue;
       const a = compOf.get(fromFile)?.id as string;
       const b = compOf.get(toFile)?.id as string;
-      if (a === b) continue;
-      const key = `${a}\0calls\0${b}`;
-      const hasCall = buckets.has(key);
-      if (hasCall) continue;
-      let ib = importEdges.get(key);
-      if (!ib) {
-        ib = { from: a, to: b, verb: "calls", tags: new Map(), count: 0, sites: [], exact: false, importOnly: true };
-        importEdges.set(key, ib);
+      if (a === b || callPairs.has(`${a}\0${b}`)) continue;
+      for (const s of sourcesOf(undefined, fromFile, a)) {
+        const to = grounded ? calleeSlice(s.rt, undefined, toFile, b) : b;
+        const key = `${s.from}\0calls\0${to}`;
+        let ib = importEdges.get(key);
+        if (!ib) {
+          ib = { from: s.from, to, verb: "calls", tags: new Map(), count: 0, sites: [], exact: false, importOnly: true };
+          importEdges.set(key, ib);
+        }
+        ib.tags.set("imports", (ib.tags.get("imports") ?? 0) + 1);
+        ib.count++;
+        ib.sites.push(siteOf(fromFile, e.span, undefined));
       }
-      ib.tags.set("imports", (ib.tags.get("imports") ?? 0) + 1);
-      ib.count++;
-      ib.sites.push(siteOf(fromFile, e.span, undefined));
     }
   }
   for (const [key, ib] of importEdges) buckets.set(key, ib);
@@ -548,21 +599,10 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
   edges.sort((x, y) => cmp(x.from, y.from) || cmp(x.to, y.to) || cmp(x.verb, y.verb) || cmp(x.id, y.id));
 
   // The APIs behind each external, counted over the facts that reach it.
-  const opsOf = new Map<string, Map<string, SystemEvidence>>();
-  for (const b of buckets.values()) {
-    if (!b.evidence || !externals.has(b.to)) continue;
-    const ops = opsOf.get(b.to) ?? new Map<string, SystemEvidence>();
-    for (const e of b.evidence.values()) {
-      const key = `${e.api}\0${e.syscall ?? ""}\0${e.level}`;
-      const cur = ops.get(key);
-      if (cur) cur.count += e.count;
-      else ops.set(key, { ...e });
-    }
-    opsOf.set(b.to, ops);
-  }
-  for (const [id, ops] of opsOf) {
+  for (const [id, perTo] of evFacts) {
     const ext = externals.get(id);
-    if (ext) ext.ops = [...ops.values()].sort(cmpEvidence);
+    if (ext === undefined) continue;
+    ext.ops = [...perTo.values()].map((r) => ({ ...r.ev, count: r.facts.size })).sort(cmpEvidence);
   }
 
   const importOnly = new Set<string>();
