@@ -60,6 +60,9 @@ importers:
       '@insight/frontend-cpp':
         specifier: workspace:*
         version: link:../../packages/frontend/cpp
+      '@insight/frontend-systemverilog':
+        specifier: workspace:*
+        version: link:../../packages/frontend/systemverilog
       '@insight/frontend-typescript':
         specifier: workspace:*
         version: link:../../packages/frontend/typescript
@@ -289,6 +292,21 @@ importers:
       tree-sitter-cpp:
         specifier: 0.23.4
         version: 0.23.4
+      web-tree-sitter:
+        specifier: 0.27.2
+        version: 0.27.2
+
+  packages/frontend/systemverilog:
+    dependencies:
+      '@insight/ir':
+        specifier: workspace:*
+        version: link:../../core/ir
+      '@insight/sdk':
+        specifier: workspace:*
+        version: link:../../core/sdk
+      tree-sitter-systemverilog:
+        specifier: 0.4.1
+        version: 0.4.1
       web-tree-sitter:
         specifier: 0.27.2
         version: 0.27.2
@@ -1217,6 +1235,14 @@ packages:
       tree-sitter:
         optional: true
 
+  tree-sitter-systemverilog@0.4.1:
+    resolution: {integrity: sha512-JDRaC9mKBRT+qNWTYA4ydIYAIFWcJ23ONpD6ugZpCIKY7NZzEowl72ZsKoo0Nk8gS/U+CtVks5X97endIwnJRw==}
+    peerDependencies:
+      tree-sitter: ^0.25.0
+    peerDependenciesMeta:
+      tree-sitter:
+        optional: true
+
   typescript@5.9.3:
     resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
     engines: {node: '>=14.17'}
@@ -2038,6 +2064,11 @@ snapshots:
       node-addon-api: 8.9.2
       node-gyp-build: 4.8.4
       tree-sitter-c: 0.23.6
+
+  tree-sitter-systemverilog@0.4.1:
+    dependencies:
+      node-addon-api: 8.9.2
+      node-gyp-build: 4.8.4
 
   typescript@5.9.3: {}
 

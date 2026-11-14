@@ -1,0 +1,12 @@
+{
+  "id": "frontend-systemverilog",
+  "version": "0.1.0",
+  "description": "Verilog and SystemVerilog via tree-sitter (syntactic)",
+  "irVersion": "^1.0",
+  "detect": ["**/*.v", "**/*.sv", "**/*.svh", "**/*.vh"],
+  "files": ["**/*.v", "**/*.sv", "**/*.svh", "**/*.vh"],
+  "provides": ["structure"],
+  "roles": {
+    "frontend": "dist/index.js"
+  }
+}
