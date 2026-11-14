@@ -226,3 +226,72 @@ describe("footprints", () => {
     for (const other of kids.slice(1)) expect(overlap(beside, placed.rects.get(other) as never)).toBe(false);
   });
 });
+
+describe("runtimeRootsScene: a thread with no root in scope", () => {
+  const withCalls = (m: ExecModel, pairs: [string, string][]): ExecModel => {
+    const idx = (id: string): number => m.functions.findIndex((f) => f.id === id);
+    return { ...m, calls: pairs.map(([a, b]) => [idx(a), idx(b)] as [number, number]) };
+  };
+  const kids = (s: Scene, id: string): string[] => (s.nodes.get(id)?.children ?? []).map((c) => s.nodes.get(c)?.label ?? "");
+
+  it("draws a normal thread frame whose cards are the scope entry functions", () => {
+    // The thread's entry lies outside the scope: its roots are not in the model. a calls b and c; b calls c.
+    const m = withCalls(
+      model({
+        scope: "src",
+        functions: [fn("a", 1), fn("b", 2), fn("c", 3)],
+        threads: [thread({ id: "m", roots: ["outside"], reached: ["a", "b", "c"], reach: 3 })],
+      }),
+      [["a", "b"], ["a", "c"], ["b", "c"]],
+    );
+    const s = runtimeRootsScene(buildExecScene(m), m);
+    expect(s).toBeDefined();
+    const t = s?.nodes.get(execThreadId("m"));
+    expect(t?.kind).toBe("thread");
+    expect(t?.label).toBe("Main thread");
+    expect(t?.detail).toBe("3 functions");
+    expect(kids(s as Scene, execThreadId("m"))).toEqual(["a"]);
+    expect(s?.nodes.get(`${execThreadId("m")}>a`)?.parent).toBe(execThreadId("m"));
+  });
+
+  it("falls back to every in-scope function when only cycles remain", () => {
+    const m = withCalls(
+      model({
+        functions: [fn("a", 1), fn("b", 2)],
+        threads: [thread({ id: "m", roots: ["outside"], reached: ["a", "b"], reach: 2 })],
+      }),
+      [["a", "b"], ["b", "a"]],
+    );
+    const s = runtimeRootsScene(buildExecScene(m), m);
+    expect(kids(s as Scene, execThreadId("m")).sort()).toEqual(["a", "b"]);
+  });
+
+  it("omits a thread with no in-scope function, and a program left with no thread", () => {
+    const m = model({
+      functions: [fn("a", 1), fn("w", 2)],
+      threads: [
+        thread({ id: "m", roots: ["a"], reached: ["a"], reach: 1 }),
+        thread({ id: "p", kind: "process", roots: [], reached: [], reach: 0 }),
+      ],
+    });
+    const s = runtimeRootsScene(buildExecScene(m), m);
+    expect(s?.nodes.has(execThreadId("p"))).toBe(false);
+    expect(s?.nodes.has(execThreadId("m"))).toBe(true);
+    for (const n of s?.nodes.values() ?? []) {
+      if (n.kind === "thread" || n.kind === "program") expect(n.children.length).toBeGreaterThan(0);
+    }
+    for (const e of s?.edges ?? []) {
+      expect(s?.nodes.has(e.from)).toBe(true);
+      expect(s?.nodes.has(e.to)).toBe(true);
+    }
+  });
+});
+
+describe("execDefaultOpen: the unthreaded group", () => {
+  it("opens the group, so its cards are drawn and it is not a closed leaf", async () => {
+    const { execDefaultOpen } = await import("../src/exec-scene.js");
+    const m = twoThreads();
+    const s = runtimeRootsScene(buildExecScene(m), m) as Scene;
+    expect(execDefaultOpen(s).has(UNTHREADED_ID)).toBe(true);
+  });
+});
