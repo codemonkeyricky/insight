@@ -98,7 +98,7 @@ Base kinds shipped by the core:
 | `concurrency.dispatches` | concurrency | edge | – | Function to the coroutine, async function or callback it hands work to. `attrs.how` is `await`, `start`, `callback`, `timer`, `microtask` or `message`. `message` is a Web Worker `postMessage` (page to worker, or worker to page) to the `onmessage` or `addEventListener("message")` handler the other side registers at its top level or on the Worker object; the TypeScript frontend emits it only when both ends resolve, with confidence `inferred`. |
 | `sync.lock-acquire` | sync | node | – | Takes a lock. `attrs.lock` names the lock; the execution model and the lock-order lens group acquires by it. |
 | `sync.lock-release` | sync | node | – |  |
-| `sync.rwlock-acquire` | sync | node | `sync.lock-acquire` |  |
+| `sync.rwlock-acquire` | sync | node | `sync.lock-acquire` | `attrs.mode` (required) is `shared` or `exclusive`. `attrs.lock` names the mutex. The rwlock's own schema lists `lock` as optional, but it extends `sync.lock-acquire`, whose required `lock` still applies to the effective schema, so `lock` is in practice required. |
 | `sync.semaphore` | sync | node | – | `attrs.op` (required) is `acquire`, `release`, `wait`, `notify` or `op`. Optional `attrs.name`, `attrs.lock` (the lock the operation is tied to) and `attrs.api`. |
 | `sync.atomic-op` | sync | node | – | `attrs.op` (required) is `acquire`, `release`, `wait`, `notify` or `op`. Optional `attrs.lock` and `attrs.api`. |
 | `sync.condvar` | sync | node | – | `attrs.op` (required) is `acquire`, `release`, `wait`, `notify` or `op`. Optional `attrs.lock` and `attrs.api`, e.g. `wait` with `lock` `m_`. |
@@ -115,6 +115,47 @@ Base kinds shipped by the core:
 | `effects.unknown` | effects | node | – | An external call no catalog recognises. Kept rather than dropped. Optional `attrs.syscall`, see below. |
 
 Every `effects.*` kind accepts an optional `attrs.syscall`: the kernel call this API wraps 1:1 (e.g. `unlink`, `connect`, `execve`). It is unset for high-level APIs.
+
+`effects.os.call` requires `attrs.api` and `attrs.op`. `attrs.op` is one of `signal`, `process-control`, `memory`, `device`, `raw-syscall`, `info` or `fd`. The schema is `packages/core/ir/schema/facets/effects.schema.json`, `EffectsOsCall`.
+
+Other attributes added with the System tab, all from the same schema files:
+
+| Kind | Attribute | Required | Notes |
+| --- | --- | --- | --- |
+| `concurrency.spawn-thread`, `concurrency.spawn-process` | `api` | no | The exact API that spawns it. |
+| `concurrency.channel-send`, `concurrency.channel-recv` | `channel` | yes | Literal name, `Class::member`, or `<dynamic>`. |
+| | `api` | no | The exact API. |
+| | `guardedBy` | no | The lock an inferred guarded queue is held under. |
+| `sync.semaphore` | `op` | yes | `acquire`, `release`, `wait`, `notify` or `op`. |
+| | `name`, `lock`, `api` | no | `name` is the semaphore's name; `lock` is the mutex it is tied to. |
+| `sync.condvar` | `op` | yes | As for `sync.semaphore`. |
+| | `name`, `lock`, `api` | no | `name` is the condvar's name. |
+| `sync.atomic-op` | `op` | yes | As for `sync.semaphore`. |
+| | `lock`, `api` | no | |
+| `sync.rwlock-acquire` | `mode` | yes | `shared` or `exclusive`. |
+| | `lock` | no in the rwlock schema; required in effect | See the note in the table above. |
+
+### Which frontend emits each kind
+
+The fact rules that turn these kinds into System-view edges are in `docs/system-view.md`, under "Fact rules". This table says only which frontend emits each kind today.
+
+| Kind | TypeScript (`packages/frontend/typescript`) | C++ (`packages/frontend/cpp`) |
+| --- | --- | --- |
+| `effects.fs.read`, `effects.fs.write` | catalog `data/effects.json` | catalog `data/effects.json`, and `src/extract.ts` |
+| `effects.net.connect`, `effects.net.listen` | catalog `data/effects.json` | `net.connect`, `net.listen` in the catalog |
+| `effects.net.serve` | `src/effects.ts` | not emitted |
+| `effects.proc.exec` | catalog, and `src/extract.ts` | catalog |
+| `effects.env.read` | `src/extract.ts` | catalog |
+| `effects.clock.read` | catalog | catalog |
+| `effects.message.post` | `src/extract.ts` | not emitted |
+| `effects.os.call` | catalog (19 rows) | catalog (16 rows) |
+| `concurrency.spawn-thread`, `concurrency.spawn-process` | `src/extract.ts` | `spawn-process` in the catalog; `spawn-thread` in `src/extract.ts` |
+| `concurrency.channel-send`, `concurrency.channel-recv` | `src/extract.ts` (`MessageChannel`, `BroadcastChannel`) | `src/extract.ts` (queue methods) |
+| `sync.lock-acquire`, `sync.lock-release`, `sync.rwlock-acquire` | catalog (`lock-acquire`); `navigator.locks` | `src/extract.ts` |
+| `sync.semaphore` | not emitted | `src/extract.ts` |
+| `sync.condvar`, `sync.atomic-op` | catalog | `src/extract.ts` |
+
+`effects.unknown` and the C++ `concurrency.async-task` are not emitted by any frontend.
 
 `calls.reference` has no parent on purpose. A query for a parent also returns its extensions, so extending `calls.call` would make every call query return references too.
 
