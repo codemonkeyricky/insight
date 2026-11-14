@@ -184,22 +184,22 @@ describe("pipeline empty state", () => {
 });
 
 describe("the Arch mode toggle with Pipeline", () => {
-  it("shows System, Pipeline and Packages in that order", () => {
+  it("shows Pipeline and Packages in that order, without System", () => {
     const html = renderToStaticMarkup(<ArchModeToggle mode="pipeline" onChange={() => {}} />);
     const at = (s: string) => html.indexOf(s);
-    expect(at(">System<")).toBeGreaterThan(-1);
-    expect(at(">System<")).toBeLessThan(at(">Pipeline<"));
+    expect(html).not.toContain(">System<");
+    expect(at(">Pipeline<")).toBeGreaterThan(-1);
     expect(at(">Pipeline<")).toBeLessThan(at(">Packages<"));
     expect(html).toContain('aria-pressed="true">Pipeline<');
   });
 
-  it("saves and restores the pipeline choice, and still defaults to System", () => {
+  it("saves and restores the pipeline choice, and still defaults to Packages", () => {
     const mem = new Map<string, string>();
     const store = { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => void mem.set(k, v) };
     writeArchMode("pipeline", store);
     expect(mem.get(ARCH_MODE_KEY)).toBe("pipeline");
     expect(readArchMode(store)).toBe("pipeline");
     mem.set(ARCH_MODE_KEY, "nonsense");
-    expect(readArchMode(store)).toBe("system");
+    expect(readArchMode(store)).toBe("packages");
   });
 });

@@ -8,6 +8,14 @@ interface CatalogEntry {
   api: string;
   attr?: string;
   arg?: number;
+  /** Value of attr when the argument is absent. */
+  default?: string;
+  /** The argument must be a string literal starting with this, or the call does not match. */
+  prefix?: string;
+  /** Copied into the attrs as op (sync and os kinds). */
+  op?: string;
+  /** Copied into the attrs as syscall: set only for a thin 1:1 wrapper of a kernel call. */
+  syscall?: string;
 }
 
 const catalog = JSON.parse(readFileSync(new URL("../data/effects.json", import.meta.url), "utf8")) as {
@@ -53,10 +61,11 @@ export interface EffectMatch {
 
 const DYNAMIC = "<dynamic>";
 
-function argValue(call: ts.CallExpression, index: number): string {
+function argValue(call: ts.CallExpression, index: number, absent?: string): string {
   if (index < 0) return DYNAMIC;
   const arg = call.arguments[index];
-  return arg && ts.isStringLiteralLike(arg) ? arg.text : DYNAMIC;
+  if (arg === undefined) return absent ?? DYNAMIC;
+  return ts.isStringLiteralLike(arg) ? arg.text : DYNAMIC;
 }
 
 /** Matches a call against the effects catalog, using the file's import bindings. */
@@ -80,12 +89,28 @@ export function matchCall(call: ts.CallExpression, imports: Map<string, ImportBi
       module = "";
       name = `${base}.${callee.name.text}`;
     }
+  } else if (
+    ts.isPropertyAccessExpression(callee) &&
+    ts.isPropertyAccessExpression(callee.expression) &&
+    ts.isIdentifier(callee.expression.expression) &&
+    !imports.has(callee.expression.expression.text)
+  ) {
+    // A global reached through one member, such as navigator.locks.request.
+    module = "";
+    name = `${callee.expression.expression.text}.${callee.expression.name.text}.${callee.name.text}`;
   }
   if (module === undefined || name === undefined) return undefined;
   const entry = byKey.get(`${module}\0${name}`);
   if (!entry) return undefined;
+  const index = entry.arg ?? 0;
+  if (entry.prefix !== undefined) {
+    const arg = call.arguments[index];
+    if (!arg || !ts.isStringLiteralLike(arg) || !arg.text.startsWith(entry.prefix)) return undefined;
+  }
   const attrs: Record<string, unknown> = { api: entry.api };
-  if (entry.attr) attrs[entry.attr] = argValue(call, entry.arg ?? 0);
+  if (entry.attr) attrs[entry.attr] = argValue(call, index, entry.default);
+  if (entry.op) attrs.op = entry.op;
+  if (entry.syscall) attrs.syscall = entry.syscall;
   return { kind: entry.kind, attrs };
 }
 

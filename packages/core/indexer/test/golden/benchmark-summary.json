@@ -32,9 +32,9 @@
         "frontend-cpp"
       ],
       "filesScanned": 121,
-      "filesWithRecords": 4,
+      "filesWithRecords": 5,
       "filesWithErrors": 0,
-      "nodes": 5,
+      "nodes": 6,
       "edges": 3
     },
     {
@@ -43,9 +43,9 @@
         "frontend-cpp"
       ],
       "filesScanned": 121,
-      "filesWithRecords": 8,
+      "filesWithRecords": 10,
       "filesWithErrors": 0,
-      "nodes": 22,
+      "nodes": 45,
       "edges": 0
     },
     {
@@ -142,18 +142,21 @@
   "concurrency": {
     "asyncFunctions": 0,
     "awaits": 0,
-    "spawns": 5,
+    "spawns": 6,
     "channelOps": 0,
     "asyncWithoutAwait": 0
   },
   "recordsByKind": {
     "calls.call": 1554,
     "calls.reference": 71,
+    "concurrency.spawn-process": 1,
     "concurrency.spawn-thread": 5,
     "concurrency.spawns": 3,
     "effects.clock.read": 12,
     "effects.env.read": 7,
-    "effects.fs.write": 1,
+    "effects.fs.read": 8,
+    "effects.fs.write": 2,
+    "effects.os.call": 14,
     "effects.proc.exec": 2,
     "finding": 47,
     "flow.branch": 536,
