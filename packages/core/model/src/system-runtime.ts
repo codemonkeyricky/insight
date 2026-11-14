@@ -269,6 +269,16 @@ export function buildRuntimePlan(model: ProjectModel, scope: string, compOfFile:
       programOfSpawnMap.set(t.spawn.node, pid);
       specs.push({ rt: execThreadId(t.id), t, parent: pid, label: "Main thread", implicit: true });
     }
+    // Threads no program owns (a C++ scope whose executables are all tests, so the programs are filtered out as noise): the
+    // process is real even when no build target names it, so they share one program of the scope. Without it the frames
+    // have no container and the threads were not drawn at all.
+    const orphans = exec.threads.filter((t) => threadIds.has(t.id) && !programOfThread.has(t.id));
+    if (orphans.length > 0) {
+      const pid = `program:scope:${scope}`;
+      const scripted = orphans.some((t) => (t.spawn?.script ?? "") !== "");
+      runtimes.set(pid, { id: pid, kind: "program", label: basename(scope) || "project", programKind: scripted ? "node" : "native" });
+      for (const t of orphans) programOfThread.set(t.id, pid);
+    }
     const groupSize = new Map<string, number>();
     for (const t of exec.threads) {
       if (!threadIds.has(t.id)) continue;
