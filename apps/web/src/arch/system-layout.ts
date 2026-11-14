@@ -50,6 +50,10 @@ export interface SysFrame {
   collapsed: boolean;
   /** The slices hidden behind the "+N more" chip. */
   hidden: number;
+  /** Set when the frame is collapsed by default: opening it adds this key to the open set. */
+  openKey?: string;
+  /** A thread whose coroutines are grouped (or were, once opened): how many, and whether they are drawn one by one. */
+  coGroup?: { count: number; open: boolean };
   /** The frame that holds this one, when it is nested. */
   parent?: string;
   spawn?: { file: string; line: number; api?: string; status: string; fn?: string };

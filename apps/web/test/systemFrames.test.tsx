@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { SystemEdge, SystemExternal, SystemModel, SystemResource, SystemRuntime, SystemSlice } from "@insight/model";
-import { layoutSystemFrames, SLICE_LIMIT } from "../src/arch/system-frames";
+import { GROUP_MIN, layoutSystemFrames, SLICE_LIMIT } from "../src/arch/system-frames";
 import type { SysArrow, SysBox, SysFrame, SysLayout } from "../src/arch/system-layout";
 import { SystemDiagram } from "../src/components/views/SystemView";
 
@@ -20,7 +20,7 @@ describe("grounded frames", () => {
   const arrowsFrom = (id: string) => layout.arrows.filter((a) => a.from === id);
 
   it("draws a frame per process and per thread, but none for an implicit thread", () => {
-    expect(frames.map((f) => f.id).sort()).toEqual([CO, PA, PB, TW, "unthreaded"].sort().filter((x) => x !== undefined));
+    expect(frames.map((f) => f.id).sort()).toEqual([CO, PA, PB, TW].sort());
     expect(frames.find((f) => f.id === TI)).toBeUndefined();
     expect(byFrame(TW).parent).toBe(PA);
   });
@@ -72,9 +72,12 @@ describe("grounded frames", () => {
     expect(box("os:signal").x + box("os:signal").w).toBeLessThanOrEqual(band.x + band.w);
   });
 
-  it("draws the kernel band full height, after the processes, with the outside column after it", () => {
+  it("sizes the kernel band to its content, after the processes, with the outside column after it", () => {
     const band = layout.band as NonNullable<typeof layout.band>;
-    expect(band.h).toBeGreaterThanOrEqual(layout.height - 1);
+    const items = layout.boxes.filter((b) => b.frame === "band" || b.kind === "chip");
+    const bottom = Math.max(...items.map((b) => b.y + b.h));
+    expect(band.h).toBeGreaterThanOrEqual(bottom);
+    expect(band.h).toBeLessThanOrEqual(bottom + 40);
     for (const f of frames.filter((x) => x.parent === undefined && x.kind !== "unthreaded")) expect(f.x + f.w).toBeLessThan(band.x);
     expect(box("fs").x).toBeGreaterThan(band.x + band.w);
     expect(box("github").x).toBeGreaterThan(band.x + band.w);
@@ -371,5 +374,87 @@ describe("skipped functions note", () => {
     };
     const html = renderToStaticMarkup(<SystemDiagram id="p" sys={sys} tests={false} onTests={() => {}} />);
     expect(html).toContain("1234 functions skipped");
+  });
+});
+
+describe("default collapse, 0-fn slices and the grid", () => {
+  const rtsMany = (n: number): SystemRuntime[] => [
+    { id: PA, kind: "program", label: "svc", programKind: "node" },
+    { id: TW, kind: "thread", label: "Worker", parent: PA },
+    ...Array.from({ length: n }, (_, i): SystemRuntime => ({ id: `coroutine:c${i}`, kind: "coroutine", label: `c${i}`, parent: TW })),
+  ];
+  const many = (n: number): SystemModel => {
+    const rts = rtsMany(n);
+    return {
+      scope: "svc",
+      runtime: "grounded",
+      components: [A, B, C].map((id) => ({ id, label: id, path: id, kind: "folder" as const, files: 1, functions: 3, entry: false })),
+      routes: [],
+      externals: [],
+      edges: [edge(`coroutine:c0|${C}`, `${TW}|${B}`, "calls", "calls")],
+      stages: [[A], [B], [C]],
+      runtimes: rts,
+      slices: [slice(TW, B, 2, { root: true }), ...rts.filter((r) => r.kind === "coroutine").map((r) => slice(r.id, C, 1, { root: true }))],
+    };
+  };
+
+  it("keeps up to GROUP_MIN coroutines as frames", () => {
+    const l = layoutSystemFrames(many(GROUP_MIN));
+    expect((l.frames as SysFrame[]).filter((f) => f.kind === "coroutine")).toHaveLength(GROUP_MIN);
+  });
+
+  it("draws one summary row for more than GROUP_MIN coroutines, and re-attaches their edges to it", () => {
+    const l = layoutSystemFrames(many(GROUP_MIN + 1));
+    const co = (l.frames as SysFrame[]).filter((f) => f.kind === "coroutine");
+    expect(co).toHaveLength(1);
+    const g = co[0] as SysFrame;
+    expect(g.title).toBe(`${GROUP_MIN + 1} coroutines`);
+    expect(g.collapsed).toBe(true);
+    expect(g.openKey).toBe(TW);
+    const a = l.arrows.find((x) => x.edge.from === `coroutine:c0|${C}`) as SysArrow;
+    expect(a.from).toBe(g.id);
+  });
+
+  it("draws the coroutines one by one once the thread is opened", () => {
+    const l = layoutSystemFrames(many(GROUP_MIN + 2), { open: new Set([TW]) });
+    expect((l.frames as SysFrame[]).filter((f) => f.kind === "coroutine")).toHaveLength(GROUP_MIN + 2);
+    expect((l.frames as SysFrame[]).find((f) => f.id === TW)?.coGroup).toEqual({ count: GROUP_MIN + 2, open: true });
+  });
+
+  it("collapses a big unthreaded frame by default, and opens it on request", () => {
+    const m = many(1);
+    const sl = [A, B, C, "D"].map((c) => slice("unthreaded", c, 1));
+    const sys: SystemModel = { ...m, components: [...m.components, { id: "D", label: "D", path: "D", kind: "folder", files: 1, functions: 1, entry: false }], stages: [[A], [B], [C], ["D"]], runtimes: [...(m.runtimes ?? []), { id: "unthreaded", kind: "unthreaded", label: "Not on a thread" }], slices: [...(m.slices ?? []), ...sl] };
+    const f = (l: SysLayout) => (l.frames as SysFrame[]).find((x) => x.id === "unthreaded") as SysFrame;
+    expect(f(layoutSystemFrames(sys)).collapsed).toBe(true);
+    expect(f(layoutSystemFrames(sys, { open: new Set(["unthreaded"]) })).collapsed).toBe(false);
+  });
+
+  it("draws no slice with 0 functions, and no frame left empty by that", () => {
+    const m = many(1);
+    const sys: SystemModel = { ...m, runtimes: [...(m.runtimes ?? []), { id: "unthreaded", kind: "unthreaded", label: "Not on a thread" }], slices: [...(m.slices ?? []), slice("unthreaded", A, 0)] };
+    const l = layoutSystemFrames(sys);
+    expect(l.boxes.some((b) => b.id === `unthreaded|${A}`)).toBe(false);
+    expect((l.frames as SysFrame[]).some((f) => f.id === "unthreaded")).toBe(false);
+  });
+
+  it("lays many processes out in a grid that fits the viewport better than one column", () => {
+    const rts: SystemRuntime[] = Array.from({ length: 8 }, (_, i) => ({ id: `program:p${i}`, kind: "program", label: `p${i}`, programKind: "node" }));
+    const sys: SystemModel = { ...many(0), runtimes: rts, edges: [], slices: rts.flatMap((r) => [A, B, C].map((c) => slice(r.id, c, 1))) };
+    const l = layoutSystemFrames(sys, { viewport: { w: 100000, h: 300 } });
+    const xs = new Set((l.frames as SysFrame[]).map((f) => f.x));
+    expect(xs.size).toBeGreaterThan(1);
+    const flat = layoutSystemFrames(sys, { viewport: { w: 400, h: 100000 } });
+    expect(new Set((flat.frames as SysFrame[]).map((f) => f.x)).size).toBe(1);
+  });
+
+  it("puts no pill outside every frame", () => {
+    const l = layoutSystemFrames(model());
+    const band = l.band as NonNullable<typeof l.band>;
+    for (const a of l.arrows) {
+      if (a.noPill || a.pill.text === "") continue;
+      const inFrame = (l.frames as SysFrame[]).some((f) => f.parent === undefined && a.pill.x > f.x && a.pill.x < f.x + f.w && a.pill.y > f.y && a.pill.y < f.y + f.h);
+      expect(inFrame || a.pill.x >= band.x).toBe(true);
+    }
   });
 });

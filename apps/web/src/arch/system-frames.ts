@@ -8,35 +8,35 @@ import { CATEGORY_ORDER, CATEGORY_TITLES, pillText, routeText, shortLabel, type 
 // strips; outside systems come after the band. Edges to outside systems go through one chip per API or syscall on the band.
 
 /** Slices a frame shows before the "+N more" chip. */
-export const SLICE_LIMIT = 12;
+export const SLICE_LIMIT = 9;
 
 const CARD_W = 196;
-const COL_GAP = 120;
-const PAD = 14;
-const HDR_H = 34;
-const SLICE_H = 58;
-const SLICE_GAP = 10;
-const FRAME_GAP = 16;
+const COL_GAP = 70;
+const PAD = 10;
+const HDR_H = 30;
+const SLICE_H = 50;
+const SLICE_GAP = 8;
+const FRAME_GAP = 12;
 const STRIP_W = 200;
 const STRIP_GAP = 26;
 const STRIP_TITLE_H = 26;
-const RES_H = 46;
-const RES_GAP = 8;
+const RES_H = 40;
+const RES_GAP = 6;
 const BAND_MIN_W = 184;
 const BAND_MAX_W = 380;
 const PORT_GAP = 16;
 // Text width estimates (px per character) for the fonts the view uses: card names 18 px, sub lines 14 px, chips 13 px mono.
 const NAME_CH = 10;
-const SUB_CH = 7.4;
+const SUB_CH = 8.2;
 const CODE_CH = 7.9;
 const BAND_TITLE_H = 40;
 const GAP_X = 150;
 const OUT_W = 210;
-const OUT_H = 60;
-const OUT_GAP = 22;
+const OUT_H = 46;
+const OUT_GAP = 10;
 const GROUP_H = 30;
-const CHIP_H = 24;
-const CHIP_GAP = 8;
+const CHIP_H = 20;
+const CHIP_GAP = 4;
 const CHIP_ROW = 20;
 const COMP_H = 64;
 const TOP = 74;
@@ -50,7 +50,14 @@ export interface FrameOptions {
   collapsed?: ReadonlySet<string>;
   /** Frames whose "+N more" chip was clicked: every slice is drawn. */
   widened?: ReadonlySet<string>;
+  /** Auto-collapsed groups the user opened: a thread id (its coroutines are drawn one by one) or an unthreaded frame id. */
+  open?: ReadonlySet<string>;
+  /** The viewport the grid of process frames aims at, in px (default 1280 x 750). */
+  viewport?: { w: number; h: number };
 }
+
+/** A thread with more coroutines than this, or an unthreaded frame with more slices, is drawn as one summary row. */
+export const GROUP_MIN = 3;
 
 /** A frame of the drawing tree, before its size and position are known. */
 interface FNode {
@@ -72,6 +79,10 @@ interface FNode {
   sharedWith?: string;
   /** The component the coroutine starts in, named in its header when none of its slices is drawn. */
   startsIn?: string;
+  /** Set on an auto-collapsed frame: the key that opens it (see FrameOptions.open). */
+  openKey?: string;
+  /** A coroutine summary row: how many coroutines it stands for. */
+  groupCount?: number;
   /** Where the free part of the right edge starts (below the strip's resources), for ports. */
   portTop?: number;
 }
@@ -95,6 +106,12 @@ export function chipLabelOf(edge: SystemEdge): string {
 export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): SysLayout {
   const collapsed = opts.collapsed ?? new Set<string>();
   const widened = opts.widened ?? new Set<string>();
+  const open = opts.open ?? new Set<string>();
+  // Frames collapsed by default (a coroutine summary, a big unthreaded frame), until the user opens them.
+  const autoCollapsed = new Set<string>();
+  const isCol = (id: string): boolean => collapsed.has(id) || autoCollapsed.has(id);
+  const coGroups = new Map<string, { count: number; open: boolean }>(); // thread id -> its coroutine summary
+  let gridRight = 0;
   const grounded = sys.runtime === "grounded" && (sys.runtimes ?? []).length > 0;
   const compById = new Map(sys.components.map((c) => [c.id, c]));
   const routesBy = new Map<string, SystemRoute[]>();
@@ -103,7 +120,8 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
   // Columns: the stage of each component, densely numbered over the components that are drawn.
   const stageOf = new Map<string, number>();
   sys.stages.forEach((stage, i) => stage.forEach((id) => stageOf.set(id, i)));
-  const slices = grounded ? (sys.slices ?? []) : [];
+  // A slice with no functions of its own (a hollow link in the call chain) is not drawn, nor are its edges.
+  const slices = grounded ? (sys.slices ?? []).filter((x) => x.functions > 0) : [];
   const used = grounded ? new Set(slices.map((s) => s.component)) : new Set(sys.components.map((c) => c.id));
   const stagesUsed = [...new Set([...used].map((id) => stageOf.get(id) ?? Number.MAX_SAFE_INTEGER))].sort((a, b) => a - b);
   const denseOf = new Map(stagesUsed.map((s, i) => [s, i]));
@@ -190,12 +208,55 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
       node.resources.push(r);
       frameOfItem.set(r.id, node.id);
     }
+    // A holder (thread or process) with many coroutines draws one summary row for them, until opened. Their slices' and
+    // their own edges sit on the summary's header.
+    {
+      const byHolder = new Map<string, FNode[]>();
+      for (const n of nodes) if (n.kind === "coroutine" && n.container !== undefined && frameById.has(n.container)) byHolder.set(n.container, [...(byHolder.get(n.container) ?? []), n]);
+      for (const [holderId, list] of byHolder) {
+        if (list.length <= GROUP_MIN) continue;
+        const isOpen = open.has(holderId);
+        coGroups.set(holderId, { count: list.length, open: isOpen });
+        if (isOpen) continue;
+        const gid = `cogroup:${holderId}`;
+        const g: FNode = {
+          id: gid,
+          kind: "coroutine",
+          rt: { id: gid, kind: "coroutine", label: `${list.length} coroutines`, parent: holderId },
+          container: holderId,
+          children: [],
+          slices: [],
+          resources: [],
+          h: 0, x: 0, y: 0, w: 0, visible: [], hidden: 0,
+          openKey: holderId,
+          groupCount: list.length,
+        };
+        frameById.set(gid, g);
+        autoCollapsed.add(gid);
+        for (const c of list) {
+          g.slices.push(...c.slices);
+          for (const sl of c.slices) frameOfItem.set(sl.id, gid);
+          for (const [k, v] of [...hiddenAt]) if (v === c.id) hiddenAt.set(k, gid);
+          frameOfItem.set(c.id, gid);
+          frameById.delete(c.id);
+          nodes.splice(nodes.indexOf(c), 1);
+        }
+        nodes.push(g);
+      }
+      for (const n of nodes) {
+        if (n.kind === "unthreaded" && n.slices.length > GROUP_MIN && !open.has(n.id)) {
+          autoCollapsed.add(n.id);
+          n.openKey = n.id;
+        }
+      }
+    }
     // Children: each frame's container lists it, threads and coroutines by id.
     const tops: FNode[] = [];
     for (const n of nodes) {
       const parent = n.container === undefined ? undefined : frameById.get(n.container);
       if (parent === undefined) {
         if (n.kind !== "unthreaded" && n.kind !== "process") continue; // a thread or coroutine with no drawn container is not drawn
+        if (n.kind === "unthreaded" && n.slices.length === 0 && n.children.length === 0) continue; // nothing to show
         tops.push(n);
       } else parent.children.push(n);
     }
@@ -228,7 +289,7 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
     for (const n of nodes) visibleOf(n);
 
     const blockH = (n: FNode): number => {
-      if (collapsed.has(n.id) || n.visible.length === 0) return n.hidden > 0 && !collapsed.has(n.id) ? CHIP_H + SLICE_GAP : 0;
+      if (isCol(n.id) || n.visible.length === 0) return n.hidden > 0 && !isCol(n.id) ? CHIP_H + SLICE_GAP : 0;
       const perCol = new Map<number, number>();
       for (const s of n.visible) perCol.set(colOf(s.component), (perCol.get(colOf(s.component)) ?? 0) + 1);
       const rows = Math.max(...perCol.values());
@@ -237,7 +298,7 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
     const stripH = (n: FNode): number => (n.resources.length === 0 ? 24 : STRIP_TITLE_H + n.resources.length * (RES_H + RES_GAP) - RES_GAP);
     // Heights, bottom-up.
     const sizeOf = (n: FNode): number => {
-      if (collapsed.has(n.id)) return HDR_H;
+      if (isCol(n.id)) return HDR_H;
       let content = 0;
       for (const c of n.children) content += sizeOf(c) + FRAME_GAP;
       if (n.children.length > 0) content -= FRAME_GAP;
@@ -266,16 +327,18 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
         x,
         y,
         w,
-        h: collapsed.has(n.id) ? HDR_H : n.h,
+        h: isCol(n.id) ? HDR_H : n.h,
         hdrH: HDR_H,
-        collapsed: collapsed.has(n.id),
+        collapsed: isCol(n.id),
         hidden: n.hidden,
+        ...(n.openKey !== undefined ? { openKey: n.openKey } : {}),
+        ...(coGroups.has(n.id) ? { coGroup: coGroups.get(n.id) } : {}),
         ...(n.container !== undefined ? { parent: n.container } : {}),
         ...(n.rt?.spawn !== undefined ? { spawn: { file: n.rt.spawn.file, line: n.rt.spawn.line, ...(n.rt.spawn.api !== undefined ? { api: n.rt.spawn.api } : {}), status: n.rt.spawn.status, ...(n.rt.spawn.fn !== undefined ? { fn: n.rt.spawn.fn } : {}) } } : {}),
         ...(n.rt?.coroutines !== undefined ? { coroutines: n.rt.coroutines } : {}),
         ...(n.rt?.kind === "thread" || n.rt?.kind === "program" ? { roots: [] } : {}),
       });
-      if (collapsed.has(n.id)) return;
+      if (isCol(n.id)) return;
       const isProc = n.kind === "process";
       const contentLeft = x + PAD;
       const cw = w - 2 * PAD - (isProc ? STRIP_W + STRIP_GAP : 0);
@@ -311,6 +374,7 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
       }
     };
     const subOf = (n: FNode): string => {
+      if (n.groupCount !== undefined) return `${plural(n.slices.length, "own slice")} · open to see them`;
       if (n.kind === "process") return n.rt?.spawn !== undefined ? spawnSub(n.rt) : plural(n.slices.length, "slice");
       if (n.kind === "unthreaded") return plural(n.slices.length, "slice");
       if (n.kind === "coroutine") {
@@ -321,20 +385,46 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
       if (n.slices.length === 0 && n.children.length === 0) return "runs no component of this scope";
       return n.rt?.coroutines !== undefined ? `${plural(n.rt.coroutines, "coroutine")} · ${plural(n.slices.length, "slice")}` : plural(n.slices.length, "slice");
     };
-    let y = TOP;
-    for (const n of tops) {
-      if (n.kind === "unthreaded") continue;
+    // Process frames sit in a grid of 1-4 columns, the one that fits a 1280 x 750 viewport best; the unthreaded frame comes last.
+    const order = [...tops.filter((n) => n.kind !== "unthreaded"), ...tops.filter((n) => n.kind === "unthreaded")];
+    for (const n of order) {
       sizeOf(n);
       n.w = procW;
-      place(n, MARGIN, y, procW);
-      y += n.h + 2 * FRAME_GAP;
     }
-    const unthreaded = tops.filter((n) => n.kind === "unthreaded");
-    for (const n of unthreaded) {
-      sizeOf(n);
-      place(n, MARGIN, y, procW);
-      y += n.h + 2 * FRAME_GAP;
+    const COL_GAP_P = 70;
+    const vp = opts.viewport ?? { w: 1280, h: 750 };
+    const assign = (g: number): { cols: number[]; ys: number[] } => {
+      const ys = new Array<number>(g).fill(TOP);
+      const cols = order.map((n) => {
+        let c = 0;
+        for (let i = 1; i < g; i++) if ((ys[i] as number) < (ys[c] as number)) c = i;
+        ys[c] = (ys[c] as number) + n.h + 2 * FRAME_GAP;
+        return c;
+      });
+      return { cols, ys };
+    };
+    let g = 1;
+    if (order.length >= 4) {
+      let best = 0;
+      for (let k = 1; k <= Math.min(4, order.length); k++) {
+        const { ys } = assign(k);
+        const w = MARGIN + k * procW + (k - 1) * COL_GAP_P + 3 * GAP_X + BAND_MIN_W + OUT_W + MARGIN;
+        const score = Math.min(vp.w / w, vp.h / (Math.max(...ys) - FRAME_GAP));
+        if (score > best * 1.03) {
+          best = score;
+          g = k;
+        }
+      }
     }
+    const { cols, ys } = assign(g);
+    const colTop = new Array<number>(g).fill(TOP);
+    order.forEach((n, i) => {
+      const c = cols[i] as number;
+      place(n, MARGIN + c * (procW + COL_GAP_P), colTop[c] as number, procW);
+      colTop[c] = (colTop[c] as number) + n.h + 2 * FRAME_GAP;
+    });
+    gridRight = MARGIN + g * procW + (g - 1) * COL_GAP_P;
+    const y = Math.max(...ys);
     H = Math.max(y, TOP) - FRAME_GAP;
     // Programless resources (no process owns them) share one strip below the processes.
     const orphan = resources.filter((r) => r.kind !== "os" && !frameOfItem.has(r.id));
@@ -393,14 +483,14 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
 
   // The kernel band: full height, after the strips. Its width comes from its labels, so no op name or chip label is cut. Its
   // kernel-op boxes are stacked at the top; the chips follow them, each at the height of the outside system it leads to.
-  const procRight = grounded ? MARGIN + procW : colsRight;
+  const procRight = grounded ? gridRight : colsRight;
   const bandX = procRight + GAP_X;
   const osRes = resources.filter((r) => r.kind === "os");
   const chipLabels = new Set<string>();
   for (const e of sys.edges) if (extShown.has(e.to)) chipLabels.add(chipLabelOf(e));
   let need = BAND_MIN_W - 20;
   for (const l of chipLabels) need = Math.max(need, 28 + l.length * CODE_CH);
-  for (const r of osRes) need = Math.max(need, 16 + r.label.length * NAME_CH + 36, 30 + ((r.names ?? [])[0]?.length ?? 0) * SUB_CH);
+  for (const r of osRes) need = Math.max(need, 16 + r.label.length * NAME_CH + 36, 50 + ((r.names ?? [])[0]?.length ?? 0) * SUB_CH);
   const bandW = Math.min(BAND_MAX_W, Math.ceil(need + 20));
   osRes.forEach((r, i) => boxes.push(resourceBox(r, bandX + 10, TOP + BAND_TITLE_H + i * (RES_H + RES_GAP), bandW - 20, "band")));
   const chipTop = TOP + BAND_TITLE_H + osRes.length * (RES_H + RES_GAP) + 14;
@@ -450,7 +540,7 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
     let outer: string | undefined;
     let cur = frameId;
     for (let guard = 0; cur !== undefined && guard < 100; guard++) {
-      if (collapsed.has(cur)) outer = cur;
+      if (isCol(cur)) outer = cur;
       cur = frameById.get(cur)?.container;
     }
     return outer === undefined ? undefined : frames.find((f) => f.id === outer);
@@ -512,7 +602,8 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
   }
 
   const bandBottom = Math.max(H, outBottom, ...boxes.map((b) => b.y + b.h), prevBottom) + MARGIN;
-  const band: SysBand = { x: bandX, y: 0, w: bandW, h: bandBottom };
+  const bandContent = Math.max(prevBottom, ...boxes.filter((b) => b.frame === "band").map((b) => b.y + b.h));
+  const band: SysBand = { x: bandX, y: 0, w: bandW, h: Math.min(bandBottom, bandContent + 24) };
   const outRight = ext.length > 0 ? outX + OUT_W : bandX + bandW;
   const width = outRight + MARGIN;
   const height = bandBottom;
@@ -713,16 +804,18 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
     ...boxes.map((b) => ({ x: b.x - 4, y: b.y - 4, w: b.w + 8, h: b.h + 8 })),
     ...frames.map((f) => ({ x: f.x, y: f.y, w: f.w, h: HDR_H })),
   ];
-  const placePill = (samples: Array<{ x: number; y: number }>, text: string, order: number[], mustShow = true): { x: number; y: number; w: number; h: number; text: string } => {
+  const placePill = (samples: Array<{ x: number; y: number }>, text: string, order: number[], mustShow = true, constrain = false): { x: number; y: number; w: number; h: number; text: string } => {
     const w = Math.round(text.length * 8.2 + 20);
     const at = arcAt(samples);
     let chosen: { x: number; y: number } | undefined;
-    const NUDGES = [0, 26, -26, 52, -52, 78, -78, 104, -104, 130, -130, 156, -156];
+    // A pill that must sit in a frame stays within a pill's height of its line; a free one may slide further.
+    const NUDGES = constrain ? [0, 14, -14, 26, -26] : [0, 26, -26, 52, -52, 78, -78, 104, -104, 130, -130, 156, -156];
     for (const t of order) {
       for (const off of NUDGES) {
         const c = at(t);
         const r = { x: c.x - w / 2, y: c.y + off - PILL_H / 2, w, h: PILL_H };
-        if (!taken.some((o) => overlaps(r, o))) {
+        const homed = !constrain || frames.length === 0 || frames.some((f) => f.parent === undefined && c.x > f.x && c.x < f.x + f.w && c.y + off > f.y && c.y + off < f.y + f.h) || c.x >= band.x;
+        if (homed && !taken.some((o) => overlaps(r, o))) {
           chosen = { x: c.x, y: c.y + off };
           break;
         }
@@ -737,7 +830,7 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
   };
   for (const a of arrows) {
     if (a.pill.text === "" || a.noPill) continue;
-    a.pill = placePill(a.samples, a.pill.text, [0.5, 0.42, 0.58, 0.34, 0.66, 0.26, 0.74], false);
+    a.pill = placePill(a.samples, a.pill.text, [0.5, 0.42, 0.58, 0.34, 0.66, 0.26, 0.74], frames.length === 0, frames.length > 0);
   }
   for (const t of trunks) {
     if (t.pill.text === "") continue;
@@ -798,7 +891,7 @@ function resourceBox(r: SystemResource, x: number, y: number, w: number, frame: 
   const names = r.names ?? [];
   // A kernel-op box keeps its whole name (the band is sized from it) and lists as many targets as fit, then "+N".
   if (r.kind === "os") {
-    const room = Math.max(1, Math.floor((w - 28) / SUB_CH));
+    const room = Math.max(1, Math.floor((w - 44) / SUB_CH));
     const shown: string[] = [];
     let used = 0;
     for (const n of names) {

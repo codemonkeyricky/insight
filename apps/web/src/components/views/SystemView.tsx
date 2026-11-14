@@ -95,19 +95,34 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
   // The Pipeline view keeps its own layout; the System view draws frames, strips and the kernel band.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const [widened, setWidened] = useState<ReadonlySet<string>>(() => new Set());
+  /** Auto-collapsed groups the user opened (a thread's coroutine summary, a big unthreaded frame). */
+  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
   useLayoutEffect(() => {
     setCollapsed(new Set());
     setWidened(new Set());
+    setOpen(new Set());
   }, [sys]);
-  const layout = useMemo(() => (pipeline !== undefined ? layoutSystem(sys, layoutOptions) : layoutSystemFrames(sys, { collapsed, widened })), [sys, layoutOptions, pipeline, collapsed, widened]);
+  const layout = useMemo(() => (pipeline !== undefined ? layoutSystem(sys, layoutOptions) : layoutSystemFrames(sys, { collapsed, widened, open })), [sys, layoutOptions, pipeline, collapsed, widened, open]);
+  const toggleOpen = useCallback((key: string) => {
+    setOpen((o) => {
+      const next = new Set(o);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
   const toggleFrame = useCallback((id: string) => {
+    // "open:<thread>" groups or ungroups a thread's coroutines; an auto-collapsed frame opens its group instead of collapsing.
+    if (id.startsWith("open:")) return toggleOpen(id.slice(5));
+    const key = (layout.frames ?? []).find((f) => f.id === id)?.openKey;
+    if (key !== undefined) return toggleOpen(key);
     setCollapsed((c) => {
       const next = new Set(c);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
-  }, []);
+  }, [layout, toggleOpen]);
   const widen = useCallback((id: string) => setWidened((w) => new Set(w).add(id)), []);
   const [sel, setSel] = useState<Selection>(null);
   const [hover, setHover] = useState<string | null>(null);
@@ -384,7 +399,7 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
                       tabIndex={0}
                       aria-expanded={!f.collapsed}
                       aria-label={`${f.title}, ${f.sub}, ${f.collapsed ? "collapsed" : "expanded"}`}
-                      onClick={() => setSel({ kind: "node", id: f.id })}
+                      onClick={() => (f.openKey !== undefined ? toggleOpen(f.openKey) : setSel({ kind: "node", id: f.id }))}
                       onDoubleClick={() => toggleFrame(f.id)}
                       onKeyDown={(e) => frameKey(f.id, e)}
                       onMouseEnter={() => setHover(f.id)}
@@ -759,6 +774,11 @@ function FrameDetail({ id, sys, frame, onToggle, onWiden }: { id: string; sys: S
         <button type="button" className="sysv-open" onClick={() => onToggle(frame.id)}>
           {frame.collapsed ? "Expand" : "Collapse"}
         </button>{" "}
+        {frame.coGroup !== undefined && (
+          <button type="button" className="sysv-open" onClick={() => onToggle(`open:${frame.id}`)}>
+            {frame.coGroup.open ? `Group the ${frame.coGroup.count} coroutines` : `Show the ${frame.coGroup.count} coroutines`}
+          </button>
+        )}{" "}
         {frame.hidden > 0 && (
           <button type="button" className="sysv-open" onClick={() => onWiden(frame.id)}>
             Show all slices
