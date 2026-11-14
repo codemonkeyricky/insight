@@ -458,3 +458,29 @@ describe("default collapse, 0-fn slices and the grid", () => {
     }
   });
 });
+
+describe("a collapsed lone process", () => {
+  const lone = (): SystemModel => ({
+    ...model(),
+    components: model().components.filter((c) => c.id === A),
+    externals: [],
+    edges: [],
+    resources: [],
+    stages: [[A]],
+    runtimes: [{ id: PA, kind: "program", label: "svc · Node", programKind: "node", spawn: { file: "svc/src/main.ts", line: 1, status: "resolved" } }],
+    slices: [slice(PA, A, 3, { root: true })],
+  });
+
+  it("keeps its frame in the layout when it has no box and no arrow", () => {
+    const l = layoutSystemFrames(lone(), { collapsed: new Set([PA]) });
+    expect(l.boxes.filter((b) => b.kind === "slice")).toEqual([]);
+    expect(l.arrows).toEqual([]);
+    expect((l.frames ?? []).map((f) => f.id)).toEqual([PA]);
+    expect(l.width).toBeGreaterThan(0);
+  });
+
+  it("is not an empty view: the header stays so the process can be expanded again", () => {
+    const html = renderToStaticMarkup(<SystemDiagram id="p" sys={lone()} tests={false} onTests={() => {}} />);
+    expect(html).toContain('data-frame="program:svc"');
+  });
+});
