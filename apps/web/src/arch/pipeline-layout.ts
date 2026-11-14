@@ -82,6 +82,7 @@ export function pipelineSystem(p: PipelineModel): PipelineSystem {
   return {
     sys: {
       scope: p.scope,
+      runtime: "none",
       components,
       routes: [],
       externals: [],

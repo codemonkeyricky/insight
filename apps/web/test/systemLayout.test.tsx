@@ -27,6 +27,7 @@ const edge = (from: string, to: string, verb: SystemEdge["verb"], label: string,
 function sample(): SystemModel {
   return {
     scope: "svc/src",
+    runtime: "none",
     components: [comp(G), comp(I), comp(S), comp(V, 1, true)],
     routes: [{ id: "route:1", component: V, framework: "export", method: "POST", path: "", handler: "POST", site: { file: V, line: 4 } }],
     externals: [
@@ -115,7 +116,7 @@ describe("layoutSystem", () => {
   });
 
   it("lays out an empty model as nothing", () => {
-    expect(layoutSystem({ scope: "", components: [], routes: [], externals: [], edges: [], stages: [] }).boxes).toEqual([]);
+    expect(layoutSystem({ scope: "", runtime: "none", components: [], routes: [], externals: [], edges: [], stages: [] }).boxes).toEqual([]);
   });
 
   it("shortens long labels at a segment and writes pills with the verb first", () => {

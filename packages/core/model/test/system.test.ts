@@ -155,7 +155,8 @@ describe("systemModel rules", () => {
     ]);
     expect(sys.components.find((c) => c.id === "scripts")?.entry).toBe(true);
     expect(sys.stages[0]).toEqual(["scripts"]);
-    expect(sys.edges.map((e) => `${e.from}>${e.to}`)).toEqual(["packages/b>packages/a", "scripts>packages/b"]);
+    // Grounded (the script's main is a program entry): calls are drawn per slice, so each edge runs on the callee's runtime.
+    expect(sys.edges.map((e) => `${e.from}>${e.to}`)).toEqual(["thread:main|packages/b>thread:main|packages/a", "thread:main|scripts>thread:main|packages/b"]);
   });
 
   it("maps a relative fetch to the matching route, with :param segments and a leading substitution", () => {
@@ -240,11 +241,11 @@ describe("systemModel rules", () => {
 
   it("gives an empty model for a scope with no files", () => {
     const sys = systemModel(modelOf(hostedDoc()), "no/such/folder");
-    expect(sys).toEqual({ scope: "no/such/folder", components: [], routes: [], externals: [], edges: [], stages: [] });
+    expect(sys).toEqual({ scope: "no/such/folder", components: [], routes: [], externals: [], edges: [], stages: [], runtime: "none" });
   });
 
   it("gives an empty model for an empty project", () => {
-    expect(systemModel(modelOf({ nodes: [], edges: [], findings: [] }), "")).toEqual({ scope: "", components: [], routes: [], externals: [], edges: [], stages: [] });
+    expect(systemModel(modelOf({ nodes: [], edges: [], findings: [] }), "")).toEqual({ scope: "", components: [], routes: [], externals: [], edges: [], stages: [], runtime: "none" });
   });
 
   it("is deterministic: the same model gives the same output", () => {

@@ -1,5 +1,6 @@
 // The System view's model: one scope's components, the HTTP routes they serve, the outside systems they touch, and the
 // verbs between them. Computed from the whole-project model, so a scope is a closed world: a fact that leaves it is not drawn.
+// When the scope has runtime context, the facts are drawn per slice (a component on one thread or coroutine); see system-runtime.ts.
 import type { IRNode, NodeId, Span } from "@insight/ir";
 import { isNoisePath } from "@insight/flow";
 import { edgeTargets } from "@insight/sdk";
@@ -7,6 +8,9 @@ import type { ProjectModel } from "./model.js";
 import { inScope, normalizeScope, ROOT_SCOPE } from "./scope.js";
 import { classifyHost } from "./services.js";
 import { scopeView } from "./view.js";
+import { buildRuntimePlan, type SystemEvidence, type SystemResource, type SystemRuntime, type SystemRuntimeMode, type SystemSlice } from "./system-runtime.js";
+
+export type { SystemEvidence, SystemResource, SystemResourceKind, SystemRuntime, SystemRuntimeMode, SystemSlice, SystemSpawn } from "./system-runtime.js";
 
 export interface SystemModel {
   scope: string; // "" = project root
@@ -16,6 +20,11 @@ export interface SystemModel {
   edges: SystemEdge[];
   stages: string[][]; // component ids per column, left → right; externals are drawn after
   via?: string; // set when the scope held one code folder, so its children are shown instead: the folder, relative to the scope ("src")
+  /** grounded: edges start and end at slices. none: no runtime context, the flat model. truncated: the exec model was cut, so flat. */
+  runtime: SystemRuntimeMode;
+  runtimes?: SystemRuntime[]; // present when runtime is grounded
+  slices?: SystemSlice[]; // present when runtime is grounded
+  resources?: SystemResource[]; // in-process resources and kernel ops, when there are any
 }
 export interface SystemOptions {
   tests?: boolean; // include tests, fixtures and samples (hidden by default)
@@ -50,16 +59,20 @@ export interface SystemExternal {
   host?: string;
   command?: string;
   names?: string[];
+  /** The APIs and syscalls behind the external, with their counts. Present only when the IR names one. */
+  ops?: SystemEvidence[];
 }
 export interface SystemEdge {
   id: string;
   from: string;
   to: string;
-  verb: "calls" | "reads" | "writes" | "runs" | "requests" | "spawns" | "posts" | "produces" | "feeds"; // produces and feeds: the Pipeline view
+  verb: "calls" | "reads" | "writes" | "runs" | "requests" | "spawns" | "posts" | "produces" | "feeds" | "enqueues" | "dequeues" | "locks" | "waits" | "notifies" | "listens" | "signals" | "maps"; // produces and feeds: the Pipeline view
   label: string; // e.g. "PUT ×5", "GET", "POST /api/index", "git", "3 vars"
   count: number;
   sites: Site[]; // up to 20 sites
   confidence: "exact" | "inferred";
+  /** The APIs and syscalls the facts went through. Present only when some fact names one. */
+  evidence?: SystemEvidence[];
 }
 
 /** Sites kept per edge. The count still covers every fact. */
@@ -87,10 +100,35 @@ interface Bucket {
   exact: boolean;
   names?: Set<string>;
   importOnly?: boolean;
+  evidence?: Map<string, SystemEvidence>;
+}
+
+/** An API or syscall a fact went through, before it is counted. */
+interface Ev {
+  api: string;
+  syscall?: string;
+  level: SystemEvidence["level"];
+}
+
+/** Where a fact starts: a slice (grounded) with its runtime, or the component itself (none). */
+interface Source {
+  from: string;
+  rt?: string;
 }
 
 /** Folders a scope may pass through to reach its children, a guard against a chain of single folders. */
 const MAX_VIA = 8;
+
+/** Kernel op labels, by `effects.os.call` op. */
+const OS_LABEL: Record<string, string> = {
+  signal: "Signals",
+  "process-control": "Process control",
+  memory: "Memory maps",
+  device: "Devices",
+  "raw-syscall": "Raw syscalls",
+  info: "System info",
+  fd: "File descriptors",
+};
 
 /**
  * The System model of one scope. A scope outside the project, or with no files, gives an empty model. Tests, fixtures and
@@ -118,7 +156,7 @@ export function systemModel(model: ProjectModel, scopePath: string, opts: System
 function buildSystem(model: ProjectModel, scope: string, tests: boolean): SystemModel {
   const view = scopeView(model, scope);
   const files = tests ? view.files() : view.files().filter((f) => !isNoisePath(f));
-  if (files.length === 0) return { scope, components: [], routes: [], externals: [], edges: [], stages: [] };
+  if (files.length === 0) return { scope, components: [], routes: [], externals: [], edges: [], stages: [], runtime: "none" };
 
   const inside = (file: string | undefined): file is string => file !== undefined && inScope(file, scope) && fileSet.has(file);
   const fileSet = new Set(files);
@@ -129,6 +167,10 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
   for (const file of files) compOf.set(file, componentOf(file, scope, packages, view.kind === "file"));
   const componentById = new Map<string, Comp>();
   for (const c of compOf.values()) componentById.set(c.id, c);
+
+  // The runtime: which threads and coroutines run each component's code. Empty unless the scope has runtime context.
+  const plan = buildRuntimePlan(model, scope, (file) => compOf.get(file)?.id);
+  const grounded = plan.mode === "grounded";
 
   const fnCount = new Map<string, number>();
   for (const fn of model.functions) {
@@ -152,14 +194,47 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
     }
     return model.functionById.has(cur) ? cur : undefined;
   };
+  // The function that owns a node: the node itself when it is a function, else its parent (a spawn, an effect or a lock sits in a function).
+  const ownerOfId = (id: NodeId): string | undefined => {
+    const own = fnOf(id);
+    if (own !== undefined) return own;
+    const parent = model.byId.get(id)?.parent;
+    return parent === undefined ? undefined : fnOf(parent);
+  };
   const siteOf = (file: string, span: Span | undefined, owner: NodeId | undefined): Site => {
     const fn = owner === undefined ? undefined : fnOf(owner);
     return { file: span?.file ?? file, line: (span?.start[0] ?? 0) + 1, ...(fn !== undefined ? { fn } : {}) };
   };
 
+  // The node a fact lands on: the slice of its component on its runtime when grounded, else the component.
+  const targetOf = (rt: string | undefined, comp: string): string => (grounded && rt !== undefined ? plan.sliceId(rt, comp) : comp);
+  // The program a runtime belongs to: undefined in the flat model, for a thread no program started, and for the unthreaded runtime.
+  const progOf = (rt: string | undefined): string | undefined => (grounded && rt !== undefined ? plan.programOf(rt) : undefined);
+  // A resource's id is keyed by its program, never by a thread: `kind:program:name`, or `kind:name` when no program owns it.
+  const resId = (kind: string, name: string, prog: string | undefined): string => (prog === undefined ? `${kind}:${name}` : `${kind}:${prog}:${name}`);
+  // The slice a callee runs in, from a caller running on `rt`: the caller's runtime when the callee runs there, else its first runtime.
+  const calleeSlice = (rt: string | undefined, fn: NodeId | undefined, file: string, comp: string): string => {
+    const owners = plan.owners(fn, file);
+    const on = rt !== undefined && owners.includes(rt) ? rt : (owners[0] as string);
+    return plan.sliceId(on, comp);
+  };
+  // Processes started by a spawn node (their threads are of kind "process" in the exec model).
+  const processSpawns = new Set<string>();
+  for (const t of plan.exec.threads) if (t.kind === "process" && t.spawn !== undefined) processSpawns.add(t.spawn.node);
+
+  // Where a fact owned by `owner` (in `file`, component `comp`) starts: one source per runtime that runs it when grounded.
+  const sourcesOf = (owner: NodeId | undefined, file: string, comp: string): Source[] => {
+    if (!grounded) return [{ from: comp }];
+    return plan.owners(owner, file).map((rt) => ({ from: plan.sliceId(rt, comp), rt }));
+  };
+
   const buckets = new Map<string, Bucket>();
   const externals = new Map<string, SystemExternal>();
-  const addFact = (from: string, to: string, verb: SystemEdge["verb"], tag: string, site: Site, exact: boolean, extra?: { names?: string[] }): void => {
+  // Evidence per target, per API: the IR facts behind it. An external's op counts are the distinct facts, however many
+  // runtimes each one runs on.
+  const evFacts = new Map<string, Map<string, { ev: SystemEvidence; facts: Set<string> }>>();
+  let factSeq = 0;
+  const addFact = (from: string, to: string, verb: SystemEdge["verb"], tag: string, site: Site, exact: boolean, extra?: { names?: string[]; ev?: Ev; fact?: string }): void => {
     const key = `${from}\0${verb}\0${to}`;
     let b = buckets.get(key);
     if (!b) {
@@ -174,21 +249,43 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
       b.names ??= new Set();
       for (const n of extra.names) b.names.add(n);
     }
+    if (extra?.ev) {
+      const e = extra.ev;
+      const evKey = `${e.api}\0${e.syscall ?? ""}\0${e.level}`;
+      b.evidence ??= new Map();
+      const cur = b.evidence.get(evKey);
+      if (cur) cur.count++;
+      else b.evidence.set(evKey, { api: e.api, ...(e.syscall !== undefined ? { syscall: e.syscall } : {}), level: e.level, count: 1 });
+      const fact = extra.fact ?? `#${++factSeq}`;
+      let perTo = evFacts.get(to);
+      if (perTo === undefined) evFacts.set(to, (perTo = new Map()));
+      let rec = perTo.get(evKey);
+      if (rec === undefined) perTo.set(evKey, (rec = { ev: { api: e.api, ...(e.syscall !== undefined ? { syscall: e.syscall } : {}), level: e.level, count: 0 }, facts: new Set() }));
+      rec.facts.add(fact);
+    }
   };
   const ensureExternal = (ext: SystemExternal): string => {
     if (!externals.has(ext.id)) externals.set(ext.id, ext);
     return ext.id;
   };
+  const putResource = (res: SystemResource): string => plan.putResource(res).id;
+  // Grounded: the env resource of a program, or `env` when no program runs the code. Flat: `env:flat`, with no edge of its own.
+  const envId = (prog: string | undefined, flat = false): string => (flat ? "env:flat" : prog === undefined ? "env" : `env:${prog}`);
 
   // The effect and route facts of the scope, owned by the file that holds them.
   const routes: SystemRoute[] = [];
   const fetches: Array<{ node: IRNode; file: string }> = [];
+  const messageFrom = new Set(plan.exec.dispatches.filter((d) => d.how === "message").map((d) => d.from));
+  const fileOfFn = new Map(plan.exec.functions.map((f) => [f.id, f.file] as const));
   for (const node of model.doc.nodes) {
     if (node.kind !== "effects.net.serve" && !node.kind.startsWith("effects.")) continue;
     const file = model.fileOf(node.id);
     if (!inside(file)) continue;
-    const attrs = node.attrs;
+    const attrs = node.attrs as Record<string, unknown>;
     const comp = compOf.get(file)?.id as string;
+    const exact = node.provenance.confidence === "exact";
+    const site = siteOf(file, node.span, node.parent);
+    const owner = ownerOfId(node.id);
     if (node.kind === "effects.net.serve") {
       const method = typeof attrs.method === "string" ? attrs.method.toUpperCase() : "GET";
       const path = typeof attrs.path === "string" ? attrs.path : "";
@@ -204,66 +301,125 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
       });
       continue;
     }
-    if (node.kind === "effects.net.connect") fetches.push({ node, file });
-    else if (node.kind === "effects.fs.read" || node.kind === "effects.fs.write") {
+    if (node.kind === "effects.net.connect") {
+      fetches.push({ node, file });
+      continue;
+    }
+    if (node.kind === "effects.net.listen") {
+      const port = attrs.port === undefined ? "" : String(attrs.port);
+      const label = port === "" ? "Listens" : `Listens :${port}`;
+      const id = ensureExternal({ id: `listen:${port}`, label, category: "service" });
+      for (const s of sourcesOf(owner, file, comp)) addFact(s.from, id, "listens", "listen", site, exact, { fact: node.id });
+      continue;
+    }
+    if (node.kind === "effects.os.call") {
+      const op = typeof attrs.op === "string" ? attrs.op : "info";
+      const target = typeof attrs.target === "string" ? attrs.target : undefined;
+      const rid = `os:${op}`;
+      const res = putResource({ id: rid, kind: "os", label: OS_LABEL[op] ?? op, source: "os" });
+      if (target !== undefined && target !== "<dynamic>") plan.addName(res, target);
+      const verb: SystemEdge["verb"] = op === "signal" || op === "process-control" ? "signals" : op === "memory" || op === "device" ? "maps" : "calls";
+      const ev = evidenceOf(attrs, target === "<dynamic>");
+      const tag = typeof attrs.api === "string" ? attrs.api : op;
+      for (const s of sourcesOf(owner, file, comp)) addFact(s.from, rid, verb, tag, site, exact, ev ? { ev, fact: node.id } : { fact: node.id });
+      continue;
+    }
+    if (node.kind === "effects.fs.read" || node.kind === "effects.fs.write") {
       const verb = node.kind === "effects.fs.read" ? "reads" : "writes";
       const api = typeof attrs.api === "string" ? attrs.api : "fs";
       const id = ensureExternal({ id: "fs", label: "Filesystem", category: "filesystem" });
-      addFact(comp, id, verb, api, siteOf(file, node.span, node.parent), node.provenance.confidence === "exact");
+      const ev = grounded ? evidenceOf(attrs, attrs.path === "<dynamic>") : undefined;
+      for (const s of sourcesOf(owner, file, comp)) addFact(s.from, id, verb, api, site, exact, ev ? { ev, fact: node.id } : undefined);
     } else if (node.kind === "effects.proc.exec") {
       const command = commandName(attrs.command);
-      const id = ensureExternal({ id: `proc:${command}`, label: command, category: "process", command });
-      addFact(comp, id, "runs", command, siteOf(file, node.span, node.parent), node.provenance.confidence === "exact");
+      const ev = grounded ? evidenceOf(attrs, command === "dynamic command") : undefined;
+      // A command that names one project program runs that program; any other is a process box by its name.
+      const api = typeof attrs.api === "string" ? attrs.api : undefined;
+      const prog = grounded ? plan.programOfCommand(command, { file: site.file, line: site.line, ...(site.fn !== undefined ? { fn: site.fn } : {}), status: "resolved", ...(api !== undefined ? { api } : {}) }) : undefined;
+      const to = prog ?? ensureExternal({ id: `proc:${command}`, label: command, category: "process", command });
+      for (const s of sourcesOf(owner, file, comp)) addFact(s.from, to, "runs", command, site, exact, ev ? { ev, fact: node.id } : undefined);
     } else if (node.kind === "effects.env.read") {
       const name = typeof attrs.name === "string" ? attrs.name : "";
-      const id = ensureExternal({ id: "env", label: "Environment", category: "config", names: [] });
-      const ext = externals.get(id) as SystemExternal;
-      if (name !== "" && !ext.names?.includes(name)) ext.names = [...(ext.names ?? []), name].sort();
-      addFact(comp, id, "reads", name, siteOf(file, node.span, node.parent), node.provenance.confidence === "exact", { names: name === "" ? [] : [name] });
+      if (grounded) {
+        for (const s of sourcesOf(owner, file, comp)) {
+          const prog = progOf(s.rt);
+          const rid = putResource({ id: envId(prog), kind: "env", label: "Environment", ...(prog !== undefined ? { program: prog } : {}), source: "env" });
+          plan.addName(rid, name);
+          addFact(s.from, rid, "reads", name, site, exact, { names: name === "" ? [] : [name] });
+        }
+      } else {
+        // The flat model keeps its one environment box and holds the names on the resource alone.
+        const rid = putResource({ id: envId(undefined, true), kind: "env", label: "Environment", source: "env" });
+        plan.addName(rid, name);
+        const id = ensureExternal({ id: "env", label: "Environment", category: "config", names: [] });
+        const ext = externals.get(id) as SystemExternal;
+        if (name !== "" && !ext.names?.includes(name)) ext.names = [...(ext.names ?? []), name].sort();
+        addFact(comp, id, "reads", name, site, exact, { names: name === "" ? [] : [name] });
+      }
     } else if (node.kind === "effects.message.post") {
-      const id = ensureExternal({ id: "peer", label: "Peer (postMessage)", category: "worker" });
-      addFact(comp, id, "posts", "postMessage", siteOf(file, node.span, node.parent), node.provenance.confidence === "exact");
+      if (grounded) {
+        // A post with a dispatch from the same function is routed by that dispatch; any other goes to a peer box.
+        if (!messageFrom.has(owner ?? "")) {
+          for (const s of sourcesOf(owner, file, comp)) {
+            const prog = progOf(s.rt);
+            const rid = putResource({ id: resId("queue", "peer", prog), kind: "queue", label: "inbox (unknown peer)", ...(prog !== undefined ? { program: prog } : {}), source: "message" });
+            addFact(s.from, rid, "enqueues", "postMessage", site, exact);
+          }
+        }
+      } else {
+        const id = ensureExternal({ id: "peer", label: "Peer (postMessage)", category: "worker" });
+        addFact(comp, id, "posts", "postMessage", site, exact);
+      }
     }
   }
 
   // Absolute and relative fetches. A relative one is matched to a route of the scope before it becomes an external.
+  routes.sort((x, y) => cmp(x.component, y.component) || cmp(x.path, y.path) || cmp(x.method, y.method) || cmp(x.id, y.id));
   for (const { node, file } of fetches) {
     const attrs = node.attrs;
     const comp = compOf.get(file)?.id as string;
+    const owner = ownerOfId(node.id);
     const method = typeof attrs.method === "string" ? attrs.method.toUpperCase() : undefined;
     const path = typeof attrs.path === "string" ? attrs.path : "";
     const exact = node.provenance.confidence === "exact" && attrs.confidence !== "inferred";
     const site = siteOf(file, node.span, node.parent);
     const host = typeof attrs.host === "string" ? attrs.host : "<dynamic>";
     const env = typeof attrs.env === "string" ? attrs.env : undefined;
+    const sources = sourcesOf(owner, file, comp);
 
     const relative = attrs.relative === true || (host === "<dynamic>" && path.startsWith(":") && path.includes("/"));
     if (relative && path !== "") {
       const hit = matchRoute(path, method, routes);
       if (hit !== undefined) {
-        if (hit.component !== comp) addFact(comp, hit.component, "requests", `${hit.method} ${hit.path}`, site, exact);
+        if (hit.component !== comp) for (const s of sources) addFact(s.from, targetOf(s.rt, hit.component), "requests", `${hit.method} ${hit.path}`, site, exact);
         continue;
       }
       const label = `${method ?? "*"} ${path}`;
       const id = ensureExternal({ id: `api:${label}`, label, category: "api" });
-      addFact(comp, id, "requests", label, site, exact);
+      for (const s of sources) addFact(s.from, id, "requests", label, site, exact);
       continue;
     }
 
     const verb = methodVerb(method);
     const tag = method ?? "fetch";
+    const ev = grounded ? evidenceOf(attrs, host === "<dynamic>") : undefined;
     if (host === "<dynamic>") {
       const ext: SystemExternal = env !== undefined
         ? { id: `config:${env}`, label: `URL from ${env}`, category: "service" }
         : { id: "dynamic-url", label: "Dynamic URL", category: "service" };
-      addFact(comp, ensureExternal(ext), verb, tag, site, exact);
+      for (const s of sources) addFact(s.from, ensureExternal(ext), verb, tag, site, exact, ev ? { ev, fact: node.id } : undefined);
       continue;
     }
     const svc = classifyHost(host, path);
-    addFact(comp, ensureExternal({ id: svc.id, label: svc.label, category: svc.category, host: svc.host }), verb, tag, site, exact);
+    const id = ensureExternal({ id: svc.id, label: svc.label, category: svc.category, host: svc.host });
+    for (const s of sources) addFact(s.from, id, verb, tag, site, exact, ev ? { ev, fact: node.id } : undefined);
   }
 
   // Code-level facts between components: calls (candidates included), references, and spawns (a worker or child process).
+  // Grounded: a call or spawn starts at the caller's slice and ends at the callee's slice on the runtime that runs it; a
+  // spawned program is its own runtime, so a process spawn ends at that program. Flat: component to component, as before.
+  // The component pairs that have a call, so an import is only drawn where no call joins the two.
+  const callPairs = new Set<string>();
   for (const rel of model.relations) {
     const fromFile = model.fileOf(rel.from);
     const toFile = model.fileOf(rel.to);
@@ -271,22 +427,120 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
     const a = compOf.get(fromFile)?.id as string;
     const exact = !rel.candidate && rel.edge.provenance.confidence === "exact";
     const site = siteOf(fromFile, rel.edge.span, rel.from);
+    const owner = ownerOfId(rel.from);
     if (rel.kind === "spawn") {
       const src = model.byId.get(rel.from);
       const api = typeof src?.attrs.api === "string" ? src.attrs.api : "thread";
       const spawnSite = siteOf(fromFile, rel.edge.span ?? src?.span, src?.parent);
-      if (inside(toFile)) {
-        const b = compOf.get(toFile)?.id as string;
-        if (a !== b) addFact(a, b, "spawns", `spawns ${api}`, spawnSite, exact);
-      } else if (toFile !== undefined) {
-        addFact(a, ensureExternal({ id: `worker:${toFile}`, label: toFile, category: "worker" }), "spawns", `spawns ${api}`, spawnSite, exact);
+      const processSpawn = processSpawns.has(rel.from);
+      const spawned = plan.threadOfSpawn(rel.from);
+      const program = grounded && processSpawn ? plan.programOfSpawn(rel.from) : undefined;
+      const apiTail = api.slice(api.lastIndexOf(".") + 1);
+      for (const s of sourcesOf(owner, fromFile, a)) {
+        if (program !== undefined) {
+          addFact(s.from, program, "spawns", `spawns ${api}`, spawnSite, exact, { fact: `${rel.from}>${rel.to}` });
+          continue;
+        }
+        if (grounded && processSpawn) {
+          // A process the IR cannot resolve to a project program is a process box by its API name.
+          addFact(s.from, ensureExternal({ id: `proc:${apiTail}`, label: apiTail, category: "process", command: apiTail }), "spawns", `spawns ${api}`, spawnSite, exact, { fact: `${rel.from}>${rel.to}` });
+          continue;
+        }
+        if (inside(toFile)) {
+          const b = compOf.get(toFile)?.id as string;
+          if (a === b) continue;
+          const to = grounded && spawned !== undefined ? plan.sliceId(spawned, b) : b;
+          addFact(s.from, to, "spawns", `spawns ${api}`, spawnSite, exact);
+        } else if (toFile !== undefined) {
+          addFact(s.from, ensureExternal({ id: `worker:${toFile}`, label: toFile, category: "worker" }), "spawns", `spawns ${api}`, spawnSite, exact);
+        }
       }
       continue;
     }
     if (!inside(toFile)) continue;
     const b = compOf.get(toFile)?.id as string;
     if (a === b) continue;
-    addFact(a, b, "calls", "calls", site, exact);
+    callPairs.add(`${a}\0${b}`);
+    // A call is drawn from the caller's slice to the callee's slice on the runtime that runs it (component-level when flat).
+    const calleeFn = ownerOfId(rel.to);
+    for (const s of sourcesOf(owner, fromFile, a)) {
+      const to = grounded ? calleeSlice(s.rt, calleeFn, toFile, b) : b;
+      addFact(s.from, to, "calls", "calls", site, exact);
+    }
+  }
+
+  // Message handoffs and event-loop queues, per the runtime's dispatches. Flat: one inbox per receiving component.
+  for (const d of plan.exec.dispatches) {
+    if (!inside(d.file)) continue;
+    const comp = compOf.get(d.file)?.id as string;
+    const site: Site = { file: d.file, line: d.line, ...(fnOf(d.from) !== undefined ? { fn: fnOf(d.from) as string } : {}) };
+    if (d.how === "timer" || d.how === "microtask" || d.how === "callback") {
+      const queue = d.how === "timer" ? "Timers" : d.how === "microtask" ? "Microtasks" : "Callbacks";
+      for (const s of sourcesOf(fnOf(d.from), d.file, comp)) {
+        const prog = progOf(s.rt);
+        const rid = putResource({ id: resId("queue", queue, prog), kind: "queue", label: queue, ...(prog !== undefined ? { program: prog } : {}), source: "event-loop" });
+        addFact(s.from, rid, "enqueues", d.how, site, true);
+      }
+    } else if (d.how === "message") {
+      for (const s of sourcesOf(fnOf(d.from), d.file, comp)) {
+        for (const target of d.targets) {
+          const tfile = fileOfFn.get(target);
+          if (!inside(tfile)) continue;
+          const tcomp = compOf.get(tfile)?.id as string;
+          if (grounded) {
+            const tRt = plan.owners(target, tfile)[0];
+            const recv = tRt === undefined ? undefined : plan.threadOf(tRt);
+            if (recv === undefined || recv === s.rt) continue;
+            const inbox = putResource({ id: `queue:${recv}:inbox`, kind: "queue", label: `${plan.label(recv)} inbox`, ...(progOf(recv) !== undefined ? { program: progOf(recv) as string } : {}), source: "message" });
+            addFact(s.from, inbox, "enqueues", "message", site, true);
+            addFact(inbox, plan.sliceId(tRt as string, tcomp), "dequeues", "message", site, true);
+          } else {
+            if (s.from === tcomp) continue;
+            const inbox = putResource({ id: `queue:${tcomp}:inbox`, kind: "queue", label: `${tcomp} inbox`, source: "message" });
+            addFact(s.from, inbox, "enqueues", "message", site, true);
+            addFact(inbox, tcomp, "dequeues", "message", site, true);
+          }
+        }
+      }
+    }
+  }
+
+  // Locks and channels the exec model lists, with each site's operation. One resource per program that uses it.
+  for (const r of plan.exec.resources) {
+    const kind = r.kind === "lock" ? "lock" : "queue";
+    const source = r.kind === "lock" ? "sync" : "channel";
+    for (const site of r.sites) {
+      if (!inside(site.file)) continue;
+      const comp = compOf.get(site.file)?.id as string;
+      const verb: SystemEdge["verb"] = site.op === "acquire" ? "locks" : site.op === "send" ? "enqueues" : "dequeues";
+      const at: Site = { file: site.file, line: site.line, fn: site.fn };
+      for (const s of sourcesOf(site.fn, site.file, comp)) {
+        const prog = progOf(s.rt);
+        const rid = putResource({ id: resId(kind, r.name, prog), kind, label: r.name, ...(prog !== undefined ? { program: prog } : {}), source });
+        // A dequeue runs from the queue to the thread that takes the item, as an inbox does.
+        if (verb === "dequeues") addFact(rid, s.from, verb, site.op, at, true);
+        else addFact(s.from, rid, verb, site.op, at, true);
+      }
+    }
+  }
+
+  // Semaphores and condvars are read from the IR: the exec model does not list them.
+  for (const node of model.doc.nodes) {
+    if (node.kind !== "sync.semaphore" && node.kind !== "sync.condvar") continue;
+    const file = model.fileOf(node.id);
+    if (!inside(file)) continue;
+    const attrs = node.attrs as Record<string, unknown>;
+    const op = typeof attrs.op === "string" ? attrs.op : "";
+    const verb: SystemEdge["verb"] | undefined = op === "acquire" || op === "wait" ? "waits" : op === "release" || op === "notify" ? "notifies" : undefined;
+    if (verb === undefined) continue;
+    const name = typeof attrs.name === "string" ? attrs.name : typeof attrs.lock === "string" ? attrs.lock : "";
+    const kind = node.kind === "sync.semaphore" ? "semaphore" : "condvar";
+    const comp = compOf.get(file)?.id as string;
+    for (const s of sourcesOf(ownerOfId(node.id), file, comp)) {
+      const prog = progOf(s.rt);
+      const rid = putResource({ id: resId(kind, name, prog), kind, label: name, ...(prog !== undefined ? { program: prog } : {}), source: "sync" });
+      addFact(s.from, rid, verb, op, siteOf(file, node.span, node.parent), node.provenance.confidence === "exact");
+    }
   }
 
   // Imports only where no call joins the same two components: an inferred edge, not used for stages.
@@ -300,23 +554,24 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
       if (!inside(toFile)) continue;
       const a = compOf.get(fromFile)?.id as string;
       const b = compOf.get(toFile)?.id as string;
-      if (a === b) continue;
-      const key = `${a}\0calls\0${b}`;
-      const hasCall = buckets.has(key);
-      if (hasCall) continue;
-      let ib = importEdges.get(key);
-      if (!ib) {
-        ib = { from: a, to: b, verb: "calls", tags: new Map(), count: 0, sites: [], exact: false, importOnly: true };
-        importEdges.set(key, ib);
+      if (a === b || callPairs.has(`${a}\0${b}`)) continue;
+      for (const s of sourcesOf(undefined, fromFile, a)) {
+        const to = grounded ? calleeSlice(s.rt, undefined, toFile, b) : b;
+        const key = `${s.from}\0calls\0${to}`;
+        let ib = importEdges.get(key);
+        if (!ib) {
+          ib = { from: s.from, to, verb: "calls", tags: new Map(), count: 0, sites: [], exact: false, importOnly: true };
+          importEdges.set(key, ib);
+        }
+        ib.tags.set("imports", (ib.tags.get("imports") ?? 0) + 1);
+        ib.count++;
+        ib.sites.push(siteOf(fromFile, e.span, undefined));
       }
-      ib.tags.set("imports", (ib.tags.get("imports") ?? 0) + 1);
-      ib.count++;
-      ib.sites.push(siteOf(fromFile, e.span, undefined));
     }
   }
   for (const [key, ib] of importEdges) buckets.set(key, ib);
 
-  const routeList = routes.sort((x, y) => cmp(x.component, y.component) || cmp(x.path, y.path) || cmp(x.method, y.method) || cmp(x.id, y.id));
+  const routeList = routes;
 
   const edges: SystemEdge[] = [];
   for (const b of buckets.values()) {
@@ -324,10 +579,11 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
     const sites = dedupeSites(b.sites);
     const tags = [...b.tags.entries()].sort(([x], [y]) => cmp(x, y));
     let label = tags.map(([t, n]) => (n > 1 ? `${t} ×${n}` : t)).join(", ");
-    if (b.verb === "reads" && b.names !== undefined && externals.get(b.to)?.id === "env") {
+    if (b.verb === "reads" && b.names !== undefined && (b.to === "env" || b.to.startsWith("env:"))) {
       const n = b.names.size;
       label = `${n} ${n === 1 ? "var" : "vars"}`;
     }
+    const evidence = b.evidence ? [...b.evidence.values()].sort(cmpEvidence) : [];
     edges.push({
       id,
       from: b.from,
@@ -337,22 +593,35 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
       count: b.count,
       sites: sites.slice(0, SITE_CAP),
       confidence: b.exact && !b.importOnly ? "exact" : "inferred",
+      ...(evidence.length > 0 ? { evidence } : {}),
     });
   }
   edges.sort((x, y) => cmp(x.from, y.from) || cmp(x.to, y.to) || cmp(x.verb, y.verb) || cmp(x.id, y.id));
 
+  // The APIs behind each external, counted over the facts that reach it.
+  for (const [id, perTo] of evFacts) {
+    const ext = externals.get(id);
+    if (ext === undefined) continue;
+    ext.ops = [...perTo.values()].map((r) => ({ ...r.ev, count: r.facts.size })).sort(cmpEvidence);
+  }
+
   const importOnly = new Set<string>();
   for (const ib of importEdges.values()) importOnly.add(`${ib.from}>calls>${ib.to}`);
+
+  // A component's slices are its place in the runtime: map each slice back to its component for the component-level checks.
+  const compOfId = (id: string): string | undefined => plan.slices.get(id)?.component ?? (componentById.has(id) ? id : undefined);
 
   // Components must hold code: a child with no functions, no route and no fact is dropped (package.json, tsconfig.json, lockfiles).
   const touched = new Set<string>();
   for (const e of edges) {
-    touched.add(e.from);
-    touched.add(e.to);
+    for (const id of [e.from, e.to]) {
+      const c = compOfId(id);
+      if (c !== undefined) touched.add(c);
+    }
   }
   for (const r of routeList) touched.add(r.component);
   for (const id of [...componentById.keys()]) if ((fnCount.get(id) ?? 0) === 0 && !touched.has(id)) componentById.delete(id);
-  if (componentById.size === 0) return { scope, components: [], routes: [], externals: [], edges: [], stages: [] };
+  if (componentById.size === 0) return { scope, components: [], routes: [], externals: [], edges: [], stages: [], runtime: "none" };
 
   // Entries: components with a route or a program entry point. Another component nothing calls starts a column 0 only when
   // it has facts going out; one with nothing in or out goes to the last column.
@@ -367,8 +636,10 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
   const incoming = new Set<string>();
   const outgoing = new Set<string>();
   for (const e of edges) {
-    if (e.from !== e.to) incoming.add(e.to);
-    outgoing.add(e.from);
+    const a = compOfId(e.from);
+    const b = compOfId(e.to);
+    if (a !== undefined && b !== undefined && a !== b) incoming.add(b);
+    if (a !== undefined) outgoing.add(a);
   }
   const entries = new Set(compIds.filter((id) => hasRoute.has(id) || hasMain.has(id)));
   const seeds = new Set([...entries, ...compIds.filter((id) => !incoming.has(id) && outgoing.has(id))]);
@@ -376,11 +647,13 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
   // Columns: BFS over calls, requests and spawns from the seeds. A component none reaches goes in a last column.
   const adj = new Map<string, string[]>();
   for (const e of edges) {
-    if (e.from === e.to || importOnly.has(`${e.from}>calls>${e.to}`)) continue;
-    if (!componentById.has(e.to) || !componentById.has(e.from)) continue;
-    const list = adj.get(e.from) ?? [];
-    list.push(e.to);
-    adj.set(e.from, list);
+    const a = compOfId(e.from);
+    const b = compOfId(e.to);
+    if (a === undefined || b === undefined || a === b || importOnly.has(`${e.from}>calls>${e.to}`)) continue;
+    if (!componentById.has(a) || !componentById.has(b)) continue;
+    const list = adj.get(a) ?? [];
+    list.push(b);
+    adj.set(a, list);
   }
   const depth = new Map<string, number>();
   let frontier = [...seeds].sort();
@@ -424,7 +697,28 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
   const externalList = [...externals.values()].sort((x, y) => cmp(x.category, y.category) || cmp(x.label, y.label) || cmp(x.id, y.id));
   for (const ext of externalList) if (ext.names !== undefined && ext.names.length === 0) delete ext.names;
 
-  return { scope, components, routes: routeList, externals: externalList, edges, stages };
+  const out: SystemModel = { scope, components, routes: routeList, externals: externalList, edges, stages, runtime: plan.mode };
+  if (grounded) {
+    const { runtimes, slices } = plan.finish();
+    out.runtimes = runtimes;
+    out.slices = slices;
+  }
+  const resourceList = [...plan.resources.values()].sort((x, y) => cmp(x.id, y.id));
+  if (resourceList.length > 0) out.resources = resourceList;
+  return out;
+}
+
+/** The API and syscall evidence of a fact, when the IR names one. `dynamic` marks a target the IR could not resolve. */
+function evidenceOf(attrs: Record<string, unknown>, dynamic: boolean): Ev | undefined {
+  const api = typeof attrs.api === "string" ? attrs.api : undefined;
+  const syscall = typeof attrs.syscall === "string" ? attrs.syscall : undefined;
+  if (api === undefined && syscall === undefined) return undefined;
+  const level: SystemEvidence["level"] = syscall !== undefined || attrs.op === "raw-syscall" ? "syscall" : dynamic ? "unknown" : "api";
+  return { api: api ?? syscall ?? "", ...(syscall !== undefined ? { syscall } : {}), level };
+}
+
+function cmpEvidence(a: SystemEvidence, b: SystemEvidence): number {
+  return cmp(a.api, b.api) || cmp(a.syscall ?? "", b.syscall ?? "") || cmp(a.level, b.level);
 }
 
 /** The component of one file in a scope: the outermost package strictly under the scope that holds it, else the scope's child. */

@@ -17,6 +17,17 @@ export { callerGraph, CALLER_DEFAULTS, type CallerEdge, type CallerGraph, type C
 export { scopeView, type ScopeKindName, type ScopeRel, type ScopeView } from "./view.js";
 export { MODEL_SCHEMA, loadModel, serializeModel, type SerializedModel } from "./serialize.js";
 export { systemModel, type Site, type SystemComponent, type SystemEdge, type SystemExternal, type SystemModel, type SystemOptions, type SystemRoute } from "./system.js";
+export {
+  buildRuntimePlan,
+  type RuntimePlan,
+  type SystemEvidence,
+  type SystemResource,
+  type SystemResourceKind,
+  type SystemRuntime,
+  type SystemRuntimeMode,
+  type SystemSlice,
+  type SystemSpawn,
+} from "./system-runtime.js";
 export { SERVICES, classifyHost, type ServiceEntry } from "./services.js";
 export { buildModuleGraph, type UnresolvedImport } from "./arch/module-graph.js";
 export {
