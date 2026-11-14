@@ -109,9 +109,10 @@ export function visibleRows(g: CallerGraph, expanded: ReadonlySet<string>, opts:
 }
 
 /**
- * The keys to expand so that every row down to maxLevel shows, in depth-first order. A node already expanded on an earlier
- * path is not expanded again, which keeps the walk linear in the nodes. Expansion stops once the visible rows would pass
- * cap; capped says so.
+ * The keys to expand so that every row down to maxLevel shows, walking breadth first, level by level. Each node is expanded
+ * at its shallowest occurrence (the first one breadth-first meets), so a caller reached by a shorter path is never hidden
+ * by a deeper occurrence on a longer one. A node is expanded at most once, which keeps the walk linear in the nodes.
+ * Expansion stops once the visible rows would pass cap; capped says so.
  */
 export function expandAllKeys(g: CallerGraph, maxLevel: number, opts: { lambdas: boolean }, cap = 500): { keys: Set<string>; capped: boolean } {
   const { byId, rowsUnder, childCount, expandable } = chainOf(g, opts);
@@ -122,26 +123,33 @@ export function expandAllKeys(g: CallerGraph, maxLevel: number, opts: { lambdas:
   if (count > cap) return { keys, capped: true };
   let capped = false;
 
-  const visit = (parentId: string, parentKey: string | undefined, level: number, ancestors: ReadonlySet<string>): boolean => {
-    for (const e of rowsUnder(parentId)) {
-      const node = byId.get(e.from);
-      if (!node) continue;
-      const cycle = node.id === g.root || ancestors.has(node.id);
-      if (cycle || level >= maxLevel || !expandable(node, cycle) || expandedIds.has(node.id)) continue;
-      const add = childCount(node);
-      if (count + add > cap) {
-        capped = true;
-        return false;
-      }
-      const key = parentKey === undefined ? node.id : parentKey + SEP + node.id;
-      keys.add(key);
-      expandedIds.add(node.id);
-      count += add;
-      if (!visit(node.id, key, level + 1, new Set([...ancestors, node.id]))) return false;
+  // A queue of rows, each with its key, level and the node ids on its path. Rows are appended as their parents expand, so the
+  // queue is in breadth-first order and the first time a node is dequeued is its shallowest occurrence.
+  type Item = { node: CallerNode; key: string; level: number; ancestors: ReadonlySet<string> };
+  const queue: Item[] = [];
+  for (const e of rowsUnder(g.root)) {
+    const node = byId.get(e.from);
+    if (node) queue.push({ node, key: node.id, level: 1, ancestors: new Set() });
+  }
+
+  for (let i = 0; i < queue.length; i++) {
+    const { node, key, level, ancestors } = queue[i] as Item;
+    const cycle = node.id === g.root || ancestors.has(node.id);
+    if (cycle || level >= maxLevel || !expandable(node, cycle) || expandedIds.has(node.id)) continue;
+    const add = childCount(node);
+    if (count + add > cap) {
+      capped = true;
+      return { keys, capped };
     }
-    return true;
-  };
-  visit(g.root, undefined, 1, new Set());
+    keys.add(key);
+    expandedIds.add(node.id);
+    count += add;
+    const childAncestors = new Set([...ancestors, node.id]);
+    for (const e of rowsUnder(node.id)) {
+      const child = byId.get(e.from);
+      if (child) queue.push({ node: child, key: key + SEP + child.id, level: level + 1, ancestors: childAncestors });
+    }
+  }
   return { keys, capped };
 }
 

@@ -168,6 +168,22 @@ describe("expandAllKeys", () => {
     expect(c).toBe(true);
     expect(keys.size).toBe(0);
   });
+
+  it("expands a caller at its shallowest occurrence, not the first one depth-first meets", () => {
+    // Depth-first meets X under A, C (level 3) first and would claim it there. X's shallowest occurrence is under B
+    // (level 2), so X must expand there and W (level 4, through Z) must show.
+    const g = graphOf(
+      "T",
+      [node("T", 0), node("A", 1), node("B", 1), node("C", 2), node("X", 2), node("Z", 3), node("W", 4)],
+      [edge("A", "T"), edge("B", "T"), edge("C", "A"), edge("X", "B"), edge("X", "C"), edge("Z", "X"), edge("W", "Z")],
+    );
+    const { keys, capped: c } = expandAllKeys(g, 4, { lambdas: true });
+    expect(c).toBe(false);
+    const rows = visibleRows(g, keys, { lambdas: true });
+    for (const n of g.nodes.slice(1)) {
+      if (n.depth <= 4) expect(rows.some((r) => r.nodeId === n.id), n.id).toBe(true);
+    }
+  });
 });
 
 describe("views and notes", () => {
