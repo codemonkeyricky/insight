@@ -68,7 +68,7 @@ export interface SystemEdge {
   id: string;
   from: string;
   to: string;
-  verb: "calls" | "reads" | "writes" | "runs" | "requests" | "spawns" | "posts" | "produces" | "feeds" | "enqueues" | "dequeues" | "locks" | "waits" | "notifies" | "listens" | "signals" | "maps"; // produces and feeds: the Pipeline view
+  verb: "calls" | "reads" | "writes" | "runs" | "requests" | "spawns" | "posts" | "produces" | "feeds" | "enqueues" | "dequeues" | "locks" | "waits" | "notifies" | "listens" | "signals" | "controls" | "opens" | "maps"; // produces and feeds: the Pipeline view
   label: string; // e.g. "PUT ×5", "GET", "POST /api/index", "git", "3 vars"
   count: number;
   sites: Site[]; // up to 20 sites
@@ -120,6 +120,9 @@ interface Source {
 
 /** Folders a scope may pass through to reach its children, a guard against a chain of single folders. */
 const MAX_VIA = 8;
+
+/** The label of a <dynamic> resource: the name is unknown, so the API that made it says what it is. */
+const dynamicLabel = (api: string | undefined): string => (api === undefined || api === "" ? "<dynamic>" : `<dynamic> (${api})`);
 
 /** Kernel op labels, by `effects.os.call` op. */
 const OS_LABEL: Record<string, string> = {
@@ -280,7 +283,7 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
   const messageFrom = new Set(plan.exec.dispatches.filter((d) => d.how === "message").map((d) => d.from));
   const fileOfFn = new Map(plan.exec.functions.map((f) => [f.id, f.file] as const));
   for (const node of model.doc.nodes) {
-    if (node.kind !== "effects.net.serve" && !node.kind.startsWith("effects.")) continue;
+    if (!node.kind.startsWith("effects.")) continue;
     const file = model.fileOf(node.id);
     if (!inside(file)) continue;
     const attrs = node.attrs as Record<string, unknown>;
@@ -320,10 +323,15 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
       const rid = `os:${op}`;
       const res = putResource({ id: rid, kind: "os", label: OS_LABEL[op] ?? op, source: "os" });
       if (target !== undefined && target !== "<dynamic>") plan.addName(res, target);
-      const verb: SystemEdge["verb"] = op === "signal" || op === "process-control" ? "signals" : op === "memory" || op === "device" ? "maps" : "calls";
+      const verb: SystemEdge["verb"] = op === "signal" ? "signals" : op === "process-control" ? "controls" : op === "memory" || op === "device" ? "maps" : "calls";
       const ev = evidenceOf(attrs, target === "<dynamic>");
       const tag = typeof attrs.api === "string" ? attrs.api : op;
       for (const s of sourcesOf(owner, file, comp)) addFact(s.from, rid, verb, tag, site, exact, ev ? { ev, fact: node.id } : { fact: node.id });
+      // An fd op on a literal path (open, fs.open, fs.openSync) also reaches the Filesystem, so the file shows there.
+      if (op === "fd" && target !== undefined && target !== "<dynamic>") {
+        const fsId = ensureExternal({ id: "fs", label: "Filesystem", category: "filesystem" });
+        for (const s of sourcesOf(owner, file, comp)) addFact(s.from, fsId, "opens", tag, site, exact, ev ? { ev, fact: node.id } : { fact: node.id });
+      }
       continue;
     }
     if (node.kind === "effects.fs.read" || node.kind === "effects.fs.write") {
@@ -516,9 +524,13 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
       const comp = compOf.get(site.file)?.id as string;
       const verb: SystemEdge["verb"] = site.op === "acquire" ? "locks" : site.op === "send" ? "enqueues" : "dequeues";
       const at: Site = { file: site.file, line: site.line, fn: site.fn };
+      // A <dynamic> name says nothing shared: each such site is its own resource, keyed by its span.
+      const dyn = r.name === "<dynamic>";
+      const rname = dyn ? `<dynamic>@${site.file}:${site.line}` : r.name;
+      const rlabel = dyn ? dynamicLabel(site.api) : r.name;
       for (const s of sourcesOf(site.fn, site.file, comp)) {
         const prog = progOf(s.rt);
-        const rid = putResource({ id: resId(kind, r.name, prog), kind, label: r.name, ...(prog !== undefined ? { program: prog } : {}), source });
+        const rid = putResource({ id: resId(kind, rname, prog), kind, label: rlabel, ...(prog !== undefined ? { program: prog } : {}), source });
         // A dequeue runs from the queue to the thread that takes the item, as an inbox does.
         if (verb === "dequeues") addFact(rid, s.from, verb, site.op, at, true);
         else addFact(s.from, rid, verb, site.op, at, true);
@@ -535,12 +547,18 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
     const op = typeof attrs.op === "string" ? attrs.op : "";
     const verb: SystemEdge["verb"] | undefined = op === "acquire" || op === "wait" ? "waits" : op === "release" || op === "notify" ? "notifies" : undefined;
     if (verb === undefined) continue;
-    const name = typeof attrs.name === "string" ? attrs.name : typeof attrs.lock === "string" ? attrs.lock : "";
+    const api = typeof attrs.api === "string" ? attrs.api : "";
+    const given = typeof attrs.name === "string" ? attrs.name : typeof attrs.lock === "string" ? attrs.lock : "";
     const kind = node.kind === "sync.semaphore" ? "semaphore" : "condvar";
+    // A wait with no name (Atomics.wait has none) takes its API's name, so no resource is ever unnamed.
+    const named = given !== "" ? given : api.startsWith("Atomics.") ? "Atomics" : api !== "" ? api : kind;
+    const dyn = named === "<dynamic>";
+    const name = dyn ? `<dynamic>@${file}:${node.span?.start.join(":") ?? node.id}` : named;
+    const label = dyn ? dynamicLabel(api) : named;
     const comp = compOf.get(file)?.id as string;
     for (const s of sourcesOf(ownerOfId(node.id), file, comp)) {
       const prog = progOf(s.rt);
-      const rid = putResource({ id: resId(kind, name, prog), kind, label: name, ...(prog !== undefined ? { program: prog } : {}), source: "sync" });
+      const rid = putResource({ id: resId(kind, name, prog), kind, label, ...(prog !== undefined ? { program: prog } : {}), source: "sync" });
       addFact(s.from, rid, verb, op, siteOf(file, node.span, node.parent), node.provenance.confidence === "exact");
     }
   }

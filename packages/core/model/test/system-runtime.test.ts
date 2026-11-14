@@ -498,3 +498,75 @@ describe("runtime model: no concurrency", () => {
     expect(s.resources).toBeUndefined();
   });
 });
+
+describe("system model: review fixes", () => {
+  const libDoc = (...extra: IRNode[]): IRDocument => ({
+    nodes: [file("lib/a.ts"), fn("lib/a.ts", "helper"), ...extra],
+    edges: [],
+    findings: [],
+  });
+
+  it("labels a process-control op with the controls verb, and keeps signals for a signal op", () => {
+    const s = systemModel(
+      buildProjectModel(
+        libDoc(
+          effect("lib/a.ts", "helper", 3, "effects.os.call", { api: "fork", op: "process-control", syscall: "fork" }),
+          effect("lib/a.ts", "helper", 4, "effects.os.call", { api: "process.kill", op: "signal", syscall: "kill", target: "SIGTERM" }),
+        ),
+      ),
+      "",
+    );
+    const controls = (s.edges ?? []).filter((e) => e.verb === "controls");
+    expect(controls.map((e) => e.to)).toEqual(["os:process-control"]);
+    expect((s.edges ?? []).filter((e) => e.verb === "signals").map((e) => e.to)).toEqual(["os:signal"]);
+  });
+
+  it("draws an fd open of a literal path to the Filesystem as well as File descriptors, but not a dynamic path", () => {
+    const s = systemModel(
+      buildProjectModel(
+        libDoc(
+          effect("lib/a.ts", "helper", 3, "effects.os.call", { api: "fs.openSync", op: "fd", syscall: "open", target: "data.txt" }),
+          effect("lib/a.ts", "helper", 4, "effects.os.call", { api: "fs.openSync", op: "fd", syscall: "open", target: "<dynamic>" }),
+        ),
+      ),
+      "",
+    );
+    const opens = (s.edges ?? []).filter((e) => e.verb === "opens");
+    expect(opens.map((e) => [e.from, e.to])).toEqual([["lib/a.ts", "fs"]]);
+    // Edges merge per pair and verb, so the two fd calls are one edge to File descriptors.
+    expect((s.edges ?? []).filter((e) => e.verb === "calls" && e.to === "os:fd")).toHaveLength(1);
+    expect((s.resources ?? []).some((r) => r.id === "os:fd")).toBe(true);
+  });
+
+  it("names a nameless Atomics condvar Atomics, and never leaves a resource unnamed", () => {
+    const s = systemModel(
+      buildProjectModel(
+        libDoc(
+          inFn("lib/a.ts", "helper", 3, "sync", "sync.condvar", { api: "Atomics.wait", op: "wait" }),
+          inFn("lib/a.ts", "helper", 4, "sync", "sync.condvar", { api: "Atomics.notify", op: "notify" }),
+        ),
+      ),
+      "",
+    );
+    const cv = (s.resources ?? []).filter((r) => r.kind === "condvar");
+    expect(cv.map((r) => [r.id, r.label])).toEqual([["condvar:Atomics", "Atomics"]]);
+    expect((s.resources ?? []).every((r) => r.label.trim() !== "" && !r.id.endsWith(":"))).toBe(true);
+    expect((s.edges ?? []).filter((e) => e.to === "condvar:Atomics").map((e) => e.verb).sort()).toEqual(["notifies", "waits"]);
+  });
+
+  it("keys each <dynamic> semaphore by its site, so unrelated sites do not share one resource", () => {
+    const s = systemModel(
+      buildProjectModel(
+        libDoc(
+          inFn("lib/a.ts", "helper", 3, "sync", "sync.semaphore", { name: "<dynamic>", op: "acquire", api: "Semaphore.acquire" }),
+          inFn("lib/a.ts", "helper", 4, "sync", "sync.semaphore", { name: "<dynamic>", op: "release", api: "Semaphore.release" }),
+        ),
+      ),
+      "",
+    );
+    const sems = (s.resources ?? []).filter((r) => r.kind === "semaphore");
+    expect(sems).toHaveLength(2);
+    expect(sems.every((r) => r.label === "<dynamic> (Semaphore.acquire)" || r.label === "<dynamic> (Semaphore.release)")).toBe(true);
+    expect(new Set(sems.map((r) => r.id)).size).toBe(2);
+  });
+});
