@@ -1,7 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { CallerEdge, CallerGraph, CallerNode } from "@insight/model";
-import { CallerChain, CallerChainView, callerHref, chainResetKey } from "../src/components/zoom/CallerChain";
+import {
+  CallerChain,
+  CallerChainView,
+  callerHref,
+  chainResetKey,
+  recalledChain,
+  rememberChain,
+  resetChainMemory,
+} from "../src/components/zoom/CallerChain";
 import { FunctionRefs } from "../src/components/zoom/RefLists";
 import type { MapSelection } from "../src/components/zoom/ZoomMap";
 import { blindTip, completeness, expandAllKeys, summaryLine, treeKey, treeKeyOf, visibleRows, childEdges } from "../src/components/zoom/callerTree";
@@ -489,5 +497,41 @@ describe("aria position and depth control", () => {
     const html = renderToStaticMarkup(<CallerChainView {...viewProps(diamondB)} />);
     expect(html).toContain("Expand to ");
     expect(html).toContain('aria-label="Expand all depth"');
+  });
+});
+
+describe("a traced chain keeps its state when the pane remounts", () => {
+  // The pane remounts on a scope change, so the state it kept under the anchor's key is what the next mount starts from.
+  // The DOM is not available in these tests; the mount itself is covered by the walk-up check in the browser.
+  const TRACE = "src/physics/validate.ts#validatePhysicsModel";
+  const state = { opened: true, possible: true, stayInScope: false, depth: 6, expanded: ["A", "A\u0001B"], capped: false };
+
+  it("finds the same key from another scope and function under the same trace, with its state", () => {
+    resetChainMemory();
+    const first = chainResetKey("p1", "src/physics/validate.ts", TRACE, TRACE);
+    rememberChain(first, state);
+    const walkedTo = chainResetKey("p1", "scripts/chaincheck.ts", "scripts/chaincheck.ts#codes", TRACE);
+    expect(walkedTo).toBe(first);
+    expect(recalledChain(walkedTo)).toMatchObject({ possible: true, expanded: ["A", "A\u0001B"], depth: 6 });
+  });
+
+  it("starts a different trace fresh", () => {
+    resetChainMemory();
+    rememberChain(chainResetKey("p1", "src/a.ts", "src/a.ts#f", TRACE), state);
+    expect(recalledChain(chainResetKey("p1", "src/a.ts", "src/a.ts#f", "src/b.ts#g"))).toBeUndefined();
+  });
+
+  it("keeps an untraced chain apart for each function", () => {
+    expect(chainResetKey("p1", "src", "src/a.ts#f", undefined)).not.toBe(chainResetKey("p1", "src", "src/a.ts#g", undefined));
+  });
+
+  it("keeps at most 20 chains, dropping the oldest first", () => {
+    resetChainMemory();
+    const keys = Array.from({ length: 21 }, (_, i) => chainResetKey("p1", "src", `src/a.ts#f${i}`, undefined));
+    keys.forEach((k) => rememberChain(k, state));
+    expect(recalledChain(keys[0] as string)).toBeUndefined();
+    expect(recalledChain(keys[1] as string)).toBeDefined();
+    expect(recalledChain(keys[20] as string)).toBeDefined();
+    resetChainMemory();
   });
 });

@@ -33,6 +33,40 @@ export function chainResetKey(id: string, scope: string, fn: string, trace?: str
   return trace !== undefined ? `${id}\0trace\0${trace}` : `${id}\0${scope}\0${fn}`;
 }
 
+/** What a chain keeps across a remount of its pane: its open state, options, expansion and focus. */
+export interface ChainState {
+  opened: boolean;
+  possible: boolean;
+  stayInScope: boolean;
+  depth: number;
+  expanded: string[];
+  focus?: string;
+  capped: boolean;
+}
+
+/** The chain states kept by key, so a pane that remounts (a scope change reloads it) gets its state back. */
+const chainMemory = new Map<string, ChainState>();
+const CHAIN_MEMORY_CAP = 20;
+
+/** Keeps a chain's state under its key, dropping the oldest key past the cap. */
+export function rememberChain(key: string, state: ChainState): void {
+  if (!chainMemory.has(key) && chainMemory.size >= CHAIN_MEMORY_CAP) {
+    const oldest = chainMemory.keys().next().value;
+    if (oldest !== undefined) chainMemory.delete(oldest);
+  }
+  chainMemory.set(key, state);
+}
+
+/** The state a chain kept under its key, if any. */
+export function recalledChain(key: string): ChainState | undefined {
+  return chainMemory.get(key);
+}
+
+/** Forgets every kept chain state. For test isolation. */
+export function resetChainMemory(): void {
+  chainMemory.clear();
+}
+
 /** The short name of a function id: the tail after its last ":" or "#", or the id itself. */
 const shortName = (id: string) => id.split(/[:#]/).pop() || id;
 
@@ -269,15 +303,17 @@ export function CallerChain({ id, sel, roots, trace }: { id: string; sel: MapSel
   const target = trace ?? fn;
   const chainKey = chainResetKey(id, scope, fn, trace);
   // A traced chain starts open: the state is read once at mount, so a later trace opens the element by hand (see below).
+  // A remounted pane starts from the state its chain kept under the same key.
+  const saved = recalledChain(chainKey);
   const [startOpen] = useState(trace !== undefined);
-  const [opened, setOpened] = useState(startOpen);
+  const [opened, setOpened] = useState(saved?.opened ?? startOpen);
   const started = opened || trace !== undefined;
-  const [possible, setPossible] = useState(false);
-  const [stayInScope, setStayInScope] = useState(false);
-  const [depth, setDepth] = useState<number>(CALLER_DEFAULTS.maxDepth);
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
-  const [focus, setFocus] = useState<string>();
-  const [capped, setCapped] = useState(false);
+  const [possible, setPossible] = useState(saved?.possible ?? false);
+  const [stayInScope, setStayInScope] = useState(saved?.stayInScope ?? false);
+  const [depth, setDepth] = useState<number>(saved?.depth ?? CALLER_DEFAULTS.maxDepth);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(saved?.expanded ?? []));
+  const [focus, setFocus] = useState<string | undefined>(saved?.focus);
+  const [capped, setCapped] = useState(saved?.capped ?? false);
   const [lastFn, setLastFn] = useState(chainKey);
   const [loaded, setLoaded] = useState<{ key: string; graph?: CallerGraph; error?: string }>();
   const treeRef = useRef<HTMLDetailsElement>(null);
@@ -286,10 +322,40 @@ export function CallerChain({ id, sel, roots, trace }: { id: string; sel: MapSel
   // A different chain starts with its own expansion and focus. Walking to another function keeps an anchored chain's.
   if (lastFn !== chainKey) {
     setLastFn(chainKey);
-    setExpanded(new Set());
-    setFocus(undefined);
-    setCapped(false);
+    const back = recalledChain(chainKey);
+    if (back) {
+      setOpened(back.opened);
+      setPossible(back.possible);
+      setStayInScope(back.stayInScope);
+      setDepth(back.depth);
+      setExpanded(new Set(back.expanded));
+      setFocus(back.focus);
+      setCapped(back.capped);
+    } else {
+      setExpanded(new Set());
+      setFocus(undefined);
+      setCapped(false);
+      // An anchored chain that is new starts with the defaults; an untraced one keeps its options, as it always has.
+      if (trace !== undefined) {
+        setPossible(false);
+        setStayInScope(false);
+        setDepth(CALLER_DEFAULTS.maxDepth);
+      }
+    }
   }
+
+  // The state is kept under its key on every change, so the next mount of this pane finds it.
+  useEffect(() => {
+    rememberChain(chainKey, {
+      opened,
+      possible,
+      stayInScope,
+      depth,
+      expanded: [...expanded],
+      ...(focus !== undefined ? { focus } : {}),
+      capped,
+    });
+  }, [chainKey, opened, possible, stayInScope, depth, expanded, focus, capped]);
 
   // Anchoring a chain from an untraced view opens the element that is already mounted.
   useEffect(() => {
