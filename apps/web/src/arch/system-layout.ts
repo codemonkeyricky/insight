@@ -138,10 +138,37 @@ export interface SysArrow {
   pill: { x: number; y: number; w: number; h: number; text: string };
   /** Edges of the band: the slice-to-chip part (in) and the chip-to-outside part (out). Other edges have neither. */
   band?: "in" | "out";
+  /**
+   * A bundled edge (grounded System view): `d` is the faint slice-to-port segment inside its frame, and the shared trunk from the
+   * port to the band is a SysTrunk. `samples` still cover the whole path to the chip, so a route test sees the full edge.
+   */
+  bundled?: true;
+  /** The verb pill is not drawn (the pill's text still names the verb in the panel). */
+  noPill?: true;
   /** runs and spawns are drawn dashed. */
   dashed: boolean;
   /** An inferred edge is drawn dashed and faded. */
   inferred: boolean;
+}
+
+/**
+ * The bundle of the edges one process sends to one chip (or kernel-op box) on the band: one line from the port on the process
+ * frame's right edge to the target. `count` is how many edges share it; a pill shows it when it is more than one.
+ */
+export interface SysTrunk {
+  id: string;
+  /** The top-level frame (process) whose right edge holds the port. */
+  process: string;
+  /** The chip or kernel-op box the trunk ends on. */
+  to: string;
+  port: { x: number; y: number };
+  d: string;
+  samples: Array<{ x: number; y: number }>;
+  /** The ids of the arrows (one per model edge) the trunk carries. */
+  edges: string[];
+  count: number;
+  verb: SystemEdge["verb"];
+  pill: { x: number; y: number; w: number; h: number; text: string };
 }
 
 export interface SysLayout {
@@ -157,6 +184,8 @@ export interface SysLayout {
   frames?: SysFrame[];
   strips?: SysStrip[];
   band?: SysBand;
+  /** Bundled outside edges, one per (process, chip). Absent in the Pipeline layout and the flat model. */
+  trunks?: SysTrunk[];
 }
 
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;

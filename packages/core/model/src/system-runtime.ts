@@ -272,7 +272,12 @@ export function buildRuntimePlan(model: ProjectModel, scope: string, compOfFile:
     // Threads no program owns (a C++ scope whose executables are all tests, so the programs are filtered out as noise): the
     // process is real even when no build target names it, so they share one program of the scope. Without it the frames
     // have no container and the threads were not drawn at all.
-    const orphans = exec.threads.filter((t) => threadIds.has(t.id) && !programOfThread.has(t.id));
+    // Only a thread that runs code of a component counts: a spawn in a fixture or test file runs nothing the System shows.
+    const runsComponent = (t: ExecThread): boolean => [...t.reached, ...t.roots].some((id) => {
+      const f = fnById.get(id);
+      return f?.inScope === true && compOfFile(f.file) !== undefined;
+    });
+    const orphans = exec.threads.filter((t) => threadIds.has(t.id) && !programOfThread.has(t.id) && runsComponent(t));
     if (orphans.length > 0) {
       const pid = `program:scope:${scope}`;
       const scripted = orphans.some((t) => (t.spawn?.script ?? "") !== "");

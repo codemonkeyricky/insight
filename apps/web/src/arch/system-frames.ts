@@ -1,5 +1,5 @@
-import type { SystemEdge, SystemModel, SystemResource, SystemRoute, SystemRuntime, SystemSlice } from "@insight/model";
-import { CATEGORY_ORDER, CATEGORY_TITLES, pillText, routeText, shortLabel, type SysArrow, type SysBand, type SysBox, type SysFrame, type SysGroup, type SysLayout, type SysStrip } from "./system-layout";
+import type { SystemEdge, SystemExternal, SystemModel, SystemResource, SystemRoute, SystemRuntime, SystemSlice } from "@insight/model";
+import { CATEGORY_ORDER, CATEGORY_TITLES, pillText, routeText, shortLabel, type SysArrow, type SysBand, type SysBox, type SysFrame, type SysGroup, type SysLayout, type SysStrip, type SysTrunk } from "./system-layout";
 
 // The geometry of the System view when the model is grounded (nested process > thread > coroutine frames, each with its
 // slices), and of the flat model (components only, with the same kernel band and outside column). Pure: no React.
@@ -22,7 +22,13 @@ const STRIP_GAP = 26;
 const STRIP_TITLE_H = 26;
 const RES_H = 46;
 const RES_GAP = 8;
-const BAND_W = 184;
+const BAND_MIN_W = 184;
+const BAND_MAX_W = 380;
+const PORT_GAP = 16;
+// Text width estimates (px per character) for the fonts the view uses: card names 18 px, sub lines 14 px, chips 13 px mono.
+const NAME_CH = 10;
+const SUB_CH = 7.4;
+const CODE_CH = 7.9;
 const BAND_TITLE_H = 40;
 const GAP_X = 150;
 const OUT_W = 210;
@@ -61,6 +67,13 @@ interface FNode {
   w: number;
   visible: SystemSlice[];
   hidden: number;
+  /** A coroutine: the slices it shares with its thread (not drawn, their edges sit on the header) and the thread's label. */
+  shared?: number;
+  sharedWith?: string;
+  /** The component the coroutine starts in, named in its header when none of its slices is drawn. */
+  startsIn?: string;
+  /** Where the free part of the right edge starts (below the strip's resources), for ports. */
+  portTop?: number;
 }
 
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -108,6 +121,15 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
 
   const resources = sys.resources ?? [];
   const hasEnv = resources.some((r) => r.kind === "env");
+  // The outside systems that are drawn (the config external gives way to an env resource), and the kernel-op ids.
+  const ext = sys.externals.filter((e) => !(hasEnv && e.category === "config"));
+  const extShown = new Set(ext.map((e) => e.id));
+  const osIds = new Set(resources.filter((r) => r.kind === "os").map((r) => r.id));
+  /** The band item an edge ends on: a chip for an outside system, the kernel-op box itself, else none (an in-process edge). */
+  const bandTargetOf = (e: SystemEdge): string | undefined => (extShown.has(e.to) ? `chip:${chipLabelOf(e)}` : osIds.has(e.to) ? e.to : undefined);
+  // Slices a coroutine shares with its thread are not drawn: item id -> the frame whose header carries their edges.
+  const hiddenAt = new Map<string, string>();
+  const portKeys = new Map<string, Set<string>>(); // top frame id -> the band targets its edges bundle into
 
   if (grounded) {
     const rts = new Map((sys.runtimes ?? []).map((r) => [r.id, r] as const));
@@ -144,6 +166,23 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
       node.slices.push(s);
       frameOfItem.set(s.id, node.id);
     }
+    // A coroutine frame shows only the components it runs that its thread does not run itself (and the one it starts in).
+    // The rest repeat the thread's own slices: they are counted in the header ("also runs N components of Main thread")
+    // and their edges sit on the coroutine's header, so nothing is hidden, only not drawn twice.
+    for (const n of nodes) {
+      if (n.kind !== "coroutine" || n.rt?.parent === undefined) continue;
+      const parentRt = n.rt.parent;
+      const onParent = new Set(slices.filter((s) => s.runtime === parentRt).map((s) => s.component));
+      const own = n.slices.filter((s) => !onParent.has(s.component));
+      const shared = n.slices.filter((s) => !own.includes(s));
+      if (shared.length === 0) continue;
+      n.slices = own;
+      n.shared = shared.length;
+      const rootSlice = shared.find((s) => s.root);
+      if (rootSlice !== undefined) n.startsIn = compById.get(rootSlice.component)?.label ?? rootSlice.component;
+      n.sharedWith = rts.get(parentRt)?.label ?? parentRt;
+      for (const s of shared) hiddenAt.set(s.id, n.id);
+    }
     for (const r of resources) {
       if (r.kind === "os" || r.program === undefined) continue;
       const node = frameById.get(r.program);
@@ -164,6 +203,21 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
     for (const n of nodes) n.children.sort((a, b) => cmp(a.kind, b.kind) || cmp(a.id, b.id));
     for (const n of nodes) n.slices.sort((a, b) => colOf(a.component) - colOf(b.component) || cmp(compLabel(a.component), compLabel(b.component)) || cmp(a.id, b.id));
     tops.sort((a, b) => (a.kind === "unthreaded" ? 1 : 0) - (b.kind === "unthreaded" ? 1 : 0) || cmp(a.rt?.label ?? "", b.rt?.label ?? "") || cmp(a.id, b.id));
+
+    // The band targets each top frame bundles its outside edges into, so the frame is tall enough for one port each.
+    const topOfId = (id: string): FNode | undefined => {
+      let cur = frameById.get(frameOfItem.get(id) ?? id);
+      for (let guard = 0; cur?.container !== undefined && guard < 100; guard++) cur = frameById.get(cur.container);
+      return cur !== undefined && (cur.kind === "process" || cur.kind === "unthreaded") ? cur : undefined;
+    };
+    for (const e of sys.edges) {
+      const target = bandTargetOf(e);
+      const top = target === undefined ? undefined : topOfId(e.from);
+      if (target === undefined || top === undefined) continue;
+      const set = portKeys.get(top.id) ?? new Set<string>();
+      set.add(target);
+      portKeys.set(top.id, set);
+    }
 
     // Visible slices: all of a widened frame, else the first SLICE_LIMIT. A collapsed frame shows none.
     const visibleOf = (n: FNode): void => {
@@ -190,7 +244,12 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
       const block = blockH(n);
       const body = block + (block > 0 && n.children.length > 0 ? PAD : 0) + content;
       let h = HDR_H + PAD + body + PAD;
+      // A frame with nothing to show (a thread or coroutine with no slices of its own) is its header alone, not an empty body.
+      if (n.kind !== "process" && body === 0) h = HDR_H;
       if (n.kind === "process") h = Math.max(h, HDR_H + PAD + stripH(n) + PAD);
+      // Room for one port per bundle on the right edge, below the strip's resources.
+      const ports = portKeys.get(n.id)?.size ?? 0;
+      if (ports > 0 && n.container === undefined) h = Math.max(h, HDR_H + PAD + (n.kind === "process" ? stripH(n) + 14 : 10) + ports * PORT_GAP + PAD);
       n.h = h;
       return h;
     };
@@ -242,6 +301,7 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
         const stripY = y + HDR_H + PAD;
         const stripHeight = n.h - HDR_H - 2 * PAD;
         strips.push({ id: `strip:${n.id}`, program: n.id, title: "In process", x: stripX, y: stripY, w: STRIP_W, h: stripHeight });
+        n.portTop = stripY + stripH(n) + 14;
         n.resources.forEach((r, i) => boxes.push(resourceBox(r, stripX + 8, stripY + STRIP_TITLE_H + i * (RES_H + RES_GAP), STRIP_W - 16, n.id)));
       }
       const childW = w - 2 * PAD - (isProc ? STRIP_W + STRIP_GAP : 0);
@@ -253,7 +313,12 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
     const subOf = (n: FNode): string => {
       if (n.kind === "process") return n.rt?.spawn !== undefined ? spawnSub(n.rt) : plural(n.slices.length, "slice");
       if (n.kind === "unthreaded") return plural(n.slices.length, "slice");
-      if (n.kind === "coroutine") return `coroutine · ${plural(n.slices.length, "slice")}`;
+      if (n.kind === "coroutine") {
+        const sharedNote = n.shared !== undefined ? `also runs ${plural(n.shared, "component")} of ${n.sharedWith ?? "its thread"}` : "";
+        const startsIn = n.slices.length === 0 && n.shared !== undefined ? n.startsIn : undefined;
+        return ["coroutine", startsIn !== undefined ? `starts in ${shortLabel(startsIn, 26)}` : "", n.slices.length > 0 ? `${plural(n.slices.length, "own slice")}` : "", sharedNote].filter(Boolean).join(" · ");
+      }
+      if (n.slices.length === 0 && n.children.length === 0) return "runs no component of this scope";
       return n.rt?.coroutines !== undefined ? `${plural(n.rt.coroutines, "coroutine")} · ${plural(n.slices.length, "slice")}` : plural(n.slices.length, "slice");
     };
     let y = TOP;
@@ -326,19 +391,40 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
     H = Math.max(H, TOP + stripH - FRAME_GAP, colsBottom);
   }
 
-  // The kernel band: full height, after the strips. Its kernel-op boxes are stacked at the top; the chips follow them.
+  // The kernel band: full height, after the strips. Its width comes from its labels, so no op name or chip label is cut. Its
+  // kernel-op boxes are stacked at the top; the chips follow them, each at the height of the outside system it leads to.
   const procRight = grounded ? MARGIN + procW : colsRight;
   const bandX = procRight + GAP_X;
   const osRes = resources.filter((r) => r.kind === "os");
-  osRes.forEach((r, i) => boxes.push(resourceBox(r, bandX + 10, TOP + BAND_TITLE_H + i * (RES_H + RES_GAP), BAND_W - 20, "band")));
+  const chipLabels = new Set<string>();
+  for (const e of sys.edges) if (extShown.has(e.to)) chipLabels.add(chipLabelOf(e));
+  let need = BAND_MIN_W - 20;
+  for (const l of chipLabels) need = Math.max(need, 28 + l.length * CODE_CH);
+  for (const r of osRes) need = Math.max(need, 16 + r.label.length * NAME_CH + 36, 30 + ((r.names ?? [])[0]?.length ?? 0) * SUB_CH);
+  const bandW = Math.min(BAND_MAX_W, Math.ceil(need + 20));
+  osRes.forEach((r, i) => boxes.push(resourceBox(r, bandX + 10, TOP + BAND_TITLE_H + i * (RES_H + RES_GAP), bandW - 20, "band")));
   const chipTop = TOP + BAND_TITLE_H + osRes.length * (RES_H + RES_GAP) + 14;
 
   // Outside column: externals by category, the config external dropped where an env resource draws the environment.
-  const outX = bandX + BAND_W + GAP_X;
-  const ext = sys.externals.filter((e) => !(hasEnv && e.category === "config"));
+  const outX = bandX + bandW + GAP_X;
   const groups: SysGroup[] = [];
   let outBottom = TOP;
   if (ext.length > 0) {
+    // What an outside box says under its name: the paths, hosts or commands it names, else how much code reaches it.
+    const reach = new Map<string, { calls: number; from: Set<string> }>();
+    for (const e of sys.edges) {
+      if (!extShown.has(e.to)) continue;
+      const r = reach.get(e.to) ?? { calls: 0, from: new Set<string>() };
+      r.calls += e.count;
+      r.from.add(e.from);
+      reach.set(e.to, r);
+    }
+    const subOfExternal = (e: SystemExternal): string => {
+      const named = externalSub(e);
+      if (named !== "") return named;
+      const r = reach.get(e.id);
+      return r === undefined ? "" : `${plural(r.calls, "call")} from ${plural(r.from.size, "slice")}`;
+    };
     let y = TOP;
     for (const category of CATEGORY_ORDER) {
       const list = ext.filter((e) => e.category === category);
@@ -346,15 +432,13 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
       groups.push({ category, title: CATEGORY_TITLES[category], x: outX, y: y + 18 });
       y += GROUP_H;
       for (const e of list) {
-        boxes.push({ id: e.id, kind: "external", column: 0, x: outX, y, w: OUT_W, h: OUT_H, title: shortLabel(e.label, 19), sub: shortLabel(externalSub(e), 30), chips: [], category, external: e });
+        boxes.push({ id: e.id, kind: "external", column: 0, x: outX, y, w: OUT_W, h: OUT_H, title: shortLabel(e.label, 19), sub: shortLabel(subOfExternal(e), 30), chips: [], category, external: e });
         y += OUT_H + OUT_GAP;
       }
       y += 6;
     }
     outBottom = y - OUT_GAP;
   }
-  // Outside edges go slice -> chip (on the band) -> external. One chip per label.
-  const extIds = new Set(sys.externals.map((e) => e.id));
   const envRes = resources.find((r) => r.kind === "env");
   const endpoint = (id: string): SysBox | SysFrame | undefined => {
     const b = boxes.find((x) => x.id === id);
@@ -375,7 +459,11 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
     const direct = endpoint(id);
     if (direct !== undefined) return direct;
     const fr = frameOfItem.get(id) ?? (frameById.has(id) ? id : undefined);
-    return headerOf(fr);
+    const collapsedHeader = headerOf(fr);
+    if (collapsedHeader !== undefined) return collapsedHeader;
+    // A slice a coroutine shares with its thread is drawn at the coroutine's header.
+    const holder = hiddenAt.get(id);
+    return holder === undefined ? undefined : frames.find((f) => f.id === holder);
   };
 
   interface Pending {
@@ -385,7 +473,6 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
     toId: string;
   }
   const pending: Pending[] = [];
-  const chips = new Map<string, { label: string; sources: number[]; box?: SysBox }>();
   for (const e of sys.edges) {
     const from = resolve(e.from);
     let toEdgeId = e.to;
@@ -394,40 +481,47 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
     if (from === undefined || to === undefined || from === to) continue;
     pending.push({ edge: e, from, to, toId: toEdgeId });
   }
-  // Chips: an edge from a card to an outside external (not on the band) goes through one chip for its label.
   const outside = (b: SysBox | SysFrame): boolean => !("hdrH" in b) && b.kind === "external";
-  const outsideRows: Array<{ edge: SystemEdge; from: SysBox | SysFrame; ext: SysBox; chipId: string }> = [];
+  const isOs = (b: SysBox | SysFrame): b is SysBox => !("hdrH" in b) && b.kind === "os";
+  // The chip of each label, and the outside boxes it leads to.
+  const chipRows: Array<{ p: Pending; chipId: string }> = [];
+  const chipTargets = new Map<string, Set<string>>();
   const direct: Pending[] = [];
   for (const p of pending) {
     if (outside(p.to) && !outside(p.from)) {
-      const label = chipLabelOf(p.edge);
-      const chipId = `chip:${label}`;
-      const c = chips.get(chipId) ?? { label, sources: [] };
-      c.sources.push(centreY(p.from));
-      chips.set(chipId, c);
-      outsideRows.push({ edge: p.edge, from: p.from, ext: p.to as SysBox, chipId });
+      const chipId = `chip:${chipLabelOf(p.edge)}`;
+      chipRows.push({ p, chipId });
+      chipTargets.set(chipId, (chipTargets.get(chipId) ?? new Set()).add(p.to.id));
     } else direct.push(p);
   }
-  // Chip positions: each chip at the mean height of its sources, pushed down until it clears the one above.
-  const chipList = [...chips.entries()].map(([id, c]) => ({ id, label: c.label, target: c.sources.reduce((a, b) => a + b, 0) / c.sources.length }));
+  // Chip positions: each chip at the height of the outside boxes it leads to, pushed down until it clears the one above.
+  const extY = new Map(boxes.filter((b) => b.kind === "external").map((b) => [b.id, b.y + b.h / 2] as const));
+  const chipList = [...chipTargets.entries()].map(([id, targets]) => {
+    const ys = [...targets].map((t) => extY.get(t) ?? TOP);
+    return { id, label: id.slice("chip:".length), target: ys.reduce((a, b) => a + b, 0) / ys.length };
+  });
   chipList.sort((a, b) => a.target - b.target || cmp(a.id, b.id));
+  const chipBox = new Map<string, SysBox>();
   let prevBottom = chipTop - CHIP_GAP;
   for (const c of chipList) {
     const y = Math.max(c.target - CHIP_H / 2, prevBottom + CHIP_GAP);
-    const box: SysBox = { id: c.id, kind: "chip", column: 0, x: bandX + 10, y, w: BAND_W - 20, h: CHIP_H, title: c.label, sub: "", chips: [], chipLabel: c.label };
+    const box: SysBox = { id: c.id, kind: "chip", column: 0, x: bandX + 10, y, w: bandW - 20, h: CHIP_H, title: c.label, sub: "", chips: [], chipLabel: c.label };
     boxes.push(box);
-    chips.set(c.id, { label: c.label, sources: [], box });
+    chipBox.set(c.id, box);
     prevBottom = y + CHIP_H;
   }
 
   const bandBottom = Math.max(H, outBottom, ...boxes.map((b) => b.y + b.h), prevBottom) + MARGIN;
-  const band: SysBand = { x: bandX, y: 0, w: BAND_W, h: bandBottom };
-  const outRight = ext.length > 0 ? outX + OUT_W : bandX + BAND_W;
+  const band: SysBand = { x: bandX, y: 0, w: bandW, h: bandBottom };
+  const outRight = ext.length > 0 ? outX + OUT_W : bandX + bandW;
   const width = outRight + MARGIN;
   const height = bandBottom;
 
-  // Arrows. Direct edges run between their ends; outside edges run into the band chip, and each chip runs to its externals once.
+  // Arrows. Direct edges run between their ends. An edge from a frame to the band goes slice -> port on its process frame's
+  // right edge (a short faint segment, one per edge), then one trunk per (process, band item) from the port to the chip or
+  // kernel-op box; each chip runs on to its outside boxes once.
   const arrows: SysArrow[] = [];
+  const trunks: SysTrunk[] = [];
   const sideOf = (a: SysBox | SysFrame, b: SysBox | SysFrame): "fwd" | "back" | "loop" => (b.x >= a.x + a.w ? "fwd" : b.x + b.w <= a.x ? "back" : "loop");
   const portKey = (n: SysBox | SysFrame, side: "l" | "r"): string => `${n.id}|${side}`;
   // Ports per node side, sorted by the other end, spread evenly along the side.
@@ -443,20 +537,46 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
     sidePorts.set(ka, [...(sidePorts.get(ka) ?? []), { idx: planned.length - 1, other: centreY(to) }]);
     sidePorts.set(kb, [...(sidePorts.get(kb) ?? []), { idx: planned.length - 1, other: centreY(from) }]);
   };
+  // The top-level frame (process or unthreaded) an end sits in, when it sits in one.
+  const topFrameOf = (n: SysBox | SysFrame): SysFrame | undefined => {
+    if (!grounded) return undefined;
+    let cur: FNode | undefined = frameById.get("hdrH" in n ? n.id : (n.frame ?? ""));
+    for (let guard = 0; cur?.container !== undefined && guard < 100; guard++) cur = frameById.get(cur.container);
+    return cur === undefined ? undefined : frames.find((f) => f.id === cur?.id);
+  };
+  interface Bundled {
+    top: SysFrame;
+    target: SysBox;
+    items: Pending[];
+  }
+  const bundles = new Map<string, Bundled>();
+  const addBundled = (top: SysFrame, target: SysBox, p: Pending): void => {
+    const key = `${top.id}>${target.id}`;
+    const b = bundles.get(key) ?? { top, target, items: [] };
+    b.items.push(p);
+    bundles.set(key, b);
+  };
   let idx = 0;
-  for (const p of direct) addPlanned(idx++, p.from, p.to, p.edge, undefined, pillText(p.edge));
-  for (const row of outsideRows) {
-    const chip = chips.get(row.chipId)?.box as SysBox;
-    addPlanned(idx++, row.from, chip, row.edge, "in", pillText(row.edge));
+  const strayDirect: Pending[] = [];
+  for (const p of direct) {
+    const top = isOs(p.to) ? topFrameOf(p.from) : undefined;
+    if (top !== undefined && isOs(p.to)) addBundled(top, p.to, p);
+    else strayDirect.push(p);
+  }
+  for (const p of strayDirect) addPlanned(idx++, p.from, p.to, p.edge, undefined, pillText(p.edge));
+  for (const row of chipRows) {
+    const chip = chipBox.get(row.chipId) as SysBox;
+    const top = topFrameOf(row.p.from);
+    if (top !== undefined) addBundled(top, chip, row.p);
+    else addPlanned(idx++, row.p.from, chip, row.p.edge, "in", pillText(row.p.edge));
   }
   // Chip -> external, once per pair, with no pill.
   const seenOut = new Set<string>();
-  for (const row of outsideRows) {
-    const key = `${row.chipId}>${row.ext.id}`;
+  for (const row of chipRows) {
+    const key = `${row.chipId}>${row.p.to.id}`;
     if (seenOut.has(key)) continue;
     seenOut.add(key);
-    const chip = chips.get(row.chipId)?.box as SysBox;
-    addPlanned(idx++, chip, row.ext, row.edge, "out", "");
+    addPlanned(idx++, chipBox.get(row.chipId) as SysBox, row.p.to, row.p.edge, "out", "");
   }
   // Obstacles for routing: every card and every frame header, except the edge's own ends.
   const obstacles = (fromId: string, toId: string): Rect[] => [
@@ -514,18 +634,91 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
       ...(p.band !== undefined ? { band: p.band } : {}),
     });
   }
-  // Pills: on the curve, slid along it and nudged off every card, header, chip and other pill.
+
+  // Bundles: per process, ports run down its right edge in the order of their targets (so trunks do not cross), each as near
+  // its sources as the spacing allows.
+  const byTop = new Map<string, Bundled[]>();
+  for (const b of bundles.values()) byTop.set(b.top.id, [...(byTop.get(b.top.id) ?? []), b]);
+  for (const [topId, list] of byTop) {
+    list.sort((a, b) => centreY(a.target) - centreY(b.target) || cmp(a.target.id, b.target.id));
+    const top = list[0]?.top as SysFrame;
+    const node = frameById.get(topId) as FNode;
+    const y0 = top.collapsed ? top.y + HDR_H / 2 : (node.portTop ?? top.y + HDR_H + 10);
+    const y1 = top.collapsed ? y0 : Math.max(y0, top.y + top.h - 10);
+    const want = list.map((b) => {
+      const ys = b.items.map((p) => centreY(p.from));
+      return Math.min(y1, Math.max(y0, ys.reduce((a, c) => a + c, 0) / ys.length));
+    });
+    const gap = top.collapsed ? 0 : PORT_GAP;
+    const at = want.slice();
+    for (let i = 1; i < at.length; i++) at[i] = Math.max(at[i] as number, (at[i - 1] as number) + gap);
+    for (let i = at.length - 1; i >= 0; i--) {
+      const limit = i === at.length - 1 ? y1 : (at[i + 1] as number) - gap;
+      at[i] = Math.min(at[i] as number, limit);
+    }
+    for (let i = 0; i < at.length; i++) at[i] = Math.max(at[i] as number, y0 + gap * i);
+    list.forEach((b, i) => {
+      const port = { x: top.x + top.w, y: at[i] as number };
+      const target = b.target;
+      const tx = target.x;
+      const ty = target.y + target.h / 2;
+      const kk = Math.max(40, (tx - port.x) * 0.5);
+      const trunkSamples = bezierSamples([port.x, port.y, port.x + kk, port.y, tx - kk, ty, tx, ty]);
+      const arrowIds: string[] = [];
+      for (const p of b.items) {
+        const from = p.from;
+        const sx = "hdrH" in from ? from.x + from.w : from.x + from.w;
+        const sy = "hdrH" in from ? from.y + HDR_H / 2 : from.y + from.h / 2;
+        const edge = p.edge;
+        let inner: Array<[number, number]> = [[sx, sy], [port.x, port.y]];
+        if (from.id === top.id) inner = [[port.x, port.y], [port.x, port.y]];
+        else {
+          const routed = routeAround([sx, sy], [port.x, port.y], obstacles(from.id, target.id));
+          inner = routed ?? [[sx, sy], [sx + 20, sy], [sx + 20, port.y], [port.x, port.y]];
+        }
+        arrows.push({
+          id: edge.id,
+          edge,
+          from: from.id,
+          to: target.id,
+          d: `M${inner.map((q) => `${num(q[0])} ${num(q[1])}`).join(" L")}`,
+          samples: [...polyline(inner), ...trunkSamples],
+          pill: { x: 0, y: 0, w: 0, h: PILL_H, text: pillText(edge) },
+          dashed: edge.verb === "runs" || edge.verb === "spawns",
+          inferred: edge.confidence === "inferred",
+          bundled: true,
+          noPill: true,
+          ...(isOs(target) ? {} : { band: "in" as const }),
+        });
+        arrowIds.push(edge.id);
+      }
+      const verb = b.items.some((p) => p.edge.verb === "writes") ? "writes" : (b.items[0] as Pending).edge.verb;
+      trunks.push({
+        id: `trunk:${top.id}>${target.id}`,
+        process: top.id,
+        to: target.id,
+        port,
+        d: `M${num(port.x)} ${num(port.y)} C${num(port.x + kk)} ${num(port.y)} ${num(tx - kk)} ${num(ty)} ${num(tx)} ${num(ty)}`,
+        samples: trunkSamples,
+        edges: arrowIds,
+        count: b.items.length,
+        verb,
+        pill: { x: 0, y: 0, w: 0, h: PILL_H, text: b.items.length > 1 ? `×${b.items.length}` : "" },
+      });
+    });
+  }
+
+  // Pills: on the curve, slid along it and nudged off every card, header, chip and other pill. A trunk's pill is its count.
   const taken: Array<{ x: number; y: number; w: number; h: number }> = [
     ...boxes.map((b) => ({ x: b.x - 4, y: b.y - 4, w: b.w + 8, h: b.h + 8 })),
     ...frames.map((f) => ({ x: f.x, y: f.y, w: f.w, h: HDR_H })),
   ];
-  for (const a of arrows) {
-    if (a.pill.text === "") continue;
-    const w = Math.round(a.pill.text.length * 8.2 + 20);
-    const at = arcAt(a.samples);
+  const placePill = (samples: Array<{ x: number; y: number }>, text: string, order: number[], mustShow = true): { x: number; y: number; w: number; h: number; text: string } => {
+    const w = Math.round(text.length * 8.2 + 20);
+    const at = arcAt(samples);
     let chosen: { x: number; y: number } | undefined;
     const NUDGES = [0, 26, -26, 52, -52, 78, -78, 104, -104, 130, -130, 156, -156];
-    for (const t of [0.5, 0.42, 0.58, 0.34, 0.66, 0.26, 0.74]) {
+    for (const t of order) {
       for (const off of NUDGES) {
         const c = at(t);
         const r = { x: c.x - w / 2, y: c.y + off - PILL_H / 2, w, h: PILL_H };
@@ -536,9 +729,19 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
       }
       if (chosen !== undefined) break;
     }
-    const c = chosen ?? at(0.5);
+    // No free spot near the edge: a crowded edge shows no pill (its count stays in the panel) rather than one on a card.
+    if (chosen === undefined && !mustShow) return { x: 0, y: 0, w: 0, h: PILL_H, text: "" };
+    const c = chosen ?? at(order[0] ?? 0.5);
     taken.push({ x: c.x - w / 2, y: c.y - PILL_H / 2, w, h: PILL_H });
-    a.pill = { x: c.x, y: c.y, w, h: PILL_H, text: a.pill.text };
+    return { x: c.x, y: c.y, w, h: PILL_H, text };
+  };
+  for (const a of arrows) {
+    if (a.pill.text === "" || a.noPill) continue;
+    a.pill = placePill(a.samples, a.pill.text, [0.5, 0.42, 0.58, 0.34, 0.66, 0.26, 0.74], false);
+  }
+  for (const t of trunks) {
+    if (t.pill.text === "") continue;
+    t.pill = placePill(t.samples, t.pill.text, [0.3, 0.22, 0.38, 0.5, 0.62]);
   }
   if (arrows.length === 0 && boxes.length === 0) return { focusY: 0, width: 0, height: 0, columns: [], groups: [], boxes: [], arrows: [] };
   const first = boxes.filter((b) => b.column === 0 && b.kind !== "external");
@@ -554,6 +757,7 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
     frames,
     strips,
     band,
+    ...(trunks.length > 0 ? { trunks } : {}),
   };
 
   function externalSub(e: { names?: string[]; host?: string; command?: string }): string {
@@ -592,10 +796,25 @@ function sliceBox(s: SystemSlice, x: number, y: number, frame: string): SysBox {
 
 function resourceBox(r: SystemResource, x: number, y: number, w: number, frame: string): SysBox {
   const names = r.names ?? [];
+  // A kernel-op box keeps its whole name (the band is sized from it) and lists as many targets as fit, then "+N".
+  if (r.kind === "os") {
+    const room = Math.max(1, Math.floor((w - 28) / SUB_CH));
+    const shown: string[] = [];
+    let used = 0;
+    for (const n of names) {
+      const next = used + (shown.length > 0 ? 2 : 0) + n.length;
+      if (shown.length > 0 && next + (names.length - shown.length - 1 > 0 ? 4 : 0) > room) break;
+      shown.push(n);
+      used = next;
+    }
+    const more = names.length - shown.length;
+    const sub = names.length === 0 ? r.kind : `${shown.join(", ")}${more > 0 ? ` +${more}` : ""}`;
+    return { id: r.id, kind: "os", column: 0, x, y, w, h: RES_H, title: r.label, sub, chips: [], frame, resource: r, glyph: resourceGlyph(r.kind) };
+  }
   const sub = names.length === 0 ? r.kind : `${names.slice(0, 2).join(", ")}${names.length > 2 ? ` +${names.length - 2}` : ""}`;
-  // A narrow box (the kernel band, a process strip) keeps its title and subtitle short enough to clear the glyph.
+  // A narrow box (a process strip) keeps its title and subtitle short enough to clear the glyph.
   const narrow = w < 200;
-  return { id: r.id, kind: r.kind === "os" ? "os" : "resource", column: 0, x, y, w, h: RES_H, title: shortLabel(r.label, narrow ? 12 : 24), sub: shortLabel(sub, narrow ? 15 : 26), chips: [], frame, resource: r, glyph: resourceGlyph(r.kind) };
+  return { id: r.id, kind: "resource", column: 0, x, y, w, h: RES_H, title: shortLabel(r.label, narrow ? 12 : 24), sub: shortLabel(sub, narrow ? 15 : 26), chips: [], frame, resource: r, glyph: resourceGlyph(r.kind) };
 }
 
 /** The stacking offset of a flat card: the sum of the heights of the cards above it in its column. */

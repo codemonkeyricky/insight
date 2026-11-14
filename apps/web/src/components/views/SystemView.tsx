@@ -20,6 +20,8 @@ const MIN_K = 0.1;
 const MAX_K = 2.5;
 /** The smallest scale a fit settles on: a card title is 18 px, so it stays at 10 px or more. A wider graph is panned. */
 export const FIT_MIN_K = 0.56;
+/** The System view's fit floor: a deep process tree is shown whole (readable once zoomed in), not cut at FIT_MIN_K. */
+export const SYSTEM_FIT_MIN_K = 0.06;
 /** Edges above this count show a verb pill only on the edges of the hovered or selected node. */
 export const PILL_LIMIT = 30;
 const FIT_MAX_K = 1.15;
@@ -33,9 +35,9 @@ interface Camera {
 }
 
 /** The camera that shows the whole layout in a view of `w` by `h`. Expanding the view gives a wide diagram room to be read. */
-export function fitCamera(layout: Pick<SysLayout, "width" | "height"> & { focusY?: number }, w: number, h: number): Camera {
+export function fitCamera(layout: Pick<SysLayout, "width" | "height"> & { focusY?: number }, w: number, h: number, minK: number = FIT_MIN_K): Camera {
   if (layout.width === 0 || layout.height === 0 || w <= 0 || h <= 0) return { k: 1, x: 0, y: 0 };
-  const k = Math.max(FIT_MIN_K, Math.min(FIT_MAX_K, (w - 16) / layout.width, (h - 16) / layout.height));
+  const k = Math.max(minK, Math.min(FIT_MAX_K, (w - 16) / layout.width, (h - 16) / layout.height));
   const cx = layout.width * k <= w ? (w - layout.width * k) / 2 : 8;
   // A diagram taller than the view starts on its first column, not on the middle of the canvas.
   const cyy = layout.height * k <= h ? (h - layout.height * k) / 2 : Math.min(8, Math.max(h - layout.height * k - 8, h / 2 - (layout.focusY ?? layout.height / 2) * k));
@@ -125,8 +127,8 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
     const h = expanded ? (el?.clientHeight ?? 700) : Math.max(420, vh * 0.6, room);
     setStageH(expanded ? null : h);
     // The legend sits along the bottom edge, so the diagram is fitted above it.
-    setCam(fitCamera(layout, w, h - LEGEND_H));
-  }, [layout, expanded]);
+    setCam(fitCamera(layout, w, h - LEGEND_H, pipeline === undefined ? SYSTEM_FIT_MIN_K : FIT_MIN_K));
+  }, [layout, expanded, pipeline]);
   // Fits when a layout arrives (a new scope, the tests flag) or the view expands, and clears the selection of the old layout.
   useLayoutEffect(() => {
     fit();
@@ -219,6 +221,15 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
         nodes.add(a.to);
       }
     }
+    // A bundled path runs slice -> port -> chip -> outside box: lighting one part lights the others of the same edge.
+    for (const a of layout.arrows) {
+      if (a.band === "in" && edges.has(a.id)) {
+        edges.add(`${a.to}>${a.edge.to}`);
+        nodes.add(a.edge.to);
+      } else if (a.band === "out" && edges.has(a.id)) {
+        for (const b of layout.arrows) if (b.band === "in" && b.to === a.from && b.edge.to === a.to) edges.add(b.id);
+      }
+    }
     return { edges, nodes };
   }, [focus, focusKind, layout]);
 
@@ -276,7 +287,7 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
           <span className="muted small sysv-note">No runtime entry in this scope</span>
         )}
         {pipeline === undefined && sys.runtime === "truncated" && (
-          <span className="muted small sysv-note">Runtime skipped: the scope is too large to trace</span>
+          <span className="muted small sysv-note">Runtime skipped: the scope is too large to trace{sys.skippedFunctions !== undefined && sys.skippedFunctions > 0 ? ` (${plural(sys.skippedFunctions, "function")} skipped)` : ""}</span>
         )}
         <label className="sysv-tests small">
           <input type="checkbox" checked={tests} onChange={(e) => onTests(e.target.checked)} /> Show tests
@@ -394,12 +405,12 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
                   const on = lit?.edges.has(a.id) === true;
                   const dim = lit !== null && !on;
                   const picked = sel?.kind === "edge" && sel.id === a.id;
-                  const cls = ["sysv-edge", `v-${a.edge.verb}`, a.dashed && "dashed", a.inferred && "inferred", a.band && `band-${a.band}`, on && "lit", dim && "dim", picked && "picked"]
+                  const cls = ["sysv-edge", `v-${a.edge.verb}`, a.dashed && "dashed", a.inferred && "inferred", a.bundled && "bundled", a.band && `band-${a.band}`, on && "lit", dim && "dim", picked && "picked"]
                     .filter(Boolean)
                     .join(" ");
                   const pill = a.pill;
                   // A Pipeline's pills show for the hovered or selected edges only; a large System graph does the same above PILL_LIMIT.
-                  const showPill = (pipeline !== undefined ? on : arrows.length <= PILL_LIMIT || on) && pill.text !== "";
+                  const showPill = (pipeline !== undefined ? on : arrows.length <= PILL_LIMIT || on) && pill.text !== "" && a.noPill !== true;
                   return (
                     <g
                       key={a.id}
@@ -414,13 +425,33 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
                       onFocus={() => setHover(a.id)}
                       onBlur={() => setHover(null)}
                     >
-                      <path className="sysv-line" d={a.d} markerEnd={a.edge.verb === "writes" || a.edge.verb === "produces" ? "url(#sysv-head-w)" : "url(#sysv-head)"} />
+                      <path className="sysv-line" d={a.d} markerEnd={a.bundled === true ? undefined : a.edge.verb === "writes" || a.edge.verb === "produces" ? "url(#sysv-head-w)" : "url(#sysv-head)"} />
                       <path className="sysv-hit" d={a.d} onClick={() => pickEdge(a)} />
                       {showPill && (
                         <g className="sysv-pill" onClick={() => pickEdge(a)}>
                           <rect x={pill.x - pill.w / 2} y={pill.y - pill.h / 2} width={pill.w} height={pill.h} rx={pill.h / 2} />
                           <text x={pill.x} y={pill.y} textAnchor="middle" dy="0.35em">
                             {pill.text}
+                          </text>
+                        </g>
+                      )}
+                    </g>
+                  );
+                })}
+                {layout.trunks?.map((t) => {
+                  const on = lit !== null && t.edges.some((id) => lit.edges.has(id));
+                  const dim = lit !== null && !on;
+                  const cls = ["sysv-trunk", `v-${t.verb}`, on && "lit", dim && "dim"].filter(Boolean).join(" ");
+                  return (
+                    <g key={t.id} className={cls} data-trunk={t.id}>
+                      <path className="sysv-line" d={t.d} markerEnd={t.verb === "writes" ? "url(#sysv-head-w)" : "url(#sysv-head)"} />
+                      <path className="sysv-hit" d={t.d} onClick={() => setSel({ kind: "node", id: t.to })} onMouseEnter={() => setHover(t.to)} onMouseLeave={() => setHover(null)} />
+                      <circle className="sysv-port" cx={t.port.x} cy={t.port.y} r={4.5} />
+                      {t.pill.text !== "" && (
+                        <g className="sysv-pill" onClick={() => setSel({ kind: "node", id: t.to })}>
+                          <rect x={t.pill.x - t.pill.w / 2} y={t.pill.y - t.pill.h / 2} width={t.pill.w} height={t.pill.h} rx={t.pill.h / 2} />
+                          <text x={t.pill.x} y={t.pill.y} textAnchor="middle" dy="0.35em">
+                            {t.pill.text}
                           </text>
                         </g>
                       )}
@@ -666,7 +697,7 @@ function EdgeList({ title, id, rows, nameOf, onSelect }: { title: string; id: st
         {rows.map((a) => (
           <li key={a.id}>
             <button type="button" className="arch-link" onClick={() => onSelect({ kind: "edge", id: a.id })}>
-              <span className={`sysv-verb v-${a.edge.verb}`}>{a.pill.text}</span> <span className="mono small">{nameOf(a)}</span>
+              <span className={`sysv-verb v-${a.edge.verb}`}>{a.pill.text || a.edge.verb}</span> <span className="mono small">{nameOf(a)}</span>
             </button>
             <SiteLinks id={id} sites={a.edge.sites.slice(0, 3)} />
             {a.edge.sites.length > 3 && <span className="muted small"> +{a.edge.sites.length - 3} more in the edge</span>}

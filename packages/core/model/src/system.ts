@@ -22,6 +22,8 @@ export interface SystemModel {
   via?: string; // set when the scope held one code folder, so its children are shown instead: the folder, relative to the scope ("src")
   /** grounded: edges start and end at slices. none: no runtime context, the flat model. truncated: the exec model was cut, so flat. */
   runtime: SystemRuntimeMode;
+  /** Truncated only: the in-scope functions the exec model cut, so the runtime of their code is not drawn. */
+  skippedFunctions?: number;
   runtimes?: SystemRuntime[]; // present when runtime is grounded
   slices?: SystemSlice[]; // present when runtime is grounded
   resources?: SystemResource[]; // in-process resources and kernel ops, when there are any
@@ -698,6 +700,7 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
   for (const ext of externalList) if (ext.names !== undefined && ext.names.length === 0) delete ext.names;
 
   const out: SystemModel = { scope, components, routes: routeList, externals: externalList, edges, stages, runtime: plan.mode };
+  if (plan.mode === "truncated") out.skippedFunctions = Math.max(0, plan.exec.stats.functionsInScope - plan.exec.functions.filter((f) => f.inScope).length);
   if (grounded) {
     const { runtimes, slices } = plan.finish();
     out.runtimes = runtimes;

@@ -1178,6 +1178,17 @@ button.add-submit:disabled { background: var(--faint); color: var(--graphite); b
 .sysv-await rect { fill: var(--faint); }
 .sysv-await text { fill: var(--fg); font: 11px var(--font-code); pointer-events: none; }
 .sysv-edge.band-in .sysv-line, .sysv-edge.band-out .sysv-line { stroke-width: 1.6; }
+/* The segment from a slice to its frame's port: faint until its edge is hovered or selected. */
+.sysv-edge.bundled .sysv-line { stroke-width: 1.2; opacity: 0.28; }
+.sysv-edge.bundled.lit .sysv-line, .sysv-edge.bundled.picked .sysv-line { opacity: 1; }
+.sysv-trunk .sysv-line { fill: none; stroke: var(--muted); stroke-width: 2; }
+.sysv-trunk.v-writes .sysv-line { stroke: var(--accent); }
+.sysv-trunk.lit .sysv-line { stroke: var(--accent); stroke-width: 2.6; }
+.sysv-trunk.dim { opacity: 0.15; }
+.sysv-port { fill: var(--sheet); stroke: var(--muted); stroke-width: 2; pointer-events: none; }
+.sysv-trunk.lit .sysv-port, .sysv-trunk.v-writes .sysv-port { stroke: var(--accent); }
+.sysv-trunk .sysv-pill rect { fill: var(--chip-solid); stroke: var(--hair); stroke-width: 1; }
+.sysv-trunk .sysv-pill text { fill: var(--fg); font: 600 15px var(--font-ui); pointer-events: none; }
 .sysv-legend .lv { display: inline-block; width: 10px; height: 10px; vertical-align: middle; margin-right: 6px; border: 1px solid var(--muted); }
 .sysv-legend .lv.syscall { background: var(--muted); }
 .sysv-legend .lv.unknown { border-style: dotted; background: transparent; }

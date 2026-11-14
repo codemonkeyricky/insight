@@ -257,3 +257,119 @@ describe("toolbar notes", () => {
     expect(html).not.toContain("No runtime entry in this scope");
   });
 });
+
+describe("outside ports and trunks", () => {
+  const sys = model();
+  const layout: SysLayout = layoutSystemFrames(sys);
+  const trunks = layout.trunks ?? [];
+  const frames = layout.frames as SysFrame[];
+
+  it("bundles outside edges into one trunk per (process, chip)", () => {
+    const keys = trunks.map((t) => `${t.process}>${t.to}`);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(trunks.length).toBeGreaterThan(0);
+    for (const t of trunks) expect(t.count).toBe(t.edges.length);
+  });
+
+  it("counts the bundled edges on the trunk pill, only when more than one", () => {
+    for (const t of trunks) {
+      if (t.count > 1) expect(t.pill?.text).toContain(`${t.count}`);
+    }
+  });
+
+  it("starts every trunk at a port on its process frame's right edge and ends it in the band", () => {
+    const band = layout.band as NonNullable<typeof layout.band>;
+    for (const t of trunks) {
+      const f = frames.find((x) => x.id === t.process) as SysFrame;
+      expect(t.port.x).toBeCloseTo(f.x + f.w, 0);
+      expect(t.port.y).toBeGreaterThan(f.y);
+      expect(t.port.y).toBeLessThan(f.y + f.h);
+      const end = t.samples[t.samples.length - 1] as { x: number };
+      expect(end.x).toBeGreaterThan(band.x);
+    }
+  });
+
+  it("keeps bundled edges' inner path inside the frame, and gives them no pill of their own", () => {
+    const bundled = layout.arrows.filter((a) => a.bundled === true);
+    expect(bundled.length).toBeGreaterThan(0);
+    for (const a of bundled) {
+      expect(a.noPill).toBe(true);
+      const first = a.samples[0] as { x: number; y: number };
+      expect(first.x).toBeLessThan((layout.band as NonNullable<typeof layout.band>).x);
+    }
+  });
+
+  it("stacks the chips in the band without overlap", () => {
+    const chips = layout.boxes.filter((b) => b.kind === "chip");
+    for (let i = 0; i < chips.length; i++) for (let j = i + 1; j < chips.length; j++) expect(overlap(chips[i] as SysBox, chips[j] as SysBox)).toBe(false);
+  });
+});
+
+describe("coroutine frames", () => {
+  const withShared = (): SystemModel => {
+    const m = model();
+    return {
+      ...m,
+      slices: [...(m.slices ?? []), slice(CO, B, 2)],
+      edges: [...m.edges, edge(`${CO}|${B}`, "github", "requests", "POST")],
+    };
+  };
+  const layout = layoutSystemFrames(withShared());
+  const co = (layout.frames as SysFrame[]).find((f) => f.id === CO) as SysFrame;
+
+  it("does not repeat a slice its thread already draws", () => {
+    expect(layout.boxes.some((b) => b.id === `${CO}|${B}`)).toBe(false);
+    expect(layout.boxes.some((b) => b.id === `${CO}|${C}`)).toBe(true);
+    expect(layout.boxes.some((b) => b.id === `${TW}|${B}`)).toBe(true);
+  });
+
+  it("says in the header how many components it shares with the thread", () => {
+    expect(co.sub ?? "").toContain("also runs 1 component of");
+  });
+
+  it("re-attaches the shared slice's edges to the coroutine header", () => {
+    const a = layout.arrows.find((x) => x.edge.from === `${CO}|${B}` && x.band === "in") as SysArrow;
+    expect(a).toBeDefined();
+    const first = a.samples[0] as { x: number; y: number };
+    expect(first.y).toBeGreaterThanOrEqual(co.y - 1);
+    expect(first.y).toBeLessThanOrEqual(co.y + co.hdrH + 1);
+  });
+});
+
+describe("empty frames and the kernel band", () => {
+  it("draws a thread that runs nothing as a header only", () => {
+    const m = model();
+    const sys: SystemModel = { ...m, slices: (m.slices ?? []).filter((s) => s.runtime !== CO), edges: m.edges.filter((e) => !e.from.startsWith(CO)) };
+    const f = (layoutSystemFrames(sys).frames as SysFrame[]).find((x) => x.id === CO) as SysFrame;
+    expect(f).toBeDefined();
+    expect(f.h).toBe(f.hdrH);
+  });
+
+  it("sizes the band from its labels and never truncates a kernel op title", () => {
+    const m = model();
+    const long = "A deliberately long kernel operation title";
+    const sys: SystemModel = { ...m, resources: [...(m.resources ?? []), { id: "os:long", kind: "os", label: long, source: "os" }] };
+    const l = layoutSystemFrames(sys);
+    const box = l.boxes.find((b) => b.id === "os:long") as SysBox;
+    expect(box.title).toBe(long);
+    expect(box.title.includes("…")).toBe(false);
+    expect(box.w).toBeGreaterThan(long.length * 6);
+  });
+});
+
+describe("skipped functions note", () => {
+  it("adds the number of skipped functions to the runtime note", () => {
+    const sys: SystemModel = {
+      scope: "svc",
+      components: [{ id: "A", label: "A", path: "A", kind: "folder", files: 1, functions: 1, entry: false }],
+      routes: [],
+      externals: [],
+      edges: [],
+      stages: [["A"]],
+      runtime: "truncated",
+      skippedFunctions: 1234,
+    };
+    const html = renderToStaticMarkup(<SystemDiagram id="p" sys={sys} tests={false} onTests={() => {}} />);
+    expect(html).toContain("1234 functions skipped");
+  });
+});
