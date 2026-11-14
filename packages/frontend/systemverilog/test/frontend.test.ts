@@ -257,10 +257,11 @@ describe("review fixes", () => {
       { name: "y", dir: "output" },
     ]);
     expect(ansi?.params).toEqual(["T"]);
-    // $fopen(f, "r") reads; $fopen(f, "w") writes; $fclose has no effect.
+    // $fopen(f, "r") reads; $fopen(f, "w") and $fopen(f) (no mode, multichannel) write; $fclose has no effect.
     const fs = nodes.filter((n) => n.kind.startsWith("effects.fs"));
     expect(fs.find((n) => n.attrs.path === "cfg.txt")?.kind).toBe("effects.fs.read");
     expect(fs.find((n) => n.attrs.path === "out.log")?.kind).toBe("effects.fs.write");
+    expect(fs.find((n) => n.attrs.path === "multi.log")?.kind).toBe("effects.fs.write");
     expect(fs.some((n) => n.attrs.api === "$fclose")).toBe(false);
     // Method calls on objects are named with a dot in the unresolved text.
     expect(edges.some((e) => e.kind === "calls.call" && JSON.stringify(e.to).includes("bi::send"))).toBe(false);

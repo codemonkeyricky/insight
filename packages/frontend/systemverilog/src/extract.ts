@@ -279,9 +279,13 @@ export function emitUnit(project: Project, rel: string): IRBatch {
     let kind: string | undefined;
     let key: "path" | "command" | "name" | undefined;
     if (name === "$fopen") {
-      // Only w, a and + write. A missing or read-only mode reads, as the review requires.
+      // IEEE 1800: no mode opens a multichannel descriptor for writing. A literal mode that
+      // starts with r and has no + reads; any other mode (w, a, r+) writes. A non-literal mode
+      // is unknown and keeps the read classification.
       const mode = literalOf(args[1]);
-      kind = mode !== undefined && /[wa+]/.test(mode) ? "effects.fs.write" : "effects.fs.read";
+      if (args.length < 2) kind = "effects.fs.write";
+      else if (mode === undefined) kind = "effects.fs.read";
+      else kind = /^r/.test(mode) && !mode.includes("+") ? "effects.fs.read" : "effects.fs.write";
       key = "path";
       if (mode !== undefined) attrs.mode = mode;
     } else {

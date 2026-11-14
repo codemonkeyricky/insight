@@ -18,6 +18,7 @@ class dv_child extends dv_pkg::dv_base;
     total = c_add(total, 1);
     fd = $fopen("cfg.txt", "r");
     fd = $fopen("out.log", "w");
+    fd = $fopen("multi.log");
     $fclose(fd);
   endfunction
 
