@@ -255,6 +255,10 @@ a.flow-node { cursor: pointer; }
 .flow-node:is(.role-return, .role-throw, .role-break, .role-continue) .flow-text { fill: var(--red-text); }
 .flow-node.resolves .flow-text { fill: var(--accent-text); }
 .flow-chev { fill: var(--accent-text); font-weight: 600; pointer-events: none; }
+.flow-text, .flow-chev, .flow-kw { user-select: none; -webkit-user-select: none; }
+.flow-chevron { cursor: pointer; }
+.flow-chevron-hit { fill: transparent; stroke: none; transition: fill 120ms ease-out; }
+.flow-chevron:hover .flow-chevron-hit { fill: color-mix(in srgb, var(--accent) 22%, transparent); }
 .flow-mark { fill: var(--warn-text); font: 700 12px system-ui, sans-serif; }
 .flow-edge { fill: none; stroke: var(--lane-0); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
 .flow-edge.c1 { stroke: var(--lane-1); }

@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import type { FlowEdge, FlowNode, FunctionFlow } from "../api";
 import { outsideScope, outsideText } from "../flowTargets";
 import { NEST_HEAD, ROW_H, stationOf } from "@insight/flow";
@@ -10,16 +10,23 @@ import { popDelay } from "../zoom/pop";
 /** A step's click, when a caller takes it over. Return true to handle it: the link (if any) is then not followed. */
 export type FlowNodeClick = (node: FlowNode) => boolean;
 
+/** Opens or folds a step (a double-click, Enter or Space on the row, or a click on its chevron). Return true when the step took it. */
+export type FlowNodeOpen = (node: FlowNode) => boolean;
+
+/** The chevron's hit target: at least 20 px square, around the glyph, at the right end of the row. */
+const CHEV_HIT = 24;
+const CHEV_INSET = 6;
+
 /**
  * One function's control-flow chart as SVG, drawn as a line map: one row per step, a station on its lane's line, the label
  * to the right. The rows and edge paths come from the layout in @insight/flow; this only draws them. A call into a function
  * in scope links to that function's chart. A call outside the scope is drawn unresolved. Any other step with a source span
- * links to its line. `onNodeClick` takes over the clicks (the zoom map does, so a click selects in place); `selectedId` marks
- * one step. `motion` (default on) makes a loop's return track march toward its head and a token walk the chart's control
+ * links to its line. `onNodeClick` takes over the clicks (the zoom map does, so a click selects in place); `onNodeOpen` takes
+ * the gestures that open or fold a step (double-click, Enter or Space, a click on the ▸/▾ chevron); `selectedId` marks one step. `motion` (default on) makes a loop's return track march toward its head and a token walk the chart's control
  * flow along the edge paths (see zoom/flowToken.ts). Motion is off under reduced motion, while the page is hidden, and
  * while the chart is off screen (see zoom/flowMotion.ts). The token runs on the most recently opened charts only.
  */
-export function FlowChart({ id, fn, scope, onNodeClick, selectedId, motion = true }: { id: string; fn: FunctionFlow; scope: string; onNodeClick?: FlowNodeClick; selectedId?: string; motion?: boolean }) {
+export function FlowChart({ id, fn, scope, onNodeClick, onNodeOpen, selectedId, motion = true }: { id: string; fn: FunctionFlow; scope: string; onNodeClick?: FlowNodeClick; onNodeOpen?: FlowNodeOpen; selectedId?: string; motion?: boolean }) {
   const uid = useId();
   const key = uid.replace(/[^a-zA-Z0-9]/g, "");
   const glow = `glow-${key}`;
@@ -54,7 +61,7 @@ export function FlowChart({ id, fn, scope, onNodeClick, selectedId, motion = tru
       </defs>
       <g>
         {fn.nodes.filter(isNest).map((n) => (
-          <NestFrame key={n.id} node={n} onNodeClick={onNodeClick} selected={n.id === selectedId} delay={nodeDelay.get(n.id) ?? 140} />
+          <NestFrame key={n.id} node={n} onNodeClick={onNodeClick} onNodeOpen={onNodeOpen} selected={n.id === selectedId} delay={nodeDelay.get(n.id) ?? 140} />
         ))}
       </g>
       <g>
@@ -64,7 +71,7 @@ export function FlowChart({ id, fn, scope, onNodeClick, selectedId, motion = tru
       </g>
       <g>
         {fn.nodes.filter((n) => !isNest(n)).map((n) => (
-          <Node key={n.id} id={id} node={n} fnId={fn.id} scope={scope} width={fn.width} onNodeClick={onNodeClick} selected={n.id === selectedId} delay={nodeDelay.get(n.id) ?? 140} />
+          <Node key={n.id} id={id} node={n} fnId={fn.id} scope={scope} width={fn.width} onNodeClick={onNodeClick} onNodeOpen={onNodeOpen} selected={n.id === selectedId} delay={nodeDelay.get(n.id) ?? 140} />
         ))}
       </g>
       {tokenActive && (
@@ -87,6 +94,47 @@ const delayStyle = (ms: number) => ({ ["--d" as string]: `${ms}ms` });
 
 const isNest = (n: FlowNode): boolean => n.shape === "nest";
 
+/** Double-click and Enter/Space on a row open or fold it. A step the handler declines is left to its link or click. */
+function openHandlers(node: FlowNode, onNodeOpen: FlowNodeOpen | undefined) {
+  if (!onNodeOpen) return {};
+  return {
+    onDoubleClick: (e: MouseEvent<Element>) => {
+      if (onNodeOpen(node)) e.preventDefault();
+    },
+    onKeyDown: (e: KeyboardEvent<Element>) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      if (e.target !== e.currentTarget) return;
+      if (onNodeOpen(node)) e.preventDefault();
+    },
+  };
+}
+
+/** The ▸/▾ at the right end of a row, with its own hit target (the touch path). It opens or folds without selecting. */
+function Chevron({ node, x, y, fold, onNodeOpen }: { node: FlowNode; x: number; y: number; fold: boolean; onNodeOpen?: FlowNodeOpen }) {
+  const cy = y + ROW_H / 2;
+  return (
+    <g
+      className="flow-chevron"
+      role="button"
+      aria-label={`${fold ? "Fold" : "Open"} ${node.label}`}
+      onClick={(e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        onNodeOpen?.(node);
+      }}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        e.preventDefault();
+      }}
+    >
+      <rect x={x - CHEV_HIT / 2} y={cy - CHEV_HIT / 2} width={CHEV_HIT} height={CHEV_HIT} rx={6} className="flow-chevron-hit" />
+      <text x={x} y={cy} dominantBaseline="central" textAnchor="middle" className="flow-chev">
+        {fold ? "▾" : "▸"}
+      </text>
+    </g>
+  );
+}
+
 /** Where a row's station sits. A chart exported before the line map has no lanes: its steps sit on lane 0. */
 const station = (n: FlowNode): [number, number] => stationOf(n);
 const labelAt = (n: FlowNode): number => n.labelX ?? n.x + 28;
@@ -101,9 +149,9 @@ const keywordOf = (n: FlowNode): string | undefined => {
 /**
  * A callee nested in the call step that calls it: a faint band of its body's lane colour with the call's row as the header
  * (a call station, the label, a fold mark). Its rows and edges are drawn over the band by the chart. A click on the header
- * folds the callee back.
+ * selects it; a double-click, Enter or Space on it, or a click on the fold mark, folds the callee back.
  */
-function NestFrame({ node, onNodeClick, selected, delay }: { node: FlowNode; onNodeClick?: FlowNodeClick; selected: boolean; delay: number }) {
+function NestFrame({ node, onNodeClick, onNodeOpen, selected, delay }: { node: FlowNode; onNodeClick?: FlowNodeClick; onNodeOpen?: FlowNodeOpen; selected: boolean; delay: number }) {
   const { x, y, w, h } = node;
   const lane = laneOf((node.lane ?? 0) + 1);
   const lc = laneOf(node.lane);
@@ -112,14 +160,21 @@ function NestFrame({ node, onNodeClick, selected, delay }: { node: FlowNode; onN
     <g className={`flow-nest c${lc}${selected ? " selected" : ""}`} data-node={node.id} data-nest="" style={delayStyle(delay)}>
       <title>{node.title ?? node.label}</title>
       <rect x={x} y={y} width={w} height={h} rx={10} className={`flow-nest-body c${lane}`} />
-      <g className="flow-nest-head" role="button" aria-label={`Fold ${node.label}`} onClick={onNodeClick ? () => onNodeClick(node) : undefined}>
+      <g
+        className="flow-nest-head"
+        role="group"
+        aria-label={node.label}
+        tabIndex={onNodeOpen ? 0 : undefined}
+        onClick={onNodeClick ? () => onNodeClick(node) : undefined}
+        {...openHandlers(node, onNodeOpen)}
+      >
         <rect x={x} y={y} width={w} height={NEST_HEAD} rx={10} className="flow-nest-hit" />
         <CallStation cx={cx} cy={cy} />
         <text x={labelAt(node)} y={cy} dominantBaseline="central" className="flow-text flow-nest-label">
           {node.tag !== undefined && <tspan className="flow-kw">{node.tag} </tspan>}
           {node.label}
-          <tspan className="flow-chev">{" ▾"}</tspan>
         </text>
+        <Chevron node={node} x={x + w - CHEV_INSET - CHEV_HIT / 2} y={y} fold onNodeOpen={onNodeOpen} />
       </g>
     </g>
   );
@@ -175,7 +230,7 @@ function Station({ node, cx, cy, resolved }: { node: FlowNode; cx: number; cy: n
   return <circle className="st step" cx={cx} cy={cy} r={3.5} />;
 }
 
-function Node({ id, node, fnId, scope, width, onNodeClick, selected, delay }: { id: string; node: FlowNode; fnId: string; scope: string; width: number; onNodeClick?: FlowNodeClick; selected: boolean; delay: number }) {
+function Node({ id, node, fnId, scope, width, onNodeClick, onNodeOpen, selected, delay }: { id: string; node: FlowNode; fnId: string; scope: string; width: number; onNodeClick?: FlowNodeClick; onNodeOpen?: FlowNodeOpen; selected: boolean; delay: number }) {
   const { shape } = node;
   const [cx, cy] = station(node);
   const target = node.target;
@@ -191,9 +246,9 @@ function Node({ id, node, fnId, scope, width, onNodeClick, selected, delay }: { 
         {node.tag !== undefined && <tspan className="flow-kw">{node.tag} </tspan>}
         {kw !== undefined && <tspan className="flow-kw">{kw} </tspan>}
         {node.label}
-        {inside && <tspan className="flow-chev">{" ▸"}</tspan>}
         {outside && <tspan className="flow-mark">{" ↗"}</tspan>}
       </text>
+      {inside && <Chevron node={node} x={width - 4 - CHEV_INSET - CHEV_HIT / 2} y={node.y} fold={false} onNodeOpen={onNodeOpen} />}
     </>
   );
   const cls = `flow-node ${shape} role-${node.role} c${laneOf(node.lane)}${outside ? " unresolved" : ""}${inside ? " resolves" : ""}${selected ? " selected" : ""}`;
@@ -205,12 +260,13 @@ function Node({ id, node, fnId, scope, width, onNodeClick, selected, delay }: { 
         if (onNodeClick(node)) e.preventDefault();
       }
     : undefined;
+  const open = { ...openHandlers(node, onNodeOpen), tabIndex: onNodeOpen && inside ? 0 : undefined };
   return link ? (
-    <a href={link} className={cls} style={style} onClick={onClick} data-node={node.id}>
+    <a href={link} className={cls} style={style} onClick={onClick} data-node={node.id} {...open}>
       {body}
     </a>
   ) : (
-    <g className={cls} style={style} onClick={onClick} data-node={node.id}>
+    <g className={cls} style={style} onClick={onClick} data-node={node.id} {...open}>
       {body}
     </g>
   );

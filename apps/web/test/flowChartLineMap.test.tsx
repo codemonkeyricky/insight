@@ -65,4 +65,33 @@ describe("FlowChart line map", () => {
     expect(nested).toContain("▾");
     expect(html).toContain("▸");
   });
+
+  it("gives an openable call a chevron button and a focusable row, and a plain step neither", () => {
+    const h = renderToStaticMarkup(<FlowChart id="p" fn={fn} scope="" onNodeOpen={() => true} />);
+    const rowOf = (label: string) => {
+      const id = fn.nodes.find((n) => n.label === label)!.id;
+      const start = h.lastIndexOf("<a ", h.indexOf(`data-node="${id}"`));
+      const from = start === -1 ? h.lastIndexOf("<g ", h.indexOf(`data-node="${id}"`)) : start;
+      const next = h.indexOf("data-node=", h.indexOf(`data-node="${id}"`) + 10);
+      return h.slice(from, next === -1 ? undefined : next);
+    };
+    const leaf = rowOf("leaf()");
+    expect(leaf).toContain('class="flow-chevron"');
+    expect(leaf).toContain('role="button"');
+    expect(leaf).toContain('aria-label="Open leaf()"');
+    expect(leaf).toMatch(/tabindex="0"[^>]*data-node|data-node[^>]*tabindex="0"/);
+    const plain = rowOf("prep()");
+    expect(plain).not.toContain("flow-chevron");
+    expect(plain).not.toContain("tabindex");
+  });
+
+  it("draws a fold chevron on a nest header", () => {
+    const leaf = layoutFunction({ id: "f#leaf", name: "leaf", async: false, items: [call("a()")] });
+    const id = fn.nodes.find((n) => n.label === "leaf()")!.id;
+    const nested = renderToStaticMarkup(<FlowChart id="p" fn={relayout(fn, new Map([[id, { flow: leaf }]]))} scope="" onNodeOpen={() => true} />);
+    expect(nested).toContain('class="flow-chevron"');
+    expect(nested).toContain('role="button"');
+    expect(nested).toContain('aria-label="Fold leaf"');
+    expect(nested).toContain('tabindex="0"');
+  });
 });
