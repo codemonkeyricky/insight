@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pickBox } from "../src/zoom/gesture.js";
+import { pickBox, zoomTakes } from "../src/zoom/gesture.js";
 
 // A small tree: the project holds a folder "dir" (with a file "a" under it) and a file "b". Boxes are drawn at scale 1
 // with widths in world units, so a box's width on screen is its width times the camera's k.
@@ -28,5 +28,25 @@ describe("pickBox", () => {
     expect(pickBox(boxes, depth, 430, 430, 1)).toBe("dir");
     // At k 4 the same gap is 120 world units wide on screen per 30 units, so the 60 px allowance is 15 world units.
     expect(pickBox(boxes, depth, 430, 430, 4)).toBeUndefined();
+  });
+});
+
+describe("zoomTakes", () => {
+  const inChart = { closest: (sel: string) => (sel === "svg.flow" ? {} : null) };
+  const onMap = { closest: () => null };
+
+  it("leaves a double-click on a chart row to the row (d3 would zoom and swallow it)", () => {
+    expect(zoomTakes({ type: "dblclick", target: inChart })).toBe(false);
+  });
+
+  it("still zooms on a double-click elsewhere on the map", () => {
+    expect(zoomTakes({ type: "dblclick", target: onMap })).toBe(true);
+  });
+
+  it("keeps d3's default filter for drags and wheels", () => {
+    expect(zoomTakes({ type: "mousedown", button: 0, target: inChart })).toBe(true);
+    expect(zoomTakes({ type: "mousedown", button: 2, target: onMap })).toBe(false);
+    expect(zoomTakes({ type: "wheel", ctrlKey: true, target: onMap })).toBe(true);
+    expect(zoomTakes({ type: "mousedown", ctrlKey: true, target: onMap })).toBe(false);
   });
 });

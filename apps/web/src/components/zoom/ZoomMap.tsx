@@ -18,7 +18,7 @@ import { displayName } from "../../zoom/names";
 import { releaseVelocity, type DragSample } from "../../zoom/spring";
 import { useCameraSpring } from "../../zoom/useCameraSpring";
 import { motionFor, progressAt, TWEEN_MS } from "../../zoom/tween";
-import { pickBox } from "../../zoom/gesture";
+import { pickBox, zoomTakes } from "../../zoom/gesture";
 import { clampTop } from "../../zoom/clampTop";
 import { edgeClass, edgeKey, edgeTitle, edgeWidth, lineClass, runtimeLine, type MapBuild, type MapEdge, type MapNode, type MapSelected, type MapSource, type RuntimeLine } from "../../zoom/source";
 import { bucketScale, FAR_TILE_PX, fitLabel, headerLabels, labelChars, lodBucket, MID_TILE_PX } from "../../zoom/lod";
@@ -971,6 +971,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     let samples: DragSample[] = [];
     const z = zoom<SVGSVGElement, unknown>()
       .scaleExtent(SCALE)
+      .filter((ev: Event) => zoomTakes(ev))
       .on("start", (ev: D3ZoomEvent<SVGSVGElement, unknown>) => {
         // A user's gesture takes the camera back from a move in flight, where it is.
         if (ev.sourceEvent) {
