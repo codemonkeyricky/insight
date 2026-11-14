@@ -268,6 +268,12 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
             </span>
           )}
         </span>
+        {pipeline === undefined && sys.runtime === "none" && sys.components.length > 0 && (
+          <span className="muted small sysv-note">No runtime entry in this scope</span>
+        )}
+        {pipeline === undefined && sys.runtime === "truncated" && (
+          <span className="muted small sysv-note">Runtime skipped: the scope is too large to trace</span>
+        )}
         <label className="sysv-tests small">
           <input type="checkbox" checked={tests} onChange={(e) => onTests(e.target.checked)} /> Show tests
         </label>

@@ -302,3 +302,30 @@ describe("flat and truncated models", () => {
     expect(layoutSystemFrames({ ...flat, components: [], edges: [], externals: [], stages: [] }).boxes).toHaveLength(0);
   });
 });
+
+describe("toolbar notes", () => {
+  const comp = (id: string) => ({ id, label: id, path: id, kind: "folder" as const, files: 1, functions: 1, entry: false });
+  const flat = (runtime: SystemModel["runtime"], components: SystemModel["components"]): SystemModel => ({
+    scope: "svc",
+    components,
+    routes: [],
+    externals: [],
+    edges: [],
+    stages: [components.map((c) => c.id)],
+    runtime,
+  });
+  it("says there is no runtime entry when the scope has code but no runtime", () => {
+    const html = renderToStaticMarkup(<SystemDiagram id="p" sys={flat("none", [comp("A")])} tests={false} onTests={() => {}} />);
+    expect(html).toContain("No runtime entry in this scope");
+    expect(html).not.toContain("Runtime skipped");
+  });
+  it("shows no runtime note when the scope has no code at all", () => {
+    const html = renderToStaticMarkup(<SystemDiagram id="p" sys={flat("none", [])} tests={false} onTests={() => {}} />);
+    expect(html).not.toContain("No runtime entry in this scope");
+  });
+  it("says runtime was skipped when the model is truncated", () => {
+    const html = renderToStaticMarkup(<SystemDiagram id="p" sys={flat("truncated", [comp("A")])} tests={false} onTests={() => {}} />);
+    expect(html).toContain("Runtime skipped:");
+    expect(html).not.toContain("No runtime entry in this scope");
+  });
+});
