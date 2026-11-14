@@ -370,7 +370,7 @@ async function runWithWatchdog(ctx: JobContext): Promise<void> {
 /** POST /api/index. Body: {repo: "owner/repo" | GitHub URL, ref?: string}. */
 export async function handleIndex(request: Request, deps: IndexDeps): Promise<Response> {
   if (request.method !== "POST") return errorResponse(405, "method_not_allowed", "use POST");
-  const session = await sessionFrom(request, deps.env as Env, deps.fetch);
+  const session = await sessionFrom(request, deps.env as Env, deps.fetch, deps.now);
   return withCookies(await submit(request, deps, session), session?.setCookie);
 }
 
@@ -526,7 +526,7 @@ export function handleHealth(deps: { storage: Pick<Storage, "kind"> }): Response
  */
 export async function handleStatus(
   request: Request,
-  deps: { storage: Storage; env?: Env; fetch?: FetchLike },
+  deps: { storage: Storage; env?: Env; fetch?: FetchLike; now?: () => number },
 ): Promise<Response> {
   if (request.method !== "GET") return errorResponse(405, "method_not_allowed", "use GET");
   const url = new URL(request.url);
@@ -547,7 +547,7 @@ export async function handleStatus(
 
   if (visibility === "private") {
     const fetchFn: FetchLike = deps.fetch ?? ((input, init) => fetch(input, init));
-    const session = await requireAccess(request, deps.env ?? {}, fetchFn, parsed.owner, parsed.repo);
+    const session = await requireAccess(request, deps.env ?? {}, fetchFn, parsed.owner, parsed.repo, deps.now);
     if (session instanceof Response) return session;
     const status = await deps.storage.getJson<IndexStatus>(
       `${repoStoragePrefix(parsed.owner, parsed.repo, sha, "private")}status.json`,
