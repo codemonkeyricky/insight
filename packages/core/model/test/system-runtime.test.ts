@@ -282,6 +282,26 @@ describe("runtime model: TypeScript fixture", () => {
     expect(s.edges.map((e) => `${e.from}>${e.verb}>${e.to}`)).toEqual(["packages/a>calls>packages/b"]);
   });
 
+  it("lists each runtime's in-scope roots, sorted and capped", () => {
+    const s = sys();
+    const worker = (s.runtimes ?? []).find((r) => r.id === "thread:src/main.ts@spawn:10");
+    expect(worker?.roots).toEqual(expect.arrayContaining(["src/worker.ts#(module)"]));
+    for (const r of s.runtimes ?? []) {
+      if (r.roots === undefined) continue;
+      expect(r.roots).toEqual([...r.roots].sort());
+      expect(r.roots.length).toBeLessThanOrEqual(20);
+    }
+  });
+
+  it("counts each sync.atomic-op fact once in each slice that runs its function", () => {
+    expect((sys().slices ?? []).some((x) => x.atomics !== undefined)).toBe(false);
+    const doc = tsDoc();
+    doc.nodes.push(inFn(TS.worker, "(module)", 3, "sync", "sync.atomic-op", { api: "Atomics.add", op: "op" }));
+    const s = tsSystem("", doc);
+    const worker = (s.slices ?? []).find((x) => x.id === "thread:src/main.ts@spawn:10|src");
+    expect(worker?.atomics).toBe(1);
+  });
+
   it("matches the committed snapshot of the grounded TypeScript runtime", () => {
     const s = sys();
     expect({ runtimes: s.runtimes, slices: s.slices, resources: s.resources, edges: s.edges }).toMatchSnapshot();
@@ -385,6 +405,24 @@ describe("runtime model: C++ fixture", () => {
 });
 
 // ---- Checks that hold for both fixtures ----
+
+describe("runtime model: C++ threads with no build target", () => {
+  it("gives threads no program owns one native program of the scope, so every thread has a frame container", () => {
+    const doc = cppDoc();
+    // A scope whose executables are all filtered out (test-only targets): no target names the process.
+    const bare: IRDocument = { ...doc, nodes: doc.nodes.filter((n) => n.kind !== "packaging.build-target"), edges: doc.edges.filter((e) => e.kind !== "packaging") };
+    const s = systemModel(buildProjectModel(bare), "");
+    expect(s.runtime).toBe("grounded");
+    const progs = (s.runtimes ?? []).filter((r) => r.kind === "program");
+    expect(progs.length).toBe(1);
+    expect(progs[0]?.programKind).toBe("native");
+    const threads = (s.runtimes ?? []).filter((r) => r.kind === "thread");
+    expect(threads.length).toBe(3);
+    expect(threads.every((t) => t.parent === progs[0]?.id)).toBe(true);
+    const lock = (s.resources ?? []).find((r) => r.kind === "lock" && r.label === "m");
+    expect(lock?.program).toBe(progs[0]?.id);
+  });
+});
 
 describe("runtime model: stability and scope", () => {
   it("gives the same JSON for the same code, whatever the input order", () => {
