@@ -73,6 +73,20 @@ describe("browser scope payloads equal the server's", () => {
     expect(modelCalls).toHaveLength(1);
   }, 600_000);
 
+  it("the live api computes the caller graph of a function from the model, as the callers route answers it", async () => {
+    const fnId = (await api.getScopeExec(id, "packages/core/model")).functions.find((f) => f.name === "inScope")?.id;
+    expect(fnId, "a function named inScope in packages/core/model").toBeDefined();
+    const q = `?path=packages/core/model&id=${encodeURIComponent(fnId!)}`;
+    expect(await api.getCallerGraph(id, "packages/core/model", fnId!)).toEqual(await serverJson(`/api/projects/${id}/callers${q}`));
+    const shallow = await api.getCallerGraph(id, "packages/core/model", fnId!, { maxDepth: 2, possible: true });
+    expect(shallow).toEqual(await serverJson(`/api/projects/${id}/callers${q}&depth=2&possible=1`));
+    // The depth-1 nodes are the direct callers that the refs lists name.
+    const depth1 = new Set(shallow.nodes.filter((n) => n.depth === 1).map((n) => n.id));
+    const calledBy = new Set((await api.getRefs(id, "packages/core/model", fnId!)).calledBy.map((r) => r.id));
+    expect([...depth1].sort()).toEqual([...calledBy].sort());
+    expect(modelCalls).toHaveLength(1);
+  }, 600_000);
+
   it("the live api names the same error as the server for a scope that leaves the project", async () => {
     const server400 = await server.app.inject({ method: "GET", url: `/api/projects/${id}/scope/flow?path=${encodeURIComponent("../x")}` });
     await expect(api.scopeFlow(id, "../x")).rejects.toMatchObject({ status: 400, message: server400.json().error });
@@ -97,6 +111,10 @@ describe("browser scope payloads equal the server's", () => {
       const fnId = (await staticApi.getScopeExec(id, "packages/core/model")).functions.find((f) => f.name === "inScope")?.id ?? "";
       expect(await staticApi.getRefs(id, "packages/core/model", fnId), "demo refs").toEqual(
         await serverJson(`/api/projects/${id}/refs?path=packages/core/model&id=${encodeURIComponent(fnId)}`),
+      );
+      const demoGraph = await staticApi.getCallerGraph(id, "packages/core/model", fnId, { maxDepth: 2, possible: true });
+      expect(demoGraph, "demo callers").toEqual(
+        await serverJson(`/api/projects/${id}/callers?path=packages/core/model&id=${encodeURIComponent(fnId)}&depth=2&possible=1`),
       );
     } finally {
       globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {

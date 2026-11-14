@@ -149,5 +149,21 @@ describe("the refs route", () => {
     expect(missing.body.error).toBe("no node nope#missing");
     expect((await get<{ error: string }>(`/api/projects/${id}/refs?id=${c}`)).body.error).toBe("path is required");
   });
+  it("answers the caller graph of a node at /callers: 400 without id, 400 for a bad depth, 404 for an unknown node, 200 for a real one", async () => {
+    const c = fnIdOf("c");
+    const noId = await get<{ error: string }>(`/api/projects/${id}/callers?path=src`);
+    expect(noId.status).toBe(400);
+    expect(noId.body.error).toBe("id is required");
+    expect((await get<{ error: string }>(`/api/projects/${id}/callers?path=src&id=${encodeURIComponent(c)}&depth=0`)).status).toBe(400);
+    expect((await get<{ error: string }>(`/api/projects/${id}/callers?path=src&id=${encodeURIComponent(c)}&depth=abc`)).status).toBe(400);
+    const missing = await get<{ error: string }>(`/api/projects/${id}/callers?path=src&id=nope%23missing`);
+    expect(missing.status).toBe(404);
+    const ok = await get<{ snapshot: string; scope: string; kind: string; id: string; nodes: Array<{ id: string }> }>(
+      `/api/projects/${id}/callers?path=src&id=${encodeURIComponent(c)}`,
+    );
+    expect(ok.status).toBe(200);
+    expect(ok.body).toMatchObject({ scope: "src", kind: "folder", id: c });
+    expect(ok.body.nodes[0]?.id).toBe(c);
+  });
 });
 

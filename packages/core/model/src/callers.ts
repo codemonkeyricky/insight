@@ -49,8 +49,8 @@ export interface CallerGraph {
   stats: { callers: number; levels: number; possible: number; blind: number; outsideScope: number };
 }
 
-/** Placeholders until the P0 sizing probe sets the real defaults. */
-export const CALLER_DEFAULTS = { maxDepth: 6, maxNodes: 300, hardMaxNodes: 2000 };
+/** Sized on the insight and cognition indexes: depth 10 holds the whole chain for 97% of functions, 250 nodes holds the largest chain seen (203). */
+export const CALLER_DEFAULTS = { maxDepth: 10, maxNodes: 250, hardMaxNodes: 1000 };
 
 /** Hows of a reference that are calls in effect. Every other reference is a possible caller. */
 const CALL_LIKE_HOWS = new Set(["new", "jsx", "handler"]);
@@ -241,10 +241,12 @@ function walk(view: ScopeView, id: NodeId, cfg: Config, forced: ReadonlySet<Node
     }
     if (x.depth >= cfg.maxDepth) {
       const hidden = new Set(groupsOf(view, xid).map((g) => g.row.id)).size;
-      x.stop = "depth";
       if (hidden > 0) {
+        x.stop = "depth";
         x.hidden = hidden;
         truncated ??= { reason: "depth", at: cfg.maxDepth };
+      } else {
+        x.stop = "none";
       }
       continue;
     }

@@ -3,7 +3,7 @@
 // flow and exec functions run on the same scoped IR, so the payloads are equal. Pure, with no React and no
 // browser globals: the demo capture (scripts/capture-demo.mjs) imports this file too.
 import { execModel, summarizeScope, type ExecFunctionRef, type ExecModel, type ScopeFlow } from "@insight/flow";
-import { pipelineModel, refsOf, scopeView, ScopeError, systemModel, type PipelineModel, type ProjectModel, type Refs, type ScopeKindName, type SystemModel } from "@insight/model";
+import { callerGraph, CALLER_DEFAULTS, pipelineModel, refsOf, scopeView, ScopeError, systemModel, type CallerGraph, type CallerOptions, type PipelineModel, type ProjectModel, type Refs, type ScopeKindName, type SystemModel } from "@insight/model";
 // The extension is written so the capture script can load this file with Node's type stripping (see scripts/capture-demo.mjs).
 import { ApiError } from "../apiError.ts";
 
@@ -85,6 +85,31 @@ export function refsFor(snapshot: string, model: ProjectModel, path: string, id:
   const kind = kindOf(model, scope);
   if (!model.byId.has(id)) throw new ApiError(404, `no node ${id}`);
   return remember(model, `refs\0${scope}\0${id}`, () => ({ snapshot, scope, kind, id, ...refsOf(scopeView(model, scope), id) })) as ScopeRefsPayload;
+}
+
+/** The caller graph of one node, as GET /callers answers it. */
+export type CallerGraphPayload = CallerGraph & { snapshot: string; scope: string; kind: ScopeKindName; id: string };
+
+/**
+ * The bounded caller chain of a node in a scope, as GET /callers answers it. Errors as refsFor does. Equal requests share one
+ * result: the key holds the scope, the id and the options after CALLER_DEFAULTS is applied.
+ */
+export function callerGraphFor(snapshot: string, model: ProjectModel, path: string, id: string, opts: CallerOptions = {}): CallerGraphPayload {
+  const scope = canonical(model, path);
+  const kind = kindOf(model, scope);
+  if (!model.byId.has(id)) throw new ApiError(404, `no node ${id}`);
+  const maxDepth = opts.maxDepth ?? CALLER_DEFAULTS.maxDepth;
+  const maxNodes = opts.maxNodes ?? CALLER_DEFAULTS.maxNodes;
+  const possible = opts.possible === true;
+  const stayInScope = opts.stayInScope === true;
+  const key = `callers\0${scope}\0${id}\0${maxDepth}\0${maxNodes}\0${possible ? 1 : 0}\0${stayInScope ? 1 : 0}`;
+  return remember(model, key, () => ({
+    snapshot,
+    scope,
+    kind,
+    id,
+    ...callerGraph(scopeView(model, scope), id, { maxDepth, maxNodes, possible, stayInScope }),
+  })) as CallerGraphPayload;
 }
 
 /**

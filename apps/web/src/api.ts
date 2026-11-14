@@ -1,8 +1,8 @@
 import type { ExecFunctionRef, ExecModel, FileFlow, FileFlowSummary, SceneLayout, ScopeFlow } from "@insight/flow";
-import type { ArchModel } from "@insight/model";
+import type { ArchModel, CallerOptions } from "@insight/model";
 import { ApiError } from "./apiError";
 import type { PipelineModel, SerializedModel, SystemModel } from "@insight/model";
-import { pipelineFor, refsFor, scopeCallersFor, scopeExecFor, scopeFlowFor, systemFor, type ScopeRefsPayload } from "./model/payloads";
+import { callerGraphFor, pipelineFor, refsFor, scopeCallersFor, scopeExecFor, scopeFlowFor, systemFor, type CallerGraphPayload, type ScopeRefsPayload } from "./model/payloads";
 import { models } from "./model/store";
 import { staticApi } from "./staticApi";
 import { hostedApi } from "./hostedApi";
@@ -443,6 +443,9 @@ const liveApi = {
     liveModel(id).then(({ snapshot, model }) => scopeExecFor(snapshot, model, scope, opts)),
   // The reverse references of a node, computed from the project model (no request). The lists cover the whole project.
   getRefs: (id: string, scope: string, fnId: string): Promise<ScopeRefsPayload> => liveModel(id).then(({ snapshot, model }) => refsFor(snapshot, model, scope, fnId)),
+  // The bounded caller chain of a node, computed from the project model (no request), as /callers answers it.
+  getCallerGraph: (id: string, scope: string, fnId: string, opts: CallerOptions = {}): Promise<CallerGraphPayload> =>
+    liveModel(id).then(({ snapshot, model }) => callerGraphFor(snapshot, model, scope, fnId, opts)),
   // The project-wide callers of each function of a scope, for the exec index (see zoom/execStore.ts). Computed from the model.
   getScopeCallers: (id: string, scope: string): Promise<ReadonlyMap<string, readonly ExecFunctionRef[]>> =>
     liveModel(id).then(({ model }) => scopeCallersFor(model, scope)),

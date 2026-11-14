@@ -30,7 +30,7 @@ import {
   type ScopeFlow,
   type SceneLayout,
 } from "@insight/flow";
-import { buildProjectModel, refsOf as modelRefsOf, scopeView as modelScopeView, serializeModel, type ProjectModel, type Refs, type SerializedModel } from "@insight/model";
+import { buildProjectModel, callerGraph as modelCallerGraph, refsOf as modelRefsOf, scopeView as modelScopeView, serializeModel, type CallerGraph, type CallerOptions, type ProjectModel, type Refs, type SerializedModel } from "@insight/model";
 import { edgeTargets, IRView, isExternal, type ProjectRoot } from "@insight/sdk";
 import { type IREdge, type IRDocument, type IRFinding, type IRNode, type IRRecord, type KindRegistry, type NodeId } from "@insight/ir";
 import { createCoreRegistry } from "@insight/ir/node";
@@ -453,6 +453,25 @@ export function scopeRefsOf(paths: ProjectPaths, snapshot: string, path: string,
   if (!kind) throw new ProjectError(404, "no such scope");
   if (!snap.model.byId.has(id)) throw new ProjectError(404, `no node ${id}`);
   return { scope, kind, ...modelRefsOf(modelScopeView(snap.model, scope), id) };
+}
+
+/** The caller graph of one node, and the scope it is asked from. The graph covers the whole project. */
+export interface ScopeCallerGraphView extends CallerGraph {
+  scope: string;
+  kind: ScopeKind;
+}
+
+/**
+ * The bounded caller chain of a node (see callerGraph in @insight/model). The path and the node are checked as scopeRefsOf
+ * checks them: a bad scope is a 404, and so is an id the snapshot does not hold.
+ */
+export function scopeCallerGraphOf(paths: ProjectPaths, snapshot: string, path: string, id: NodeId, opts: CallerOptions = {}): ScopeCallerGraphView {
+  const scope = normalizeScope(path);
+  const snap = loadSnapshot(paths, snapshot);
+  const kind = scopeKindOf(snap, scope);
+  if (!kind) throw new ProjectError(404, "no such scope");
+  if (!snap.model.byId.has(id)) throw new ProjectError(404, `no node ${id}`);
+  return { scope, kind, ...modelCallerGraph(modelScopeView(snap.model, scope), id, opts) };
 }
 
 /** The execution model of one scope, and the scope it names. */

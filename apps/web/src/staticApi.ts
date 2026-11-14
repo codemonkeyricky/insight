@@ -28,9 +28,9 @@ import type {
   SourceSlice,
   TargetType,
 } from "./api";
-import type { PipelineModel, SerializedModel, SystemModel } from "@insight/model";
+import type { CallerOptions, PipelineModel, SerializedModel, SystemModel } from "@insight/model";
 import { buildFileFlow } from "@insight/flow";
-import { pipelineFor, refsFor, scopeCallersFor, scopeExecFor, scopeFlowFor, systemFor, type ScopeRefsPayload } from "./model/payloads";
+import { callerGraphFor, pipelineFor, refsFor, scopeCallersFor, scopeExecFor, scopeFlowFor, systemFor, type CallerGraphPayload, type ScopeRefsPayload } from "./model/payloads";
 import { models } from "./model/store";
 import { canonicalScope, scopeKey, scopeProblem } from "./scopeKey";
 
@@ -349,6 +349,14 @@ export function makeStaticApi(baseFor: (projectId: string) => string | Promise<s
       if (problem) throw new ApiError(400, problem);
       const { snapshot, model } = await modelOf(id);
       return refsFor(snapshot, model, scope, fnId);
+    },
+    /** The bounded caller chain of a node, computed from the project's model the way the live server computes it. */
+    getCallerGraph: async (id: string, scope: string, fnId: string, callerOpts: CallerOptions = {}): Promise<CallerGraphPayload> => {
+      await checkProject(id);
+      const problem = scopeProblem(scope);
+      if (problem) throw new ApiError(400, problem);
+      const { snapshot, model } = await modelOf(id);
+      return callerGraphFor(snapshot, model, scope, fnId, callerOpts);
     },
     /** The project-wide callers of each function of a scope, computed from the project's model. */
     getScopeCallers: async (id: string, scope: string): Promise<ReadonlyMap<string, readonly ExecFunctionRef[]>> => {

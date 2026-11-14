@@ -192,6 +192,14 @@ describe("callerGraph: scope and caps", () => {
     expect(g.truncated).toEqual({ reason: "depth", at: 1 });
   });
 
+  it("gives a node at maxDepth with no callers stop none, and no truncation", () => {
+    const chain = modelOf(["A", "B", "T"], [call(fid("A"), fid("B")), call(fid("B"), fid("T"), 2)]);
+    const g = callerGraph(scopeView(chain, ""), fid("T"), { maxDepth: 2 });
+    expect(g.nodes.find((n) => n.id === fid("A"))).toMatchObject({ depth: 2, stop: "none" });
+    expect(g.nodes.find((n) => n.id === fid("A"))?.hidden).toBeUndefined();
+    expect(g.truncated).toBeUndefined();
+  });
+
   it("stops at maxNodes 3 with a node truncation and a hidden count, and stays stable", () => {
     const callers = ["C1", "C2", "C3", "C4"];
     const fan = modelOf(["T", ...callers], callers.map((c) => call(fid(c), fid("T"))));

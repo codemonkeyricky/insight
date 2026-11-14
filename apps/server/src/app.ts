@@ -23,6 +23,7 @@ import {
   updateAnnotation,
 } from "@insight/indexer";
 import type { ProjectRoot } from "@insight/sdk";
+import type { CallerOptions } from "@insight/model";
 import {
   allFindings,
   analysisFor,
@@ -43,6 +44,7 @@ import {
   scopeExecOf,
   scopeFlowOf,
   scopeLensRows,
+  scopeCallerGraphOf,
   scopeRefsOf,
   scopeView,
   serializedModelOf,
@@ -129,6 +131,26 @@ function scopePathOf(raw: unknown): string {
   if (raw === undefined) throw new ProjectError(400, "path is required");
   if (typeof raw !== "string") throw new ProjectError(400, "path must be given once");
   return raw;
+}
+
+/** A positive integer query value, or a 400 with the server's message. Absent gives undefined. */
+function positiveIntOf(raw: unknown, name: string): number | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string" || !/^[1-9]\d*$/.test(raw)) throw new ProjectError(400, `${name} must be a positive integer`);
+  return Number(raw);
+}
+
+/** The caller-graph options of a /callers query: depth and nodes as positive integers, possible and stayInScope as flags. */
+function callerOptionsOf(q: { depth?: string; nodes?: string; possible?: string; stayInScope?: string }): CallerOptions {
+  const maxDepth = positiveIntOf(q.depth, "depth");
+  const maxNodes = positiveIntOf(q.nodes, "nodes");
+  const flag = (raw: string | undefined): boolean => raw === "1" || raw === "true";
+  return {
+    ...(maxDepth !== undefined ? { maxDepth } : {}),
+    ...(maxNodes !== undefined ? { maxNodes } : {}),
+    possible: flag(q.possible),
+    stayInScope: flag(q.stayInScope),
+  };
 }
 
 export async function buildServer(opts: ServerOptions = {}): Promise<InsightServer> {
@@ -405,6 +427,24 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
     const { scope, kind, calledBy, calls } = scopeRefsOf(pathsFor(p), snapshot, path, id);
     return { snapshot, scope, kind, id, calledBy, calls };
   });
+
+  // The bounded caller chain of one node in a scope: the functions that call or reference it, transitively, across the whole
+  // project. Same path, snapshot and node checks as /refs. `depth` and `nodes` are positive integers; `possible` and
+  // `stayInScope` are "1" or "true" to turn them on. The payload is the one the browser's getCallerGraph computes.
+  app.get<{ Params: ProjectParams; Querystring: SnapshotQuery & { path?: string; id?: string; depth?: string; nodes?: string; possible?: string; stayInScope?: string } }>(
+    "/api/projects/:id/callers",
+    async (req) => {
+      const p = project(req.params.id);
+      const path = scopePathOf(req.query.path);
+      const id = req.query.id;
+      if (typeof id !== "string" || id === "") throw new ProjectError(400, "id is required");
+      const opts = callerOptionsOf(req.query);
+      const snapshot = resolveSnapshot(pathsFor(p), req.query.snapshot);
+      if (!snapshot) throw new ProjectError(404, "project has no snapshot yet");
+      const { scope, kind, ...graph } = scopeCallerGraphOf(pathsFor(p), snapshot, path, id, opts);
+      return { snapshot, scope, kind, id, ...graph };
+    },
+  );
 
   app.get<{ Params: ProjectParams; Querystring: SnapshotQuery & { lens?: string; severity?: string } }>(
     "/api/projects/:id/findings",
