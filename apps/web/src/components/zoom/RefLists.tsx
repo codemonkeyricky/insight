@@ -8,6 +8,7 @@ import type { RefRow, Refs } from "@insight/model";
 import { api } from "../../api";
 import { hrefFlow, hrefView } from "../../router";
 import type { MapSelection } from "./ZoomMap";
+import { CallerChain } from "./CallerChain";
 
 /** What every part of the lists needs: the project, the scope the map shows (its rows inside it, the scope a link keeps), and roots-only. */
 interface Base {
@@ -40,7 +41,12 @@ export function FunctionRefs({ id, sel, roots }: { id: string; sel: MapSelection
   const shown = refState?.key === refKey ? refState : undefined;
   if (shown === undefined) return <p className="muted small">Loading the references</p>;
   if (shown.refs === undefined) return <p className="muted small">The references of this function are not available: {shown.error}</p>;
-  return <RefLists id={id} scope={scope} roots={roots} refs={shown.refs} />;
+  return (
+    <>
+      <RefLists id={id} scope={scope} roots={roots} refs={shown.refs} />
+      <CallerChain id={id} sel={sel} roots={roots} />
+    </>
+  );
 }
 
 export function RefLists({ id, scope, roots, refs }: Base & { refs: Refs }) {

@@ -369,6 +369,23 @@ a.flow-node { cursor: pointer; }
 .ref-row:hover .ref-name { text-decoration: underline; }
 .ref-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
+/* Caller chain: a lazy ARIA tree of the function's transitive callers, under the Called by and Calls lists. */
+.chain-tools { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; font-size: var(--t-xs); margin-top: 6px; }
+.chain-tree { list-style: none; margin: 0; padding: 0; }
+.chain-row { display: flex; align-items: baseline; gap: 0.25rem; }
+.chain-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.chain-row .ref-row { flex: 1 1 auto; min-width: 0; }
+.chain-row.possible .ref-row { border: 1px dashed var(--line); border-radius: 3px; }
+.chain-row.outside { opacity: 0.65; }
+.chain-row.cycle { color: var(--muted); font-size: var(--t-sm); padding: 3px 6px; }
+.chain-more { padding: 3px 6px; }
+.chain-possible { font-size: var(--t-xs); border: 1px dashed var(--muted); padding: 0 0.25rem; border-radius: 3px; }
+.chain-blind { color: var(--accent); cursor: help; }
+.chain-toggle { background: none; border: 0; padding: 0; width: 1rem; color: var(--muted); cursor: pointer; flex: 0 0 1rem; }
+.chain-note { color: var(--muted); }
+.chain-note.complete { color: var(--graphite); }
+.sh-pinned:has(.caller-chain[open]) { max-height: 60%; }
+
 /* Lens tree */
 .tree { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; overflow-x: auto; }
 .tree-kids { margin-left: 11px; padding-left: 12px; border-left: 1px solid var(--line); }
