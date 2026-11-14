@@ -87,29 +87,34 @@ Base kinds shipped by the core:
 | `calls.call` | calls | edge | – | Caller function to callee function. A call through an interface member, or an abstract class member, has no body to call, so its `to` is `{"candidates": [...]}` with the implementations (`attrs.how` is `interface`, provenance `heuristic`). The candidates are every indexed class that implements the interface, directly, through an extended interface, or through a base class, and that declares the member or inherits it from its nearest base class; or, for an abstract member, every indexed concrete subclass of the abstract class and what it inherits or overrides. A receiver typed by an interface is matched against that interface's implementers, not the interface that declares the member. A set is sorted by id and holds at most 32 targets; `attrs.truncated` is `true` when the set was cut. A set always has at least one target, even when there is one implementation. Not covered: structural matches (a class that fits an interface without `implements`), classes in files outside the index, class expressions, and a new implementer in another file, which reaches a call site only when that call site's file is extracted again. |
 | `calls.reference` | calls | edge | – | Caller to a function it refers to without calling it. `attrs.how` is `new`, `jsx`, `value`, `closure` or `handler`. Caller is the enclosing function, or the file for module-level code. `closure` runs from a function to an anonymous function created inside it, so the creator still reaches what the closure calls. `handler` runs from the code that installs a project function as an event or message handler, such as `worker.onmessage = fn` or `addEventListener("message", fn)`, to that function. |
 | `calls.contains-call` | calls | edge | – |  |
-| `concurrency.spawn-thread` | concurrency | node | – |  |
-| `concurrency.spawn-process` | concurrency | node | – |  |
+| `concurrency.spawn-thread` | concurrency | node | – | `attrs.target` names the function run; `attrs.api` (optional) is the exact API that spawns it. |
+| `concurrency.spawn-process` | concurrency | node | – | `attrs.target` names the program run; `attrs.api` (optional) is the exact API that spawns it. |
 | `concurrency.coroutine` | concurrency | node | – |  |
 | `concurrency.async-task` | concurrency | node | – |  |
 | `concurrency.await` | concurrency | node | – |  |
-| `concurrency.channel-send` | concurrency | node | – | A send on a channel. `attrs.channel` names the channel; the execution model groups sends and receives by it. |
-| `concurrency.channel-recv` | concurrency | node | – | A receive on a channel. `attrs.channel` names the channel, as for a send. |
+| `concurrency.channel-send` | concurrency | node | – | A send on a channel. `attrs.channel` (required) names the queue or channel: a literal name, `Class::member`, or `<dynamic>`; the execution model groups sends and receives by it. Optional `attrs.api` is the exact API, and optional `attrs.guardedBy` names the lock for a queue inferred to be guarded by that lock. |
+| `concurrency.channel-recv` | concurrency | node | – | A receive on a channel. `attrs.channel` (required) names the channel, as for a send. Optional `attrs.api` and `attrs.guardedBy` as for a send. |
 | `concurrency.spawns` | concurrency | edge | – | Spawn node to the function (or script file) it runs. `attrs.how` is `thread`, `process` or `async`. The spawning function is the spawn node's owner. Only emitted when the target resolves. |
 | `concurrency.dispatches` | concurrency | edge | – | Function to the coroutine, async function or callback it hands work to. `attrs.how` is `await`, `start`, `callback`, `timer`, `microtask` or `message`. `message` is a Web Worker `postMessage` (page to worker, or worker to page) to the `onmessage` or `addEventListener("message")` handler the other side registers at its top level or on the Worker object; the TypeScript frontend emits it only when both ends resolve, with confidence `inferred`. |
 | `sync.lock-acquire` | sync | node | – | Takes a lock. `attrs.lock` names the lock; the execution model and the lock-order lens group acquires by it. |
 | `sync.lock-release` | sync | node | – |  |
 | `sync.rwlock-acquire` | sync | node | `sync.lock-acquire` |  |
-| `sync.semaphore` | sync | node | – |  |
-| `sync.atomic-op` | sync | node | – |  |
-| `sync.condvar` | sync | node | – |  |
-| `effects.fs.read` | effects | node | – |  |
-| `effects.fs.write` | effects | node | – |  |
-| `effects.net.connect` | effects | node | – |  |
-| `effects.net.listen` | effects | node | – |  |
-| `effects.proc.exec` | effects | node | – |  |
-| `effects.env.read` | effects | node | – |  |
-| `effects.clock.read` | effects | node | – |  |
-| `effects.unknown` | effects | node | – | An external call no catalog recognises. Kept rather than dropped. |
+| `sync.semaphore` | sync | node | – | `attrs.op` (required) is `acquire`, `release`, `wait`, `notify` or `op`. Optional `attrs.name`, `attrs.lock` (the lock the operation is tied to) and `attrs.api`. |
+| `sync.atomic-op` | sync | node | – | `attrs.op` (required) is `acquire`, `release`, `wait`, `notify` or `op`. Optional `attrs.lock` and `attrs.api`. |
+| `sync.condvar` | sync | node | – | `attrs.op` (required) is `acquire`, `release`, `wait`, `notify` or `op`. Optional `attrs.lock` and `attrs.api`, e.g. `wait` with `lock` `m_`. |
+| `effects.fs.read` | effects | node | – | Optional `attrs.syscall`, see below. |
+| `effects.fs.write` | effects | node | – | Optional `attrs.syscall`, see below. |
+| `effects.net.connect` | effects | node | – | Optional `attrs.syscall`, see below. |
+| `effects.net.listen` | effects | node | – | Optional `attrs.syscall`, see below. |
+| `effects.net.serve` | effects | node | – | An HTTP route a file serves: registered on a server object, or exported under an HTTP verb name. Required `attrs.framework`, `attrs.method` and `attrs.path`. Optional `attrs.handler` and `attrs.syscall`. |
+| `effects.proc.exec` | effects | node | – | Optional `attrs.syscall`, see below. |
+| `effects.env.read` | effects | node | – | Optional `attrs.syscall`, see below. |
+| `effects.clock.read` | effects | node | – | Optional `attrs.syscall`, see below. |
+| `effects.message.post` | effects | node | – | A message posted to a peer (postMessage) from a page or worker. Required `attrs.api`. Optional `attrs.syscall`, see below. |
+| `effects.os.call` | effects | node | – | An OS operation that is not a resource kind: signals, process control, memory mapping, device control, raw syscall, OS info, fd-level ops. Matched only from catalog entries naming an exact API. Required `attrs.api` (exact API, e.g. `process.kill`, `mmap`) and `attrs.op`, one of `signal`, `process-control`, `memory`, `device`, `raw-syscall`, `info` or `fd`. Optional `attrs.syscall` (kernel call it maps to 1:1, e.g. `kill`) and `attrs.target` (literal signal name, fd or path, or `<dynamic>`). |
+| `effects.unknown` | effects | node | – | An external call no catalog recognises. Kept rather than dropped. Optional `attrs.syscall`, see below. |
+
+Every `effects.*` kind accepts an optional `attrs.syscall`: the kernel call this API wraps 1:1 (e.g. `unlink`, `connect`, `execve`). It is unset for high-level APIs.
 
 `calls.reference` has no parent on purpose. A query for a parent also returns its extensions, so extending `calls.call` would make every call query return references too.
 

@@ -133,3 +133,55 @@ describe("calls.reference how", () => {
     expect(report.errors.some((e) => e.message.includes("how must be equal to one of the allowed values"))).toBe(true);
   });
 });
+
+describe("system-tab kinds (os.call, syscall, channels, sync)", () => {
+  // One file and one node of the given kind, whose attrs are the argument.
+  const withNode = (facet: string, kind: string, attrs: unknown) => {
+    const file = { node: { id: "app/a.ts", facet: "structure", kind: "structure.file", attrs: { path: "app/a.ts", language: "typescript", parseStatus: "ok" }, provenance: { frontend: "test", confidence: "exact" } } };
+    const node = { node: { id: "app/a.ts#n", facet, kind, parent: "app/a.ts", attrs, provenance: { frontend: "test", confidence: "exact" } } };
+    return [file, node].map((r) => JSON.stringify(r)).join("\n");
+  };
+  const check = (ndjson: string) => validateIR(ndjson, createCoreRegistry());
+
+  it("accepts a valid effects.os.call", () => {
+    const report = check(withNode("effects", "effects.os.call", { api: "process.kill", op: "signal", syscall: "kill", target: "SIGTERM" }));
+    expect(report.errors).toEqual([]);
+    expect(report.ok).toBe(true);
+  });
+
+  it("rejects an effects.os.call with an op outside the enum", () => {
+    const report = check(withNode("effects", "effects.os.call", { api: "process.kill", op: "bogus" }));
+    expect(report.ok).toBe(false);
+    expect(report.errors.some((e) => e.message.includes("op must be equal to one of the allowed values"))).toBe(true);
+  });
+
+  it("rejects an effects.os.call without api", () => {
+    const report = check(withNode("effects", "effects.os.call", { op: "memory" }));
+    expect(report.ok).toBe(false);
+    expect(report.errors.some((e) => e.message.includes("must have required property 'api'"))).toBe(true);
+  });
+
+  it("accepts syscall on effects.fs.write", () => {
+    const report = check(withNode("effects", "effects.fs.write", { api: "fs.unlink", path: "x", syscall: "unlink" }));
+    expect(report.errors).toEqual([]);
+    expect(report.ok).toBe(true);
+  });
+
+  it("accepts a channel-send with channel and guardedBy", () => {
+    const report = check(withNode("concurrency", "concurrency.channel-send", { channel: "Queue::items", api: "Queue.put", guardedBy: "m_" }));
+    expect(report.errors).toEqual([]);
+    expect(report.ok).toBe(true);
+  });
+
+  it("rejects a channel-send without channel", () => {
+    const report = check(withNode("concurrency", "concurrency.channel-send", { api: "Queue.put" }));
+    expect(report.ok).toBe(false);
+    expect(report.errors.some((e) => e.message.includes("must have required property 'channel'"))).toBe(true);
+  });
+
+  it("accepts a sync.condvar with op wait and lock", () => {
+    const report = check(withNode("sync", "sync.condvar", { op: "wait", lock: "m_" }));
+    expect(report.errors).toEqual([]);
+    expect(report.ok).toBe(true);
+  });
+});
