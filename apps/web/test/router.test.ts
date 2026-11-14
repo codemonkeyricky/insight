@@ -208,12 +208,18 @@ describe("hash router", () => {
   });
 
   it("lists the built-in tabs; any other tab id is a lens", () => {
-    expect([...BUILTIN_TABS]).toEqual(["overview", "flow", "arch", "compare", "review"]);
+    expect([...BUILTIN_TABS]).toEqual(["overview", "flow", "system", "arch", "compare", "review"]);
   });
 
   it("parses the arch tab as a view, with no scope needed", () => {
     expect(parseRoute("#/projects/p1/view/arch")).toEqual({ name: "workspace", id: "p1", tab: "arch", scope: "" });
     expect(hrefView("p1", "arch")).toBe("#/projects/p1/view/arch");
+  });
+
+  it("parses the system tab as a view, with its scope", () => {
+    expect(parseRoute("#/projects/p1/view/system")).toEqual({ name: "workspace", id: "p1", tab: "system", scope: "" });
+    expect(parseRoute("#/projects/p1/view/system?scope=src%2Fa")).toEqual({ name: "workspace", id: "p1", tab: "system", scope: "src/a" });
+    expect(hrefView("p1", "system", { scope: "src/a" })).toBe("#/projects/p1/view/system?scope=src%2Fa");
   });
 
   it("scopes a path to a folder or a file", () => {
@@ -244,6 +250,7 @@ describe("old URLs land on the sheet content", () => {
 
   it("arch, compare and review keep their own content, and lens ids draw lens pages", () => {
     expect(contentOf("arch", "project")).toBe("arch");
+    expect(contentOf("system", "project")).toBe("system");
     expect(contentOf("compare", "project")).toBe("compare");
     expect(contentOf("review", "project")).toBe("triage");
     expect(contentOf("some-lens", "folder")).toBe("lens");

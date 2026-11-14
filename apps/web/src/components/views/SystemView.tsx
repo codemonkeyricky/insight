@@ -199,7 +199,7 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
   }, [focus, focusKind, layout]);
 
   const openScope = (path: string) => {
-    window.location.hash = hrefView(id, "arch", { scope: path });
+    window.location.hash = hrefView(id, "system", { scope: path });
   };
   const pickNode = (b: SysBox) => setSel({ kind: "node", id: b.id });
   const pickEdge = (a: SysArrow) => setSel({ kind: "edge", id: a.id });

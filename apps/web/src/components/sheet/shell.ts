@@ -6,7 +6,7 @@ import { hrefView } from "../../router";
 import type { LayerLink } from "./LayerTabs";
 
 /** What the stage shows: the flow sheet, a page, or a lens page. */
-export type ShellContent = "flow" | "overview" | "arch" | "compare" | "triage" | "lens";
+export type ShellContent = "flow" | "overview" | "system" | "arch" | "compare" | "triage" | "lens";
 
 /** The content a tab shows. Overview is the flow sheet unless `full`. Any tab id that is not a page is a lens. */
 export function contentOf(tab: string, _kind: ScopeKind, full = false): ShellContent {
@@ -15,6 +15,7 @@ export function contentOf(tab: string, _kind: ScopeKind, full = false): ShellCon
       return full ? "overview" : "flow";
     case "flow":
       return "flow";
+    case "system":
     case "arch":
     case "compare":
       return tab;
@@ -36,7 +37,7 @@ export interface LayersInput {
 }
 
 /**
- * The tabs of the centre pane, in order: Overview, Flow, Arch, then (with a server) Compare and Triage, then one tab per lens
+ * The tabs of the centre pane, in order: Overview, Flow, System, Arch, then (with a server) Compare and Triage, then one tab per lens
  * in the order given. A lens's tab is its id, so `view/<lens id>` opens it and a link to it round-trips.
  */
 export function layerLinks({ id, tab, scope, content, noServer, lenses }: LayersInput): LayerLink[] {
@@ -51,6 +52,7 @@ export function layerLinks({ id, tab, scope, content, noServer, lenses }: Layers
     // Overview is current on the overview route, whether it shows the flow root or the full page. Flow is the flow tab otherwise.
     page("overview", "Overview", tab === "overview", true),
     page("flow", "Flow", content === "flow" && tab !== "overview"),
+    page("system", "System", content === "system"),
     page("arch", "Arch", content === "arch"),
     ...(noServer ? [] : [page("compare", "Compare", content === "compare"), page("review", "Triage", content === "triage")]),
     ...lenses.map(

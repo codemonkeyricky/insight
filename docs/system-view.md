@@ -1,6 +1,6 @@
 # System view
 
-The System view is a mode of the Arch tab (the System / Pipeline / Packages toggle, System by default). It answers "what does this
+The System view is its own top-level tab, between Flow and Arch (open it from the tab strip, or `#/projects/<id>/view/system`). It answers "what does this
 code talk to?" for the current explorer scope: the components inside the scope, the routes they serve, the outside
 systems they reach and the verbs between them.
 
@@ -81,7 +81,7 @@ non-endpoint card, for a hosted-like and a dense 20-component, 60-edge fixture) 
 
 ## Pipeline mode
 
-The Arch tab has three modes: System | Pipeline | Packages (System by default, the reader's choice is kept in localStorage).
+The Arch tab has two modes: Pipeline | Packages (Packages by default, the reader's choice is kept in localStorage). A saved System choice from before System became a tab reads as Packages. Pipeline is reached from the Arch tab's toggle.
 Pipeline shows the processing stages of the explorer scope: where the scope's data comes from, which component handles it, and
 where it goes. It is derived by `pipelineModel(model, scope, { tests })` in `packages/core/model/src/pipeline.ts`, computed in the
 page by `api.getPipeline` like the System view, and drawn by the same `layoutSystem` and card, edge and panel code.
