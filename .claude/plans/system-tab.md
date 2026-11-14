@@ -260,10 +260,7 @@ benchmark, all 9 `sync.*` nodes and the one scoped lock lie in scope. The worktr
 - **COROUTINE_LIMIT = 16 (keep the plan default).** Awaited coroutines per thread reach 46 in the worktree and 24 in
   cognition, but only 6 worktree threads and 1 cognition thread exceed 16, so frames are drawn for most threads and the
   largest ones stay awaited-only glyphs.
-- **D3 cap: add `threadsOf`.** The root scope `""` takes 1812 ms (worktree) and 1178 ms (cognition) with no cap, far above the
-  300 ms bar, and the default cap truncates the worktree root. Scoped views also exceed 300 ms (440 to 863 ms with no cap, except
-  the 45 ms benchmark), so the rule triggers at the root and at most scopes. Build `threadsOf` (the threads that reach one
-  function) and keep `maxFunctions` as a fallback only.
+- **D3 decision (after P0): cache the project-wide part of `execModel`; no `threadsOf`.** Adjacency, entries and thread plans (`reach`) are already computed over the whole project and do not depend on the scope (exec-model.ts:492, :654, :903). Only the per-scope listing depends on it. So P4 splits `execModel` into a project-wide `execPlans(nodes, edges)`, memoized per `nodes` array in a `WeakMap`, and the scoped view on top of it. The output stays byte-identical, and the existing flow tests are unchanged. `systemModel` uses `maxFunctions: Infinity`. **Accept:** the first call at the worktree root takes no longer than today's 1.8 s, and a second scope on the same model takes < 150 ms, or else P4 reports a profile of where the time goes. The System view shows a "Computing runtime…" state while the first call runs.
 
 ## Phases
 
