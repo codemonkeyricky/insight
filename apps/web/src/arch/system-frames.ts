@@ -593,7 +593,9 @@ function sliceBox(s: SystemSlice, x: number, y: number, frame: string): SysBox {
 function resourceBox(r: SystemResource, x: number, y: number, w: number, frame: string): SysBox {
   const names = r.names ?? [];
   const sub = names.length === 0 ? r.kind : `${names.slice(0, 2).join(", ")}${names.length > 2 ? ` +${names.length - 2}` : ""}`;
-  return { id: r.id, kind: r.kind === "os" ? "os" : "resource", column: 0, x, y, w, h: RES_H, title: shortLabel(r.label, 24), sub: shortLabel(sub, 26), chips: [], frame, resource: r, glyph: resourceGlyph(r.kind) };
+  // A narrow box (the kernel band, a process strip) keeps its title and subtitle short enough to clear the glyph.
+  const narrow = w < 200;
+  return { id: r.id, kind: r.kind === "os" ? "os" : "resource", column: 0, x, y, w, h: RES_H, title: shortLabel(r.label, narrow ? 12 : 24), sub: shortLabel(sub, narrow ? 15 : 26), chips: [], frame, resource: r, glyph: resourceGlyph(r.kind) };
 }
 
 /** The stacking offset of a flat card: the sum of the heights of the cards above it in its column. */
