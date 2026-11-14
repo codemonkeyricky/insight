@@ -1,22 +1,51 @@
 // The caller chain of the selected function: every function that calls or references it, transitively, as an ARIA tree
 // the reader opens level by level. Loaded when the section opens. The tree itself (CallerChainView) renders from props only.
 import { useEffect, useRef, useState } from "react";
-import { CALLER_DEFAULTS, type CallerGraph, type CallerNode } from "@insight/model";
+import { CALLER_DEFAULTS, type CallerEdge, type CallerGraph, type CallerNode } from "@insight/model";
 import { api } from "../../api";
 import { readLambdas } from "../../zoom/lambdaPref";
-import { hrefFlow, hrefView } from "../../router";
+import { hrefView } from "../../router";
 import type { MapSelection } from "./ZoomMap";
-import { blindTip, completeness, expandAllKeys, isTreeKey, summaryLine, treeKey, visibleRows, type Row, type TreeRow } from "./callerTree";
+import { KindTag, refHref } from "./RefLists";
+import {
+  blindTip,
+  completeness,
+  expandAllKeys,
+  focusAfterCollapse,
+  summaryLine,
+  treeKey,
+  treeKeyOf,
+  visibleRows,
+  type Row,
+  type TreeRow,
+} from "./callerTree";
 
 /** The link of a chain row, as RefItem links a reverse reference row: a function opens in its scope, or its file's scope when outside it. */
 export function callerHref(id: string, scope: string, roots: boolean, node: CallerNode, trace?: string): string {
-  return node.isFunction
-    ? hrefView(id, "flow", { scope: node.inScope ? scope : node.file, fn: node.id, roots, ...(trace ? { trace } : {}) })
-    : hrefFlow(id, node.file);
+  return refHref(id, scope, roots, node, trace);
+}
+
+/**
+ * The key a chain resets its expansion and focus on. A traced chain is the anchor's, whatever function is walked to, so it
+ * keys on the anchor alone; an untraced chain is the function's.
+ */
+export function chainResetKey(id: string, scope: string, fn: string, trace?: string): string {
+  return trace !== undefined ? `${id}\0trace\0${trace}` : `${id}\0${scope}\0${fn}`;
 }
 
 /** The short name of a function id: the tail after its last ":" or "#", or the id itself. */
 const shortName = (id: string) => id.split(/[:#]/).pop() || id;
+
+/** The kind tags of a caller's edges: one per distinct tag, in edge order. Call is the default and is not tagged. */
+function kindTags(edges: CallerEdge[]): Array<{ kind: string; how?: string }> {
+  const seen = new Map<string, { kind: string; how?: string }>();
+  for (const e of edges) {
+    if (e.kind === "call") continue;
+    const label = e.kind === "dispatch" && e.how === "message" ? "message" : e.kind;
+    if (!seen.has(label)) seen.set(label, { kind: e.kind, ...(e.how !== undefined ? { how: e.how } : {}) });
+  }
+  return [...seen.values()];
+}
 
 const DEPTHS: Array<{ value: number; label: string }> = [
   { value: 1, label: "1" },
@@ -54,19 +83,23 @@ interface ViewProps {
 export function CallerChainView(props: ViewProps) {
   const { id, scope, roots, graph, expanded, possible, stayInScope, depth, lambdas, capped, trace, pin, onOption } = props;
   const rows = visibleRows(graph, expanded, { lambdas });
-  const focusKey = props.focus ?? rows[0]?.key;
+  // The focus names a visible row, or else the first row takes the tab stop: a hidden focus must not leave the tree unreachable.
+  const focusKey = rows.some((r) => r.key === props.focus) ? props.focus : rows[0]?.key;
   const note = completeness(graph, possible);
 
   return (
     <div className="chain-body">
       <div className="chain-tools">
-        <select aria-label="Depth" value={depth} onChange={(e) => onOption?.({ depth: Number(e.target.value) })}>
-          {DEPTHS.map((d) => (
-            <option key={d.value} value={d.value}>
-              {d.label}
-            </option>
-          ))}
-        </select>
+        <label>
+          Expand to{" "}
+          <select aria-label="Expand all depth" value={depth} onChange={(e) => onOption?.({ depth: Number(e.target.value) })}>
+            {DEPTHS.map((d) => (
+              <option key={d.value} value={d.value}>
+                {d.label}
+              </option>
+            ))}
+          </select>
+        </label>
         <button type="button" onClick={() => props.onExpandAll?.()}>
           Expand all
         </button>
@@ -96,9 +129,10 @@ export function CallerChainView(props: ViewProps) {
         aria-label="Caller chain"
         className="chain-tree"
         onKeyDown={(e) => {
-          if (!isTreeKey(e.key)) return;
+          const key = treeKeyOf(e);
+          if (key === undefined) return;
           e.preventDefault();
-          props.onKey?.(e.key);
+          props.onKey?.(key);
         }}
       >
         {rows.map((r) => {
@@ -128,6 +162,8 @@ export function CallerChainView(props: ViewProps) {
                 key={r.key}
                 role="treeitem"
                 aria-level={level}
+                aria-posinset={r.posinset}
+                aria-setsize={r.setsize}
                 tabIndex={tab}
                 data-key={r.key}
                 className="chain-row cycle"
@@ -172,13 +208,16 @@ function ChainRow({
   onToggle?(key: string): void;
   onFocus?(key: string): void;
 }) {
-  const { node, edge } = row;
-  const tip = blindTip(node, edge);
+  const { node, edges } = row;
+  const tip = blindTip(node, edges.find((e) => e.site) ?? row.edge);
   const classes = ["chain-row", node.certainty === "possible" ? "possible" : "", !node.inScope ? "outside" : ""].filter(Boolean).join(" ");
+  const count = edges.reduce((sum, e) => sum + e.count, 0);
   return (
     <li
       role="treeitem"
       aria-level={row.level}
+      aria-posinset={row.posinset}
+      aria-setsize={row.setsize}
       aria-expanded={row.expandable ? row.expanded : undefined}
       tabIndex={tab}
       data-key={row.key}
@@ -196,13 +235,10 @@ function ChainRow({
       <a className="ref-row" href={href} tabIndex={-1}>
         <span className="ref-name">{node.name}</span>{" "}
         <span className="mono muted small">{node.line > 0 ? `${node.file}:${node.line}` : node.file}</span>
-        {edge.kind !== "call" && (
-          <>
-            {" "}
-            <span className={`kind ${edge.kind}`}>{edge.kind === "dispatch" && edge.how === "message" ? "message" : edge.kind}</span>
-          </>
-        )}
-        {edge.count > 1 && <span className="muted small"> ×{edge.count}</span>}
+        {kindTags(edges).map((t) => (
+          <KindTag key={t.how !== undefined ? `${t.kind}\0${t.how}` : t.kind} kind={t.kind} how={t.how} />
+        ))}
+        {count > 1 && <span className="muted small"> ×{count}</span>}
         {node.certainty === "possible" && (
           <>
             {" "}
@@ -231,8 +267,7 @@ export function CallerChain({ id, sel, roots, trace }: { id: string; sel: MapSel
   const fn = sel.selected.ref;
   // A traced chain is the anchored function's, whatever function the reader walks to; the anchor's chain is kept while it stays.
   const target = trace ?? fn;
-  const fnKey = `${id}\0${scope}\0${fn}`;
-  const chainKey = trace !== undefined ? `${id}\0${scope}\0trace\0${trace}` : fnKey;
+  const chainKey = chainResetKey(id, scope, fn, trace);
   // A traced chain starts open: the state is read once at mount, so a later trace opens the element by hand (see below).
   const [startOpen] = useState(trace !== undefined);
   const [opened, setOpened] = useState(startOpen);
@@ -349,14 +384,16 @@ export function CallerChain({ id, sel, roots, trace }: { id: string; sel: MapSel
             depth={depth}
             lambdas={lambdas}
             capped={capped}
-            onToggle={(key) =>
+            onToggle={(key) => {
+              // Collapsing a row hides its subtree: a focus inside it moves to the row.
+              if (expanded.has(key)) setFocus((f) => focusAfterCollapse(f, key));
               setExpanded((prev) => {
                 const next = new Set(prev);
                 if (next.has(key)) next.delete(key);
                 else next.add(key);
                 return next;
-              })
-            }
+              });
+            }}
             onKey={onKey}
             onFocus={(key) => setFocus(key)}
             onOption={(o) => {
@@ -372,6 +409,7 @@ export function CallerChain({ id, sel, roots, trace }: { id: string; sel: MapSel
             onCollapseAll={() => {
               setExpanded(new Set());
               setCapped(false);
+              setFocus(undefined);
             }}
           />
         </>

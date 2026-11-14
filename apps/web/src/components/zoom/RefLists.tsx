@@ -39,12 +39,41 @@ export function FunctionRefs({ id, sel, roots, trace }: { id: string; sel: MapSe
     };
   }, [id, scope, selected.ref]);
   const shown = refState?.key === refKey ? refState : undefined;
-  if (shown === undefined) return <p className="muted small">Loading the references</p>;
-  if (shown.refs === undefined) return <p className="muted small">The references of this function are not available: {shown.error}</p>;
+  // The chain is always mounted, whatever the refs state: walking to another function must not unmount it and lose its state.
   return (
     <>
-      <RefLists id={id} scope={scope} roots={roots} refs={shown.refs} />
+      {shown === undefined ? (
+        <p className="muted small">Loading the references</p>
+      ) : shown.refs === undefined ? (
+        <p className="muted small">The references of this function are not available: {shown.error}</p>
+      ) : (
+        <RefLists id={id} scope={scope} roots={roots} refs={shown.refs} />
+      )}
       <CallerChain id={id} sel={sel} roots={roots} {...(trace !== undefined ? { trace } : {})} />
+    </>
+  );
+}
+
+/** The link of a reverse reference row or a caller row: a function opens in its scope, or its file's scope when outside it; a file opens its flow. */
+export function refHref(
+  id: string,
+  scope: string,
+  roots: boolean,
+  row: { id: string; file: string; isFunction: boolean; inScope: boolean },
+  trace?: string,
+): string {
+  return row.isFunction
+    ? hrefView(id, "flow", { scope: row.inScope ? scope : row.file, fn: row.id, roots, ...(trace ? { trace } : {}) })
+    : hrefFlow(id, row.file);
+}
+
+/** The kind tag of a reference: its kind, or "message" for a message dispatch. Call is the default and is not tagged. */
+export function KindTag({ kind, how }: { kind: string; how?: string | undefined }) {
+  if (kind === "call") return null;
+  return (
+    <>
+      {" "}
+      <span className={`kind ${kind}`}>{kind === "dispatch" && how === "message" ? "message" : kind}</span>
     </>
   );
 }
@@ -99,21 +128,12 @@ function RefGroup({ id, scope, roots, label, rows }: Base & { label: string; row
 }
 
 function RefItem({ id, scope, roots, row }: Base & { row: RefRow }) {
-  // A function opens in its scope, or in its file's scope when it lies outside this one. Module-level code (a file row) opens the file's flow.
-  const href = row.isFunction
-    ? hrefView(id, "flow", { scope: row.inScope ? scope : row.file, fn: row.id, roots })
-    : hrefFlow(id, row.file);
   // The whole row is the link: a click or Enter on any part of it opens the function.
   return (
-    <a className="ref-row" href={href}>
+    <a className="ref-row" href={refHref(id, scope, roots, row)}>
       <span className="ref-name">{row.name}</span>{" "}
       <span className="mono muted small">{row.line > 0 ? `${row.file}:${row.line}` : row.file}</span>
-      {row.kind !== "call" && (
-        <>
-          {" "}
-          <span className={`kind ${row.kind}`}>{row.kind === "dispatch" && row.how === "message" ? "message" : row.kind}</span>
-        </>
-      )}
+      <KindTag kind={row.kind} how={row.how} />
       {row.count > 1 && <span className="muted small"> ×{row.count}</span>}
       {row.candidate && <span className="muted small"> candidate</span>}
     </a>

@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { CallerEdge, CallerGraph, CallerNode } from "@insight/model";
-import { CallerChain, CallerChainView, callerHref } from "../src/components/zoom/CallerChain";
+import { CallerChain, CallerChainView, callerHref, chainResetKey } from "../src/components/zoom/CallerChain";
+import { FunctionRefs } from "../src/components/zoom/RefLists";
 import type { MapSelection } from "../src/components/zoom/ZoomMap";
-import { blindTip, completeness, expandAllKeys, summaryLine, treeKey, visibleRows, childEdges } from "../src/components/zoom/callerTree";
+import { blindTip, completeness, expandAllKeys, summaryLine, treeKey, treeKeyOf, visibleRows, childEdges } from "../src/components/zoom/callerTree";
 import { api } from "../src/api";
 import { hrefView, parseRoute } from "../src/router";
 import { findKeyAction, type FindItem } from "../src/components/sheet/FindPalette";
@@ -404,5 +405,89 @@ describe("findKeyAction", () => {
   it("ignores other keys and a missing row", () => {
     expect(findKeyAction(fnRow, { key: "ArrowDown", shiftKey: false })).toBeUndefined();
     expect(findKeyAction(undefined, { key: "Enter", shiftKey: false })).toBeUndefined();
+  });
+});
+
+const liOf = (html: string, key: string): string => html.split("<li").find((s) => s.includes(`data-key="${key}"`)) ?? "";
+
+describe("chain survives walking up", () => {
+  it("keeps the caller chain mounted while the refs load", () => {
+    const sel = { build: { path: "packages/core" }, selected: { ref: "packages/core/x.ts#f" } } as never;
+    const html = renderToStaticMarkup(<FunctionRefs id="p1" sel={sel} roots={false} />);
+    expect(html).toContain("Loading the references");
+    expect(html).toContain('class="ref-list caller-chain"');
+  });
+
+  it("keys the chain by its anchor when traced, and by its function otherwise", () => {
+    expect(chainResetKey("p1", "src", "src/a.ts#a", "src/t.ts#t")).toBe(chainResetKey("p1", "src", "src/b.ts#b", "src/t.ts#t"));
+    expect(chainResetKey("p1", "src", "src/a.ts#a")).not.toBe(chainResetKey("p1", "src", "src/b.ts#b"));
+  });
+});
+
+describe("one row per caller", () => {
+  // A calls T twice: once by a call (2 sites), once by passing T as a value (3 sites).
+  const dup = graphOf("T", [node("T", 0), node("A", 1)], [edge("A", "T", { count: 2 }), edge("A", "T", { kind: "reference", how: "value", count: 3 })]);
+
+  it("gives A one row carrying both edges, with no also-via", () => {
+    const rows = visibleRows(dup, new Set(), { lambdas: true });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ key: "A", alsoVia: 0, edges: [expect.anything(), expect.anything()] });
+  });
+
+  it("shows both kind tags and the summed count on the one row", () => {
+    const html = renderToStaticMarkup(<CallerChainView {...viewProps(dup)} />);
+    expect(html).toContain('class="kind reference"');
+    expect(html).toContain("×5");
+    expect(html.match(/data-key=/g) ?? []).toHaveLength(1);
+  });
+
+  it("keeps every row key unique when everything is expanded", () => {
+    const { keys } = expandAllKeys(diamondZ, 10, { lambdas: true });
+    const rows = visibleRows(diamondZ, keys, { lambdas: true });
+    const all = rows.map((r) => r.key);
+    expect(new Set(all).size).toBe(all.length);
+    expect(all).toHaveLength(5);
+  });
+});
+
+describe("focus and collapse", () => {
+  it("falls back to the first row when focus names a hidden row", () => {
+    const html = renderToStaticMarkup(<CallerChainView {...viewProps(diamondB, { focus: "Z\u0001Q" })} />);
+    expect(html.match(/tabindex="0"/g) ?? []).toHaveLength(1);
+    expect(liOf(html, "B")).toContain('tabindex="0"');
+  });
+});
+
+describe("completeness and keys", () => {
+  it("says the chain is not complete while Stay in scope cut the walk", () => {
+    const g = graphOf("T", [node("T", 0), node("A", 1, { inScope: false, stop: "outside-scope" })], [edge("A", "T")]);
+    const c = completeness(g, false);
+    expect(c.complete).toBe(false);
+    expect(c.text).toContain("1 caller(s) outside the scope are listed but not followed; turn off Stay in scope to follow them.");
+  });
+
+  it("passes tree keys without modifiers and ignores them with Alt, Ctrl or Meta", () => {
+    const plain = { altKey: false, ctrlKey: false, metaKey: false };
+    expect(treeKeyOf({ key: "ArrowDown", ...plain })).toBe("ArrowDown");
+    expect(treeKeyOf({ key: "ArrowLeft", ...plain, altKey: true })).toBeUndefined();
+    expect(treeKeyOf({ key: "ArrowLeft", ...plain, ctrlKey: true })).toBeUndefined();
+    expect(treeKeyOf({ key: "ArrowLeft", ...plain, metaKey: true })).toBeUndefined();
+    expect(treeKeyOf({ key: "a", ...plain })).toBeUndefined();
+  });
+});
+
+describe("aria position and depth control", () => {
+  it("gives each row its position and the size of its sibling set", () => {
+    const html = renderToStaticMarkup(<CallerChainView {...viewProps(diamondB, { expanded: new Set(["B"]) })} />);
+    expect(liOf(html, "C")).toContain('aria-posinset="2"');
+    expect(liOf(html, "C")).toContain('aria-setsize="2"');
+    expect(liOf(html, "B\u0001A")).toContain('aria-posinset="1"');
+    expect(liOf(html, "B\u0001A")).toContain('aria-setsize="1"');
+  });
+
+  it("labels the depth control as expansion depth", () => {
+    const html = renderToStaticMarkup(<CallerChainView {...viewProps(diamondB)} />);
+    expect(html).toContain("Expand to ");
+    expect(html).toContain('aria-label="Expand all depth"');
   });
 });
