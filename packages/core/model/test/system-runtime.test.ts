@@ -282,6 +282,26 @@ describe("runtime model: TypeScript fixture", () => {
     expect(s.edges.map((e) => `${e.from}>${e.verb}>${e.to}`)).toEqual(["packages/a>calls>packages/b"]);
   });
 
+  it("lists each runtime's in-scope roots, sorted and capped", () => {
+    const s = sys();
+    const worker = (s.runtimes ?? []).find((r) => r.id === "thread:src/main.ts@spawn:10");
+    expect(worker?.roots).toEqual(expect.arrayContaining(["src/worker.ts#(module)"]));
+    for (const r of s.runtimes ?? []) {
+      if (r.roots === undefined) continue;
+      expect(r.roots).toEqual([...r.roots].sort());
+      expect(r.roots.length).toBeLessThanOrEqual(20);
+    }
+  });
+
+  it("counts each sync.atomic-op fact once in each slice that runs its function", () => {
+    expect((sys().slices ?? []).some((x) => x.atomics !== undefined)).toBe(false);
+    const doc = tsDoc();
+    doc.nodes.push(inFn(TS.worker, "(module)", 3, "sync", "sync.atomic-op", { api: "Atomics.add", op: "op" }));
+    const s = tsSystem("", doc);
+    const worker = (s.slices ?? []).find((x) => x.id === "thread:src/main.ts@spawn:10|src");
+    expect(worker?.atomics).toBe(1);
+  });
+
   it("matches the committed snapshot of the grounded TypeScript runtime", () => {
     const s = sys();
     expect({ runtimes: s.runtimes, slices: s.slices, resources: s.resources, edges: s.edges }).toMatchSnapshot();

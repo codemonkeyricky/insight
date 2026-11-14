@@ -228,6 +228,9 @@ exports[`runtime model: C++ fixture > matches the committed snapshot of the grou
       "kind": "thread",
       "label": "Thread · std::thread",
       "parent": "prog:cpp:app",
+      "roots": [
+        "cpp/work.cpp#produce",
+      ],
       "spawn": {
         "api": "std::thread",
         "file": "cpp/main.cpp",
@@ -241,6 +244,9 @@ exports[`runtime model: C++ fixture > matches the committed snapshot of the grou
       "kind": "thread",
       "label": "Thread · std::thread",
       "parent": "prog:cpp:app",
+      "roots": [
+        "cpp/work.cpp#consume",
+      ],
       "spawn": {
         "api": "std::thread",
         "file": "cpp/main.cpp",
@@ -254,6 +260,9 @@ exports[`runtime model: C++ fixture > matches the committed snapshot of the grou
       "kind": "thread",
       "label": "Main thread",
       "parent": "prog:cpp:app",
+      "roots": [
+        "cpp/main.cpp#main",
+      ],
     },
   ],
   "slices": [
@@ -625,6 +634,9 @@ exports[`runtime model: TypeScript fixture > matches the committed snapshot of t
       "kind": "coroutine",
       "label": "refresh",
       "parent": "thread:main:entry:node:src/main.ts",
+      "roots": [
+        "src/main.ts#refresh",
+      ],
     },
     {
       "id": "prog:entry:node:scripts/build.ts",
@@ -664,6 +676,9 @@ exports[`runtime model: TypeScript fixture > matches the committed snapshot of t
       "kind": "thread",
       "label": "Main thread",
       "parent": "prog:entry:node:scripts/build.ts",
+      "roots": [
+        "scripts/build.ts#(module)",
+      ],
     },
     {
       "coroutines": 1,
@@ -671,12 +686,18 @@ exports[`runtime model: TypeScript fixture > matches the committed snapshot of t
       "kind": "thread",
       "label": "Main thread",
       "parent": "prog:entry:node:src/main.ts",
+      "roots": [
+        "src/main.ts#(module)",
+      ],
     },
     {
       "id": "thread:src/main.ts@spawn:10",
       "kind": "thread",
       "label": "Thread · Worker",
       "parent": "prog:entry:node:src/main.ts",
+      "roots": [
+        "src/worker.ts#(module)",
+      ],
       "spawn": {
         "api": "Worker",
         "file": "src/main.ts",
@@ -691,6 +712,9 @@ exports[`runtime model: TypeScript fixture > matches the committed snapshot of t
       "kind": "thread",
       "label": "Main thread",
       "parent": "program:src/main.ts@spawn:11",
+      "roots": [
+        "tools/child.ts#run",
+      ],
     },
     {
       "id": "thread:src/main.ts@spawn:20",

@@ -31,6 +31,8 @@ export interface SystemRuntime {
   coroutines?: number;
   /** The resources this runtime owns, sorted. */
   resources?: string[];
+  /** In-scope root function ids of the thread, or the coroutine's target: sorted, capped at SITE_CAP. Absent when none is in scope. */
+  roots?: string[];
 }
 
 /** One component on one runtime: the functions of the component that the runtime runs. */
@@ -43,6 +45,8 @@ export interface SystemSlice {
   root: boolean;
   /** Awaited coroutines of this thread whose code is in the component: they run inline, so they are a count, not a frame. */
   awaits?: number;
+  /** sync.atomic-op facts in the component's functions this slice runs. Each fact is counted once per slice. Absent when none. */
+  atomics?: number;
 }
 
 export type SystemResourceKind = "queue" | "lock" | "semaphore" | "condvar" | "env" | "os";
@@ -97,6 +101,8 @@ export interface RuntimePlan {
 }
 
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+/** The most ids a runtime or site list carries: the same cap as the Site lists in system.ts. */
+const SITE_CAP = 20;
 
 function basename(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1);
@@ -149,6 +155,17 @@ export function buildRuntimePlan(model: ProjectModel, scope: string, compOfFile:
   const slices = new Map<string, SystemSlice>();
   const resources = new Map<string, SystemResource>();
   const fnById = new Map<string, ExecFunctionRef>(exec.functions.map((f) => [f.id, f] as const));
+  // The in-scope functions among ids, sorted and capped (the same cap as the Site lists).
+  const inScopeRoots = (ids: readonly string[]): string[] => [...new Set(ids)].filter((id) => fnById.get(id)?.inScope === true).sort(cmp).slice(0, SITE_CAP);
+  // The function a node sits in: the node itself when it is a function, else the nearest enclosing one.
+  const fnOwnerOf = (id: string): string | undefined => {
+    let cur: string | undefined = id;
+    for (let guard = 0; cur !== undefined && guard < 100; guard++) {
+      if (model.functionById.has(cur)) return cur;
+      cur = model.byId.get(cur)?.parent;
+    }
+    return undefined;
+  };
   const threadOfSpawnMap = new Map<string, string>();
   const programOfSpawnMap = new Map<string, string>();
   const threadsOfFn = new Map<string, Set<string>>();
@@ -274,6 +291,7 @@ export function buildRuntimePlan(model: ProjectModel, scope: string, compOfFile:
     for (const sp of specs) {
       const { rt, t } = sp;
       const started = t.coroutines.filter((c) => c.how === "start");
+      const roots = inScopeRoots(t.roots);
       runtimes.set(rt, {
         id: rt,
         kind: "thread",
@@ -282,6 +300,7 @@ export function buildRuntimePlan(model: ProjectModel, scope: string, compOfFile:
         ...(sp.implicit ? { implicit: true as const } : {}),
         ...(sp.spawn !== undefined ? { spawn: sp.spawn } : {}),
         ...(started.length > 0 ? { coroutines: started.length } : {}),
+        ...(roots.length > 0 ? { roots } : {}),
       });
       if (t.spawn !== undefined && t.kind !== "process") threadOfSpawnMap.set(t.spawn.node, rt);
       // Functions a coroutine alone runs are owned by the coroutine, not by the thread that awaits it.
@@ -290,7 +309,8 @@ export function buildRuntimePlan(model: ProjectModel, scope: string, compOfFile:
       for (const r of t.roots) rootKeys.add(`${rt}\0${r}`);
       for (const c of started) {
         const crt = execCoroutineId(t.id, c.target);
-        runtimes.set(crt, { id: crt, kind: "coroutine", label: fnById.get(c.target)?.name ?? c.target, parent: rt });
+        const croots = inScopeRoots([c.target]);
+        runtimes.set(crt, { id: crt, kind: "coroutine", label: fnById.get(c.target)?.name ?? c.target, parent: rt, ...(croots.length > 0 ? { roots: croots } : {}) });
         rootKeys.add(`${crt}\0${c.target}`);
         for (const fn of [c.target, ...c.callees]) if (fnById.get(fn)?.inScope) addTo(coroutinesOfFn, fn, crt);
       }
@@ -305,6 +325,21 @@ export function buildRuntimePlan(model: ProjectModel, scope: string, compOfFile:
         s.functions++;
         if (rootKeys.has(`${rt}\0${f.id}`)) s.root = true;
       }
+    }
+    // sync.atomic-op facts: each counted once per slice of its component on every runtime that runs its function.
+    const atomicsOf = new Map<string, Set<string>>();
+    for (const node of model.doc.nodes) {
+      if (node.kind !== "sync.atomic-op") continue;
+      const f = fnOwnerOf(node.id);
+      const fn = f === undefined ? undefined : fnById.get(f);
+      if (fn === undefined || !fn.inScope) continue;
+      const comp = compOfFile(fn.file);
+      if (comp === undefined) continue;
+      for (const rt of ownersOf(fn.id, fn.file)) addTo(atomicsOf, sliceId(rt, comp), node.id);
+    }
+    for (const [sid, ids] of atomicsOf) {
+      const s = slices.get(sid);
+      if (s !== undefined) s.atomics = ids.size;
     }
     for (const sp of specs) {
       for (const c of sp.t.coroutines) {
