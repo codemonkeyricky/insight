@@ -1,9 +1,9 @@
 import { useEffect, useId, useMemo, useRef, type MouseEvent, type ReactNode } from "react";
 import type { FlowEdge, FlowNode, FunctionFlow } from "../api";
 import { outsideScope, outsideText } from "../flowTargets";
-import { NEST_HEAD } from "@insight/flow";
+import { NEST_HEAD, ROW_H, stationOf } from "@insight/flow";
 import { hrefFile, hrefView } from "../router";
-import { backEdgeFlags, edgeMotions, prefersReducedMotion, PULSE_S, useMarchBudget, useOnScreen, usePageVisible, type EdgeMotion } from "../zoom/flowMotion";
+import { backEdgeFlags, prefersReducedMotion, useOnScreen, usePageVisible } from "../zoom/flowMotion";
 import { runFlowToken, useTokenSlot } from "../zoom/flowToken";
 import { popDelay } from "../zoom/pop";
 
@@ -11,18 +11,17 @@ import { popDelay } from "../zoom/pop";
 export type FlowNodeClick = (node: FlowNode) => boolean;
 
 /**
- * One function's control-flow chart as SVG. The boxes and edge points come from the layout in
- * @insight/flow; this only draws them. A call into a function in scope links to that function's chart.
- * A call outside the scope is drawn unresolved. Any other step with a source span links to its line.
- * `onNodeClick` takes over the clicks (the zoom map does, so a click selects in place); `selectedId` marks one step.
- * `motion` (default on) makes each edge march in its direction, a back-edge (a loop's return) also carries a pulse, and a
- * token walks the chart's control flow (see zoom/flowToken.ts). Motion is off under reduced motion, while the page is
- * hidden, and while the chart is off screen (see zoom/flowMotion.ts). The token runs on the most recently opened charts only.
+ * One function's control-flow chart as SVG, drawn as a line map: one row per step, a station on its lane's line, the label
+ * to the right. The rows and edge paths come from the layout in @insight/flow; this only draws them. A call into a function
+ * in scope links to that function's chart. A call outside the scope is drawn unresolved. Any other step with a source span
+ * links to its line. `onNodeClick` takes over the clicks (the zoom map does, so a click selects in place); `selectedId` marks
+ * one step. `motion` (default on) makes a loop's return track march toward its head and a token walk the chart's control
+ * flow along the edge paths (see zoom/flowToken.ts). Motion is off under reduced motion, while the page is hidden, and
+ * while the chart is off screen (see zoom/flowMotion.ts). The token runs on the most recently opened charts only.
  */
 export function FlowChart({ id, fn, scope, onNodeClick, selectedId, motion = true }: { id: string; fn: FunctionFlow; scope: string; onNodeClick?: FlowNodeClick; selectedId?: string; motion?: boolean }) {
   const uid = useId();
   const key = uid.replace(/[^a-zA-Z0-9]/g, "");
-  const arrow = `arrow-${key}`;
   const glow = `glow-${key}`;
   const ref = useRef<SVGSVGElement>(null);
   const tokenRef = useRef<SVGGElement>(null);
@@ -31,10 +30,8 @@ export function FlowChart({ id, fn, scope, onNodeClick, selectedId, motion = tru
   const reduced = prefersReducedMotion();
   const on = motion && visible && onScreen && !reduced;
   const back = useMemo(() => backEdgeFlags(fn.nodes, fn.edges), [fn]);
-  const budget = useMarchBudget(uid, fn.edges.length, on);
-  const motions = useMemo(() => edgeMotions(back, { on, reduced, budget }), [back, on, reduced, budget]);
   const tokenActive = useTokenSlot(uid, on && fn.edges.length > 0);
-  // The cascade when a chart opens: nodes rise in reading order (y, then x), each edge draws on after its source node.
+  // The cascade when a chart opens: rows rise in reading order (y, then x), each edge draws on after its source row.
   const nodeDelay = useMemo(() => {
     const order = fn.nodes.slice().sort((a, b) => a.y - b.y || a.x - b.x);
     return new Map(order.map((n, i) => [n.id, 140 + popDelay(i, 240, 10)] as const));
@@ -45,26 +42,29 @@ export function FlowChart({ id, fn, scope, onNodeClick, selectedId, motion = tru
     if (!tokenActive || !svg || !tok) return;
     return runFlowToken(svg, tok, fn);
   }, [tokenActive, fn]);
+  const arrowId = (lane: number) => `arrow-${key}-${lane}`;
   return (
     <svg ref={ref} className="flow" width={fn.width} height={fn.height} viewBox={`0 0 ${fn.width} ${fn.height}`} role="img" aria-label={`Control flow of ${fn.name}`}>
       <defs>
-        <marker id={arrow} viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-          <path d="M2,1.5 L8.5,5 L2,8.5" className="flow-arrow" />
-        </marker>
+        {LANES.map((l) => (
+          <marker key={l} id={arrowId(l)} viewBox="0 0 8 8" refX="6" refY="4" markerWidth="8" markerHeight="8" orient="auto" markerUnits="userSpaceOnUse">
+            <path d="M0 0L8 4L0 8Z" className={`flow-arrow c${l}`} />
+          </marker>
+        ))}
       </defs>
       <g>
         {fn.nodes.filter(isNest).map((n) => (
-          <NestFrame key={n.id} node={n} onNodeClick={onNodeClick} selected={n.id === selectedId} />
+          <NestFrame key={n.id} node={n} onNodeClick={onNodeClick} selected={n.id === selectedId} delay={nodeDelay.get(n.id) ?? 140} />
         ))}
       </g>
       <g>
         {fn.edges.map((e, i) => (
-          <Edge key={`${e.from}>${e.to}>${i}`} edge={e} index={i} marker={arrow} motion={motions[i] ?? NO_MOTION} back={back[i] === true} delay={(nodeDelay.get(e.from) ?? 140) + 80} />
+          <Edge key={`${e.from}>${e.to}>${i}`} edge={e} index={i} arrow={arrowId} back={back[i] === true} march={on} delay={(nodeDelay.get(e.from) ?? 140) + 80} />
         ))}
       </g>
       <g>
         {fn.nodes.filter((n) => !isNest(n)).map((n) => (
-          <Node key={n.id} id={id} node={n} fnId={fn.id} scope={scope} onNodeClick={onNodeClick} selected={n.id === selectedId} delay={nodeDelay.get(n.id) ?? 140} />
+          <Node key={n.id} id={id} node={n} fnId={fn.id} scope={scope} width={fn.width} onNodeClick={onNodeClick} selected={n.id === selectedId} delay={nodeDelay.get(n.id) ?? 140} />
         ))}
       </g>
       {tokenActive && (
@@ -73,120 +73,131 @@ export function FlowChart({ id, fn, scope, onNodeClick, selectedId, motion = tru
             <stop className="flow-glow-in" offset="0" />
             <stop className="flow-glow-out" offset="1" />
           </radialGradient>
-          <circle r={6} fill={`url(#${glow})`} />
-          <circle r={3} className="flow-token-dot" />
+          <circle r={8} fill={`url(#${glow})`} />
+          <circle r={4} className="flow-token-dot" />
         </g>
       )}
     </svg>
   );
 }
 
+const LANES = [0, 1, 2, 3, 4];
+const laneOf = (n: number | undefined): number => (n ?? 0) % 5;
+const delayStyle = (ms: number) => ({ ["--d" as string]: `${ms}ms` });
+
 const isNest = (n: FlowNode): boolean => n.shape === "nest";
 
+/** Where a row's station sits. A chart exported before the line map has no lanes: its steps sit on lane 0. */
+const station = (n: FlowNode): [number, number] => stationOf(n);
+const labelAt = (n: FlowNode): number => n.labelX ?? n.x + 28;
+
+/** The faint word before a step's label, by role. A label that already starts with it is left alone. */
+const KEYWORD: Partial<Record<FlowNode["role"], string>> = { branch: "if", switch: "switch", effect: "io", await: "await", spawn: "spawn", call: "call" };
+const keywordOf = (n: FlowNode): string | undefined => {
+  const kw = KEYWORD[n.role];
+  return kw === undefined || n.label === kw || n.label.startsWith(`${kw} `) || n.label.startsWith(`${kw}(`) ? undefined : kw;
+};
+
 /**
- * A callee nested in the call step that calls it: a rounded frame with the callee's name in a header. Its steps and edges
- * are drawn over it by the chart, so the frame sits under both. A click on the header folds the callee back.
+ * A callee nested in the call step that calls it: a faint band of its body's lane colour with the call's row as the header
+ * (a call station, the label, a fold mark). Its rows and edges are drawn over the band by the chart. A click on the header
+ * folds the callee back.
  */
-function NestFrame({ node, onNodeClick, selected }: { node: FlowNode; onNodeClick?: FlowNodeClick; selected: boolean }) {
+function NestFrame({ node, onNodeClick, selected, delay }: { node: FlowNode; onNodeClick?: FlowNodeClick; selected: boolean; delay: number }) {
   const { x, y, w, h } = node;
+  const lane = laneOf((node.lane ?? 0) + 1);
+  const lc = laneOf(node.lane);
+  const [cx, cy] = station(node);
   return (
-    <g className={`flow-nest${selected ? " selected" : ""}`} data-node={node.id} data-nest="">
+    <g className={`flow-nest c${lc}${selected ? " selected" : ""}`} data-node={node.id} data-nest="" style={delayStyle(delay)}>
       <title>{node.title ?? node.label}</title>
-      <rect x={x} y={y} width={w} height={h} rx={12} className="flow-nest-body" />
+      <rect x={x} y={y} width={w} height={h} rx={10} className={`flow-nest-body c${lane}`} />
       <g className="flow-nest-head" role="button" aria-label={`Fold ${node.label}`} onClick={onNodeClick ? () => onNodeClick(node) : undefined}>
-        <rect x={x} y={y} width={w} height={NEST_HEAD} rx={12} className="flow-nest-hit" />
-        <text x={x + 12} y={y + NEST_HEAD / 2} dominantBaseline="central" className="flow-nest-label">
-          {"▾ "}
+        <rect x={x} y={y} width={w} height={NEST_HEAD} rx={10} className="flow-nest-hit" />
+        <CallStation cx={cx} cy={cy} />
+        <text x={labelAt(node)} y={cy} dominantBaseline="central" className="flow-text flow-nest-label">
+          {node.tag !== undefined && <tspan className="flow-kw">{node.tag} </tspan>}
           {node.label}
+          <tspan className="flow-chev">{" ▾"}</tspan>
         </text>
       </g>
     </g>
   );
 }
 
-const NO_MOTION: EdgeMotion = { march: false, pulse: false };
-
-/**
- * One edge: its solid path with the arrow, then (when it moves) a dashed overlay that marches along the same path in its
- * direction, and on a back-edge a dot that travels the path every PULSE_S. The overlay sits on top of the solid line.
- */
-function Edge({ edge, index, marker, motion, back, delay }: { edge: FlowEdge; index: number; marker: string; motion: EdgeMotion; back: boolean; delay: number }) {
-  const d = edge.points.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x} ${y}`).join(" ");
+/** One edge as a single path, drawn from the layout's `d` (or its points on a chart exported before the line map). */
+function Edge({ edge, index, arrow, back, march, delay }: { edge: FlowEdge; index: number; arrow: (lane: number) => string; back: boolean; march: boolean; delay: number }) {
+  const style = back || edge.style === "back" || edge.kind === "back" ? "back" : (edge.style ?? (edge.kind === "exception" ? "throws" : "solid"));
+  const lane = laneOf(edge.lane);
+  const d = edge.d ?? edge.points.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x} ${y}`).join(" ");
+  const isBack = style === "back";
   return (
-    <g className={`flow-edge ${edge.kind}${back ? " back-edge" : ""}`} data-edge={index} style={{ ["--d" as string]: `${delay}ms` }}>
-      <path d={d} markerEnd={`url(#${marker})`} pathLength={edge.kind === "exception" ? undefined : 1} />
-      {motion.march && <path d={d} className={`flow-march${back ? " back" : ""}`} />}
-      {motion.pulse && (
-        <circle r={2.6} className="flow-pulse">
-          <animateMotion dur={`${PULSE_S}s`} repeatCount="indefinite" path={d} />
-        </circle>
-      )}
-      {edge.label && edge.labelAt && (
-        <text x={edge.labelAt[0]} y={edge.labelAt[1]} className="flow-label" textAnchor="middle">
-          {edge.label}
-        </text>
-      )}
+    <path
+      d={d}
+      className={`flow-edge ${style} c${lane}${isBack ? ` back-edge${march ? " marching" : ""}` : ""}`}
+      data-edge={index}
+      style={delayStyle(delay)}
+      pathLength={style === "solid" ? 1 : undefined}
+      markerEnd={isBack ? `url(#${arrow(lane)})` : undefined}
+    />
+  );
+}
+
+/** The call station, the "interchange": a ring with a core dot. */
+function CallStation({ cx, cy, open = true }: { cx: number; cy: number; open?: boolean }) {
+  return (
+    <g className="flow-station">
+      <circle cx={cx} cy={cy} r={5.5} className={`st ring${open ? "" : " dashed"}`} />
+      <circle cx={cx} cy={cy} r={1.9} className="core" />
     </g>
   );
 }
 
-function Node({ id, node, fnId, scope, onNodeClick, selected, delay }: { id: string; node: FlowNode; fnId: string; scope: string; onNodeClick?: FlowNodeClick; selected: boolean; delay: number }) {
-  const { x, y, w, h, shape } = node;
-  const cx = x + w / 2;
-  const cy = y + h / 2;
-  let mark: ReactNode;
-  switch (shape) {
-    case "terminator":
-      mark = <rect x={x} y={y} width={w} height={h} rx={h / 2} />;
-      break;
-    case "decision":
-      mark = <polygon points={`${cx},${y} ${x + w},${cy} ${cx},${y + h} ${x},${cy}`} />;
-      break;
-    case "loop": {
-      const k = Math.min(14, w / 4);
-      mark = <polygon points={`${x + k},${y} ${x + w - k},${y} ${x + w},${cy} ${x + w - k},${y + h} ${x + k},${y + h} ${x},${cy}`} />;
-      break;
-    }
-    case "join":
-      mark = <circle cx={cx} cy={cy} r={Math.min(w, h) / 2} />;
-      break;
-    case "label":
-      mark = null;
-      break;
-    default:
-      mark = <rect x={x} y={y} width={w} height={h} rx={9} />;
+/** The station mark of a step, by its shape and role. */
+function Station({ node, cx, cy, resolved }: { node: FlowNode; cx: number; cy: number; resolved: boolean }): ReactNode {
+  const { shape, role } = node;
+  if (shape === "turn") return <path className="st turn" transform={`translate(${cx} ${cy})`} d="M4.1 -1A4.2 4.2 0 1 0 2.4 3.5M4.6 -4.8V-.9H.7" />;
+  if (shape === "exit") return <rect className="st exit" x={cx - 7} y={cy - 3} width={14} height={6} rx={3} />;
+  if (shape === "loop") return <circle className="st loop" cx={cx} cy={cy} r={5} />;
+  if (shape === "decision") return <path className="st diamond" d={`M${cx} ${cy - 6}L${cx + 6} ${cy}L${cx} ${cy + 6}L${cx - 6} ${cy}Z`} />;
+  if (role === "start") return <circle className="st start" cx={cx} cy={cy} r={6} />;
+  if (role === "end") {
+    return (
+      <g className="flow-station">
+        <circle className="st endring" cx={cx} cy={cy} r={8} />
+        <circle className="st end" cx={cx} cy={cy} r={4} />
+      </g>
+    );
   }
+  if (role === "call") return <CallStation cx={cx} cy={cy} open={resolved || node.target === undefined} />;
+  if (role === "effect") return <rect className="st effect" x={cx - 3.5} y={cy - 3.5} width={7} height={7} rx={1.5} />;
+  if (shape === "label") return <path className="st tick" d={`M${cx - 4} ${cy}H${cx + 4}`} />;
+  return <circle className="st step" cx={cx} cy={cy} r={3.5} />;
+}
+
+function Node({ id, node, fnId, scope, width, onNodeClick, selected, delay }: { id: string; node: FlowNode; fnId: string; scope: string; width: number; onNodeClick?: FlowNodeClick; selected: boolean; delay: number }) {
+  const { shape } = node;
+  const [cx, cy] = station(node);
   const target = node.target;
   const outside = target !== undefined && outsideScope(target, scope);
   const inside = target !== undefined && !outside && target !== fnId;
-  const text =
-    shape === "join" ? null : (
-      <text x={cx} y={cy} textAnchor="middle" dominantBaseline="central" className="flow-text">
-        {node.label}
-      </text>
-    );
-  // A call step is drawn with a double bar down each side, the ISO 5807 mark for a predefined process.
-  const bars = node.role === "call" && shape !== "label" ? (
-    <>
-      <line x1={x + 6} y1={y} x2={x + 6} y2={y + h} className="flow-call-bar" />
-      <line x1={x + w - 6} y1={y} x2={x + w - 6} y2={y + h} className="flow-call-bar" />
-    </>
-  ) : null;
+  const kw = keywordOf(node);
   const body = (
     <>
       <title>{outside && target !== undefined ? outsideText(target) : (node.title ?? node.label)}</title>
-      {mark}
-      {bars}
-      {text}
-      {outside && (
-        <text x={x + w - 6} y={y + 12} textAnchor="end" className="flow-mark">
-          ↗
-        </text>
-      )}
+      <rect x={4} y={node.y} width={Math.max(0, width - 8)} height={ROW_H} rx={7} className="flow-hit" />
+      <Station node={node} cx={cx} cy={cy} resolved={!outside} />
+      <text x={labelAt(node)} y={cy} dominantBaseline="central" className="flow-text">
+        {node.tag !== undefined && <tspan className="flow-kw">{node.tag} </tspan>}
+        {kw !== undefined && <tspan className="flow-kw">{kw} </tspan>}
+        {node.label}
+        {inside && <tspan className="flow-chev">{" ▸"}</tspan>}
+        {outside && <tspan className="flow-mark">{" ↗"}</tspan>}
+      </text>
     </>
   );
-  const cls = `flow-node ${shape} role-${node.role}${outside ? " unresolved" : ""}${inside ? " resolves" : ""}${selected ? " selected" : ""}`;
-  const style = { ["--d" as string]: `${delay}ms` };
+  const cls = `flow-node ${shape} role-${node.role} c${laneOf(node.lane)}${outside ? " unresolved" : ""}${inside ? " resolves" : ""}${selected ? " selected" : ""}`;
+  const style = delayStyle(delay);
   // A call into this scope opens the callee's chart; every other step with a span opens its source line.
   const link = inside && target !== undefined ? hrefView(id, "flow", { scope, fn: target }) : node.span ? hrefFile(id, node.span.file, node.span.start[0] + 1) : undefined;
   const onClick = onNodeClick
