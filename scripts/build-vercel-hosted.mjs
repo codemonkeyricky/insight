@@ -67,6 +67,50 @@ function treeSize(dir) {
   return { bytes, files };
 }
 
+/**
+ * Tree-sitter grammar packages (tree-sitter-cpp, tree-sitter-systemverilog, ...) ship C sources, prebuilt native bindings and
+ * build inputs. The runtime loads only their .wasm (require.resolve("<grammar>/<grammar>.wasm")), so these are removed.
+ * web-tree-sitter is not matched: it needs its own wasm. Kept: package.json, *.wasm, queries/, LICENSE.
+ */
+const GRAMMAR_PACKAGE = /^tree-sitter-/;
+const GRAMMAR_PRUNE = ["prebuilds", "src", "bindings", "binding.gyp", "grammar.js", "build"];
+
+function sizeOf(path) {
+  return statSync(path).isDirectory() ? treeSize(path).bytes : statSync(path).size;
+}
+
+/** Removes the source and native build parts of every tree-sitter-* grammar package under node_modules (nested ones included). */
+function pruneGrammarPackages(modulesDir) {
+  let removedBytes = 0;
+  const walk = (folder) => {
+    const pkgPath = join(folder, "package.json");
+    if (existsSync(pkgPath)) {
+      let name;
+      try {
+        name = JSON.parse(readFileSync(pkgPath, "utf8")).name;
+      } catch {
+        name = undefined;
+      }
+      if (typeof name === "string" && GRAMMAR_PACKAGE.test(name)) {
+        for (const entry of GRAMMAR_PRUNE) {
+          const target = join(folder, entry);
+          if (!existsSync(target)) continue;
+          const bytes = sizeOf(target);
+          rmSync(target, { recursive: true, force: true });
+          removedBytes += bytes;
+          console.log(`pruned ${name}/${entry}: ${(bytes / (1024 * 1024)).toFixed(1)} MB`);
+        }
+      }
+    }
+    for (const entry of readdirSync(folder, { withFileTypes: true })) {
+      if (entry.isDirectory()) walk(join(folder, entry.name));
+    }
+  };
+  walk(modulesDir);
+  console.log(`grammar pruning saved ${(removedBytes / (1024 * 1024)).toFixed(1)} MB`);
+  return removedBytes;
+}
+
 /** The workspace packages that carry an insight-plugin.json: the built-in plugins, found the way core finds them. */
 function builtinPlugins() {
   const found = [];
@@ -126,6 +170,7 @@ try {
     const dest = join(outputRoot, fn.dir);
     mkdirSync(dest, { recursive: true });
     cpSync(modules, join(dest, "node_modules"), { recursive: true, dereference: true });
+    pruneGrammarPackages(join(dest, "node_modules"));
     cpSync(join(deployDir, "dist"), join(dest, "dist"), { recursive: true });
     cpSync(join(deployDir, "package.json"), join(dest, "package.json"));
 
