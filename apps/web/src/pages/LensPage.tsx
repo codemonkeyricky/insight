@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { api, type LensRecord, type LensView, type ScopeStats, type Span, type TargetType } from "../api";
+import { api, type LensRecord, type LensView, type ScopeStats, type Span, type StateMachineTransition, type TargetType } from "../api";
 import { AnnotationBox } from "../components/AnnotationBox";
 import { GraphCanvas, type GraphPick } from "../components/GraphCanvas";
 import { SourcePanel, type SelectedSpan } from "../components/SourcePanel";
 import { TreeBlock } from "../components/TreeBlock";
+import { StateDiagram, type MachinePick } from "../components/StateDiagram";
+import { MachineList, SiteList } from "../components/MachineSection";
+import { machinesOf, readMachineParam, selectMachine, withMachineParam } from "../states/machineParam";
 import { canonicalScope } from "../scopeKey";
 import { granularityOf, OUTSIDE_SCOPE, plainReason, resultHasContent, scopeBanner } from "../scopeLenses";
 
@@ -32,6 +35,8 @@ export function LensPage({ id, lensId, scope, projectName, stats, onLoaded }: Le
   const [picked, setPicked] = useState<Picked | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [machineParam, setMachineParam] = useState<string | null>(() => readMachineParam(window.location.hash));
+  const [arc, setArc] = useState<StateMachineTransition | null>(null);
   const onLoadedRef = useRef(onLoaded);
 
   useEffect(() => {
@@ -45,6 +50,7 @@ export function LensPage({ id, lensId, scope, projectName, stats, onLoaded }: Le
     setSelected(null);
     setPicked(null);
     setNote(null);
+    setArc(null);
     api.scopeLens(id, scope, lensId).then(
       (run) => {
         if (cancelled) return;
@@ -94,6 +100,28 @@ export function LensPage({ id, lensId, scope, projectName, stats, onLoaded }: Le
     setSelected({ span, label: text });
   };
 
+  const machines = machinesOf(result.views);
+  const machine = selectMachine(machines, machineParam);
+  const chooseMachine = (holderId: string) => {
+    setMachineParam(holderId);
+    setArc(null);
+    setSelected(null);
+    setNote(null);
+    try {
+      window.history.replaceState(null, "", withMachineParam(window.location.hash, holderId));
+    } catch {
+      // The selection still applies for this page view.
+    }
+  };
+  const pickMachine = (p: MachinePick) => {
+    setArc(p.transition ?? null);
+    if (p.span) show(p.span, p.label);
+    else {
+      setSelected(null);
+      setNote(`${p.label}: no source line is recorded.`);
+    }
+  };
+
   const pick = (p: GraphPick) => {
     setPicked({ type: p.kind, key: p.key, label: p.label });
     if (!p.span) {
@@ -116,7 +144,19 @@ export function LensPage({ id, lensId, scope, projectName, stats, onLoaded }: Le
             </div>
           ) : (
             <>
-              {result.views.map((view) => (
+              {machine && (
+                <div className="view">
+                  <h3>{machine.title}</h3>
+                  <div className="sm-machines">
+                    {machines.length > 1 ? <MachineList machines={machines} selectedId={machine.holder.id} onSelect={chooseMachine} /> : <div />}
+                    <StateDiagram view={machine} onPick={pickMachine} selected={arc?.id ?? null} />
+                  </div>
+                  {machine.notes?.map((n) => (
+                    <p key={n} className="muted small">{n}</p>
+                  ))}
+                </div>
+              )}
+              {result.views.filter((v) => v.type !== "state-machine").map((view) => (
                 <ViewBlock key={view.id} view={view} projectId={id} onPick={pick} onShow={show} />
               ))}
               <h3>Findings</h3>
@@ -155,6 +195,7 @@ export function LensPage({ id, lensId, scope, projectName, stats, onLoaded }: Le
         </div>
         <div className="side">
           {note && <p className="muted small" role="status">{note}</p>}
+          {machine && arc && <SiteList view={machine} transition={arc} onShow={show} />}
           <SourcePanel projectId={id} selected={selected} onClose={() => setSelected(null)} />
           {picked && <AnnotationBox projectId={id} type={picked.type} targetKey={picked.key} title={picked.label} />}
         </div>
@@ -163,7 +204,7 @@ export function LensPage({ id, lensId, scope, projectName, stats, onLoaded }: Le
   );
 }
 
-function ViewBlock({
+export function ViewBlock({
   view,
   projectId,
   onPick,
@@ -235,6 +276,7 @@ function ViewBlock({
                 {view.columns.map((c) => (
                   <th key={c}>{c}</th>
                 ))}
+                {view.spans && <th>line</th>}
               </tr>
             </thead>
             <tbody>
@@ -245,6 +287,15 @@ function ViewBlock({
                       {String(cell ?? "")}
                     </td>
                   ))}
+                  {view.spans && (
+                    <td>
+                      {view.spans[i] ? (
+                        <button type="button" className="link" onClick={() => onShow(view.spans?.[i] as Span, `${view.title}: ${String(row[0] ?? "")}`)}>
+                          {(view.spans[i] as Span).file}:{(view.spans[i] as Span).start[0] + 1}
+                        </button>
+                      ) : null}
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -253,6 +304,7 @@ function ViewBlock({
       </div>
     );
   }
+  if (view.type === "state-machine") return <></>;
   return (
     <div className="view">
       <h3>{view.title}</h3>

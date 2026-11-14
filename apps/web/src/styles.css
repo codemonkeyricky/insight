@@ -1196,3 +1196,50 @@ a.auth-chip { text-decoration: none; }
 .repo-list a:hover { border-color: var(--accent); }
 .repo-name { min-width: 0; overflow-wrap: anywhere; }
 .repo-lock { color: var(--muted); flex: none; }
+
+/* State diagram (states lens): one machine drawn as SVG, in the app tokens so both themes read. */
+.state-diagram { display: grid; gap: 8px; }
+.state-diagram .sm-tools { display: flex; align-items: center; gap: 10px; }
+.state-diagram .sm-tool { font: inherit; font-size: var(--t-sm); padding: 2px 10px; border: 1px solid var(--hair); border-radius: var(--r-pill); background: var(--sheet); color: var(--ink); cursor: pointer; }
+.state-diagram .sm-tool:disabled { opacity: .45; cursor: default; }
+.state-diagram .sm-wrap { width: 100%; margin: 0 auto; background: var(--sheet); border: 1px solid var(--hair); border-radius: var(--r-md); overflow: hidden; touch-action: pan-y; cursor: grab; }
+.state-diagram .sm-svg { display: block; width: 100%; height: auto; max-height: 82vh; font-family: var(--font-ui); user-select: none; }
+.state-diagram .sm-box { fill: var(--box); stroke: color-mix(in srgb, var(--ink) 45%, transparent); stroke-width: 1.5; }
+.state-diagram .sm-box--inner { fill: none; }
+.state-diagram .sm-name { fill: var(--ink); font-size: 13px; font-weight: 500; pointer-events: none; }
+.state-diagram .sm-start { fill: var(--ink); }
+.state-diagram .sm-state--any .sm-box { fill: none; stroke-dasharray: 5 4; stroke: var(--graphite); }
+.state-diagram .sm-state--any .sm-name { fill: var(--graphite); font-weight: 400; }
+.state-diagram .sm-state--unentered .sm-box { fill: none; stroke: var(--graphite); stroke-width: 1; stroke-dasharray: 3 3; }
+.state-diagram .sm-state--unentered .sm-name { fill: var(--graphite); }
+.state-diagram .sm-state { cursor: pointer; outline: none; }
+.state-diagram .sm-state:hover .sm-box, .state-diagram .sm-state:focus-visible .sm-box, .state-diagram .sm-state--hot .sm-box { stroke: var(--accent); stroke-width: 2; }
+.state-diagram .sm-state:focus-visible .sm-start, .state-diagram .sm-state--hot .sm-start { fill: var(--accent); }
+.state-diagram .sm-arc { cursor: pointer; outline: none; color: var(--graphite); }
+.state-diagram .sm-hit { fill: none; stroke: transparent; stroke-width: 14; }
+.state-diagram .sm-line { fill: none; stroke: currentColor; stroke-width: 1.5; }
+.state-diagram .sm-head { fill: currentColor; stroke: none; }
+.state-diagram .sm-arc--inferred .sm-line { stroke-dasharray: 6 4; }
+.state-diagram .sm-arc--heuristic .sm-line { stroke-dasharray: 1.5 4; stroke-linecap: round; stroke-width: 2; }
+.state-diagram .sm-label rect { fill: var(--sheet); stroke: var(--hair); stroke-width: 1; }
+.state-diagram .sm-label text { fill: var(--ink); font-size: 12px; pointer-events: none; }
+.state-diagram .sm-svg--hot .sm-arc:not(.sm-arc--hot) { opacity: .28; }
+.state-diagram .sm-arc--hot, .state-diagram .sm-arc--selected, .state-diagram .sm-arc:focus-visible { color: var(--accent); }
+.state-diagram .sm-arc--hot .sm-line, .state-diagram .sm-arc--selected .sm-line, .state-diagram .sm-arc:focus-visible .sm-line { stroke-width: 2.25; }
+.state-diagram .sm-arc--hot .sm-label rect, .state-diagram .sm-arc--selected .sm-label rect { stroke: var(--accent); }
+.state-diagram .sm-legend { list-style: none; display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0; padding: 0; font-size: var(--t-xs); color: var(--muted); }
+.state-diagram .sm-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.state-diagram .sm-key { stroke: var(--graphite); stroke-width: 1.5; }
+.state-diagram .sm-key--inferred { stroke-dasharray: 6 4; }
+.state-diagram .sm-key--heuristic { stroke-dasharray: 1.5 4; stroke-linecap: round; stroke-width: 2; }
+.state-diagram .sm-swatch { display: inline-block; width: 22px; height: 13px; border-radius: 4px; border: 1px solid var(--graphite); }
+.state-diagram .sm-swatch--unentered { border-style: dashed; border-width: 1px; opacity: .8; }
+.state-diagram .sm-swatch--terminal { box-shadow: inset 0 0 0 2px var(--sheet), inset 0 0 0 3px var(--graphite); }
+.sm-machines { display: grid; gap: 14px; grid-template-columns: minmax(150px, 220px) minmax(0, 1fr); align-items: start; }
+.sm-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.sm-list button { display: grid; gap: 1px; width: 100%; text-align: left; font: inherit; padding: 7px 10px; border: 1px solid var(--hair); border-radius: var(--r-md); background: var(--sheet); color: var(--ink); cursor: pointer; }
+.sm-list button[aria-current="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.sm-list .sm-holder { font-weight: 600; overflow-wrap: anywhere; }
+.sm-sites { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.sm-sites li { padding: 6px 8px; border: 1px solid var(--hair); border-radius: var(--r-sm); background: var(--sheet); }
+@media (max-width: 700px) { .sm-machines { grid-template-columns: minmax(0, 1fr); } }
