@@ -67,9 +67,9 @@ export class Ids {
   }
 }
 
+/** One file's index. Holds no source text: emit reads the text again. */
 export interface Unit {
   rel: string;
-  text: string;
   /** Count of ERROR or MISSING nodes. A file with any has inferred facts and one finding. The tree is not kept; emit parses again. */
   errorCount: number;
   /** Ids of this file's declarations, functions and processes. Shared by the project pass and the emitter. */
@@ -308,39 +308,65 @@ function collectVars(unit: Unit, root: SyntaxNode): void {
   visit(root, "");
 }
 
-/**
- * Definitions in a file the grammar could not parse, such as `module X import pkg::*; #(...)`. The text is
- * scanned line by line, and only names that the tree did not already define are added.
- */
-function scanDefs(unit: Unit, p: Project): void {
-  if (unit.errorCount === 0) return;
-  const known = new Set((p.declsByName.get("") ?? []).map((d) => d.name));
-  for (const refs of p.declsByName.values()) for (const d of refs) if (d.file === unit.rel) known.add(d.name);
-  // Lifetime keywords (`automatic`, `static`) and the `class` of `interface class` come before the name.
-  const re = /^[ \t]*(module|interface|package)\s+((?:(?:static|automatic|class)\s+)*)(\w+)/;
-  // Comments are blanked to spaces, keeping line breaks and widths, so the line numbers and lengths stay true.
-  const stripped = unit.text.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, (c) => c.replace(/[^\n]/g, " "));
-  const rawLines = unit.text.split("\n");
-  stripped.split("\n").forEach((line, i) => {
-    const m = re.exec(line);
-    const name = m?.[3];
-    if (!m || name === undefined || known.has(name)) return;
-    known.add(name);
-    // `interface class` declares a class, which is not instantiable like an interface.
-    const hdl: Hdl = m[1] === "module" ? "module" : m[1] === "package" ? "package" : /\bclass\b/.test(m[2] ?? "") ? "class" : "interface";
-    const id = unit.ids.take(declId(unit.rel, name));
-    const ref: DeclRef = { name, hdl, file: unit.rel, id };
-    if (!p.decls.has(name)) p.decls.set(name, ref);
-    p.declsByName.set(name, [...(p.declsByName.get(name) ?? []), ref]);
-    unit.scanned.push({ name, hdl, line: i, length: rawLines[i]?.length ?? line.length, id });
-  });
+/** A definition line found by scanning the text of a file the grammar could not parse. */
+interface ScanCandidate {
+  name: string;
+  hdl: Hdl;
+  line: number;
+  length: number;
 }
 
 /**
- * Indexes the definitions of every file. Each file is parsed once here and its tree is freed at once; the
- * emit step parses it again. Only plain data is kept.
+ * Definition lines of a file the grammar could not parse, such as `module X import pkg::*; #(...)`. The text is
+ * scanned line by line. Only the lines are kept, so the text can be dropped once the index is built.
  */
-async function indexProject(texts: Map<string, string>, rels: string[]): Promise<Project> {
+function scanCandidates(text: string): ScanCandidate[] {
+  const out: ScanCandidate[] = [];
+  // Lifetime keywords (`automatic`, `static`) and the `class` of `interface class` come before the name.
+  const re = /^[ \t]*(module|interface|package)\s+((?:(?:static|automatic|class)\s+)*)(\w+)/;
+  // Comments are blanked to spaces, keeping line breaks and widths, so the line numbers and lengths stay true.
+  const stripped = text.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, (c) => c.replace(/[^\n]/g, " "));
+  const rawLines = text.split("\n");
+  stripped.split("\n").forEach((line, i) => {
+    const m = re.exec(line);
+    const name = m?.[3];
+    if (!m || name === undefined) return;
+    // `interface class` declares a class, which is not instantiable like an interface.
+    const hdl: Hdl = m[1] === "module" ? "module" : m[1] === "package" ? "package" : /\bclass\b/.test(m[2] ?? "") ? "class" : "interface";
+    out.push({ name, hdl, line: i, length: rawLines[i]?.length ?? line.length });
+  });
+  return out;
+}
+
+/**
+ * Adds the scanned definitions of one unit whose names the tree did not already define. Runs after every file is
+ * indexed, so the tree's definitions of the file are known.
+ */
+function registerScanned(unit: Unit, candidates: ScanCandidate[], p: Project): void {
+  if (unit.errorCount === 0) return;
+  const known = new Set((p.declsByName.get("") ?? []).map((d) => d.name));
+  for (const refs of p.declsByName.values()) for (const d of refs) if (d.file === unit.rel) known.add(d.name);
+  for (const c of candidates) {
+    if (known.has(c.name)) continue;
+    known.add(c.name);
+    const id = unit.ids.take(declId(unit.rel, c.name));
+    const ref: DeclRef = { name: c.name, hdl: c.hdl, file: unit.rel, id };
+    if (!p.decls.has(c.name)) p.decls.set(c.name, ref);
+    p.declsByName.set(c.name, [...(p.declsByName.get(c.name) ?? []), ref]);
+    unit.scanned.push({ name: c.name, hdl: c.hdl, line: c.line, length: c.length, id });
+  }
+}
+
+/** How many times the project pass has run. Tests read it to check that a retry reuses the index. */
+export const indexStats = { builds: 0 };
+
+/**
+ * Indexes the definitions of every file. Each file is parsed once here and its tree is freed at once; the
+ * emit step parses it again. Only plain data is kept: no source text is held, so the result is small.
+ */
+export async function indexProject(texts: Map<string, string>): Promise<Project> {
+  indexStats.builds++;
+  const rels = [...texts.keys()].sort();
   const parser = await getParser();
   const p: Project = {
     units: new Map(),
@@ -352,12 +378,13 @@ async function indexProject(texts: Map<string, string>, rels: string[]): Promise
     bases: new Map(),
     idOf: new Map(),
   };
+  const scans = new Map<string, ScanCandidate[]>();
   for (const rel of rels) {
     const text = texts.get(rel) ?? "";
     const tree = parser.parse(text);
     if (!tree) throw new Error(`could not parse ${rel}`);
     const root = tree.rootNode;
-    const unit: Unit = { rel, text, errorCount: root.hasError ? errorNodes(root).length : 0, ids: new Ids(), scanned: [], varTypes: new Map() };
+    const unit: Unit = { rel, errorCount: root.hasError ? errorNodes(root).length : 0, ids: new Ids(), scanned: [], varTypes: new Map() };
     try {
       const imports = new Set<string>();
       collectDecls(unit, root, p, imports);
@@ -367,30 +394,36 @@ async function indexProject(texts: Map<string, string>, rels: string[]): Promise
       tree.delete();
     }
     p.units.set(rel, unit);
+    if (unit.errorCount > 0) scans.set(rel, scanCandidates(text));
   }
-  for (const unit of p.units.values()) scanDefs(unit, p);
+  for (const unit of p.units.values()) registerScanned(unit, scans.get(unit.rel) ?? [], p);
   return p;
 }
 
-/** The last project indexed, with the hash of the files it was built from. It holds the source texts, so the extract run releases it. */
+/**
+ * The last project indexed, keyed by a digest of the sorted file names and each file's content hash. It holds
+ * no source text, only the index, so it is kept for the life of the process: a retry of the same project reuses it.
+ */
 let lastProject: { key: string; project: Project } | undefined;
 
-/** Drops the cached project and the source texts it holds. Called when an extract run finishes. */
+/** Drops the cached index. Tests use it to start from an empty cache. Extract runs do not call it. */
 export function releaseProject(): void {
   lastProject = undefined;
 }
 
 /**
- * Indexes the project's definitions across its files. The last result is kept, keyed by a hash of the
- * file names and contents, so a retry within the same extract run reuses it. Edited text gives a new key.
+ * Indexes the project's definitions across its files. Reuses the last index when the file names and contents
+ * match it, so a retry of the same project does not parse again. Any edited file gives a new key.
  */
 export async function buildProject(texts: Map<string, string>): Promise<Project> {
-  const rels = [...texts.keys()].sort();
-  const hash = createHash("sha256");
-  for (const rel of rels) hash.update(rel).update("\u0000").update(texts.get(rel) ?? "").update("\u0000");
-  const key = hash.digest("hex");
+  const digest = createHash("sha256");
+  for (const rel of [...texts.keys()].sort()) {
+    const content = createHash("sha256").update(texts.get(rel) ?? "").digest("hex");
+    digest.update(rel).update("\u0000").update(content).update("\u0000");
+  }
+  const key = digest.digest("hex");
   if (lastProject?.key === key) return lastProject.project;
-  const project = await indexProject(texts, rels);
+  const project = await indexProject(texts);
   lastProject = { key, project };
   return project;
 }

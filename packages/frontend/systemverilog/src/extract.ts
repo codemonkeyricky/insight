@@ -177,14 +177,14 @@ function portsOf(n: SyntaxNode, header: SyntaxNode | undefined): Array<{ name: s
 }
 
 /**
- * Facts for one file, from the project pass. The file is parsed here and its tree is freed before returning.
- * Files with parse errors get inferred facts and one finding.
+ * Facts for one file, from the project pass. `text` is the file's source, read by the caller; the index holds no text.
+ * The file is parsed here and its tree is freed before returning. Files with parse errors get inferred facts and one finding.
  */
-export async function emitUnit(project: Project, rel: string): Promise<IRBatch> {
+export async function emitUnit(project: Project, rel: string, text: string): Promise<IRBatch> {
   const unit = project.units.get(rel);
   if (!unit) return { file: rel, records: [] };
   const parser = await getParser();
-  const tree = parser.parse(unit.text);
+  const tree = parser.parse(text);
   if (!tree) throw new Error(`could not parse ${rel}`);
   try {
     return emitTree(project, unit, tree.rootNode);

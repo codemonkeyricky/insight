@@ -6,7 +6,7 @@ import { type IRRecord, type IREdge, type IRNode, validateIR } from "@insight/ir
 import { createCoreRegistry } from "@insight/ir/node";
 import { runFrontendConformance, type IRBatch, type ProjectRoot } from "@insight/sdk";
 import frontend, { extractFiles } from "../src/index.js";
-import { buildProject, releaseProject } from "../src/project.js";
+import { buildProject, indexStats, releaseProject } from "../src/project.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(here, "fixtures");
@@ -443,7 +443,7 @@ describe("round 3 fixes", () => {
     expect(f?.provenance?.confidence).toBe("exact");
   });
 
-  it("fix 5: an edit to the text invalidates the cached index, and a finished extract run releases it", async () => {
+  it("fix 5: an edit to the text invalidates the cached index, and a finished extract run keeps it", async () => {
     const a = new Map([["a.sv", "module m1; endmodule\n"]]);
     const first = await buildProject(a);
     const edited = await buildProject(new Map([["a.sv", "module m2; endmodule\n"]]));
@@ -452,11 +452,11 @@ describe("round 3 fixes", () => {
     expect(edited.decls.has("m1")).toBe(false);
     releaseProject();
     expect(await buildProject(a)).not.toBe(first);
-    // A finished extract run drops the index it built.
+    // A finished extract run keeps the index it built, so the next run over the same texts reuses it.
     const texts = new Map(["pk.sv", "sub.sv", "inst.sv"].map((rel) => [rel, readFileSync(join(round2, rel), "utf8")]));
     const before = await buildProject(texts);
     await extractDir(round2, [...texts.keys()]);
-    expect(await buildProject(texts)).not.toBe(before);
+    expect(await buildProject(texts)).toBe(before);
   });
 
   it("fix 6: over-limit sources are sized from the file system, so each file is read once", async () => {
@@ -492,6 +492,75 @@ describe("round 3 fixes", () => {
     for await (const _ of extractFiles(ctx, 10)) void _;
     // One read in the pre-pass takes the total over the limit; the per-file pass reads each file once.
     expect(reads).toBe(1 + all.length);
+  });
+});
+
+describe("index cache across retries", () => {
+  const round2 = join(fixturesDir, "round2");
+  const all = ["pk.sv", "sub.sv", "inst.sv", "ctor.sv"];
+  const readRound2 = (rel: string) => readFileSync(join(round2, rel), "utf8");
+  const extractWith = async (targets: string[], read: (rel: string) => string = readRound2): Promise<IRBatch[]> => {
+    const ctx = {
+      root: { path: round2, name: "x", allowBuildTools: false },
+      files: targets,
+      listFiles: () => [...all],
+      readFile: async (rel: string) => read(rel),
+      log: () => undefined,
+    };
+    const out: IRBatch[] = [];
+    for await (const batch of frontend.extract(ctx)) out.push(batch);
+    return out;
+  };
+
+  it("(a) a retry over the same project reuses the index: the pre-pass parses once", async () => {
+    releaseProject();
+    const before = indexStats.builds;
+    await extractWith(all);
+    expect(indexStats.builds - before).toBe(1);
+    await extractWith(["inst.sv"]);
+    await extractWith(["pk.sv"]);
+    expect(indexStats.builds - before).toBe(1);
+  });
+
+  it("(b) changing one file's text between calls rebuilds the index, and the retry then reuses the new one", async () => {
+    releaseProject();
+    await extractWith(all);
+    const built = indexStats.builds;
+    const edited = (rel: string) => (rel === "inst.sv" ? `${readRound2(rel)}\n// edited between runs\n` : readRound2(rel));
+    await extractWith(["inst.sv"], edited);
+    expect(indexStats.builds - built).toBe(1);
+    await extractWith(["inst.sv"], edited);
+    expect(indexStats.builds - built).toBe(1);
+  });
+
+  it("(c) the cached index holds no source text", async () => {
+    releaseProject();
+    const texts = new Map(all.map((rel) => [rel, readRound2(rel)]));
+    const index = await buildProject(texts);
+    // Every string reachable from the index. A leaked file would show up as a string as long as the longest file.
+    const strings: string[] = [];
+    const seen = new Set<object>();
+    const walk = (v: unknown): void => {
+      if (typeof v === "string") {
+        strings.push(v);
+        return;
+      }
+      if (v === null || typeof v !== "object" || seen.has(v)) return;
+      seen.add(v);
+      if (v instanceof Map) {
+        for (const [k, x] of v) {
+          walk(k);
+          walk(x);
+        }
+        return;
+      }
+      for (const x of Object.values(v)) walk(x);
+    };
+    walk(index);
+    const longest = Math.max(...[...texts.values()].map((t) => t.length));
+    expect(longest).toBeGreaterThan(0);
+    expect(Math.max(...strings.map((s) => s.length))).toBeLessThan(longest);
+    expect([...index.units.values()].every((u) => !("text" in u))).toBe(true);
   });
 });
 
