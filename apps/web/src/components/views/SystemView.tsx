@@ -97,11 +97,15 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
   const [widened, setWidened] = useState<ReadonlySet<string>>(() => new Set());
   /** Auto-collapsed groups the user opened (a thread's coroutine summary, a big unthreaded frame). */
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
-  useLayoutEffect(() => {
+  // A new model starts with everything folded the default way. Reset while rendering (not in an effect), so the first layout
+  // of the new model is already the default one and the auto-fit below measures it.
+  const [stateSys, setStateSys] = useState(sys);
+  if (stateSys !== sys) {
+    setStateSys(sys);
     setCollapsed(new Set());
     setWidened(new Set());
     setOpen(new Set());
-  }, [sys]);
+  }
   const layout = useMemo(() => (pipeline !== undefined ? layoutSystem(sys, layoutOptions) : layoutSystemFrames(sys, { collapsed, widened, open })), [sys, layoutOptions, pipeline, collapsed, widened, open]);
   const toggleOpen = useCallback((key: string) => {
     setOpen((o) => {
@@ -128,6 +132,12 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
   const [hover, setHover] = useState<string | null>(null);
   const [cam, setCam] = useState<Camera>({ k: 1, x: 0, y: 0 });
   const [expanded, setExpanded] = useState(false);
+  /** The scale of the last fit: zooming out stops there when it is below MIN_K (a large diagram fits at 0.02). */
+  const fitK = useRef(1);
+  /** The newest layout, for `fit`, so toggling a frame (which changes the layout) does not refit and lose the user's zoom and pan. */
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
+  const minK = (): number => Math.min(MIN_K, fitK.current);
   /** The stage's height in px: the room the window leaves, at least 60vh. Null while expanded (the view fills the window). */
   const [stageH, setStageH] = useState<number | null>(null);
   const stage = useRef<HTMLDivElement>(null);
@@ -144,12 +154,15 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
     // The legend sits along the bottom edge, so the diagram is fitted above it.
     // On a phone the legend wraps onto several lines, so measure it rather than assume one row.
     const legendH = Math.max(LEGEND_H, (el?.querySelector<HTMLElement>(".sysv-legend")?.offsetHeight ?? 0) + 16);
-    setCam(fitCamera(layout, w, h - legendH, pipeline === undefined ? SYSTEM_FIT_MIN_K : FIT_MIN_K));
-  }, [layout, expanded, pipeline]);
-  // Fits when a layout arrives (a new scope, the tests flag) or the view expands, and clears the selection of the old layout.
+    const cam = fitCamera(layoutRef.current, w, h - legendH, pipeline === undefined ? SYSTEM_FIT_MIN_K : FIT_MIN_K);
+    fitK.current = cam.k;
+    setCam(cam);
+  }, [expanded, pipeline]);
+  // Fits when a new model arrives (a new scope, the tests flag), the view expands or the layout options change. Collapsing,
+  // widening or grouping changes the layout but keeps the user's zoom and pan.
   useLayoutEffect(() => {
     fit();
-  }, [fit]);
+  }, [fit, sys, layoutOptions]);
   useLayoutEffect(() => {
     setSel(null);
     setHover(null);
@@ -175,7 +188,7 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
       const px = e.clientX - r.left;
       const py = e.clientY - r.top;
       setCam((c) => {
-        const k = Math.min(MAX_K, Math.max(MIN_K, c.k * Math.exp(-e.deltaY * 0.0015)));
+        const k = Math.min(MAX_K, Math.max(minK(), c.k * Math.exp(-e.deltaY * 0.0015)));
         const s = k / c.k;
         return { k, x: px - (px - c.x) * s, y: py - (py - c.y) * s };
       });
@@ -189,7 +202,7 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
     const px = (el?.clientWidth ?? 800) / 2;
     const py = (el?.clientHeight ?? 500) / 2;
     setCam((c) => {
-      const k = Math.min(MAX_K, Math.max(MIN_K, c.k * f));
+      const k = Math.min(MAX_K, Math.max(minK(), c.k * f));
       const s = k / c.k;
       return { k, x: px - (px - c.x) * s, y: py - (py - c.y) * s };
     });
@@ -255,16 +268,23 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
   };
   const pickNode = (b: SysBox) => setSel({ kind: "node", id: b.id });
   const pickEdge = (a: SysArrow) => setSel({ kind: "edge", id: a.id });
-  const frameKey = (id: string, e: KeyboardEvent<SVGGElement>) => {
-    if (e.key === "Enter" || e.key === " ") {
+  // Enter does what a click does (selects the frame, or opens a coroutine summary); Space does what a double-click does
+  // (collapses or expands it). The selected frame's panel also has the Collapse and Group buttons.
+  const frameKey = (f: SysFrame, e: KeyboardEvent<SVGGElement>) => {
+    if (e.key === "Enter") {
       e.preventDefault();
-      toggleFrame(id);
+      if (f.openKey !== undefined) toggleOpen(f.openKey);
+      else setSel({ kind: "node", id: f.id });
+    } else if (e.key === " ") {
+      e.preventDefault();
+      toggleFrame(f.id);
     }
   };
   const nodeKey = (b: SysBox, e: KeyboardEvent<SVGGElement>) => {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      pickNode(b);
+      if (b.kind === "more" && b.frame !== undefined) widen(b.frame);
+      else pickNode(b);
     }
   };
   const edgeKey = (a: SysArrow, e: KeyboardEvent<SVGGElement>) => {
@@ -277,7 +297,8 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
   // The edges keep their order: moving the DOM nodes of a hovered edge would swallow the click that follows the hover.
   const arrows = layout.arrows;
 
-  const empty = layout.boxes.length === 0;
+  // A collapsed lone process has frames but no boxes: it is not empty, and its header is how to open it again.
+  const empty = layout.boxes.length === 0 && (layout.frames ?? []).length === 0;
   // Content past the stage's edge: a fade along the right edge and a hint to pan.
   const stageW = stage.current?.clientWidth ?? 0;
   const stageHt = stage.current?.clientHeight ?? 0;
@@ -400,8 +421,8 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
                       aria-expanded={!f.collapsed}
                       aria-label={`${f.title}, ${f.sub}, ${f.collapsed ? "collapsed" : "expanded"}`}
                       onClick={() => (f.openKey !== undefined ? toggleOpen(f.openKey) : setSel({ kind: "node", id: f.id }))}
-                      onDoubleClick={() => toggleFrame(f.id)}
-                      onKeyDown={(e) => frameKey(f.id, e)}
+                      onDoubleClick={() => (f.openKey !== undefined ? undefined : toggleFrame(f.id))}
+                      onKeyDown={(e) => frameKey(f, e)}
                       onMouseEnter={() => setHover(f.id)}
                       onMouseLeave={() => setHover(null)}
                       onFocus={() => setHover(f.id)}
@@ -486,7 +507,7 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
                       data-node={b.id}
                       role="button"
                       tabIndex={0}
-                      aria-label={b.kind === "component" ? `${b.component?.label}, ${b.sub}` : `${b.external?.label}, outside system`}
+                      aria-label={boxLabel(b)}
                       onClick={() => (b.kind === "more" && b.frame !== undefined ? widen(b.frame) : pickNode(b))}
                       onDoubleClick={() => (b.kind === "component" && b.component ? openScope(b.component.path) : undefined)}
                       onKeyDown={(e) => nodeKey(b, e)}
@@ -551,6 +572,28 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
       </div>
     </div>
   );
+}
+
+/** What a screen reader says for a box: its name and what kind of thing it is. Never "undefined". */
+export function boxLabel(b: SysBox): string {
+  switch (b.kind) {
+    case "component":
+      return `${b.component?.label ?? b.title}, ${b.sub}`;
+    case "slice":
+      return `${b.title}, slice${b.sub !== "" ? `, ${b.sub}` : ""}`;
+    case "chip":
+      return `${b.title}, call into the kernel or an outside system`;
+    case "more":
+      return `${b.title} slices, show all`;
+    case "os":
+      return `${b.title}, kernel operation${b.sub !== "" ? `, ${b.sub}` : ""}`;
+    case "resource":
+      return `${b.title}, ${b.resource?.kind ?? "resource"}`;
+    case "external":
+      return `${b.external?.label ?? b.title}, outside system`;
+    default:
+      return b.title;
+  }
 }
 
 function ResourceGlyph({ x, y, kind }: { x: number; y: number; kind: string }) {
@@ -717,7 +760,7 @@ function EdgeList({ title, id, rows, nameOf, onSelect }: { title: string; id: st
               <span className={`sysv-verb v-${a.edge.verb}`}>{a.pill.text || a.edge.verb}</span> <span className="mono small">{nameOf(a)}</span>
             </button>
             <SiteLinks id={id} sites={a.edge.sites.slice(0, 3)} />
-            {a.edge.sites.length > 3 && <span className="muted small"> +{a.edge.sites.length - 3} more in the edge</span>}
+            {a.edge.count > Math.min(3, a.edge.sites.length) && <span className="muted small"> +{a.edge.count - Math.min(3, a.edge.sites.length)} more in the edge</span>}
           </li>
         ))}
       </ul>

@@ -87,6 +87,8 @@ interface FNode {
   portTop?: number;
 }
 
+/** An inferred edge is drawn dashed and faded, except the Pipeline's produces and feeds facts. Direct and bundled arrows agree. */
+const isInferred = (e: SystemEdge): boolean => e.confidence === "inferred" && e.verb !== "produces" && e.verb !== "feeds";
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 const plural = (n: number, one: string): string => `${n} ${n === 1 ? one : `${one}s`}`;
 
@@ -115,7 +117,11 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
   const grounded = sys.runtime === "grounded" && (sys.runtimes ?? []).length > 0;
   const compById = new Map(sys.components.map((c) => [c.id, c]));
   const routesBy = new Map<string, SystemRoute[]>();
-  for (const r of sys.routes) routesBy.set(r.component, [...(routesBy.get(r.component) ?? []), r]);
+  for (const r of sys.routes) {
+    const l = routesBy.get(r.component);
+    if (l === undefined) routesBy.set(r.component, [r]);
+    else l.push(r);
+  }
 
   // Columns: the stage of each component, densely numbered over the components that are drawn.
   const stageOf = new Map<string, number>();
@@ -187,12 +193,19 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
     // A coroutine frame shows only the components it runs that its thread does not run itself (and the one it starts in).
     // The rest repeat the thread's own slices: they are counted in the header ("also runs N components of Main thread")
     // and their edges sit on the coroutine's header, so nothing is hidden, only not drawn twice.
+    const componentsOnRuntime = new Map<string, Set<string>>();
+    for (const s of slices) {
+      const set = componentsOnRuntime.get(s.runtime) ?? new Set<string>();
+      set.add(s.component);
+      componentsOnRuntime.set(s.runtime, set);
+    }
     for (const n of nodes) {
       if (n.kind !== "coroutine" || n.rt?.parent === undefined) continue;
       const parentRt = n.rt.parent;
-      const onParent = new Set(slices.filter((s) => s.runtime === parentRt).map((s) => s.component));
+      const onParent = componentsOnRuntime.get(parentRt) ?? new Set<string>();
       const own = n.slices.filter((s) => !onParent.has(s.component));
-      const shared = n.slices.filter((s) => !own.includes(s));
+      const ownSet = new Set(own);
+      const shared = n.slices.filter((s) => !ownSet.has(s));
       if (shared.length === 0) continue;
       n.slices = own;
       n.shared = shared.length;
@@ -212,7 +225,20 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
     // their own edges sit on the summary's header.
     {
       const byHolder = new Map<string, FNode[]>();
-      for (const n of nodes) if (n.kind === "coroutine" && n.container !== undefined && frameById.has(n.container)) byHolder.set(n.container, [...(byHolder.get(n.container) ?? []), n]);
+      for (const n of nodes) {
+        if (n.kind !== "coroutine" || n.container === undefined || !frameById.has(n.container)) continue;
+        const list = byHolder.get(n.container);
+        if (list === undefined) byHolder.set(n.container, [n]);
+        else list.push(n);
+      }
+      // The slice ids each coroutine frame carries at its header (see hiddenAt), so a coroutine folded into a summary hands them on.
+      const hiddenBy = new Map<string, string[]>();
+      for (const [k, v] of hiddenAt) {
+        const l = hiddenBy.get(v);
+        if (l === undefined) hiddenBy.set(v, [k]);
+        else l.push(k);
+      }
+      const gone = new Set<FNode>();
       for (const [holderId, list] of byHolder) {
         if (list.length <= GROUP_MIN) continue;
         const isOpen = open.has(holderId);
@@ -234,14 +260,21 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
         frameById.set(gid, g);
         autoCollapsed.add(gid);
         for (const c of list) {
-          g.slices.push(...c.slices);
-          for (const sl of c.slices) frameOfItem.set(sl.id, gid);
-          for (const [k, v] of [...hiddenAt]) if (v === c.id) hiddenAt.set(k, gid);
+          for (const sl of c.slices) {
+            g.slices.push(sl);
+            frameOfItem.set(sl.id, gid);
+          }
+          for (const k of hiddenBy.get(c.id) ?? []) hiddenAt.set(k, gid);
           frameOfItem.set(c.id, gid);
           frameById.delete(c.id);
-          nodes.splice(nodes.indexOf(c), 1);
+          gone.add(c);
         }
         nodes.push(g);
+      }
+      if (gone.size > 0) {
+        const kept = nodes.filter((n) => !gone.has(n));
+        nodes.length = 0;
+        nodes.push(...kept);
       }
       for (const n of nodes) {
         if (n.kind === "unthreaded" && n.slices.length > GROUP_MIN && !open.has(n.id)) {
@@ -530,11 +563,12 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
     outBottom = y - OUT_GAP;
   }
   const envRes = resources.find((r) => r.kind === "env");
-  const endpoint = (id: string): SysBox | SysFrame | undefined => {
-    const b = boxes.find((x) => x.id === id);
-    if (b !== undefined) return b;
-    return frames.find((f) => f.id === id);
-  };
+  // Boxes and frames are all placed by now (the chips come later): look ends up by id, the first of each id winning.
+  const boxById = new Map<string, SysBox>();
+  for (const b of boxes) if (!boxById.has(b.id)) boxById.set(b.id, b);
+  const frameObj = new Map<string, SysFrame>();
+  for (const f of frames) if (!frameObj.has(f.id)) frameObj.set(f.id, f);
+  const endpoint = (id: string): SysBox | SysFrame | undefined => boxById.get(id) ?? frameObj.get(id);
   // A hidden item (under a collapsed frame) is drawn at the header of its outermost collapsed frame.
   const headerOf = (frameId: string | undefined): SysFrame | undefined => {
     let outer: string | undefined;
@@ -543,7 +577,7 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
       if (isCol(cur)) outer = cur;
       cur = frameById.get(cur)?.container;
     }
-    return outer === undefined ? undefined : frames.find((f) => f.id === outer);
+    return outer === undefined ? undefined : frameObj.get(outer);
   };
   const resolve = (id: string): SysBox | SysFrame | undefined => {
     const direct = endpoint(id);
@@ -553,7 +587,7 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
     if (collapsedHeader !== undefined) return collapsedHeader;
     // A slice a coroutine shares with its thread is drawn at the coroutine's header.
     const holder = hiddenAt.get(id);
-    return holder === undefined ? undefined : frames.find((f) => f.id === holder);
+    return holder === undefined ? undefined : frameObj.get(holder);
   };
 
   interface Pending {
@@ -625,15 +659,19 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
     planned.push({ idx, from, to, edge, ...(band !== undefined ? { band } : {}), toNode: to.id, fromNode: from.id, text, sides: [sa, sb] });
     const ka = portKey(from, sa);
     const kb = portKey(to, sb);
-    sidePorts.set(ka, [...(sidePorts.get(ka) ?? []), { idx: planned.length - 1, other: centreY(to) }]);
-    sidePorts.set(kb, [...(sidePorts.get(kb) ?? []), { idx: planned.length - 1, other: centreY(from) }]);
+    const pa = sidePorts.get(ka);
+    if (pa === undefined) sidePorts.set(ka, [{ idx: planned.length - 1, other: centreY(to) }]);
+    else pa.push({ idx: planned.length - 1, other: centreY(to) });
+    const pb = sidePorts.get(kb);
+    if (pb === undefined) sidePorts.set(kb, [{ idx: planned.length - 1, other: centreY(from) }]);
+    else pb.push({ idx: planned.length - 1, other: centreY(from) });
   };
   // The top-level frame (process or unthreaded) an end sits in, when it sits in one.
   const topFrameOf = (n: SysBox | SysFrame): SysFrame | undefined => {
     if (!grounded) return undefined;
     let cur: FNode | undefined = frameById.get("hdrH" in n ? n.id : (n.frame ?? ""));
     for (let guard = 0; cur?.container !== undefined && guard < 100; guard++) cur = frameById.get(cur.container);
-    return cur === undefined ? undefined : frames.find((f) => f.id === cur?.id);
+    return cur === undefined ? undefined : frameObj.get(cur.id);
   };
   interface Bundled {
     top: SysFrame;
@@ -670,16 +708,22 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
     addPlanned(idx++, chipBox.get(row.chipId) as SysBox, row.p.to, row.p.edge, "out", "");
   }
   // Obstacles for routing: every card and every frame header, except the edge's own ends.
-  const obstacles = (fromId: string, toId: string): Rect[] => [
-    ...boxes.filter((b) => b.id !== fromId && b.id !== toId).map((b) => ({ x: b.x, y: b.y, w: b.w, h: b.h })),
-    ...frames.filter((f) => f.id !== fromId && f.id !== toId).map((f) => ({ x: f.x, y: f.y, w: f.w, h: f.hdrH })),
-  ];
+  // Built once and indexed on a grid: the boxes and frame headers do not move while edges are routed.
+  const obstacles = new ObstacleGrid();
+  for (const b of boxes) obstacles.add(b.id, { x: b.x, y: b.y, w: b.w, h: b.h });
+  for (const f of frames) obstacles.add(f.id, { x: f.x, y: f.y, w: f.w, h: f.hdrH });
   const portAt = new Map<number, { x1: number; y1: number; x2: number; y2: number }>();
-  const slot = (n: SysBox | SysFrame, side: "l" | "r", planIdx: number): number => {
-    const list = (sidePorts.get(portKey(n, side)) ?? []).slice().sort((p, q) => p.other - q.other || p.idx - q.idx);
-    const i = list.findIndex((p) => p.idx === planIdx);
-    return i < 0 ? 0 : i;
-  };
+  // The slot of a port among those on its side, ordered by the other end: sorted once per side.
+  const slotOf = new Map<string, Map<number, number>>();
+  for (const [k, list] of sidePorts) {
+    list.sort((p, q) => p.other - q.other || p.idx - q.idx);
+    const m = new Map<number, number>();
+    list.forEach((q, i) => {
+      if (!m.has(q.idx)) m.set(q.idx, i);
+    });
+    slotOf.set(k, m);
+  }
+  const slot = (n: SysBox | SysFrame, side: "l" | "r", planIdx: number): number => slotOf.get(portKey(n, side))?.get(planIdx) ?? 0;
   for (const p of planned) {
     const a = p.from;
     const b = p.to;
@@ -703,8 +747,8 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
     let samples = bezierSamples(segs);
     // A curve that crosses a card or a frame header it does not end at is redrawn as an orthogonal route around them,
     // in the gutters, entering each end from its side. Headers are obstacles, so no edge runs through a frame's title band.
-    if (samples.slice(1, -1).some((q) => obstacleAt(q, obstacles(p.fromNode, p.toNode)))) {
-      const pts = routeAround([x1, y1], [x2, y2], obstacles(p.fromNode, p.toNode));
+    if (samples.slice(1, -1).some((q) => obstacles.contains(q, p.fromNode, p.toNode))) {
+      const pts = routeAround([x1, y1], [x2, y2], obstacles, p.fromNode, p.toNode);
       if (pts !== undefined) {
         d = `M${pts.map((q) => `${num(q[0])} ${num(q[1])}`).join(" L")}`;
         samples = polyline(pts);
@@ -721,7 +765,7 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
       samples,
       pill: { x: 0, y: 0, w: 0, h: PILL_H, text },
       dashed: edge.verb === "runs" || edge.verb === "spawns",
-      inferred: edge.confidence === "inferred" && edge.verb !== "produces" && edge.verb !== "feeds",
+      inferred: isInferred(edge),
       ...(p.band !== undefined ? { band: p.band } : {}),
     });
   }
@@ -764,7 +808,7 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
         let inner: Array<[number, number]> = [[sx, sy], [port.x, port.y]];
         if (from.id === top.id) inner = [[port.x, port.y], [port.x, port.y]];
         else {
-          const routed = routeAround([sx, sy], [port.x, port.y], obstacles(from.id, target.id));
+          const routed = routeAround([sx, sy], [port.x, port.y], obstacles, from.id, target.id);
           inner = routed ?? [[sx, sy], [sx + 20, sy], [sx + 20, port.y], [port.x, port.y]];
         }
         arrows.push({
@@ -776,7 +820,7 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
           samples: [...polyline(inner), ...trunkSamples],
           pill: { x: 0, y: 0, w: 0, h: PILL_H, text: pillText(edge) },
           dashed: edge.verb === "runs" || edge.verb === "spawns",
-          inferred: edge.confidence === "inferred",
+          inferred: isInferred(edge),
           bundled: true,
           noPill: true,
           ...(isOs(target) ? {} : { band: "in" as const }),
@@ -800,10 +844,10 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
   }
 
   // Pills: on the curve, slid along it and nudged off every card, header, chip and other pill. A trunk's pill is its count.
-  const taken: Array<{ x: number; y: number; w: number; h: number }> = [
-    ...boxes.map((b) => ({ x: b.x - 4, y: b.y - 4, w: b.w + 8, h: b.h + 8 })),
-    ...frames.map((f) => ({ x: f.x, y: f.y, w: f.w, h: HDR_H })),
-  ];
+  const taken = new RectGrid();
+  for (const b of boxes) taken.add({ x: b.x - 4, y: b.y - 4, w: b.w + 8, h: b.h + 8 });
+  for (const f of frames) taken.add({ x: f.x, y: f.y, w: f.w, h: HDR_H });
+  const topFrames = frames.filter((f) => f.parent === undefined);
   const placePill = (samples: Array<{ x: number; y: number }>, text: string, order: number[], mustShow = true, constrain = false): { x: number; y: number; w: number; h: number; text: string } => {
     const w = Math.round(text.length * 8.2 + 20);
     const at = arcAt(samples);
@@ -814,8 +858,8 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
       for (const off of NUDGES) {
         const c = at(t);
         const r = { x: c.x - w / 2, y: c.y + off - PILL_H / 2, w, h: PILL_H };
-        const homed = !constrain || frames.length === 0 || frames.some((f) => f.parent === undefined && c.x > f.x && c.x < f.x + f.w && c.y + off > f.y && c.y + off < f.y + f.h) || c.x >= band.x;
-        if (homed && !taken.some((o) => overlaps(r, o))) {
+        const homed = !constrain || frames.length === 0 || topFrames.some((f) => c.x > f.x && c.x < f.x + f.w && c.y + off > f.y && c.y + off < f.y + f.h) || c.x >= band.x;
+        if (homed && !taken.overlapsAny(r)) {
           chosen = { x: c.x, y: c.y + off };
           break;
         }
@@ -825,7 +869,7 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
     // No free spot near the edge: a crowded edge shows no pill (its count stays in the panel) rather than one on a card.
     if (chosen === undefined && !mustShow) return { x: 0, y: 0, w: 0, h: PILL_H, text: "" };
     const c = chosen ?? at(order[0] ?? 0.5);
-    taken.push({ x: c.x - w / 2, y: c.y - PILL_H / 2, w, h: PILL_H });
+    taken.add({ x: c.x - w / 2, y: c.y - PILL_H / 2, w, h: PILL_H });
     return { x: c.x, y: c.y, w, h: PILL_H, text };
   };
   for (const a of arrows) {
@@ -836,7 +880,7 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
     if (t.pill.text === "") continue;
     t.pill = placePill(t.samples, t.pill.text, [0.3, 0.22, 0.38, 0.5, 0.62]);
   }
-  if (arrows.length === 0 && boxes.length === 0) return { focusY: 0, width: 0, height: 0, columns: [], groups: [], boxes: [], arrows: [] };
+  if (arrows.length === 0 && boxes.length === 0 && frames.length === 0) return { focusY: 0, width: 0, height: 0, columns: [], groups: [], boxes: [], arrows: [] };
   const first = boxes.filter((b) => b.column === 0 && b.kind !== "external");
   const focusY = first.length === 0 ? height / 2 : first.reduce((s, b) => s + b.y + b.h / 2, 0) / first.length;
   return {
@@ -939,72 +983,170 @@ function endY(n: SysBox | SysFrame, slot: number, count: number): number {
 
 interface Rect { x: number; y: number; w: number; h: number }
 
-/** True when a point is inside (or on the border of) one of the rectangles. */
-function obstacleAt(q: { x: number; y: number }, rects: Rect[]): boolean {
-  return rects.some((r) => q.x >= r.x && q.x <= r.x + r.w && q.y >= r.y && q.y <= r.y + r.h);
+const GRID_CELL = 128;
+const cellKey = (cx: number, cy: number): number => (cx + 32768) * 65536 + (cy + 32768);
+
+/** Rectangles bucketed on a coarse grid, so a query looks only at the rectangles near it. */
+class RectGrid {
+  private readonly cells = new Map<number, Rect[]>();
+  add(r: Rect): void {
+    const x0 = Math.floor(r.x / GRID_CELL), x1 = Math.floor((r.x + r.w) / GRID_CELL);
+    const y0 = Math.floor(r.y / GRID_CELL), y1 = Math.floor((r.y + r.h) / GRID_CELL);
+    for (let cx = x0; cx <= x1; cx++) {
+      for (let cy = y0; cy <= y1; cy++) {
+        const k = cellKey(cx, cy);
+        const l = this.cells.get(k);
+        if (l === undefined) this.cells.set(k, [r]);
+        else l.push(r);
+      }
+    }
+  }
+  /** True when `q` overlaps a rectangle of the grid (strictly: touching edges do not count). */
+  overlapsAny(q: Rect): boolean {
+    const x0 = Math.floor(q.x / GRID_CELL), x1 = Math.floor((q.x + q.w) / GRID_CELL);
+    const y0 = Math.floor(q.y / GRID_CELL), y1 = Math.floor((q.y + q.h) / GRID_CELL);
+    for (let cx = x0; cx <= x1; cx++) {
+      for (let cy = y0; cy <= y1; cy++) {
+        const l = this.cells.get(cellKey(cx, cy));
+        if (l !== undefined && l.some((o) => overlaps(q, o))) return true;
+      }
+    }
+    return false;
+  }
 }
 
-/** True when an axis-aligned segment passes strictly through a rectangle's interior. */
-function segmentHits(ax: number, ay: number, bx: number, by: number, r: Rect): boolean {
-  const lo = Math.min(ax, bx), hi = Math.max(ax, bx), top = Math.min(ay, by), bot = Math.max(ay, by);
-  return lo < r.x + r.w && hi > r.x && top < r.y + r.h && bot > r.y;
+/** The routing obstacles (cards and frame headers) keyed by the id of the box or frame, so an edge can skip its own ends. */
+class ObstacleGrid {
+  private readonly cells = new Map<number, Array<Rect & { id: string }>>();
+  private readonly all: Array<Rect & { id: string }> = [];
+  add(id: string, r: Rect): void {
+    const o = { ...r, id };
+    this.all.push(o);
+    const x0 = Math.floor(r.x / GRID_CELL), x1 = Math.floor((r.x + r.w) / GRID_CELL);
+    const y0 = Math.floor(r.y / GRID_CELL), y1 = Math.floor((r.y + r.h) / GRID_CELL);
+    for (let cx = x0; cx <= x1; cx++) {
+      for (let cy = y0; cy <= y1; cy++) {
+        const k = cellKey(cx, cy);
+        const l = this.cells.get(k);
+        if (l === undefined) this.cells.set(k, [o]);
+        else l.push(o);
+      }
+    }
+  }
+  /** True when the point is inside (or on the border of) an obstacle other than the two ends. */
+  contains(q: { x: number; y: number }, a: string, b: string): boolean {
+    const l = this.cells.get(cellKey(Math.floor(q.x / GRID_CELL), Math.floor(q.y / GRID_CELL)));
+    return l !== undefined && l.some((r) => r.id !== a && r.id !== b && q.x >= r.x && q.x <= r.x + r.w && q.y >= r.y && q.y <= r.y + r.h);
+  }
+  /** The obstacles other than the two ends that reach into the window. */
+  within(minX: number, maxX: number, minY: number, maxY: number, a: string, b: string): Rect[] {
+    const seen = new Set<Rect & { id: string }>();
+    const out: Rect[] = [];
+    const x0 = Math.floor(minX / GRID_CELL), x1 = Math.floor(maxX / GRID_CELL);
+    const y0 = Math.floor(minY / GRID_CELL), y1 = Math.floor(maxY / GRID_CELL);
+    for (let cx = x0; cx <= x1; cx++) {
+      for (let cy = y0; cy <= y1; cy++) {
+        for (const r of this.cells.get(cellKey(cx, cy)) ?? []) {
+          if (seen.has(r)) continue;
+          seen.add(r);
+          if (r.id !== a && r.id !== b && r.x < maxX && r.x + r.w > minX && r.y < maxY && r.y + r.h > minY) out.push(r);
+        }
+      }
+    }
+    return out;
+  }
 }
 
 /**
  * Orthogonal route from a to b that keeps off every rectangle. Candidate lines sit ROUTE_GUTTER outside each
  * rectangle's edges, and a Dijkstra search over those lines charges a fixed cost per bend. Undefined when none exists.
  */
-function routeAround(a: [number, number], b: [number, number], obs: Rect[]): Array<[number, number]> | undefined {
+function routeAround(a: [number, number], b: [number, number], obs: ObstacleGrid, fromId: string, toId: string): Array<[number, number]> | undefined {
   const M = 80;
   const minX = Math.min(a[0], b[0]) - M, maxX = Math.max(a[0], b[0]) + M;
   const minY = Math.min(a[1], b[1]) - M, maxY = Math.max(a[1], b[1]) + M;
-  const near = obs.filter((r) => r.x < maxX && r.x + r.w > minX && r.y < maxY && r.y + r.h > minY);
+  const near = obs.within(minX, maxX, minY, maxY, fromId, toId);
   const xs = [...new Set([a[0], b[0], ...near.flatMap((r) => [r.x - ROUTE_GUTTER, r.x + r.w + ROUTE_GUTTER])])].sort((p, q) => p - q);
   const ys = [...new Set([a[1], b[1], ...near.flatMap((r) => [r.y - ROUTE_GUTTER, r.y + r.h + ROUTE_GUTTER])])].sort((p, q) => p - q);
   const nx = xs.length, ny = ys.length;
   const si = xs.indexOf(a[0]), sj = ys.indexOf(a[1]), ti = xs.indexOf(b[0]), tj = ys.indexOf(b[1]);
   if (si < 0 || sj < 0 || ti < 0 || tj < 0) return undefined;
   const DX = [1, -1, 0, 0], DY = [0, 0, 1, -1];
+  // Which lattice segments pass through a rectangle's interior, marked once per rectangle (a segment hits a rectangle when it passes strictly through its interior).
+  // blockedH[j * nx + i] is the segment (i, j) -> (i + 1, j); blockedV[j * nx + i] is (i, j) -> (i, j + 1).
+  const blockedH = new Uint8Array(nx * ny), blockedV = new Uint8Array(nx * ny);
+  const firstGt = (arr: number[], v: number): number => {
+    let lo = 0, hi = arr.length;
+    while (lo < hi) {
+      const m = (lo + hi) >> 1;
+      if ((arr[m] as number) > v) hi = m;
+      else lo = m + 1;
+    }
+    return lo;
+  };
+  for (const r of near) {
+    const right = r.x + r.w, bottom = r.y + r.h;
+    const i0 = firstGt(xs, r.x), j0 = firstGt(ys, r.y);
+    for (let j = j0; j < ny && (ys[j] as number) < bottom; j++) {
+      for (let i = Math.max(0, i0 - 1); i < nx - 1 && (xs[i] as number) < right; i++) blockedH[j * nx + i] = 1;
+    }
+    for (let i = i0; i < nx && (xs[i] as number) < right; i++) {
+      for (let j = Math.max(0, j0 - 1); j < ny - 1 && (ys[j] as number) < bottom; j++) blockedV[j * nx + i] = 1;
+    }
+  }
   const NONE = 4, STATES = nx * ny * 5;
   const key = (i: number, j: number, d: number): number => (j * nx + i) * 5 + d;
   const dist = new Float64Array(STATES).fill(Infinity);
   const prev = new Int32Array(STATES).fill(-1);
-  // Binary heap of [cost, state].
-  const heap: Array<[number, number]> = [];
+  // Binary heap of (cost, state), in two parallel arrays so no tuple is allocated per push.
+  const hc: number[] = [];
+  const hk: number[] = [];
   const push = (c: number, k: number): void => {
-    heap.push([c, k]);
-    let i = heap.length - 1;
+    let i = hc.length;
+    hc.push(c);
+    hk.push(k);
     while (i > 0) {
       const par = (i - 1) >> 1;
-      if ((heap[par] as [number, number])[0] <= (heap[i] as [number, number])[0]) break;
-      [heap[par], heap[i]] = [heap[i] as [number, number], heap[par] as [number, number]];
+      if ((hc[par] as number) <= c) break;
+      hc[i] = hc[par] as number;
+      hk[i] = hk[par] as number;
       i = par;
     }
+    hc[i] = c;
+    hk[i] = k;
   };
-  const pop = (): [number, number] | undefined => {
-    const top = heap[0];
-    const last = heap.pop();
-    if (heap.length > 0 && last !== undefined) {
-      heap[0] = last;
+  let popC = 0, popK = 0;
+  const pop = (): boolean => {
+    if (hc.length === 0) return false;
+    popC = hc[0] as number;
+    popK = hk[0] as number;
+    const lc = hc.pop() as number;
+    const lk = hk.pop() as number;
+    const n = hc.length;
+    if (n > 0) {
       let i = 0;
       for (;;) {
         const l = 2 * i + 1, r = l + 1;
         let m = i;
-        if (l < heap.length && (heap[l] as [number, number])[0] < (heap[m] as [number, number])[0]) m = l;
-        if (r < heap.length && (heap[r] as [number, number])[0] < (heap[m] as [number, number])[0]) m = r;
+        let mc = lc;
+        if (l < n && (hc[l] as number) < mc) { m = l; mc = hc[l] as number; }
+        if (r < n && (hc[r] as number) < mc) { m = r; mc = hc[r] as number; }
         if (m === i) break;
-        [heap[m], heap[i]] = [heap[i] as [number, number], heap[m] as [number, number]];
+        hc[i] = hc[m] as number;
+        hk[i] = hk[m] as number;
         i = m;
       }
+      hc[i] = lc;
+      hk[i] = lk;
     }
-    return top;
+    return true;
   };
   const start = key(si, sj, NONE);
   dist[start] = 0;
   push(0, start);
   let goal = -1;
-  while (heap.length > 0) {
-    const [c, k] = pop() as [number, number];
+  while (pop()) {
+    const c = popC, k = popK;
     if (c > (dist[k] as number)) continue;
     const d = k % 5;
     const cell = (k - d) / 5;
@@ -1014,7 +1156,7 @@ function routeAround(a: [number, number], b: [number, number], obs: Rect[]): Arr
       const ni = i + (DX[nd] as number), nj = j + (DY[nd] as number);
       if (ni < 0 || nj < 0 || ni >= nx || nj >= ny) continue;
       const x0 = xs[i] as number, y0 = ys[j] as number, x1 = xs[ni] as number, y1 = ys[nj] as number;
-      if (near.some((r) => segmentHits(x0, y0, x1, y1, r))) continue;
+      if (nd === 0 ? blockedH[j * nx + i] : nd === 1 ? blockedH[j * nx + ni] : nd === 2 ? blockedV[j * nx + i] : blockedV[nj * nx + i]) continue;
       const turn = d !== NONE && d !== nd ? 80 : 0;
       const nc = c + Math.abs(x1 - x0) + Math.abs(y1 - y0) + turn;
       const nk = key(ni, nj, nd);

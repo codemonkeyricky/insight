@@ -227,9 +227,13 @@ pill or edge shows its sites.
 | Drag, wheel | Pan and zoom. |
 | Hover a card or an edge | Lights its neighbours. |
 
-Keyboard: frame headers, components, outside boxes and edges are all focusable. **Tab** moves between them. **Enter** or
-**Space** toggles a frame (collapses or expands it), selects a component, an outside box or an edge. Enter on a
-coroutine group opens or folds it.
+Keyboard: frame headers, components, outside boxes, "+N more" chips and edges are all focusable. **Tab** moves between them.
+On a frame header, **Enter** selects the frame (the panel shows it, with its Collapse, Group and Show all buttons), and
+**Space** collapses or expands it. Enter on a coroutine summary opens it. On a "+N more" chip, **Enter** or **Space**
+shows all the slices; on a component, an outside box or an edge, it selects it.
+
+Zooming out stops at 0.1, or at the scale of the last fit when that is smaller, so zooming out never zooms in. Collapsing,
+widening or grouping keeps your zoom and pan; only a new model, a different layout or **Expand** refits.
 
 The first view fits the stage. The System fit has a floor of 0.02, so a large project shows its whole frame structure at
 a small scale rather than cutting it off; the Pipeline fit has a floor of 0.56. Pills are shown for every edge up to 30
