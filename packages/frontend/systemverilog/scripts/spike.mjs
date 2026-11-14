@@ -2,7 +2,7 @@
 // tree-sitter-systemverilog WASM grammar and print one JSON summary to stdout.
 // Usage: node scripts/spike.mjs <dir>...
 import { createRequire } from "node:module";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 
 const require = createRequire(import.meta.url);
@@ -50,8 +50,11 @@ const perFile = [];
 const errorParents = new Map();
 
 for (const root of roots) {
-  const base = statSync(root).isDirectory() ? root : resolve(root, "..");
-  const paths = statSync(root).isDirectory() ? walk(root) : [root];
+  // lstat, not stat: symlinks are skipped, so a link cannot send the walk outside the tree.
+  const st = lstatSync(root);
+  if (st.isSymbolicLink()) continue;
+  const base = st.isDirectory() ? root : resolve(root, "..");
+  const paths = st.isDirectory() ? walk(root) : [root];
   for (const abs of paths) {
     const rel = relative(base, abs);
     let text;

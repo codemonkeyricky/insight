@@ -53,6 +53,12 @@ function labelOf(construct: SyntaxNode): string | undefined {
   }
 }
 
+/** True when a node has `super` `.` `new` as consecutive direct tokens, the form of `super.new()` with no arguments. */
+function hasSuperNewTokens(n: SyntaxNode): boolean {
+  const kids = n.children;
+  return kids.some((k, i) => k.type === "super" && kids[i + 1]?.type === "." && kids[i + 2]?.type === "new");
+}
+
 /** The processes directly owned by a module: those not inside a nested definition. */
 function ownProcesses(n: SyntaxNode): SyntaxNode[] {
   const out: SyntaxNode[] = [];
@@ -270,6 +276,12 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
     const newArgs = body?.namedChildren.find((c) => c.type === "new_method_call");
     if (body && newArgs) {
       if (n.namedChildren.find((c) => c.type === "implicit_class_handle")?.text.trim() === "super") superCtor(f, newArgs);
+      else {
+        // `C::new(args)` parses as a method call on `C`. It is a constructor call of class C.
+        const cls = n.namedChildren.find((c) => c.type === "primary")?.text.trim();
+        const head = n.text.slice(0, body.startIndex - n.startIndex);
+        if (cls !== undefined && /^[A-Za-z_]\w*$/.test(cls) && head.includes("::")) emitCall(f, newArgs, `${cls}.new`, "new", { kind: "member", cls });
+      }
       return;
     }
     const nameNode = body?.childForFieldName("name");
@@ -470,9 +482,11 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
         const inner: Frame = { ...f, fn: id, scope };
         if (n.type === "class_constructor_declaration") {
           // `super.new(args)` in a constructor is an argument list on the constructor node. An empty one leaves no node, so only the text shows it.
+          // An empty `super.new()` leaves no argument node, but its `super`, `.` and `new` tokens are direct children.
+          // Comments and strings are their own nodes, so they never match here.
           const args = n.namedChildren.find((c) => c.type === "list_of_arguments");
           if (args) superCtor(inner, args);
-          else if (/\bsuper\s*\.\s*new\s*\(/.test(n.text)) superCtor(inner, n);
+          else if (hasSuperNewTokens(n)) superCtor(inner, n);
         }
         visitChildren(n, inner);
         break;
@@ -702,7 +716,7 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
         facet: "structure",
         kind: "structure.type",
         parent: rel,
-        attrs: { name: s.name, typeKind: s.hdl === "interface" ? "interface" : "struct", hdl: s.hdl, params: [], ports: [] },
+        attrs: { name: s.name, typeKind: s.hdl === "interface" ? "interface" : s.hdl === "class" ? "class" : "struct", hdl: s.hdl, params: [], ports: [] },
         span,
         provenance: heuristic,
       });

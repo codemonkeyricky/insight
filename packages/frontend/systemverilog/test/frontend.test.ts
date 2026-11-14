@@ -6,7 +6,7 @@ import { type IRRecord, type IREdge, type IRNode, validateIR } from "@insight/ir
 import { createCoreRegistry } from "@insight/ir/node";
 import { runFrontendConformance, type IRBatch, type ProjectRoot } from "@insight/sdk";
 import frontend, { extractFiles } from "../src/index.js";
-import { buildProject } from "../src/project.js";
+import { buildProject, releaseProject } from "../src/project.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(here, "fixtures");
@@ -397,6 +397,101 @@ describe("round 2 fixes", () => {
     expect(g2?.to).toBe("gen_pick.sv#gen_pick.g2.pick");
     expect(g2?.provenance?.confidence).toBe("exact");
     expect(top?.to).toEqual({ candidates: ["gen_pick.sv#gen_pick.g1.pick", "gen_pick.sv#gen_pick.g2.pick"] });
+  });
+});
+
+describe("round 3 fixes", () => {
+  const round2 = join(fixturesDir, "round2");
+  const round3 = join(fixturesDir, "round3");
+  const callsFrom = (records: IRRecord[], from: string) => edgesOf(records).filter((e) => e.kind === "calls.call" && e.from === from);
+  const pairs = (edges: IREdge[]) => edges.map((e) => [e.attrs?.callee, e.to]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+
+  it("fix 1: a class handle declared after another declaration (a net declaration in the tree) resolves for new, method calls and array elements", async () => {
+    const records = allRecords(await extractDir(round3, ["handles.sv"]));
+    const calls = callsFrom(records, "handles.sv#handles_mod.initial#1");
+    expect(pairs(calls)).toEqual([
+      ["C.new", "handles.sv#C.new"],
+      ["C.new", "handles.sv#C.new"],
+      ["C.new", "handles.sv#C.new"],
+      ["C.new", "handles.sv#C.new"],
+      ["c2.m", "handles.sv#C.m"],
+    ]);
+  });
+
+  it("fix 2: an `interface class` in an errored file is a class, not an instantiable interface", async () => {
+    const records = allRecords(await extractDir(round3, ["iface_class.sv"]));
+    const ic = nodesOf(records).find((n) => n.attrs.name === "ic");
+    expect(ic?.kind).toBe("structure.type");
+    expect(ic?.attrs.hdl).toBe("class");
+    expect(ic?.attrs.typeKind).toBe("class");
+    const inst = edgesOf(records).find((e) => e.kind === "x-sv.instantiates" && e.attrs?.instance === "x");
+    expect(inst?.to).toEqual({ unresolved: { scheme: "sv.module", text: "ic" } });
+  });
+
+  it("fix 3: super.new is found in the tree, so a comment or string that says super.new() adds no edge", async () => {
+    const edges = edgesOf(allRecords(await extractDir(round3, ["super_new.sv"])));
+    expect(callsFrom(allRecords(await extractDir(round3, ["super_new.sv"])), "super_new.sv#quiet_c.new")).toEqual([]);
+    const supers = edges.filter((e) => e.kind === "calls.call" && e.attrs?.callee === "super.new");
+    expect(supers.map((e) => e.from)).toEqual(["super_new.sv#kid_c.new"]);
+    expect(supers.map((e) => e.to)).toEqual(["super_new.sv#base_c.new"]);
+  });
+
+  it("fix 4: a $unit function of the same file wins over a file-level import of a package function with the same name", async () => {
+    const edges = edgesOf(allRecords(await extractDir(round3, ["unit_pref.sv"])));
+    const f = edges.find((e) => e.kind === "calls.call" && e.attrs?.callee === "f");
+    expect(f?.to).toBe("unit_pref.sv#f");
+    expect(f?.provenance?.confidence).toBe("exact");
+  });
+
+  it("fix 5: an edit to the text invalidates the cached index, and a finished extract run releases it", async () => {
+    const a = new Map([["a.sv", "module m1; endmodule\n"]]);
+    const first = await buildProject(a);
+    const edited = await buildProject(new Map([["a.sv", "module m2; endmodule\n"]]));
+    expect(edited).not.toBe(first);
+    expect(edited.decls.has("m2")).toBe(true);
+    expect(edited.decls.has("m1")).toBe(false);
+    releaseProject();
+    expect(await buildProject(a)).not.toBe(first);
+    // A finished extract run drops the index it built.
+    const texts = new Map(["pk.sv", "sub.sv", "inst.sv"].map((rel) => [rel, readFileSync(join(round2, rel), "utf8")]));
+    const before = await buildProject(texts);
+    await extractDir(round2, [...texts.keys()]);
+    expect(await buildProject(texts)).not.toBe(before);
+  });
+
+  it("fix 6: over-limit sources are sized from the file system, so each file is read once", async () => {
+    const all = ["pk.sv", "sub.sv", "inst.sv"];
+    let reads = 0;
+    const ctx = {
+      root: { path: round2, name: "x", allowBuildTools: false },
+      files: all,
+      listFiles: () => [...all],
+      readFile: async (rel: string) => {
+        reads++;
+        return readFileSync(join(round2, rel), "utf8");
+      },
+      log: () => undefined,
+    };
+    for await (const _ of extractFiles(ctx, 10)) void _;
+    expect(reads).toBe(all.length);
+  });
+
+  it("fix 6: without sizes from the file system, reading stops once the total is over the limit", async () => {
+    const all = ["pk.sv", "sub.sv", "inst.sv"];
+    let reads = 0;
+    const ctx = {
+      root: { path: join(round3, "no-such-dir"), name: "x", allowBuildTools: false },
+      files: all,
+      listFiles: () => [...all],
+      readFile: async (rel: string) => {
+        reads++;
+        return readFileSync(join(round2, rel), "utf8");
+      },
+      log: () => undefined,
+    };
+    for await (const _ of extractFiles(ctx, 10)) void _;
+    // One read in the pre-pass takes the total over the limit; the per-file pass reads each file once.
+    expect(reads).toBe(1 + all.length);
   });
 });
 

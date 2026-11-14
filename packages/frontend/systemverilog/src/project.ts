@@ -291,6 +291,18 @@ function collectVars(unit: Unit, root: SyntaxNode): void {
       if (name) add(scope, name, typeOf(n.namedChildren.find((c) => c.type === "data_type_or_implicit")));
       return;
     }
+    // Inside a module the grammar parses `C c2;` (a class handle after another declaration) as a net declaration.
+    // Its type is the first direct identifier; a plain net such as `wire w;` has none and is skipped.
+    if (n.type === "net_declaration") {
+      const type = n.namedChildren.find((c) => c.type === "simple_identifier")?.text;
+      if (type !== undefined) {
+        for (const a of n.descendantsOfType("net_decl_assignment")) {
+          const name = a.namedChildren.find((c) => c.type === "simple_identifier")?.text;
+          if (name) add(scope, name, type);
+        }
+      }
+      return;
+    }
     for (const c of n.namedChildren) visit(c, scope);
   };
   visit(root, "");
@@ -305,16 +317,17 @@ function scanDefs(unit: Unit, p: Project): void {
   const known = new Set((p.declsByName.get("") ?? []).map((d) => d.name));
   for (const refs of p.declsByName.values()) for (const d of refs) if (d.file === unit.rel) known.add(d.name);
   // Lifetime keywords (`automatic`, `static`) and the `class` of `interface class` come before the name.
-  const re = /^[ \t]*(module|interface|package)\s+(?:(?:static|automatic|class)\s+)*(\w+)/;
+  const re = /^[ \t]*(module|interface|package)\s+((?:(?:static|automatic|class)\s+)*)(\w+)/;
   // Comments are blanked to spaces, keeping line breaks and widths, so the line numbers and lengths stay true.
   const stripped = unit.text.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, (c) => c.replace(/[^\n]/g, " "));
   const rawLines = unit.text.split("\n");
   stripped.split("\n").forEach((line, i) => {
     const m = re.exec(line);
-    const name = m?.[2];
+    const name = m?.[3];
     if (!m || name === undefined || known.has(name)) return;
     known.add(name);
-    const hdl: Hdl = m[1] === "module" ? "module" : m[1] === "interface" ? "interface" : "package";
+    // `interface class` declares a class, which is not instantiable like an interface.
+    const hdl: Hdl = m[1] === "module" ? "module" : m[1] === "package" ? "package" : /\bclass\b/.test(m[2] ?? "") ? "class" : "interface";
     const id = unit.ids.take(declId(unit.rel, name));
     const ref: DeclRef = { name, hdl, file: unit.rel, id };
     if (!p.decls.has(name)) p.decls.set(name, ref);
@@ -359,12 +372,17 @@ async function indexProject(texts: Map<string, string>, rels: string[]): Promise
   return p;
 }
 
-/** The last project indexed, with the hash of the files it was built from. */
+/** The last project indexed, with the hash of the files it was built from. It holds the source texts, so the extract run releases it. */
 let lastProject: { key: string; project: Project } | undefined;
+
+/** Drops the cached project and the source texts it holds. Called when an extract run finishes. */
+export function releaseProject(): void {
+  lastProject = undefined;
+}
 
 /**
  * Indexes the project's definitions across its files. The last result is kept, keyed by a hash of the
- * file names and contents, so a retry or a second extraction over the same files reuses it.
+ * file names and contents, so a retry within the same extract run reuses it. Edited text gives a new key.
  */
 export async function buildProject(texts: Map<string, string>): Promise<Project> {
   const rels = [...texts.keys()].sort();
@@ -472,14 +490,14 @@ export function resolveCallee(p: Project, rel: string, scope: string | undefined
         const own = chainLookup(p, scope, name);
         if (own.length > 0) return pick(own, rel, gen);
       }
+      // File scope: `$unit` functions and DPI imports outside any package. A function of this file beats an import of the same name.
+      const unitFns = lookup(p, "", name);
+      const here = unitFns.filter((r) => r.file === rel);
+      if (here.length > 0) return pick(here, rel, gen);
       for (const pkg of p.importsByFile.get(rel) ?? []) {
         const refs = lookup(p, pkg, name);
         if (refs.length > 0) return finish(narrow(refs, gen), false);
       }
-      // File scope: `$unit` functions and DPI imports outside any package. The same file wins, then any file.
-      const unitFns = lookup(p, "", name);
-      const here = unitFns.filter((r) => r.file === rel);
-      if (here.length > 0) return pick(here, rel, gen);
       if (unitFns.length > 0) return finish(narrow(unitFns, gen), false);
       return finish(p.pkgFnsByName.get(name) ?? [], false);
     }
