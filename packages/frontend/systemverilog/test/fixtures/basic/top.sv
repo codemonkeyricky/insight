@@ -43,6 +43,16 @@ module top (
   for (genvar i = 0; i < 4; i++) begin : g_lanes
     logic [`DATA_WIDTH-1:0] lane_q;
     always_ff @(posedge clk) lane_q <= din ^ i;
+    alu #(
+      .WIDTH(`DATA_WIDTH)
+    ) u_lane_alu (
+      .clk  (clk),
+      .a    (lane_q),
+      .b    (din),
+      .op   (op_q),
+      .y    (),
+      .zero ()
+    );
   end
 
   assign dout = acc;
