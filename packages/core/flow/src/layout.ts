@@ -1,56 +1,45 @@
-import type { Arm, FunctionFacts, Item } from "./build.js";
-import type { FlowEdge, FlowEdgeKind, FlowNode, FlowShape, FlowRole, FlowSpan, FlowStats, FunctionFlow } from "./types.js";
+import type { FunctionFacts, Item } from "./build.js";
+import type { FlowEdge, FlowEdgeKind, FlowEdgeStyle, FlowNode, FlowShape, FlowRole, FlowSpan, FlowStats, FunctionFlow } from "./types.js";
 import { displayName } from "./names.js";
 
-const STEP_W = 236;
-const STEP_H = 34;
-const DEC_W = 236;
-const DEC_H = 54;
-const TERM_W = 150;
-const TERM_H = 28;
-const MARK_W = 110;
-const MARK_H = 26;
-const JOIN = 10;
-const GAP_Y = 26;
-const GAP_X = 30;
-const MIN_ARM = 64;
-const LOOP_PAD = 40;
 /*
- * Longest labels that fit their boxes at 12px monospace (about 7.2px a character). A step's
- * rectangle is 236 wide; a diamond's text line is about 180 wide and a hexagon's about 200.
- * The full text stays in the node's title.
+ * The line map: one row per step on a vertical line, a station mark on it, the label to its right. Nesting is the lane
+ * (x position of the line). Rows are placed by one recursive walk; edges are made when the next row is known.
  */
-const STEP_LABEL = 30;
-const DEC_LABEL = 24;
-const LOOP_LABEL = 28;
+export const ROW_H = 30;
+export const LANE_W = 24;
+/** x of lane 0's line. */
+export const LINE_X0 = 22;
+export const LABEL_GAP = 18;
+export const CHAR_W = 7.2;
+/** Longest label in characters; longer ones are clipped with an ellipsis (the full text stays in the title). */
+export const LABEL_MAX = 48;
+/** Extra space under a loop. */
+export const LOOP_GAP = 10;
+export const CHART_PAD_R = 16;
 /** A function with more nodes than this is not charted; the picture would not help. */
 export const MAX_NODES = 700;
 
-/** A laid-out piece of the chart. Coordinates are relative to its top-left corner. */
-interface Frag {
-  w: number;
-  h: number;
-  nodes: FlowNode[];
-  edges: FlowEdge[];
-  /** First node, which sits at the top centre. Absent for an empty piece. */
-  entry?: string;
-  /** Last node, at the bottom centre. Absent when control never falls out of the bottom. */
-  exit?: string;
+/** A call step drawn as a band: its header is one row. */
+export const NEST_HEAD = ROW_H;
+export const NEST_TOP = 0;
+export const NEST_PAD = 0;
+
+/** Centre of a node's station: its lane's line, at the middle of its row (a nest's header row). */
+export function stationOf(node: FlowNode): [number, number] {
+  return [LINE_X0 + (node.lane ?? 0) * LANE_W, node.y + ROW_H / 2];
 }
 
 /** A callee drawn inside the call step that calls it. `inline` holds the calls nested inside it, by the ids of its steps. */
 export interface InlineEntry {
   flow: FunctionFlow;
+  /** Set for a callee that runs on another thread or in another process: it is drawn as a parallel line, not inside the step. */
+  runtime?: { kind: "thread" | "process"; label: string };
   inline?: InlineTree;
 }
 
 /** The call steps drawn expanded, by the step's id in its own chart. A step nested inside a frame is drawn with the frame's id, a slash, and that id. */
 export type InlineTree = ReadonlyMap<string, InlineEntry>;
-
-/** The header, top gap and side/bottom padding of the frame a nested callee is drawn in. */
-export const NEST_HEAD = 26;
-export const NEST_TOP = 18;
-export const NEST_PAD = 14;
 
 interface Scope {
   /** Nodes laid out so far across the whole chart, against MAX_NODES. */
@@ -67,12 +56,15 @@ class Maker {
     readonly base: ReadonlyMap<string, FlowNode> | undefined = undefined,
     readonly scope: Scope = { budget: { used: 0 }, ancestors: new Set() },
   ) {}
-  /** Takes an id without making a node: a nested chart skips the id its own chart gives the start terminator, so ids match. */
+  /** Takes an id without making a node: where a join used to be made, and a nested chart's start terminator, so ids stay stable. */
   reserve(): void {
     this.n++;
   }
-  node(role: FlowRole, shape: FlowShape, label: string, w: number, h: number, extra: { title?: string; span?: FlowSpan; target?: string; handler?: true } = {}): FlowNode {
-    const out: FlowNode = { id: `${this.prefix}n${++this.n}`, role, shape, label, w, h, x: 0, y: 0 };
+  node(role: FlowRole, shape: FlowShape, label: string, extra: { title?: string; span?: FlowSpan; target?: string; handler?: true } = {}): FlowNode {
+    return this.make(`${this.prefix}n${++this.n}`, role, shape, label, extra);
+  }
+  make(id: string, role: FlowRole, shape: FlowShape, label: string, extra: { title?: string; span?: FlowSpan; target?: string; handler?: true } = {}): FlowNode {
+    const out: FlowNode = { id, role, shape, label, w: 0, h: ROW_H, x: 0, y: 0 };
     if (extra.title !== undefined && extra.title !== label) out.title = extra.title;
     if (extra.span) out.span = extra.span;
     if (extra.target) out.target = extra.target;
@@ -81,153 +73,223 @@ class Maker {
   }
 }
 
-const EMPTY: Frag = { w: 0, h: 0, nodes: [], edges: [] };
-
-function shift(f: Frag, dx: number, dy: number): void {
-  for (const n of f.nodes) {
-    n.x += dx;
-    n.y += dy;
-  }
-  for (const e of f.edges) {
-    e.points = e.points.map(([x, y]) => [x + dx, y + dy]);
-    if (e.labelAt) e.labelAt = [e.labelAt[0] + dx, e.labelAt[1] + dy];
-  }
+/** Where control leaves a row, waiting for the row that follows. `trunk` is the lane of a fork's trunk the line returns to. */
+interface Pend {
+  from: FlowNode;
+  kind: FlowEdgeKind;
+  style: FlowEdgeStyle;
+  trunk?: number;
+  /** Where the line really leaves (a loop's exit leaves from the loop's last row, not its head). */
+  y?: number;
 }
 
-function single(node: FlowNode, terminal = false): Frag {
-  return { w: node.w, h: node.h, nodes: [node], edges: [], entry: node.id, ...(terminal ? {} : { exit: node.id }) };
+/** What the walk builds. */
+interface Ctx {
+  y: number;
+  nodes: FlowNode[];
+  edges: FlowEdge[];
+  /** Tag for the next row placed. */
+  tag?: string;
+  /** The right-most lane or return track (in lanes) used by any row placed so far. */
+  hi: number;
 }
 
-/** Stack pieces top to bottom on one centre line, joining each to the next. */
-function stack(frags: Frag[]): Frag {
-  const parts = frags.filter((f) => f.entry !== undefined);
-  if (parts.length === 0) return EMPTY;
-  const w = Math.max(...parts.map((f) => f.w));
-  const out: Frag = { w, h: 0, nodes: [], edges: [] };
-  let y = 0;
-  let prevExit: string | undefined;
-  let prevBottom = 0;
-  for (const f of parts) {
-    shift(f, (w - f.w) / 2, y);
-    if (prevExit !== undefined && f.entry !== undefined) {
-      out.edges.push({ from: prevExit, to: f.entry, kind: "next", points: [[w / 2, prevBottom], [w / 2, y]] });
+type Pt = [number, number];
+
+/** Path data and vertices for a line from (xa, ya) to (xb, yb). `trunkX` makes it curve onto a trunk in the row below the source first. */
+function route(xa: number, ya: number, xb: number, yb: number, trunkX?: number): { d: string; points: Pt[] } {
+  const points: Pt[] = [[xa, ya]];
+  let d = `M${xa} ${ya}`;
+  let x = xa;
+  let y = ya;
+  if (trunkX !== undefined && Math.abs(trunkX - xa) > 0.5 && yb - ya >= ROW_H) {
+    const h = ROW_H;
+    d += `C${x} ${y + h * 0.3} ${trunkX} ${y + h * 0.7} ${trunkX} ${y + h}`;
+    x = trunkX;
+    y += h;
+    points.push([x, y]);
+  }
+  if (Math.abs(x - xb) < 0.5) {
+    d += `L${xb} ${yb}`;
+    points.push([xb, yb]);
+    return { d, points };
+  }
+  const h = Math.max(0, Math.min(ROW_H, yb - y));
+  if (xb > x) {
+    if (yb - y > h) {
+      d += `L${x} ${yb - h}`;
+      points.push([x, yb - h]);
     }
-    out.nodes.push(...f.nodes);
-    out.edges.push(...f.edges);
-    if (out.entry === undefined) out.entry = f.entry;
-    prevExit = f.exit;
-    prevBottom = y + f.h;
-    y += f.h + GAP_Y;
-  }
-  out.h = y - GAP_Y;
-  if (prevExit !== undefined) out.exit = prevExit;
-  return out;
-}
-
-const armLabel = (a: Arm): string => (a.kind === "true" ? "yes" : a.kind === "false" ? (a.label === "else" ? "no" : a.label) : a.kind === "exception" ? "throws" : a.kind === "next" ? "" : a.label);
-
-function fork(mk: Maker, item: Extract<Item, { t: "fork" }>): Frag {
-  const isTry = item.role === "try";
-  const head = isTry
-    ? mk.node("marker", "label", "try", MARK_W, MARK_H, item.span ? { span: item.span } : {})
-    : mk.node(item.role, "decision", clipLabel(item.role === "switch" ? "switch" : item.label, DEC_LABEL), DEC_W, DEC_H, { title: item.title ?? item.label, ...(item.span ? { span: item.span } : {}) });
-  const arms = item.arms.map((a) => ({ arm: a, frag: stack(a.body.map((i) => piece(mk, i))) }));
-  const widths = arms.map((a) => Math.max(a.frag.w, MIN_ARM));
-  const total = widths.reduce((s, w) => s + w, 0) + GAP_X * (arms.length - 1);
-  const W = Math.max(total, head.w);
-  const out: Frag = { w: W, h: 0, nodes: [head], edges: [], entry: head.id };
-  head.x = (W - head.w) / 2;
-  const cx = W / 2;
-  const topBus = head.h + 16;
-  const armsTop = topBus + 22;
-  const armsH = Math.max(0, ...arms.map((a) => a.frag.h));
-  const allTerminal = item.complete && arms.every((a) => a.frag.entry !== undefined && a.frag.exit === undefined);
-  const joinBus = armsTop + armsH + 14;
-  const joinTop = joinBus + 12;
-  const join = allTerminal ? undefined : mk.node("join", "join", "", JOIN, JOIN);
-  if (join) {
-    join.x = cx - JOIN / 2;
-    join.y = joinTop;
-    out.nodes.push(join);
-  }
-  let colX = (W - total) / 2;
-  arms.forEach(({ arm, frag }, i) => {
-    const colW = widths[i] as number;
-    const armCx = colX + colW / 2;
-    const kind: FlowEdgeKind = arm.kind;
-    const label = armLabel(arm);
-    // Above the bus, so the label never sits on the drop into an arm. The halo keeps it legible where the trunk crosses.
-    const labelAt: [number, number] = [armCx, topBus - 8];
-    if (frag.entry !== undefined) {
-      shift(frag, colX + (colW - frag.w) / 2, armsTop);
-      out.nodes.push(...frag.nodes);
-      out.edges.push(...frag.edges);
-      out.edges.push({ from: head.id, to: frag.entry, kind, ...(label ? { label, labelAt } : {}), points: [[cx, head.h], [cx, topBus], [armCx, topBus], [armCx, armsTop]] });
-      if (join && frag.exit !== undefined) {
-        out.edges.push({ from: frag.exit, to: join.id, kind: "next", points: [[armCx, armsTop + frag.h], [armCx, joinBus], [cx, joinBus], [cx, joinTop]] });
-      }
-    } else if (join) {
-      // An arm with nothing in it goes straight from the decision to the join.
-      out.edges.push({ from: head.id, to: join.id, kind, ...(label ? { label, labelAt } : {}), points: [[cx, head.h], [cx, topBus], [armCx, topBus], [armCx, joinBus], [cx, joinBus], [cx, joinTop]] });
-    }
-    colX += colW + GAP_X;
-  });
-  if (join) {
-    out.h = joinTop + JOIN;
-    out.exit = join.id;
+    const y0 = yb - h;
+    d += `C${x} ${y0 + h * 0.7} ${xb} ${y0 + h * 0.3} ${xb} ${y0 + h}L${xb} ${yb}`;
   } else {
-    out.h = armsTop + armsH;
+    d += `L${x} ${yb - h}C${x} ${yb - h * 0.3} ${xb} ${yb - h * 0.7} ${xb} ${yb}`;
+    points.push([x, yb - h]);
   }
-  return out;
+  points.push([xb, yb]);
+  return { d, points };
 }
 
-function loop(mk: Maker, item: Extract<Item, { t: "loop" }>): Frag {
-  const head = mk.node("loop", "loop", clipLabel(item.label, LOOP_LABEL), DEC_W, DEC_H, { title: item.title ?? item.label, ...(item.span ? { span: item.span } : {}) });
-  const body = stack(item.body.map((i) => piece(mk, i)));
-  const W = Math.max(body.w, DEC_W) + 2 * LOOP_PAD;
-  const cx = W / 2;
-  const out: Frag = { w: W, h: 0, nodes: [head], edges: [], entry: head.id };
-  head.x = (W - head.w) / 2;
-  const bodyTop = head.h + GAP_Y;
-  let backY = head.h + 12;
-  if (body.entry !== undefined) {
-    shift(body, (W - body.w) / 2, bodyTop);
-    out.nodes.push(...body.nodes);
-    out.edges.push(...body.edges);
-    out.edges.push({ from: head.id, to: body.entry, kind: "each", label: "each", labelAt: [cx + 22, head.h + 13], points: [[cx, head.h], [cx, bodyTop]] });
-    const bodyBottom = bodyTop + body.h;
-    backY = bodyBottom + 12;
-    if (body.exit !== undefined) {
-      const leftX = LOOP_PAD / 2;
-      out.edges.push({ from: body.exit, to: head.id, kind: "back", points: [[cx, bodyBottom], [cx, backY], [leftX, backY], [leftX, head.h / 2], [head.x, head.h / 2]] });
-    }
-  }
-  const exitBus = backY + 14;
-  const joinTop = exitBus + 12;
-  const join = mk.node("join", "join", "", JOIN, JOIN);
-  join.x = cx - JOIN / 2;
-  join.y = joinTop;
-  out.nodes.push(join);
-  const rightX = W - LOOP_PAD / 2;
-  out.edges.push({
-    from: head.id,
-    to: join.id,
-    kind: "exit",
-    label: "done",
-    labelAt: [rightX - 18, head.h / 2 - 7],
-    points: [[head.x + head.w, head.h / 2], [rightX, head.h / 2], [rightX, exitBus], [cx, exitBus], [cx, joinTop]],
-  });
-  out.h = joinTop + JOIN;
-  out.exit = join.id;
-  return out;
+function link(c: Ctx, p: Pend, to: FlowNode): void {
+  const [xa, ya] = stationOf(p.from);
+  const [xb, yb] = stationOf(to);
+  const la = p.from.lane ?? 0;
+  const lb = to.lane ?? 0;
+  const lane = p.style === "skip" || p.style === "done" ? la : Math.max(la, lb);
+  const r = route(xa, ya, xb, yb, p.trunk === undefined ? undefined : LINE_X0 + p.trunk * LANE_W);
+  c.edges.push({ from: p.from.id, to: to.id, kind: p.kind, style: p.style, lane, d: r.d, points: r.points });
 }
+
+/**
+ * The loop's back edge: out of the body's last step (or `p.y` for a nested loop's exit) to the right across to the return
+ * track `ret` (in lanes, outside everything the body used), straight up to the head's row, round the corner and left into
+ * the head from the right.
+ */
+function backEdge(c: Ctx, p: Pend, head: FlowNode, ret: number): void {
+  const [xa, ya0] = stationOf(p.from);
+  const ya = p.y ?? ya0;
+  const [xb, yb] = stationOf(head);
+  const tx = LINE_X0 + ret * LANE_W;
+  const r = 10;
+  const d = `M${xa} ${ya0}${ya > ya0 ? `L${xa} ${ya}` : ""}L${tx - r} ${ya}Q${tx} ${ya} ${tx} ${ya - r}L${tx} ${yb + r}Q${tx} ${yb} ${tx - r} ${yb}L${xb + 9} ${yb}`;
+  const points: Pt[] = [[xa, ya0]];
+  if (ya > ya0) points.push([xa, ya]);
+  points.push([tx - r, ya], [tx, ya - r], [tx, yb + r], [tx - r, yb], [xb + 9, yb]);
+  c.edges.push({ from: p.from.id, to: head.id, kind: "back", style: "back", lane: p.from.lane ?? 0, d, track: tx, points });
+}
+
+/** Puts a node on the next row and links what was waiting for it. */
+function row(c: Ctx, node: FlowNode, lane: number, labelLane: number, skip: number, into: Pend[]): void {
+  node.lane = lane;
+  node.y = c.y;
+  node.h = ROW_H;
+  c.y += ROW_H;
+  if (lane > c.hi) c.hi = lane;
+  node.labelX = LINE_X0 + Math.max(labelLane, lane + skip) * LANE_W + LABEL_GAP;
+  if (c.tag !== undefined) {
+    node.tag = c.tag;
+    c.tag = undefined;
+  }
+  c.nodes.push(node);
+  for (const p of into) link(c, p, node);
+}
+
+const next = (from: FlowNode): Pend => ({ from, kind: "next", style: "solid" });
 
 function clipLabel(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
+function walkList(c: Ctx, mk: Maker, items: Item[], lane: number, labelLane: number, skip: number, into: Pend[]): Pend[] {
+  let cur = into;
+  for (const it of items) cur = walkItem(c, mk, it, lane, labelLane, skip, cur);
+  return cur;
+}
+
+function walkItem(c: Ctx, mk: Maker, item: Item, lane: number, labelLane: number, skip: number, into: Pend[]): Pend[] {
+  switch (item.t) {
+    case "step": {
+      if (item.role === "marker") {
+        const m = mk.node("marker", "label", item.label, item.span ? { span: item.span } : {});
+        row(c, m, lane, labelLane, skip, into);
+        return [next(m)];
+      }
+      const node = mk.node(item.role, "step", clipLabel(item.label, LABEL_MAX), { title: item.title ?? item.label, ...(item.span ? { span: item.span } : {}), ...(item.target ? { target: item.target } : {}), ...(item.handler ? { handler: true as const } : {}) });
+      return stepRow(c, mk, node, lane, labelLane, skip, into);
+    }
+    case "term": {
+      const t = mk.node(item.role, "exit", item.label, item.span ? { span: item.span } : {});
+      row(c, t, lane, labelLane, skip, into);
+      return [];
+    }
+    case "fork":
+      return fork(c, mk, item, lane, labelLane, skip, into);
+    case "loop":
+      return loop(c, mk, item, lane, labelLane, skip, into);
+  }
+}
+
+const tagFor = (label: string): string => (label === "else" || label === "no" ? "else" : label);
+
+function fork(c: Ctx, mk: Maker, item: Extract<Item, { t: "fork" }>, lane: number, labelLane: number, skip: number, into: Pend[]): Pend[] {
+  const head =
+    item.role === "try"
+      ? mk.node("marker", "label", "try", item.span ? { span: item.span } : {})
+      : mk.node(item.role, "decision", clipLabel(item.role === "switch" ? "switch" : item.label, LABEL_MAX), { title: item.title ?? item.label, ...(item.span ? { span: item.span } : {}) });
+  row(c, head, lane, labelLane, skip, into);
+  const inner = lane + 1 + skip;
+  const out: Pend[] = [];
+  let falls = !item.complete || item.arms.some((a) => a.body.length === 0);
+  if (item.role === "branch") {
+    const t = item.arms.find((a) => a.kind === "true");
+    const f = item.arms.find((a) => a.kind === "false");
+    const tBody = t?.body ?? [];
+    const fBody = f?.body ?? [];
+    const tOut = tBody.length > 0 ? walkList(c, mk, tBody, inner, labelLane, 0, [{ from: head, kind: "true", style: "solid" }]) : [];
+    // The true arm's merge line runs down its lane beside the false arm's rows, so those step one lane right.
+    const tFalls = tOut.length > 0;
+    let fOut: Pend[] = [];
+    if (fBody.length > 0) {
+      c.tag = tagFor(f?.label ?? "else");
+      fOut = walkList(c, mk, fBody, lane, labelLane, tFalls ? skip + 1 : skip, [{ from: head, kind: "false", style: "solid" }]);
+    }
+    out.push(...tOut, ...fOut);
+    if (fBody.length === 0) out.push({ from: head, kind: "false", style: "skip" });
+    else if (tBody.length === 0) out.push({ from: head, kind: "true", style: "skip" });
+    falls = falls || tOut.length > 0 || fOut.length > 0;
+  } else {
+    // Trunk and sidings: every arm's rows on the inner lane, one arm after another.
+    let any = !item.complete;
+    for (const a of item.arms) {
+      if (a.body.length === 0) {
+        any = true;
+        continue;
+      }
+      if (a.kind === "exception") c.tag = "catch";
+      else if (a.kind !== "next") c.tag = a.label;
+      const o = walkList(c, mk, a.body, inner, labelLane, 0, [{ from: head, kind: a.kind, style: a.kind === "exception" ? "throws" : "solid" }]);
+      if (o.length > 0) {
+        any = true;
+        for (const p of o) p.trunk = lane;
+        out.push(...o);
+      }
+    }
+    if (any) out.push(next(head));
+    falls = falls || any;
+  }
+  // The id a join used to take.
+  if (falls) mk.reserve();
+  return out;
+}
+
+function loop(c: Ctx, mk: Maker, item: Extract<Item, { t: "loop" }>, lane: number, labelLane: number, skip: number, into: Pend[]): Pend[] {
+  const head = mk.node("loop", "loop", clipLabel(item.label, LABEL_MAX), { title: item.title ?? item.label, ...(item.span ? { span: item.span } : {}) });
+  row(c, head, lane, labelLane, skip, into);
+  const inner = lane + 1 + skip;
+  const first = c.nodes.length - 1;
+  const before = c.hi;
+  c.hi = inner;
+  const body = item.body.length > 0 ? walkList(c, mk, item.body, inner, labelLane, 0, [{ from: head, kind: "each", style: "solid" }]) : [];
+  if (body.length > 0) {
+    // The return track runs half a lane outside everything the body used (nested lanes and nested tracks), so it never
+    // crosses the body and an inner loop's ring sits inside the outer one. Labels in the loop clear it.
+    const ret = c.hi + 0.5;
+    c.hi = Math.max(before, ret);
+    const clear = LINE_X0 + Math.ceil(ret) * LANE_W + LABEL_GAP;
+    for (let i = first; i < c.nodes.length; i++) {
+      const n = c.nodes[i] as FlowNode;
+      n.labelX = Math.max(n.labelX ?? 0, clear);
+    }
+    for (const p of body) backEdge(c, p, head, ret);
+  } else c.hi = item.body.length === 0 ? before : Math.max(before, c.hi);
+  c.y += LOOP_GAP;
+  // The id a join used to take.
+  mk.reserve();
+  return [{ from: head, kind: "exit", style: "done", y: c.y - LOOP_GAP / 2 }];
+}
+
 /** A step, taking the target a viewer gave the chart it was built from, and nested when its callee is expanded. */
-function stepPiece(mk: Maker, node: FlowNode): Frag {
+function stepRow(c: Ctx, mk: Maker, node: FlowNode, lane: number, labelLane: number, skip: number, into: Pend[]): Pend[] {
   const local = node.id.slice(mk.prefix.length);
   const b = mk.base?.get(local);
   if (b !== undefined) {
@@ -240,16 +302,18 @@ function stepPiece(mk: Maker, node: FlowNode): Frag {
     else delete node.handler;
   }
   const entry = mk.inline?.get(local);
-  return (entry !== undefined ? nest(mk, node, entry) : undefined) ?? single(node);
+  const nested = entry === undefined ? undefined : entry.runtime !== undefined ? spawn(c, mk, node, entry, entry.runtime, lane, labelLane, skip, into) : nest(c, mk, node, entry, lane, labelLane, skip, into);
+  if (nested !== undefined) return nested;
+  row(c, node, lane, labelLane, skip, into);
+  return [next(node)];
 }
 
 /**
- * A call step with its callee's chart inside: a frame (the step's own node, now shaped "nest") with a header naming the
- * callee and the callee's laid-out steps under it. The edge into the step meets the frame's top and the one out of it
- * leaves its bottom. Undefined when the callee cannot be nested (no pre-layout chart, a function already in the chain, or
- * the chart would pass MAX_NODES), and the step stays a plain step.
+ * A call step with its callee's rows under it: the step's own node, now shaped "nest" (a band), is the header row and the
+ * callee's rows sit on the next lane. Undefined when the callee cannot be nested (no pre-layout chart, a function already
+ * in the chain, or the chart would pass MAX_NODES), and the step stays a plain step.
  */
-function nest(mk: Maker, node: FlowNode, entry: InlineEntry): Frag | undefined {
+function nest(c: Ctx, mk: Maker, node: FlowNode, entry: InlineEntry, lane: number, labelLane: number, skip: number, into: Pend[]): Pend[] | undefined {
   const flow = entry.flow;
   const { scope } = mk;
   if (flow.items === undefined || flow.tooLarge || scope.ancestors.has(flow.id)) return undefined;
@@ -258,35 +322,56 @@ function nest(mk: Maker, node: FlowNode, entry: InlineEntry): Frag | undefined {
   scope.budget.used += add;
   const sub = new Maker(`${node.id}/`, entry.inline, new Map(flow.nodes.map((n) => [n.id, n])), { budget: scope.budget, ancestors: new Set([...scope.ancestors, flow.id]) });
   sub.reserve();
-  const body = stack(flow.items.map((i) => piece(sub, i)));
-  const w = Math.max(body.w + 2 * NEST_PAD, STEP_W);
-  const h = body.entry === undefined ? NEST_HEAD + NEST_PAD : NEST_HEAD + NEST_TOP + body.h + NEST_PAD;
   node.shape = "nest";
-  node.label = clipLabel(displayName(flow.name, flow.id), STEP_LABEL);
+  node.label = clipLabel(displayName(flow.name, flow.id), LABEL_MAX);
   node.title = flow.name;
-  node.w = w;
-  node.h = h;
-  const out: Frag = { w, h, nodes: [node], edges: [], entry: node.id, exit: node.id };
-  if (body.entry !== undefined) {
-    shift(body, (w - body.w) / 2, NEST_HEAD + NEST_TOP);
-    out.nodes.push(...body.nodes);
-    out.edges.push({ from: node.id, to: body.entry, kind: "next", points: [[w / 2, NEST_HEAD], [w / 2, NEST_HEAD + NEST_TOP]] }, ...body.edges);
-  }
-  return out;
+  row(c, node, lane, labelLane, skip, into);
+  const first = c.nodes.length - 1;
+  const out = walkList(c, sub, flow.items, lane + 1 + skip, labelLane, 0, [next(node)]);
+  let bottom = node.y + ROW_H;
+  for (let i = first; i < c.nodes.length; i++) bottom = Math.max(bottom, (c.nodes[i] as FlowNode).y + (c.nodes[i] as FlowNode).h);
+  node.h = bottom - node.y;
+  // A callee that always returns or throws does not end the caller's line: it goes on from the header.
+  return out.length === 0 ? [next(node)] : out;
 }
 
-function piece(mk: Maker, item: Item): Frag {
-  switch (item.t) {
-    case "step":
-      if (item.role === "marker") return single(mk.node("marker", "label", item.label, MARK_W, MARK_H, item.span ? { span: item.span } : {}));
-      return stepPiece(mk, mk.node(item.role, "step", item.label, STEP_W, STEP_H, { ...(item.title ? { title: item.title } : {}), ...(item.span ? { span: item.span } : {}), ...(item.target ? { target: item.target } : {}), ...(item.handler ? { handler: true as const } : {}) }));
-    case "term":
-      return single(mk.node(item.role, "exit", item.label, TERM_W, TERM_H, item.span ? { span: item.span } : {}), true);
-    case "fork":
-      return fork(mk, item);
-    case "loop":
-      return loop(mk, item);
+/**
+ * A spawn step whose callee is expanded: the step's row becomes a fork row with a bar across to a new lane, and the callee's
+ * rows run on that lane under a header row that names the line. The caller's line goes straight down past it (the caller
+ * does not wait, and the index has no join), so the caller's next row comes after the line's last row. The lane is right
+ * of the caller's lane, so a loop's return track (outside every lane the body used) clears it. Undefined when the callee
+ * cannot be drawn (as for nest).
+ */
+function spawn(c: Ctx, mk: Maker, node: FlowNode, entry: InlineEntry, runtime: NonNullable<InlineEntry["runtime"]>, lane: number, labelLane: number, skip: number, into: Pend[]): Pend[] | undefined {
+  const flow = entry.flow;
+  const { scope } = mk;
+  if (flow.items === undefined || flow.tooLarge || scope.ancestors.has(flow.id)) return undefined;
+  const add = countNodes(flow.items) + 3;
+  if (scope.budget.used + add > MAX_NODES) return undefined;
+  scope.budget.used += add;
+  const sub = new Maker(`${node.id}/`, entry.inline, new Map(flow.nodes.map((n) => [n.id, n])), { budget: scope.budget, ancestors: new Set([...scope.ancestors, flow.id]) });
+  const childLane = lane + 1 + skip;
+  node.shape = "fork";
+  node.fork = { kind: runtime.kind, to: childLane };
+  row(c, node, lane, labelLane, skip, into);
+  // The label sits after the bar.
+  node.labelX = Math.max(node.labelX ?? 0, LINE_X0 + childLane * LANE_W + 5 + LABEL_GAP);
+  // The header takes the id of the start terminator a nested chart does not draw.
+  const head = sub.make(`${sub.prefix}n1`, "marker", "line", clipLabel(runtime.label, LABEL_MAX), { title: runtime.label, ...(flow.span ? { span: flow.span } : {}) });
+  sub.reserve();
+  head.line = { kind: runtime.kind };
+  row(c, head, childLane, childLane, 0, []);
+  const [hx, hy] = stationOf(head);
+  const [, fy] = stationOf(node);
+  c.edges.push({ from: node.id, to: head.id, kind: "next", style: "solid", lane: childLane, d: `M${hx} ${fy}L${hx} ${hy}`, points: [[hx, fy], [hx, hy]] });
+  const out = walkList(c, sub, flow.items, childLane, childLane, 0, [next(head)]);
+  if (out.length > 0) row(c, sub.node("end", "terminator", "end"), childLane, childLane, 0, out);
+  if (runtime.kind === "process") {
+    const bottom = c.nodes.reduce((m, n) => (n.id.startsWith(sub.prefix) ? Math.max(m, n.y + n.h) : m), head.y + ROW_H);
+    head.line.band = { x: hx - 13, y: head.y, w: 0, h: bottom - head.y };
   }
+  // The caller's line goes on from the fork row.
+  return [next(node)];
 }
 
 function countNodes(items: Item[]): number {
@@ -321,19 +406,34 @@ export function measure(items: Item[]): FlowStats {
   return s;
 }
 
-/** Lay out one function as a top-to-bottom flowchart. */
+/** Lay out one function as a line map: rows on lanes. */
 export function layoutFunction(fn: FunctionFacts, opts: { inline?: InlineTree; base?: FunctionFlow } = {}): FunctionFlow {
   const stats = measure(fn.items);
   const base = { id: fn.id, name: fn.name, async: fn.async, ...(fn.span ? { span: fn.span } : {}), stats };
   const count = countNodes(fn.items);
   if (count > MAX_NODES) return { ...base, tooLarge: true, width: 0, height: 0, nodes: [], edges: [] };
   const mk = new Maker("", opts.inline, opts.base === undefined ? undefined : new Map(opts.base.nodes.map((n) => [n.id, n])), { budget: { used: count }, ancestors: new Set([fn.id]) });
-  const start = single(mk.node("start", "terminator", `${fn.async ? "async " : ""}${clipLabel(displayName(fn.name, fn.id), STEP_LABEL)}`, STEP_W, TERM_H, { title: fn.name, ...(fn.span ? { span: fn.span } : {}) }));
-  const body = stack(fn.items.map((i) => piece(mk, i)));
-  const parts = [start, body];
-  if (body.entry === undefined || body.exit !== undefined) parts.push(single(mk.node("end", "terminator", "end", TERM_W, TERM_H)));
-  const whole = stack(parts);
-  return { ...base, width: whole.w, height: whole.h, nodes: whole.nodes, edges: whole.edges, ...(opts.inline === undefined ? { items: fn.items } : {}) };
+  const c: Ctx = { y: 0, nodes: [], edges: [], hi: 0 };
+  const start = mk.node("start", "terminator", clipLabel(`${fn.async ? "async " : ""}${displayName(fn.name, fn.id)}`, LABEL_MAX), { title: fn.name, ...(fn.span ? { span: fn.span } : {}) });
+  row(c, start, 0, 0, 0, []);
+  const out = walkList(c, mk, fn.items, 0, 0, 0, [next(start)]);
+  if (fn.items.length === 0 || out.length > 0) row(c, mk.node("end", "terminator", "end"), 0, 0, 0, out);
+  // Sizes, once every label and lane is known.
+  let right = 0;
+  let bottom = 0;
+  for (const n of c.nodes) {
+    const textW = CHAR_W * (n.label.length + (n.tag?.length ?? 0) + 6);
+    n.x = LINE_X0 + (n.lane ?? 0) * LANE_W - (n.shape === "nest" ? 13 : 10);
+    n.w = (n.labelX ?? 0) - n.x + textW + 8;
+    right = Math.max(right, (n.labelX ?? 0) + textW);
+    bottom = Math.max(bottom, n.y + n.h);
+  }
+  const width = Math.max(260, right + CHART_PAD_R);
+  for (const n of c.nodes) {
+    if (n.shape === "nest") n.w = width - 4 - n.x;
+    if (n.line?.band) n.line.band.w = width - 4 - n.line.band.x;
+  }
+  return { ...base, width, height: bottom + 8, nodes: c.nodes, edges: c.edges, ...(opts.inline === undefined ? { items: fn.items } : {}) };
 }
 
 /**

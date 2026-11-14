@@ -18,7 +18,7 @@ import { displayName } from "../../zoom/names";
 import { releaseVelocity, type DragSample } from "../../zoom/spring";
 import { useCameraSpring } from "../../zoom/useCameraSpring";
 import { motionFor, progressAt, TWEEN_MS } from "../../zoom/tween";
-import { pickBox } from "../../zoom/gesture";
+import { pickBox, zoomTakes } from "../../zoom/gesture";
 import { clampTop } from "../../zoom/clampTop";
 import { edgeClass, edgeKey, edgeTitle, edgeWidth, lineClass, runtimeLine, type MapBuild, type MapEdge, type MapNode, type MapSelected, type MapSource, type RuntimeLine } from "../../zoom/source";
 import { bucketScale, FAR_TILE_PX, fitLabel, headerLabels, labelChars, lodBucket, MID_TILE_PX } from "../../zoom/lod";
@@ -28,6 +28,7 @@ import { FarCards, type FarCard } from "./FarCards";
 import { zoneCells, zoneLetter, zoneLines } from "../../zoom/zones";
 import { offMapSelected } from "../../zoom/offMap";
 import type { ZoomStore } from "../../zoom/scene";
+import { stepAction, type StepContext } from "../../zoom/stepAction";
 import { CalloutShape, ExpansionShape, type CalloutEnds } from "./Expansion";
 
 /** The camera's scale range: from the whole project down to a single line of a chart. */
@@ -764,27 +765,21 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     setOffMap({ build: b, selected: offMapSelected(fnId, fn) });
   };
 
+  /** The facts stepAction decides on, for a row of the expansion of `fnId`. */
+  const stepContext = (fnId: string, node: FlowNode): StepContext => {
+    const b = buildRef.current;
+    const callee = node.target !== undefined && node.target !== ownerOf(expRef.current.find((e) => e.fnId === fnId), node.id) ? node.target : undefined;
+    return { hasCallee: callee !== undefined, isLambda: callee !== undefined && isLambdaCall(b, fnId, callee), runtime: stepRuntime(node) };
+  };
+
   /**
-   * A click on a step of an expansion's chart. A call to a function opens that function's expansion beside the step, and
-   * selects the callee. Any other step becomes the construct the source panel highlights, and selects the expansion's
-   * function. A step never navigates.
+   * A single click on a step of an expansion's chart selects it: the step becomes the construct the source panel highlights
+   * (a call row and a nest header too: their call line), and the owning function is selected. Nothing opens or folds, and
+   * the camera does not move. A step never navigates.
    */
   const chartStep = (fnId: string, node: FlowNode): boolean => {
     stageRef.current?.focus({ preventScroll: true });
-    const b = buildRef.current;
-    if (node.shape === "nest") {
-      void inlineStep(fnId, node, node.target ?? "");
-      return true;
-    }
-    const callee = node.target !== undefined && node.target !== ownerOf(expRef.current.find((e) => e.fnId === fnId), node.id) ? node.target : undefined;
-    // A handler (`ctx.onmessage = (e) => …`) is how a worker processes its messages: it opens, even as a folded lambda.
-    if (callee !== undefined && node.handler !== true && isLambdaCall(b, fnId, callee)) void highlightLambda(fnId, node, callee);
-    else if (callee !== undefined) {
-      // A callee on the caller's thread nests in the step; one on another thread or in another process opens its own box.
-      const kind = stepRuntime(node);
-      if (kind === "same") void inlineStep(fnId, node, callee);
-      else void openStep(fnId, node, callee, kind);
-    } else {
+    if (stepAction(node, "click", stepContext(fnId, node)) === "select") {
       const owner = ownerOf(expRef.current.find((e) => e.fnId === fnId), node.id);
       setConstruct({ ref: owner, nodeId: node.id, ...(node.span ? { span: node.span } : {}) });
       void selectFunction(owner);
@@ -793,24 +788,43 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   };
 
   /**
+   * Opens or folds a step: a call on the caller's thread nests in the step; one on another thread or in another process opens
+   * as a parallel line under its step; a nest header folds; a lambda is highlighted. Returns whether the step took the gesture.
+   */
+  const chartOpen = (fnId: string, node: FlowNode): boolean => {
+    stageRef.current?.focus({ preventScroll: true });
+    const action = stepAction(node, "open", stepContext(fnId, node));
+    const callee = node.target ?? "";
+    if (action === "fold") void inlineStep(fnId, node, callee);
+    else if (action === "lambda") void highlightLambda(fnId, node, callee);
+    else if (action === "inline") void inlineStep(fnId, node, callee);
+    else if (action === "fork") {
+      const kind = stepRuntime(node);
+      void inlineStep(fnId, node, callee, kind === "same" ? undefined : kind);
+    }
+    return action !== "none";
+  };
+
+  /**
    * Nests a call step's callee in the step, inside the same box: the step grows into a frame holding the callee's chart, the
    * box grows to fit, and the roots grid makes room (setExp). A callee that cannot nest (it is already in the chain, the
    * chart would be too large, or the chart has no pre-layout steps) opens beside the step instead. A click on a frame
    * folds it back, with every call nested in it.
    */
-  const inlineStep = async (fnId: string, node: FlowNode, callee: string) => {
+  const inlineStep = async (fnId: string, node: FlowNode, callee: string, runtimeKind?: "thread" | "process") => {
     const b = buildRef.current;
     if (!b) return;
-    if (node.shape === "nest") {
+    if (node.shape === "nest" || node.shape === "fork") {
       setExp(setInline(placeAll(b, expRef.current), fnId, node.id, undefined, placeView(b)));
       return;
     }
     const chart = await loadChart(callee);
     if (chart === undefined) return;
     const list = placeAll(b, expRef.current);
-    const next = setInline(list, fnId, node.id, chart, placeView(b));
+    const runtime = runtimeKind === undefined ? undefined : { kind: runtimeKind, label: runtimeLabel(runtimeKind, callee, displayName(chart.name, chart.id)) };
+    const next = setInline(list, fnId, node.id, chart, placeView(b), runtime);
     if (next === list) {
-      if (chart.items === undefined) void openStep(fnId, node, callee);
+      if (chart.items === undefined || runtime !== undefined) void openStep(fnId, node, callee, runtimeKind);
       return;
     }
     setExp(next);
@@ -958,6 +972,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     let samples: DragSample[] = [];
     const z = zoom<SVGSVGElement, unknown>()
       .scaleExtent(SCALE)
+      .filter((ev: Event) => zoomTakes(ev))
       .on("start", (ev: D3ZoomEvent<SVGSVGElement, unknown>) => {
         // A user's gesture takes the camera back from a move in flight, where it is.
         if (ev.sourceEvent) {
@@ -1446,6 +1461,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
                       k={labelScale}
                       selectedId={construct !== undefined && construct.ref === e.fnId ? construct.nodeId : undefined}
                       onNodeClick={(n) => chartStep(e.fnId, n)}
+                      onNodeOpen={(n) => chartOpen(e.fnId, n)}
                       onSelect={() => void selectFunction(e.fnId)}
                       onClose={() => setExp(closeExpansion(expRef.current, e.fnId))}
                       motion={motion}

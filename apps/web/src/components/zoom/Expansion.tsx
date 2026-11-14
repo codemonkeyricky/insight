@@ -24,6 +24,8 @@ interface Props {
   selectedId?: string;
   /** Takes over the clicks on the chart's steps (see FlowChart). */
   onNodeClick: (node: FlowNode) => boolean;
+  /** Opens or folds a step: a double-click, Enter or Space on a row, or a click on its chevron (see FlowChart). */
+  onNodeOpen?: (node: FlowNode) => boolean;
   /** Selects the expansion's function: a click on its header. */
   onSelect: () => void;
   onClose: () => void;
@@ -63,7 +65,7 @@ export function CalloutShape({ ends, closing = false, reduced = false }: { ends:
   );
 }
 
-export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClick, onSelect, onClose, motion = true }: Props) {
+export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClick, onNodeOpen, onSelect, onClose, motion = true }: Props) {
   const { chart, x, y, w, h } = expansion;
   // The title is the function's display name; the tooltip and the accessible name keep the full name. The detail's letter
   // stays in the accessible name only.
@@ -102,7 +104,7 @@ export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClic
       </g>
       {chartShown(chart.width * k) && (
         <g transform={`translate(${x + CHART_PAD} ${y + CHART_HEAD + CHART_PAD})`} onClick={(ev) => ev.stopPropagation()}>
-          <FlowChart id={id} fn={chart} scope={scope} onNodeClick={onNodeClick} selectedId={selectedId} motion={motion} />
+          <FlowChart id={id} fn={chart} scope={scope} onNodeClick={onNodeClick} onNodeOpen={onNodeOpen} selectedId={selectedId} motion={motion} />
         </g>
       )}
     </g>

@@ -27,32 +27,33 @@ afterEach(() => {
 });
 
 describe("FlowChart motion", () => {
-  it("with motion on, every edge marches and the back-edge carries a pulse", () => {
-    const html = render(<FlowChart id="p" fn={fn} scope="." motion />);
-    expect(html.match(/flow-march/g)?.length).toBe(3);
-    expect(html).toContain("back-edge");
-    expect(html).toContain("animateMotion");
-    expect(html.match(/flow-pulse/g)?.length).toBe(1);
+  it("the return line never animates, with motion on or off", () => {
+    for (const motion of [true, false]) {
+      const html = render(<FlowChart id="p" fn={fn} scope="." motion={motion} />);
+      expect(html).not.toContain("marching");
+      expect(html).toContain("back-edge");
+      expect(html).not.toContain("flow-march");
+      expect(html).not.toContain("animateMotion");
+      expect(html).not.toContain("flow-pulse");
+    }
   });
 
-  it("with Flow motion off, no overlays or pulses are drawn", () => {
-    const html = render(<FlowChart id="p" fn={fn} scope="." motion={false} />);
-    expect(html).not.toContain("flow-march");
-    expect(html).not.toContain("flow-pulse");
-    expect(html).not.toContain("animateMotion");
-    expect(html).toContain("back-edge");
-  });
-
-  it("under reduced motion, no overlays or pulses are drawn", () => {
+  it("under reduced motion, nothing marches", () => {
     (globalThis as { matchMedia?: unknown }).matchMedia = () => ({ matches: true });
     const html = render(<FlowChart id="p" fn={fn} scope="." motion />);
-    expect(html).not.toContain("flow-march");
+    expect(html).not.toContain("marching");
     expect(html).not.toContain("animateMotion");
   });
 
   it("marks the selected step", () => {
     const html = render(<FlowChart id="p" fn={fn} scope="." selectedId="body" />);
     expect(html).toMatch(/flow-node[^"]*process[^"]*selected/);
+  });
+
+  it("draws an old chart without lanes or path data from its points", () => {
+    const html = render(<FlowChart id="p" fn={fn} scope="." />);
+    expect(html).toContain('d="M80 0 L80 10"');
+    expect(html).toMatch(/class="flow-edge solid c0"/);
   });
 });
 

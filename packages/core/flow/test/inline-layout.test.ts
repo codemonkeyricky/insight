@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Item } from "../src/build.js";
-import { layoutFunction, MAX_NODES, relayout, NEST_HEAD, type InlineTree } from "../src/layout.js";
+import { layoutFunction, MAX_NODES, relayout, NEST_HEAD, stationOf, type InlineTree } from "../src/layout.js";
 import type { FunctionFlow } from "../src/types.js";
 
 const call = (label: string, target?: string): Item => ({ t: "step", role: "call", label, ...(target ? { target } : {}) });
@@ -31,6 +31,7 @@ describe("nested call steps", () => {
     for (const n of inner) {
       expect(n.x).toBeGreaterThanOrEqual(frame!.x);
       expect(n.y).toBeGreaterThanOrEqual(frame!.y + NEST_HEAD);
+      expect(n.lane).toBe(frame!.lane! + 1);
       expect(n.x + n.w).toBeLessThanOrEqual(frame!.x + frame!.w);
       expect(n.y + n.h).toBeLessThanOrEqual(frame!.y + frame!.h);
     }
@@ -52,9 +53,12 @@ describe("nested call steps", () => {
     const after = stepId(out, "after()");
     const frame = out.nodes.find((n) => n.id === id)!;
     const into = out.edges.find((e) => e.from === before && e.to === id)!;
-    const outOf = out.edges.find((e) => e.from === id && e.to === after)!;
-    expect(into.points.at(-1)![1]).toBe(frame.y);
-    expect(outOf.points[0]![1]).toBe(frame.y + frame.h);
+    const outOf = out.edges.find((e) => e.to === after)!;
+    // The line map: the call is the band's header row; the line into it ends at the header's station, and the line out
+    // of a callee that falls through leaves its last body row.
+    expect(into.points.at(-1)).toEqual(stationOf(frame));
+    expect(frame.h).toBeGreaterThan(NEST_HEAD);
+    expect(outOf.from).toBe(`${id}/n3`);
     expect(out.edges.some((e) => e.from === id && e.to === `${id}/n2`)).toBe(true);
   });
 

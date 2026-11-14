@@ -105,3 +105,20 @@ describe("inline expansion state", () => {
     expect(next[0]!.chart).toBe(list[0]!.chart);
   });
 });
+
+describe("a spawn opened as a parallel line", () => {
+  const job = make("f#job", [call("work()")]);
+  const root = make("f#r", [call("a()"), call("spawn thread · job", "f#job", "spawn")]);
+  const id = idOf(root, "spawn thread · job");
+  const list = () => openExpansion([], "f#r", { kind: "box", nodeId: "b", rect: box }, root, view);
+
+  it("opens as a fork row with the line's rows, and folds back", () => {
+    const next = setInline(list(), "f#r", id, job, view, { kind: "thread", label: "Thread · job" });
+    const e = next.find((x) => x.fnId === "f#r")!;
+    expect(isNested(e, id)).toBe(true);
+    expect(e.chart.nodes.find((n) => n.id === id)?.shape).toBe("fork");
+    expect(e.chart.nodes.length).toBe(root.nodes.length + 3);
+    const closed = setInline(next, "f#r", id, undefined, view);
+    expect(closed.find((x) => x.fnId === "f#r")!.chart.nodes.length).toBe(root.nodes.length);
+  });
+});

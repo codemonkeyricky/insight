@@ -3,7 +3,7 @@
 // (buildTokenRoute, unit tested). runFlowToken drives the dot on the page with one animation frame loop per chart and writes
 // only its transform and visibility, so no React state changes per frame. useTokenSlot caps how many charts animate.
 import { useCallback, useEffect, useSyncExternalStore } from "react";
-import type { FlowEdge, FlowNode, FunctionFlow } from "@insight/flow";
+import { stationOf, type FlowEdge, type FlowNode, type FunctionFlow } from "@insight/flow";
 import { backEdgeFlags } from "./flowMotion";
 
 /** The token's speed along a path, in chart units a second. */
@@ -126,7 +126,8 @@ type Seg = { pause: true; node: string; x: number; y: number; ms: number } | { p
 export function runFlowToken(svg: SVGSVGElement, tok: SVGGElement, fn: FunctionFlow): () => void {
   const pathEl = new Map<number, SVGPathElement>();
   svg.querySelectorAll("[data-edge]").forEach((el) => {
-    const p = el.firstElementChild;
+    // The chart draws each edge as one path carrying data-edge; an older group wrapper holds it as its first child.
+    const p = el instanceof SVGPathElement ? el : el.firstElementChild;
     if (p instanceof SVGPathElement) pathEl.set(Number(el.getAttribute("data-edge")), p);
   });
   const byId = new Map(fn.nodes.map((n) => [n.id, n] as const));
@@ -138,7 +139,8 @@ export function runFlowToken(svg: SVGSVGElement, tok: SVGGElement, fn: FunctionF
     route.nodes.forEach((id, k) => {
       const n = byId.get(id);
       if (n === undefined) return;
-      segs.push({ pause: true, node: id, x: n.x + n.w / 2, y: n.y + n.h / 2, ms: TOKEN_PAUSE_MS });
+      const [sx, sy] = stationOf(n);
+      segs.push({ pause: true, node: id, x: sx, y: sy, ms: TOKEN_PAUSE_MS });
       const e = route.edges[k];
       if (e === undefined) return;
       const path = pathEl.get(e);
