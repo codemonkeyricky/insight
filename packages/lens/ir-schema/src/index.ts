@@ -80,7 +80,7 @@ export const lensIrSchema: Lens = {
     };
 
     // Table: one row per kind.
-    const columns = ["Kind", "Facet", "On", "Extends", "Attrs def", "Required attrs", "Optional attrs", "Emitted by", "Read by", "Description"];
+    const columns = ["Kind", "Facet", "On", "Emitted by", "Read by", "Required attrs", "Optional attrs", "Extends", "Attrs def", "Description"];
     const rows: TableView["rows"] = [];
     const spans: (ViewSpan | null)[] = [];
     for (const k of kinds) {
@@ -91,34 +91,48 @@ export const lensIrSchema: Lens = {
         nameOf(k),
         str(k.attrs.facet),
         str(k.attrs.on),
-        extendsOf.get(k.id) ?? null,
-        defId !== undefined ? nodeName(defId) : null,
-        req.length > 0 ? req.join(", ") : null,
-        opt.length > 0 ? opt.join(", ") : null,
         list(emitBy, k.id),
         list(readBy, k.id),
+        req.length > 0 ? req.join(", ") : null,
+        opt.length > 0 ? opt.join(", ") : null,
+        extendsOf.get(k.id) ?? null,
+        defId !== undefined ? nodeName(defId) : null,
         str(k.attrs.description) || null,
       ]);
       spans.push(k.span ?? null);
     }
     const table: TableView = { type: "table", id: "kinds", title: "Kinds", columns, rows, spans };
 
-    // Graph: kinds, plus the attrs defs they point at.
-    const gNodes = new Map<string, { id: string; label: string; group: string }>();
-    for (const k of kinds) gNodes.set(k.id, { id: k.id, label: nameOf(k), group: str(k.attrs.facet) });
-    const gEdges: GraphView["edges"] = [];
-    for (const e of extendsEdges) {
-      const t = targetOf(e);
-      if (t !== undefined && gNodes.has(t) && gNodes.has(e.from)) gEdges.push({ from: e.from, to: t, kind: "extends" });
-    }
-    for (const e of attrsEdges) {
-      const t = targetOf(e);
-      if (t === undefined || !gNodes.has(e.from)) continue;
-      const defNode = ir.node(t);
-      if (defNode && !gNodes.has(t)) gNodes.set(t, { id: t, label: nameOf(defNode), group: "attrs" });
-      if (gNodes.has(t)) gEdges.push({ from: e.from, to: t, kind: "attrs" });
-    }
-    const kindGraph: GraphView = { type: "graph", id: "kind-graph", title: "Kinds", nodes: [...gNodes.values()], edges: gEdges };
+    // Graphs: one per facet. Nodes are that facet's kinds and the packages that emit or read them; edges are
+    // package -> kind (emits / reads) and extends between kinds of the facet.
+    const facetOf = new Map<string, string>();
+    for (const k of kinds) facetOf.set(k.id, str(k.attrs.facet));
+    const facets = [...new Set(kinds.map((k) => str(k.attrs.facet)))].sort();
+    const facetGraphs: GraphView[] = facets.map((facet) => {
+      const members = kinds.filter((k) => facetOf.get(k.id) === facet);
+      const memberIds = new Set(members.map((k) => k.id));
+      const nodes = new Map<string, { id: string; label: string; group: string }>();
+      for (const k of members) nodes.set(k.id, { id: k.id, label: nameOf(k), group: "kind" });
+      const edges: GraphView["edges"] = [];
+      const seen = new Set<string>();
+      for (const e of usesEdges) {
+        const t = targetOf(e);
+        if (t === undefined || !memberIds.has(t)) continue;
+        const pkg = pkgOf(e.from);
+        const verb = str(e.attrs?.how) === "emit" ? "emits" : "reads";
+        const pid = `package:${pkg}`;
+        if (!nodes.has(pid)) nodes.set(pid, { id: pid, label: pkg, group: "package" });
+        const key = `${pid}|${t}|${verb}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        edges.push({ from: pid, to: t, kind: verb, label: verb });
+      }
+      for (const e of extendsEdges) {
+        const t = targetOf(e);
+        if (t !== undefined && memberIds.has(t) && memberIds.has(e.from)) edges.push({ from: e.from, to: t, kind: "extends", label: "extends" });
+      }
+      return { type: "graph", id: `facet-${facet}`, title: `${facet} kinds`, nodes: [...nodes.values()], edges };
+    });
 
     // Graph: the core schema's definitions and the $refs between them.
     const coreDefs = defs.filter((d) => d.id.startsWith(`${CORE_FILE}#def:`));
@@ -179,7 +193,7 @@ export const lensIrSchema: Lens = {
       });
     }
 
-    const views: LensView[] = [table, kindGraph, recordsGraph];
+    const views: LensView[] = [table, ...facetGraphs, recordsGraph];
     const emitted = kinds.filter((k) => emitBy.has(k.id)).length;
     const metrics = {
       kinds: kinds.length,

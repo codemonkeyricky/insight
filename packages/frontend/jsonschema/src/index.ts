@@ -166,7 +166,7 @@ const EMIT_CALL_BEFORE = /\bemit\w*\([^)]*$/;
 async function scanTs(ctx: ExtractContext): Promise<TsScan> {
   const files = ctx
     .listFiles()
-    .filter((f) => (f.startsWith("packages/") || f.startsWith("apps/")) && TS_RE.test(f) && !TS_SKIP.test(`/${f}`));
+    .filter((f) => (f.startsWith("packages/") || f.startsWith("apps/")) && TS_RE.test(f) && !TS_SKIP.test(`/${f}`) && !f.startsWith("packages/frontend/jsonschema/"));
   const hits = new Map<string, Hit[]>();
   for (const f of files) {
     let text: string;
