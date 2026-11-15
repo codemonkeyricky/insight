@@ -6,6 +6,7 @@ import type { SyntaxNode } from "./parser.js";
 import {
   blockOf,
   effectCatalog,
+  type EffectEntry,
   FRONTEND_ID,
   lockIdentity,
   nodeKey,
@@ -15,16 +16,25 @@ import {
   type FnDecl,
   type Project,
 } from "./project.js";
-
-/** Guard types and whether they hold the lock shared. */
-const GUARDS: Record<string, "exclusive" | "shared"> = {
-  "std::lock_guard": "exclusive",
-  "std::unique_lock": "exclusive",
-  "std::scoped_lock": "exclusive",
-  "std::shared_lock": "shared",
-};
-/** Arguments of a guard that do not take the lock. */
-const NO_LOCK_ARGS = new Set(["std::defer_lock", "std::try_to_lock", "std::adopt_lock"]);
+import {
+  CONDVAR_OP,
+  classAt,
+  declArgs,
+  DYNAMIC,
+  GUARDS,
+  guardedQueues,
+  isAtomicMethod,
+  LOCKFREE_SEND_RECV,
+  NO_LOCK_ARGS,
+  nameText,
+  POSIX_COND_OPS,
+  POSIX_SEM_OPS,
+  refOf,
+  resolveVar,
+  SEMAPHORE_OP,
+  stdQueueCall,
+  waitLock,
+} from "./sync.js";
 const THREAD_TYPES = new Set(["std::thread", "std::jthread"]);
 type SpawnHow = "thread" | "async";
 /** Calls that start a thread or task. `arg` is the argument holding the function, or -1 for the first argument that is not a launch policy. */
@@ -57,6 +67,46 @@ class Ids {
     this.seen.add(id);
     return id;
   }
+}
+
+/** The modes a stream type opens its file in. */
+const STREAM_MODES: Record<string, ("read" | "write")[]> = {
+  "std::ifstream": ["read"],
+  "std::ofstream": ["write"],
+  "std::fstream": ["read", "write"],
+};
+
+/** A string literal's contents, without the quotes. Other expressions are not literal paths. */
+const stringLiteral = (n: SyntaxNode): string | undefined => {
+  const m = /^"((?:[^"\\]|\\.)*)"$/s.exec(n.text);
+  return n.type === "string_literal" && m ? (m[1] as string) : undefined;
+};
+
+/** A macro or signal name written as a literal: an upper-case identifier, or a number. A lower-case name is a variable. */
+const nameLiteral = (n: SyntaxNode): string | undefined => {
+  if (n.type === "number_literal") return n.text;
+  return n.type === "identifier" && /^[A-Z][A-Z0-9_]*$/.test(n.text) ? n.text : undefined;
+};
+
+/** The attribute value a catalog row takes from its argument, or <dynamic> when the argument is not a literal. */
+function catalogValue(row: EffectEntry, args: SyntaxNode[]): string {
+  if (row.arg === undefined) return DYNAMIC;
+  const a = args[row.arg];
+  if (!a) return DYNAMIC;
+  const literal = row.attr === "path" || row.op === "fd" ? stringLiteral(a) : nameLiteral(a);
+  return literal ?? DYNAMIC;
+}
+
+/**
+ * True when the project defines a function this call could reach: a qualified name that matches, or an
+ * unqualified name that is a method of the enclosing class, or a free function visible here (same file, or not static).
+ */
+function definesCallee(project: Project, rel: string, callee: string, cls: string | undefined): boolean {
+  if (callee.includes("::")) {
+    const simple = callee.split("::").pop() ?? callee;
+    return (project.bySimple.get(simple) ?? []).some((d) => d.qname === callee || d.qname.endsWith(`::${callee}`));
+  }
+  return (project.bySimple.get(callee) ?? []).some((d) => (d.cls === undefined ? d.exported || d.rel === rel : d.cls === cls));
 }
 
 /** The first argument in a parenthesised or braced argument list, as written. */
@@ -259,14 +309,14 @@ export function emitUnit(project: Project, rel: string): IRBatch {
    * A thread or task start. The spawn node is always recorded with the target text. The spawns edge
    * is added only when the target argument names a function the project defines.
    */
-  const spawn = (n: SyntaxNode, container: NodeId, how: SpawnHow, target: string | undefined, targetArg: SyntaxNode | undefined) => {
+  const spawn = (n: SyntaxNode, container: NodeId, how: SpawnHow, api: string, target: string | undefined, targetArg: SyntaxNode | undefined) => {
     const id = ids.take(`${rel}@spawn:${n.startPosition.row}:${n.startPosition.column}`);
     node({
       id,
       facet: "concurrency",
       kind: "concurrency.spawn-thread",
       parent: container,
-      attrs: target !== undefined ? { target: target.slice(0, 120) } : {},
+      attrs: { api, ...(target !== undefined ? { target: target.slice(0, 120) } : {}) },
       span: spanOf(rel, n),
       provenance: prov,
     });
@@ -300,47 +350,135 @@ export function emitUnit(project: Project, rel: string): IRBatch {
     });
   };
 
+  /** A node at a site: the kind, the facet, and an id built from the tag and the site's position. */
+  const emitNode = (n: SyntaxNode, container: NodeId, facet: string, kind: string, tag: string, attrs: Record<string, unknown>, provenance: Provenance) =>
+    node({
+      id: ids.take(`${rel}@${tag}:${n.startPosition.row}:${n.startPosition.column}`),
+      facet,
+      kind,
+      parent: container,
+      attrs,
+      span: spanOf(rel, n),
+      provenance,
+    });
+
+  /** A send to or receive from a queue or channel. `guardedBy` is set only for an inferred guarded std queue. */
+  const channelOp = (call: SyntaxNode, container: NodeId, side: "send" | "recv", channel: string, api: string, provenance: Provenance, guardedBy?: string) =>
+    emitNode(call, container, "concurrency", side === "send" ? "concurrency.channel-send" : "concurrency.channel-recv", side, {
+      channel,
+      api,
+      ...(guardedBy !== undefined ? { guardedBy } : {}),
+    }, provenance);
+
+  /** A call of a method on a variable whose declared type is a queue, semaphore, condition variable or atomic. */
+  const memberCall = (call: SyntaxNode, fnNode: SyntaxNode, args: SyntaxNode[], container: NodeId, cls: string | undefined) => {
+    const method = fnNode.childForFieldName("field")?.text;
+    const ref = refOf(fnNode.childForFieldName("argument"));
+    if (!method || !ref) return;
+    const v = resolveVar(project, ref.name, call, cls, ref.viaThis);
+    if (!v) return;
+    const api = `${v.type}::${method}`;
+    const lockFree = LOCKFREE_SEND_RECV[v.type];
+    if (lockFree) {
+      if (lockFree.send.includes(method)) channelOp(call, container, "send", v.channel, api, prov);
+      else if (lockFree.recv.includes(method)) channelOp(call, container, "recv", v.channel, api, prov);
+      return;
+    }
+    const queue = stdQueueCall(project, rel, call);
+    if (queue) {
+      // Only a queue inferred to be guarded emits. Its locks and the channel are the same on both sides.
+      const guard = guardedQueues(project).get(queue.channel);
+      if (guard !== undefined) channelOp(call, container, queue.side, queue.channel, api, syncProv, guard);
+      return;
+    }
+    const sem = SEMAPHORE_OP(v.type, method);
+    if (sem !== undefined) {
+      emitNode(call, container, "sync", "sync.semaphore", "sem", { op: sem, name: v.channel, api }, prov);
+      return;
+    }
+    const cv = CONDVAR_OP(v.type, method);
+    if (cv !== undefined) {
+      const attrs: Record<string, unknown> = { op: cv, name: v.channel, api };
+      const lock = cv === "wait" ? waitLock(project, call, args[0], cls) : undefined;
+      if (lock !== undefined) attrs.lock = lock;
+      emitNode(call, container, "sync", "sync.condvar", "cv", attrs, prov);
+      return;
+    }
+    if (isAtomicMethod(v.type, method)) emitNode(call, container, "sync", "sync.atomic-op", "atomic", { op: "op", api }, prov);
+  };
+
+  /** The POSIX semaphore and condition variable calls. A name that is not a plain name is <dynamic>. */
+  const posixSync = (call: SyntaxNode, callee: string, args: SyntaxNode[], container: NodeId, cls: string | undefined) => {
+    const named = (n: SyntaxNode | undefined) => {
+      const text = nameText(n);
+      return text === DYNAMIC ? text : lockIdentity(text, cls, project.members);
+    };
+    const sem = POSIX_SEM_OPS[callee];
+    if (sem !== undefined) {
+      emitNode(call, container, "sync", "sync.semaphore", "sem", { op: sem, name: named(args[0]), api: callee }, prov);
+      return;
+    }
+    const cond = POSIX_COND_OPS[callee];
+    if (cond !== undefined) {
+      const attrs: Record<string, unknown> = { op: cond.op, name: named(args[0]), api: callee };
+      if (cond.lock) {
+        const lock = nameText(args[1]);
+        if (lock !== DYNAMIC) attrs.lock = lockIdentity(lock, cls, project.members);
+      }
+      emitNode(call, container, "sync", "sync.condvar", "cv", attrs, prov);
+    }
+  };
+
+  /** One row of the catalog: a spawn, or an effect with the attributes its row sets. */
+  const catalogRow = (row: EffectEntry, call: SyntaxNode, callee: string, args: SyntaxNode[], container: NodeId) => {
+    if (row.kind === "concurrency.spawn-process") {
+      emitNode(call, container, "concurrency", row.kind, "procspawn", { api: row.api ?? callee }, prov);
+      return;
+    }
+    const attrs: Record<string, unknown> = { api: row.api ?? callee };
+    if (row.op !== undefined) attrs.op = row.op;
+    if (row.syscall !== undefined) attrs.syscall = row.syscall;
+    if (row.attr !== undefined) attrs[row.attr] = catalogValue(row, args);
+    emitNode(call, container, "effects", row.kind, "effect", attrs, prov);
+  };
+
   const handleCall = (call: SyntaxNode, container: NodeId, fn: FnDecl | undefined) => {
     const fnNode = call.childForFieldName("function");
     if (!fnNode) return;
     const callee = stripTemplates(norm(fnNode.text)).replace(/^::/, "");
     const args = argsOf(call);
+    const cls = classAt(project, rel, call);
 
     const spawnCall = SPAWN_CALLS.get(callee);
     if (spawnCall) {
       const targetArg =
         spawnCall.arg === -1 ? args.find((a) => !norm(a.text).startsWith("std::launch")) : args[spawnCall.arg];
-      spawn(call, container, spawnCall.how, targetArg?.text, targetArg);
+      spawn(call, container, spawnCall.how, callee, targetArg?.text, targetArg);
     }
 
-    const effect = effectCatalog.get(callee);
-    if (effect) {
-      node({
-        id: ids.take(`${rel}@effect:${call.startPosition.row}:${call.startPosition.column}`),
-        facet: "effects",
-        kind: effect.kind,
-        parent: container,
-        attrs: { api: callee },
-        span: spanOf(rel, call),
-        provenance: prov,
-      });
-    }
-
-    if (fnNode.type === "field_expression" && args.length === 0) {
-      const method = fnNode.childForFieldName("field")?.text;
-      const recv = fnNode.childForFieldName("argument")?.text;
-      if (recv !== undefined && (method === "lock" || method === "unlock")) {
-        const lock = lockIdentity(recv, scopeOf(call).cls ?? fn?.cls, project.members);
-        node({
-          id: ids.take(`${rel}@${method}:${call.startPosition.row}:${call.startPosition.column}`),
-          facet: "sync",
-          kind: method === "lock" ? "sync.lock-acquire" : "sync.lock-release",
-          parent: container,
-          attrs: method === "lock" ? { lock, mode: "exclusive", api: "lock" } : { lock, api: "unlock" },
-          span: spanOf(rel, call),
-          provenance: syncProv,
-        });
+    if (fnNode.type === "field_expression") {
+      // Member calls only: a name matched in the catalog is never a member, so `f.read()` emits nothing.
+      if (args.length === 0) {
+        const method = fnNode.childForFieldName("field")?.text;
+        const recv = fnNode.childForFieldName("argument")?.text;
+        if (recv !== undefined && (method === "lock" || method === "unlock")) {
+          const lock = lockIdentity(recv, cls, project.members);
+          node({
+            id: ids.take(`${rel}@${method}:${call.startPosition.row}:${call.startPosition.column}`),
+            facet: "sync",
+            kind: method === "lock" ? "sync.lock-acquire" : "sync.lock-release",
+            parent: container,
+            attrs: method === "lock" ? { lock, mode: "exclusive", api: "lock" } : { lock, api: "unlock" },
+            span: spanOf(rel, call),
+            provenance: syncProv,
+          });
+        }
       }
+      memberCall(call, fnNode, args, container, cls);
+    } else if (!definesCallee(project, rel, callee, cls)) {
+      // A function the project defines is never a system call: a local `kill` shadows ::kill.
+      for (const row of effectCatalog.get(callee) ?? []) catalogRow(row, call, callee, args, container);
+      posixSync(call, callee, args, container, cls);
     }
 
     if (fn) {
@@ -367,6 +505,16 @@ export function emitUnit(project: Project, rel: string): IRBatch {
     }
   };
 
+  /** `++x` and `x--` on a std::atomic variable: an atomic read-modify-write. */
+  const atomicUpdate = (n: SyntaxNode, container: NodeId) => {
+    const ref = refOf(n.childForFieldName("argument"));
+    if (!ref) return;
+    const v = resolveVar(project, ref.name, n, classAt(project, rel, n), ref.viaThis);
+    if (v?.type !== "std::atomic") return;
+    const op = n.childForFieldName("operator")?.text === "--" ? "operator--" : "operator++";
+    emitNode(n, container, "sync", "sync.atomic-op", "atomic", { op: "op", api: `std::atomic::${op}` }, prov);
+  };
+
   const handleDeclaration = (decl: SyntaxNode, container: NodeId, fn: FnDecl | undefined) => {
     const typeNode = decl.childForFieldName("type");
     const base = stripTemplates(norm(typeNode?.text ?? ""));
@@ -383,34 +531,60 @@ export function emitUnit(project: Project, rel: string): IRBatch {
         const only = params?.namedChildren[0];
         const nameArg =
           only?.type === "parameter_declaration" && !only.childForFieldName("declarator") ? only.childForFieldName("type") : null;
-        spawn(decl, container, "thread", firstArgument(params?.text), nameArg ?? undefined);
+        spawn(decl, container, "thread", base, firstArgument(params?.text), nameArg ?? undefined);
       } else if (declarator?.type === "init_declarator") {
         // `std::thread t{f, x}` holds its arguments in an initializer list. `std::thread t{}` starts nothing.
         const value = declarator.childForFieldName("value");
         if (value?.type === "argument_list" || (value?.type === "initializer_list" && namedArgs(value).length > 0)) {
-          spawn(decl, container, "thread", firstArgument(value.text), namedArgs(value)[0]);
+          spawn(decl, container, "thread", base, firstArgument(value.text), namedArgs(value)[0]);
+        }
+      }
+    }
+
+    // `std::ifstream in("file")` opens a file for reading, `std::ofstream` for writing, `std::fstream` for both.
+    const streams = STREAM_MODES[base];
+    if (streams !== undefined && declarator !== null) {
+      const [first] = declArgs(decl);
+      if (first !== undefined) {
+        for (const mode of streams) {
+          emitNode(decl, container, "effects", mode === "read" ? "effects.fs.read" : "effects.fs.write", `stream-${mode}`, { api: base, path: stringLiteral(first) ?? DYNAMIC }, prov);
         }
       }
     }
 
     const mode = GUARDS[base];
     if (mode === undefined || declarator?.type !== "function_declarator") return;
-    const params = (declarator.childForFieldName("parameters")?.namedChildren ?? []).filter((p) => p.type !== "comment");
-    const locks = params.map((p) => p.text).filter((t) => !NO_LOCK_ARGS.has(norm(t)));
     const block = blockOf(decl);
     // An out-of-line definition (void Store::put) has no class in its scope; its name carries it.
     const cls = scopeOf(decl).cls ?? fn?.cls;
+    const locks = declArgs(decl).filter((p) => !NO_LOCK_ARGS.has(norm(p.text)));
     locks.forEach((arg, i) => {
-      const lock = lockIdentity(arg, cls, project.members);
-      node({
-        id: ids.take(`${rel}@guard:${decl.startPosition.row}:${decl.startPosition.column}:${i}`),
-        facet: "sync",
-        kind: "x-cpp.scoped-lock",
-        parent: container,
-        attrs: { lock, mode, api: base },
-        span: spanOf(rel, decl),
-        provenance: syncProv,
-      });
+      const lock = lockIdentity(arg.text, cls, project.members);
+      // A shared_mutex taken by any guard is a read-write lock: shared for shared_lock, exclusive otherwise. It is
+      // emitted as sync.rwlock-acquire alone, which extends sync.lock-acquire, so each guard is one acquire node.
+      const ref = refOf(arg);
+      const mutexType = ref ? resolveVar(project, ref.name, decl, cls, ref.viaThis)?.type : undefined;
+      if (mutexType === "std::shared_mutex") {
+        node({
+          id: ids.take(`${rel}@rwlock:${decl.startPosition.row}:${decl.startPosition.column}:${i}`),
+          facet: "sync",
+          kind: "sync.rwlock-acquire",
+          parent: container,
+          attrs: { lock, mode, api: base },
+          span: spanOf(rel, decl),
+          provenance: syncProv,
+        });
+      } else {
+        node({
+          id: ids.take(`${rel}@guard:${decl.startPosition.row}:${decl.startPosition.column}:${i}`),
+          facet: "sync",
+          kind: "x-cpp.scoped-lock",
+          parent: container,
+          attrs: { lock, mode, api: base },
+          span: spanOf(rel, decl),
+          provenance: syncProv,
+        });
+      }
       if (block) {
         node({
           id: ids.take(`${rel}@release:${block.endPosition.row}:${block.endPosition.column}:${i}`),
@@ -530,6 +704,9 @@ export function emitUnit(project: Project, rel: string): IRBatch {
       }
       case "call_expression":
         handleCall(n, container, fn);
+        break;
+      case "update_expression":
+        atomicUpdate(n, container);
         break;
       case "declaration":
         handleDeclaration(n, container, fn);

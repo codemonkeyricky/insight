@@ -436,6 +436,15 @@
     }
   },
   {
+    "kind": "effects.os.call",
+    "facet": "effects",
+    "on": "node",
+    "description": "An OS operation that is not a resource kind: signals, process control, memory mapping, device control, raw syscall, OS info, fd-level ops. Matched only from catalog entries naming an exact API.",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/effects.json#/$defs/EffectsOsCall"
+    }
+  },
+  {
     "kind": "effects.unknown",
     "facet": "effects",
     "on": "node",

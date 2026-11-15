@@ -1153,6 +1153,52 @@ button.add-submit:disabled { background: var(--faint); color: var(--graphite); b
 .sysv-verb.v-writes { color: var(--accent-text); font-weight: 600; }
 .sysv-verb.v-produces { color: var(--accent-text); font-weight: 600; }
 .sysv-open { padding: 4px 14px; }
+/* Grounded frames: process > thread > coroutine, the in-process strips, the kernel band and its chips. */
+.sysv-frame { cursor: pointer; outline: none; }
+.sysv-frame-body { fill: var(--sheet); stroke: var(--hair); stroke-width: 1; }
+.sysv-frame.process > .sysv-frame-body { fill: var(--box); }
+.sysv-frame.coroutine > .sysv-frame-body { stroke-dasharray: 4 4; }
+.sysv-frame.unresolved > .sysv-frame-body { stroke-dasharray: 5 4; fill: transparent; }
+.sysv-frame.unresolved > .sysv-frame-hdr { fill: transparent; stroke-dasharray: 5 4; }
+.sysv-frame.unresolved .sysv-frame-title, .sysv-frame-note { fill: var(--muted); }
+.sysv-frame-note { font: italic 13px var(--font-ui); pointer-events: none; }
+.sysv-frame-hdr { fill: var(--faint); stroke: var(--hair); stroke-width: 1; }
+.sysv-frame.process > .sysv-frame-hdr { fill: var(--chip-solid); }
+.sysv-frame-title { fill: var(--fg); font: 600 15px var(--font-ui); pointer-events: none; }
+.sysv-frame-sub { fill: var(--muted); font: 13px var(--font-ui); pointer-events: none; }
+.sysv-frame:hover .sysv-frame-hdr, .sysv-frame:focus-visible .sysv-frame-hdr, .sysv-frame.picked .sysv-frame-hdr { stroke: var(--accent); stroke-width: 2; }
+.sysv-frame.dim { opacity: 0.35; }
+.sysv-strip rect { fill: var(--faint); stroke: var(--hair); stroke-width: 1; }
+.sysv-strip text { fill: var(--muted); font: 600 12px var(--font-ui); text-transform: uppercase; pointer-events: none; }
+.sysv-band rect { fill: var(--faint); stroke: var(--accent); stroke-width: 1; stroke-dasharray: 2 4; opacity: 0.9; }
+.sysv-band text { fill: var(--accent-text); font: 600 13px var(--font-ui); pointer-events: none; }
+.sysv-node.chip .sysv-card { fill: var(--chip-solid); }
+.sysv-chipname { fill: var(--fg); font: 13px var(--font-code); pointer-events: none; }
+.sysv-node.os .sysv-card { fill: var(--box); }
+.sysv-node.os .sysv-tab { fill: var(--graphite); }
+.sysv-node.resource .sysv-tab { fill: var(--thread); }
+.sysv-glyph { fill: none; stroke: var(--fg); stroke-linecap: round; pointer-events: none; }
+.sysv-glyph-text { fill: var(--fg); font: 14px var(--font-ui); pointer-events: none; }
+.sysv-await rect { fill: var(--faint); }
+.sysv-await text { fill: var(--fg); font: 11px var(--font-code); pointer-events: none; }
+.sysv-edge.band-in .sysv-line, .sysv-edge.band-out .sysv-line { stroke-width: 1.6; }
+/* The segment from a slice to its frame's port: faint until its edge is hovered or selected. */
+.sysv-edge.bundled .sysv-line { stroke-width: 1.2; opacity: 0.28; }
+.sysv-edge.bundled.lit .sysv-line, .sysv-edge.bundled.picked .sysv-line { opacity: 1; }
+.sysv-trunk .sysv-line { fill: none; stroke: var(--muted); stroke-width: 2; }
+.sysv-trunk.v-writes .sysv-line { stroke: var(--accent); }
+.sysv-trunk.lit .sysv-line { stroke: var(--accent); stroke-width: 2.6; }
+.sysv-trunk.dim { opacity: 0.15; }
+.sysv-port { fill: var(--sheet); stroke: var(--muted); stroke-width: 2; pointer-events: none; }
+.sysv-trunk.lit .sysv-port, .sysv-trunk.v-writes .sysv-port { stroke: var(--accent); }
+.sysv-trunk .sysv-pill rect { fill: var(--chip-solid); stroke: var(--hair); stroke-width: 1; }
+.sysv-trunk .sysv-pill text { fill: var(--fg); font: 600 15px var(--font-ui); pointer-events: none; }
+.sysv-legend .lv { display: inline-block; width: 10px; height: 10px; vertical-align: middle; margin-right: 6px; border: 1px solid var(--muted); }
+.sysv-legend .lv.syscall { background: var(--muted); }
+.sysv-legend .lv.unknown { border-style: dotted; background: transparent; }
+.sysv-evidence { width: 100%; border-collapse: collapse; margin: 6px 0; }
+.sysv-evidence th, .sysv-evidence td { text-align: left; padding: 2px 6px 2px 0; vertical-align: top; }
+.sysv-evidence th { color: var(--muted); font-weight: 600; }
 .sysv-legend { position: absolute; left: 10px; bottom: 8px; list-style: none; margin: 0; padding: 4px 10px; display: flex; flex-wrap: wrap; gap: 4px 14px; border-radius: 8px; background: var(--chip-solid); box-shadow: 0 0 0 0.5px var(--hair); pointer-events: none; }
 .sysv-legend .sw { display: inline-block; width: 26px; height: 0; border-top: 2px solid var(--muted); vertical-align: middle; margin-right: 6px; }
 .sysv-legend .sw.w { border-top-color: var(--accent); }

@@ -1,10 +1,17 @@
-// Logic for the lens tabs and lens pages of a scope. Only type imports, so the capture script can
-// load the content rule (resultHasContent) directly, the same as scopeKey.ts.
+// Logic for the lens tabs and lens pages of a scope. The only value import is builtinTabs.ts, which has no imports
+// and carries its explicit extension, so the capture script can load the content rule (resultHasContent) directly,
+// the same as scopeKey.ts. Keep every other import type-only.
 import type { LensView, ScopeLensRow, ScopeStats, TreeNode, TreeView } from "./api";
+import { BUILTIN_TABS } from "./builtinTabs.ts";
 
-/** The lens rows that get a tab: every row but the hidden ones (the manifest's `hidden` flag), in the order the server gave. */
+const BUILTIN_IDS: ReadonlySet<string> = new Set(BUILTIN_TABS);
+
+/**
+ * The lens rows that get a tab: every row but the hidden ones (the manifest's `hidden` flag), in the order the server gave.
+ * A lens whose id is a built-in tab id (such as "system") would collide with that tab, so it gets no tab.
+ */
 export function tabbedLenses(rows: readonly ScopeLensRow[]): ScopeLensRow[] {
-  return rows.filter((r) => !r.hidden);
+  return rows.filter((r) => !r.hidden && !BUILTIN_IDS.has(r.id));
 }
 
 export interface LensTab {
