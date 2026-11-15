@@ -992,6 +992,33 @@ describe("escaped identifiers name the same class", () => {
   });
 });
 
+describe("an escaped class name is the plain name everywhere", () => {
+  const dir = join(fixturesDir, "esc_decl");
+  const rels = ["c.sv", "t.sv"];
+
+  it("`class \\C` with `\\C ::m()` and `C::m()` calls: both resolve to the one method, whose id has one spelling", async () => {
+    const records = allRecords(await extractDir(dir, rels));
+    const calls = edgesOf(records).filter((e) => e.kind === "calls.call" && e.attrs?.callee === "C::m");
+    expect(calls).toHaveLength(2);
+    expect(calls.map((e) => e.to)).toEqual(["c.sv#C.m", "c.sv#C.m"]);
+    expect(nodesOf(records).some((n) => n.id === "c.sv#C.m")).toBe(true);
+    expect(nodesOf(records).filter((n) => n.id.includes("\\"))).toEqual([]);
+  });
+
+  it("the out-of-class `function void \\C ::n()` has the id prefix of the in-class method, `c.sv#C.`", async () => {
+    const records = allRecords(await extractDir(dir, rels));
+    const ids = nodesOf(records).map((n) => n.id);
+    expect(ids).toContain("c.sv#C.n");
+    expect(ids.filter((id) => id.startsWith("c.sv#C.")).sort()).toEqual(["c.sv#C.m", "c.sv#C.n", "c.sv#C.new"]);
+  });
+
+  it("`\\C ::new()` and `C::new()` both resolve to C's constructor", async () => {
+    const calls = edgesOf(allRecords(await extractDir(dir, rels))).filter((e) => e.kind === "calls.call" && e.attrs?.callee === "C.new");
+    expect(calls).toHaveLength(2);
+    expect(calls.map((e) => e.to)).toEqual(["c.sv#C.new", "c.sv#C.new"]);
+  });
+});
+
 describe("bind directives", () => {
   const dir = join(fixturesDir, "bind_scope");
   const files = ["dut.sv", "chk.sv", "tb.sv", "bindf.sv"];

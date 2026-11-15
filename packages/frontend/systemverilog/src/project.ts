@@ -226,7 +226,8 @@ export const isExternDecl = (n: SyntaxNode): boolean => /^extern\b/.test(n.text)
 /** The name of a module, interface or program (in its header), or of a package or class. */
 export function declName(n: SyntaxNode): string | undefined {
   const header = n.namedChildren.find((c) => c.type.endsWith("_header"));
-  return (header ?? n).childForFieldName("name")?.text;
+  const text = (header ?? n).childForFieldName("name")?.text;
+  return text === undefined ? undefined : svName(text);
 }
 
 /**
@@ -254,7 +255,8 @@ export function subroutineOf(n: SyntaxNode): { name: string; hdl: "function" | "
     return { name: "new", hdl: "function", ...(scope !== undefined ? { scope } : {}) };
   }
   const body = n.namedChildren.find((c) => c.type === "function_body_declaration" || c.type === "task_body_declaration");
-  const name = body?.childForFieldName("name")?.text;
+  const raw = body?.childForFieldName("name")?.text;
+  const name = raw === undefined ? undefined : svName(raw);
   if (!body || !name) return undefined;
   const scope = classScopeOf(body);
   return { name, hdl: n.type === "task_declaration" ? "task" : "function", ...(scope !== undefined ? { scope } : {}) };
@@ -269,7 +271,7 @@ export function genNameOf(n: SyntaxNode): string | undefined {
 function baseOf(n: SyntaxNode): BaseRef | undefined {
   const ct = n.namedChildren.find((c) => c.type === "class_type");
   if (!ct) return undefined;
-  const names = ct.namedChildren.filter((c) => c.type === "simple_identifier").map((c) => c.text);
+  const names = ct.namedChildren.filter((c) => c.type === "simple_identifier" || c.type === "escaped_identifier").map((c) => svName(c.text));
   const name = names.at(-1);
   if (name === undefined) return undefined;
   return names.length > 1 ? { scope: names[0], name } : { name };
