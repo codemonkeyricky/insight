@@ -19,6 +19,7 @@ import {
   openCallers,
   openExpansion,
   reflow,
+  stillOpen,
   resizeCallers,
   toggleCallers,
   type Expansion,
@@ -166,7 +167,7 @@ describe("a card's chart over its callers box", () => {
   it("opening the card's chart re-anchors its callers box on the chart's header, and the chart opened from a row survives", () => {
     const card = openCallers([], "A", boxAnchor, "A", 3, view);
     const withChart = openExpansion(card, "A", boxAnchor, chart("A", 300, 200), view);
-    const hung = hangCallersFrom(withChart, "A", view);
+    const hung = hangCallersFrom(withChart, "A", "n", view);
     const withRow = openExpansion(hung, "B", { kind: "step", fnId: callersKey("A"), stepId: "b", rect: callerRowRect(0) }, chart("B", 200, 100), view);
     const head = find(withRow, "A");
     const c = find(withRow, callersKey("A"));
@@ -181,7 +182,7 @@ describe("callers box anchors", () => {
   it("a box open at one anchor is not open at another: the header's button is not shown open for the card's box", () => {
     const card = toggleCallers([], "A", boxAnchor, "A", view);
     const chartOpen = openExpansion(card, "A", boxAnchor, chart("A", 300, 200), view);
-    const hung = hangCallersFrom(chartOpen, "A", view);
+    const hung = hangCallersFrom(chartOpen, "A", "n", view);
     expect(callersAt(hung, "A", headerAnchor(find(hung, "A")))).toBe(true);
     expect(callersAt(hung, "A", boxAnchor)).toBe(false);
   });
@@ -248,5 +249,73 @@ describe("callers buttons in the rendered chart", () => {
     expect(html).toContain('aria-label="Show callers of leaf"');
     expect(html).not.toContain("zm-callers-btn is-open");
     expect(HEADER_STEP).toBe("@header");
+  });
+});
+
+describe("a call step opens its callee at a sibling step (N1)", () => {
+  const at = (fnId: string, stepId: string) => ({ kind: "step" as const, fnId, stepId, rect: { x: 0, y: 40, w: 10, h: 10 } });
+
+  it("A's s1 opens B, B's step opens C, then A's s2 (also calling C) moves C to s2 and closes B's chain", () => {
+    const a = openExpansion([], "A", boxAnchor, chart("A", 300, 200), view);
+    const b = openExpansion(a, "B", at("A", "s1"), chart("B", 200, 100), view);
+    const c = openExpansion(b, "C", at("B", "bs"), chart("C", 100, 100), view);
+    expect(c.map((e) => e.fnId).sort()).toEqual(["A", "B", "C"]);
+    const next = openExpansion(c, "C", at("A", "s2"), chart("C", 100, 100), view);
+    expect(next).not.toBe(c);
+    expect(next.map((e) => e.fnId).sort()).toEqual(["A", "C"]);
+    expect(find(next, "C").anchor).toMatchObject({ kind: "step", fnId: "A", stepId: "s2" });
+    expect(overlaps(find(next, "A"), find(next, "C"))).toBe(false);
+  });
+
+  it("moving an open callee to another step keeps its own chain attached to it", () => {
+    const a = openExpansion([], "A", boxAnchor, chart("A", 300, 200), view);
+    const b = openExpansion(a, "B", at("A", "s1"), chart("B", 200, 100), view);
+    const withC = openExpansion(b, "C", at("B", "bs"), chart("C", 100, 100), view);
+    const next = openExpansion(withC, "B", at("A", "s3"), chart("B", 200, 100), view);
+    expect(next.map((e) => e.fnId).sort()).toEqual(["A", "B", "C"]);
+    expect(find(next, "B").anchor).toMatchObject({ stepId: "s3" });
+    expect(find(next, "C").anchor).toMatchObject({ kind: "step", fnId: "B", stepId: "bs" });
+  });
+
+  it("a genuine cycle is still refused: the anchor lies inside the callee's own chain", () => {
+    const a = openExpansion([], "A", boxAnchor, chart("A", 300, 200), view);
+    const b = openExpansion(a, "B", at("A", "s1"), chart("B", 200, 100), view);
+    expect(openExpansion(b, "A", at("B", "bs"), chart("A", 300, 200), view)).toBe(b);
+  });
+});
+
+describe("hanging a card's callers box (N3)", () => {
+  it("moves only a box hung from this card; a box hung elsewhere is left alone", () => {
+    const elsewhere: Rect = { x: 500, y: 300, w: 230, h: 44 };
+    const a = openExpansion([], "A", boxAnchor, chart("A", 300, 200), view);
+    const withBox = openCallers(a, "A", { kind: "box", nodeId: "m", rect: elsewhere }, "A", 3, view);
+    expect(hangCallersFrom(withBox, "A", "n", view)).toBe(withBox);
+  });
+
+  it("does not close the new chart's own step children", () => {
+    const a = openExpansion([], "A", boxAnchor, chart("A", 300, 200), view);
+    const withChild = openExpansion(a, "B", at("A", "s1"), chart("B", 200, 100), view);
+    const withBox = openCallers(withChild, "A", boxAnchor, "A", 3, view);
+    const hung = hangCallersFrom(withBox, "A", "n", view);
+    expect(hung.map((e) => e.fnId).sort()).toEqual(["A", "B", callersKey("A")].sort());
+    expect(find(hung, callersKey("A")).anchor).toMatchObject({ kind: "step", fnId: "A", stepId: HEADER_STEP });
+  });
+
+  const at = (fnId: string, stepId: string) => ({ kind: "step" as const, fnId, stepId, rect: { x: 0, y: 40, w: 10, h: 10 } });
+});
+
+describe("a loaded chart opens only while the map still shows its context (N2)", () => {
+  const a = openExpansion([], "A", boxAnchor, chart("A", 300, 200), view);
+  const started = { context: "p\u0001", path: "src" };
+
+  it("a relayout of the same focus (a new build, same scope) still opens it", () => {
+    expect(stillOpen(a, "A", started, { context: "p\u0001", path: "src" })).toBe(true);
+  });
+
+  it("a different project, a different scope, or a closed parent opens nothing", () => {
+    expect(stillOpen(a, "A", started, { context: "q\u0001", path: "src" })).toBe(false);
+    expect(stillOpen(a, "A", started, { context: "p\u0001", path: "lib" })).toBe(false);
+    expect(stillOpen(a, "A", started, { context: "p\u0001", path: undefined })).toBe(false);
+    expect(stillOpen([], "A", started, { context: "p\u0001", path: "src" })).toBe(false);
   });
 });

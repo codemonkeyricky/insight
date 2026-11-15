@@ -79,13 +79,15 @@ describe("callers box rows", () => {
 });
 
 describe("stale callers fetch", () => {
-  it("rows that arrive after the box unmounted do not select, open or throw", async () => {
+  it("rows that arrive after the box unmounted do not select, open, resize or throw", async () => {
     let resolve: (v: unknown) => void = () => {};
     getRefs.mockReturnValue(new Promise((r) => (resolve = r)));
     const errors: unknown[] = [];
     const onError = (e: ErrorEvent) => errors.push(e.error);
     window.addEventListener("error", onError);
     const { props, unmount } = mount();
+    // The mount itself reports the loading size; only what happens after the unmount is checked.
+    props.onLines.mockClear();
     unmount();
     resolve({ calledBy: [refRow({ id: "f#late", name: "late" })] });
     await new Promise((r) => setTimeout(r, 0));
@@ -93,6 +95,24 @@ describe("stale callers fetch", () => {
     expect(errors).toEqual([]);
     expect(props.onSelect).not.toHaveBeenCalled();
     expect(props.onOpen).not.toHaveBeenCalled();
+    expect(props.onLines).not.toHaveBeenCalled();
+  });
+
+  it("rows that arrive after the box closed do not resize it (onLines is not called)", async () => {
+    let resolve: (v: unknown) => void = () => {};
+    getRefs.mockReturnValue(new Promise((r) => (resolve = r)));
+    const { props, rerender } = mount();
+    props.onLines.mockClear();
+    const closing = (
+      <svg>
+        <CallersBox {...props} closing />
+      </svg>
+    );
+    rerender(closing);
+    props.onLines.mockClear();
+    resolve({ calledBy: [refRow({ id: "f#late", name: "late" }), refRow({ id: "f#later", name: "later" })] });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(props.onLines).not.toHaveBeenCalled();
   });
 
   it("a closing box fetches nothing", () => {
