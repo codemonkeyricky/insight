@@ -1,12 +1,12 @@
-import { cpSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { projectPaths, readSnapshot, runIndex } from "../src/index.js";
 
-// The CMake frontend's inputs include the CMakeLists files and the header files, so adding a header under a target's
-// include directory must re-extract the CMake shards and link the new header to the target, and an unchanged project
-// must reuse them.
+// The CMake frontend's inputs include the CMakeLists files and its inputListing covers every file, so adding a header
+// under a target's include directory, or a source that a file(GLOB) matches, must re-extract the CMake shards and link
+// the new file to the target, and an unchanged project must reuse them.
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..", "..", "..");
 const SCRATCH = join(here, "..", ".insight-test", `cmake-freshness-${process.pid}`);
@@ -49,5 +49,30 @@ describe("frontend-cmake freshness", () => {
     const third = await runIndex(options(false));
     expect(third.extracted.filter((e) => e.frontend === "frontend-cmake")).toEqual([]);
     expect(third.reused).toBeGreaterThan(0);
+  }, 120_000);
+
+  it("links a new source that a file(GLOB) matches to its target after an incremental re-index", async () => {
+    const globProject = join(SCRATCH, "cmake-glob");
+    cpSync(fixture, globProject, { recursive: true });
+    appendFileSync(
+      join(globProject, "lib", "CMakeLists.txt"),
+      'file(GLOB GLOBBED "src/*.cc")\ntarget_sources(shapes PRIVATE ${GLOBBED})\n',
+    );
+    const globOptions = (full: boolean) => ({ ...options(full), projectPath: globProject });
+
+    const first = await runIndex(globOptions(true));
+    expect(first.extracted).toContainEqual({ frontend: "frontend-cmake", file: "lib/CMakeLists.txt" });
+
+    // A new .cc file is not in the frontend's contents inputs, only in its listing, so the file list alone must
+    // re-extract the CMake shards.
+    writeFileSync(join(globProject, "lib", "src", "b.cc"), "int b() { return 2; }\n");
+    const second = await runIndex(globOptions(false));
+    expect(second.extracted).toContainEqual({ frontend: "frontend-cmake", file: "lib/CMakeLists.txt" });
+
+    const records = readSnapshot(projectPaths(globProject), second.snapshot);
+    const edges = records.flatMap((r) => ("edge" in r ? [r.edge] : []));
+    expect(edges).toContainEqual(
+      expect.objectContaining({ kind: "packaging.target-contains", from: "cmake://lib:shapes", to: "lib/src/b.cc" }),
+    );
   }, 120_000);
 });

@@ -25,6 +25,8 @@ The `cpp.include` resolver of a build system leaves `fallback` unset. The C++ sy
 sets `"fallback": true`, so its guesses are used only when no build-system resolver answered. See
 [writing-a-frontend.md](writing-a-frontend.md#resolvers).
 
+Freshness: a build-system frontend declares `inputs` for its build definitions (`BUILD`, `MODULE.bazel`, `*.bzl`, `CMakeLists.txt`, `*.cmake` and so on), whose contents matter. It declares `inputListing: ["**/*"]`, so adding or removing any file re-extracts its shards, because a glob such as `glob(["*.cc"])` or `file(GLOB ...)` may now match a different set of files. Editing the contents of a source file does not re-extract the build files.
+
 `manager`, `source`, `override` and `buildSystem` are open strings. The values below are the ones the two frontends use.
 
 ## Bazel (`frontend-bazel`)

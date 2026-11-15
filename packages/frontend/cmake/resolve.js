@@ -1,25 +1,9 @@
 // Resolver: answers a C++ include with the headers found through a target's include directories, and, when no
 // in-repository header explains it, with the external package the target's dependencies declare.
-import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join, posix } from "node:path";
 import { externalsForInclude } from "@insight/sdk";
 import { buildCmakeModel, closureOf, includeDirsOf, isCMakeFile, ownersOf, resolveLink } from "./parse.js";
-
-/**
- * The model of the last link run. It is reused while the file list is the same array with the same length and the
- * CMake texts hash to the same digest, so an edit to any CMake file is still seen at once.
- */
-let cached;
-
-function digestOf(texts) {
-  const hash = createHash("sha256");
-  for (const key of [...texts.keys()].sort()) {
-    const text = texts.get(key);
-    hash.update(`${key}\0${text.length}\0${text}\0`);
-  }
-  return hash.digest("hex");
-}
 
 async function readTexts(ctx) {
   const texts = new Map();
@@ -31,8 +15,7 @@ async function readTexts(ctx) {
 
 /**
  * With a runCache (one per link run, see ResolveContext.runCache) the model is built once per run and stored there as
- * a Promise, so the files are not read again. Without it the model is rebuilt when the file list or the CMake texts
- * change, checked by the digest of those texts.
+ * a Promise, so the files are not read again. Without it the model is built on each call.
  */
 function loadModel(ctx) {
   if (ctx.runCache !== undefined) {
@@ -49,19 +32,7 @@ function loadModel(ctx) {
     cache.set(key, pending);
     return pending;
   }
-  return loadModelByDigest(ctx);
-}
-
-async function loadModelByDigest(ctx) {
-  const files = ctx.listFiles();
-  const texts = await readTexts(ctx);
-  const digest = digestOf(texts);
-  if (cached !== undefined && cached.files === files && cached.count === files.length && cached.digest === digest) {
-    return cached.model;
-  }
-  const model = buildCmakeModel(texts, files);
-  cached = { files, count: files.length, digest, model };
-  return model;
+  return readTexts(ctx).then((texts) => buildCmakeModel(texts, ctx.listFiles()));
 }
 
 /** The external packages the closure's links name, by id. */

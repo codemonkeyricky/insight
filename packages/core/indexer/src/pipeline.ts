@@ -220,7 +220,14 @@ export async function runIndex(opts: IndexOptions): Promise<IndexReport> {
     const inputMatch = inputGlobs.length > 0 ? picomatch(inputGlobs) : () => false;
     const files = allFiles.filter((f) => fileMatch(f));
     const inputFiles = allFiles.filter((f) => inputMatch(f));
-    const inputsHash = sha256(canonicalJson(inputFiles.map((p) => [p, scan.files.get(p)])));
+    const listingGlobs = manifest.inputListing ?? [];
+    const listingMatch = listingGlobs.length > 0 ? picomatch(listingGlobs) : () => false;
+    const contents = inputFiles.map((p) => [p, scan.files.get(p)]);
+    // Without inputListing the hash is the same as before, so existing shard keys do not change.
+    const inputsHash =
+      listingGlobs.length > 0
+        ? sha256(canonicalJson({ contents, listing: allFiles.filter((f) => listingMatch(f)).sort() }))
+        : sha256(canonicalJson(contents));
 
     const previous = state.frontends[manifest.id];
     const reusable = previous && previous.version === frontend.version && previous.inputsHash === inputsHash ? previous : undefined;

@@ -20,6 +20,11 @@ export interface PluginManifest {
   detect?: string[];
   files?: string[];
   inputs?: string[];
+  /**
+   * Globs whose matching files contribute only their paths to the inputsHash, not their contents. For frontends whose
+   * output depends on which files exist (for example build-file globs), not on what they contain.
+   */
+  inputListing?: string[];
   provides?: string[];
   dependsOn?: string[];
   /** A lens with no tab in the web app. It still runs and its results stay available to the CLI and API. */
