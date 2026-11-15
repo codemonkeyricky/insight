@@ -1,6 +1,6 @@
 {
   "name": "@insight/frontend-bazel",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Insight frontend: Bazel BUILD files, read statically (no bazel run)",
   "license": "MIT",
   "type": "module",

@@ -888,3 +888,55 @@ describe("main-repository names and label shorthand", () => {
     expect(deps.map((e) => e.to)).toEqual(["@foo"]);
   });
 });
+
+describe("WORKSPACE main-repository names and label scope", () => {
+  it("reads the workspace() name from WORKSPACE and WORKSPACE.bazel, and both names from a hybrid repo", () => {
+    expect(mainRepoNames(new Map([["WORKSPACE", 'workspace(name = "myws")']]))).toEqual(["myws"]);
+    expect(mainRepoNames(new Map([["WORKSPACE.bazel", 'workspace(name = "wb")']]))).toEqual(["wb"]);
+    expect(mainRepoNames(new Map([["MODULE.bazel", 'module(name = "m")'], ["WORKSPACE", 'workspace(name = "w")']]))).toEqual(["m", "w"]);
+    expect(mainRepoNames(new Map([["MODULE.bazel", 'module(name = "same")'], ["WORKSPACE", 'workspace(name = "same")']]))).toEqual(["same"]);
+  });
+
+  it("resolves @myws//b:y to the in-repository //b:y in a WORKSPACE-only repo", async () => {
+    const deps = edgesOf(await extractFiles({
+      "WORKSPACE": 'workspace(name = "myws")',
+      "a/BUILD": 'cc_library(name = "x", srcs = [], deps = ["@myws//b:y"])',
+      "b/BUILD": 'cc_library(name = "y", srcs = [])',
+    })).filter((e) => e.kind === "packaging.dep-edge" && e.from === "//a:x");
+    expect(deps.map((e) => e.to)).toEqual(["//b:y"]);
+  });
+
+  it("resolves both @m// and @w// to in-repository labels in a hybrid repo", async () => {
+    const deps = edgesOf(await extractFiles({
+      "MODULE.bazel": 'module(name = "m")',
+      "WORKSPACE": 'workspace(name = "w")',
+      "a/BUILD": 'cc_library(name = "x", srcs = [], deps = ["@m//b:y", "@w//b:y"])',
+      "b/BUILD": 'cc_library(name = "y", srcs = [])',
+    })).filter((e) => e.kind === "packaging.dep-edge" && e.from === "//a:x");
+    expect(deps.map((e) => e.to)).toEqual(["//b:y", "//b:y"]);
+  });
+});
+
+describe("label normalisation is limited to label attributes", () => {
+  it("leaves a non-label string such as copts = [\"@argsfile\"] as written, and creates no edge or external from it", () => {
+    const targets = parseBuildFile(
+      "app/BUILD",
+      'cc_library(name = "x", srcs = [], copts = ["@argsfile"], args = ["@params"], deps = ["@ext//:lib"])',
+      [],
+      new Set(["app"]),
+      ["argsfile", "params"],
+    );
+    expect(targets[0]?.deps).toEqual([]);
+    expect(targets[0]?.externalDeps).toEqual(["@ext//:lib"]);
+  });
+
+  it("does not add an edge or external for copts = [\"@argsfile\"] in an extracted repo, and still maps deps to ext", async () => {
+    const batches = await extractFiles({
+      "MODULE.bazel": 'module(name = "m")\nbazel_dep(name = "ext", version = "1.0")',
+      "app/BUILD": 'cc_library(name = "x", srcs = [], copts = ["@argsfile"], args = ["@params"], deps = ["@ext//:lib"])',
+    });
+    const edges = edgesOf(batches).filter((e) => e.kind === "packaging.dep-edge" && e.from === "//app:x");
+    expect(edges.map((e) => e.to)).toEqual(["@ext"]);
+    expect(edges.some((e) => e.to.includes("argsfile") || e.to.includes("params"))).toBe(false);
+  });
+});

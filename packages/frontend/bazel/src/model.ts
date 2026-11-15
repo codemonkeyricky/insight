@@ -253,13 +253,32 @@ export function moduleVariables(toks: Tok[]): ModuleVars {
   return vars;
 }
 
+/**
+ * The attributes whose strings are labels. Only these have a main-repository label (`@root//p:t`) read as an
+ * in-repository one; a string anywhere else, such as copts = ["@argsfile"], is left as written.
+ */
+const LABEL_ATTRS = new Set([
+  "deps", "implementation_deps", "srcs", "hdrs", "textual_hdrs", "data", "visibility", "default_visibility",
+  "actual", "exports", "runtime_deps", "src",
+]);
+
+/** The call with each label attribute's strings normalised by normalizeMainLabel. */
+function withLabelArgs(call: Call, mainRepos: readonly string[]): Call {
+  const args = call.args.map((a) =>
+    a.key !== undefined && LABEL_ATTRS.has(a.key)
+      ? { ...a, tokens: a.tokens.map((t) => (t.kind === "str" ? { ...t, value: normalizeMainLabel(t.value, mainRepos) } : t)) }
+      : a,
+  );
+  return { ...call, args };
+}
+
 /** Absolute form of a visibility label: ":__subpackages__" in package p becomes "//p:__subpackages__". */
-function visibilityOf(args: Arg[], key: string, pkg: string, vars: ModuleVars): string[] | undefined {
+function visibilityOf(args: Arg[], key: string, pkg: string, vars: ModuleVars, mainRepos: readonly string[]): string[] | undefined {
   const arg = args.find((a) => a.key === key);
   if (arg === undefined) return undefined;
   const values = evaluate(arg.tokens, vars);
   return values?.map((text) => {
-    const target = labelOf(text, pkg);
+    const target = labelOf(text, pkg, mainRepos);
     return "external" in target ? target.external : target.id;
   });
 }
@@ -297,12 +316,12 @@ export function parseBuildFile(
 ): BazelTarget[] {
   const pkg = packageOf(buildFile);
   const targets: BazelTarget[] = [];
-  // Labels that name the main repository are read as in-repository labels, everywhere they appear.
-  const toks = tokenize(text).map((t) => (t.kind === "str" ? { ...t, value: normalizeMainLabel(t.value, mainRepos) } : t));
+  const toks = tokenize(text);
   const vars = moduleVariables(toks);
-  const calls = topLevelCalls(toks);
+  // Only label-typed attributes have their main-repository labels read as in-repository labels.
+  const calls = topLevelCalls(toks).map((c) => withLabelArgs(c, mainRepos));
   const pkgCall = calls.find((c) => c.name === "package");
-  const defaultVisibility = pkgCall === undefined ? undefined : visibilityOf(pkgCall.args, "default_visibility", pkg, vars);
+  const defaultVisibility = pkgCall === undefined ? undefined : visibilityOf(pkgCall.args, "default_visibility", pkg, vars, mainRepos);
   for (const call of calls) {
     const modelled = isModelledRule(call.name);
     if (!modelled && !isUnknownRule(call)) continue;
@@ -314,7 +333,7 @@ export function parseBuildFile(
     const externalDeps: string[] = [];
     // Outside C++, a deps entry can be a call such as requirement("numpy"), which is not a label.
     for (const label of cc ? stringsIn(arg("deps")) : labelsIn(arg("deps"))) {
-      const target = labelOf(label, pkg);
+      const target = labelOf(label, pkg, mainRepos);
       if ("external" in target) externalDeps.push(target.external);
       else deps.push(target.id);
     }
@@ -327,7 +346,7 @@ export function parseBuildFile(
     if (mainFile !== undefined && !srcs.includes(mainFile)) srcs.push(mainFile);
     // A target that sets visibility never takes the package default, even when its value cannot be read.
     const hasOwnVisibility = call.args.some((a) => a.key === "visibility");
-    const ownVisibility = hasOwnVisibility ? visibilityOf(call.args, "visibility", pkg, vars) : defaultVisibility;
+    const ownVisibility = hasOwnVisibility ? visibilityOf(call.args, "visibility", pkg, vars, mainRepos) : defaultVisibility;
     targets.push({
       id: `//${pkg}:${name}`,
       name,
