@@ -1072,3 +1072,13 @@ describe("hierarchical bind", () => {
     expect(edge?.provenance?.confidence).toBe("heuristic");
   });
 });
+
+describe("detection past several Coq .v files", () => {
+  it("a root with five Coq-like .v files and one Verilog module in a subdirectory is detected as Verilog", async () => {
+    const dir = makeTemp("sv-coq-many-");
+    for (let i = 1; i <= 5; i++) writeFileSync(join(dir, `c${i}.v`), `Require Import Coq.Lists.List.\nTheorem t${i} : True.\nProof. exact I. Qed.\n`);
+    mkdirSync(join(dir, "sub"));
+    writeFileSync(join(dir, "sub", "real.v"), "module real;\nendmodule\n");
+    expect(await frontend.detect({ path: dir, name: "mixed", allowBuildTools: false })).toEqual({ reason: "found sub/real.v" });
+  });
+});

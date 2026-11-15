@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtractContext, Frontend, IRBatch, ProjectRoot } from "@insight/sdk";
 import { emitUnit } from "./extract.js";
@@ -12,7 +12,24 @@ export const MAX_CROSS_FILE_BYTES = 64 * 1024 * 1024;
 const SKIP_DIRS = new Set(["node_modules", ".git", ".insight", "dist", "build"]);
 
 /** How many `.v` files detection reads to tell Verilog from another language. Past this, a `.v` file does not count. */
-const MAX_V_READS = 4;
+const MAX_V_READS = 32;
+/** The most of a `.v` file detection reads. The HDL keywords of a file sit near its start. */
+const MAX_V_HEAD_BYTES = 64 * 1024;
+
+/** The first bytes of a file, or undefined when it cannot be read. The descriptor is always closed. */
+function readHead(path: string): string | undefined {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, "r");
+    const buf = Buffer.alloc(MAX_V_HEAD_BYTES);
+    const n = readSync(fd, buf, 0, MAX_V_HEAD_BYTES, 0);
+    return buf.subarray(0, n).toString("utf8");
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
 
 /**
  * Finds the first Verilog or SystemVerilog file within a few levels of the root that `accept` takes. `accept` gets
@@ -104,13 +121,14 @@ export const frontend: Frontend = {
   provides: ["structure", "packaging", "flow", "calls", "effects"],
 
   async detect(root: ProjectRoot) {
-    // A `.v` file counts only when its text is HDL (see isHdlText). Coq also uses `.v`, so the first few are read.
+    // A `.v` file counts only when its text is HDL (see isHdlText). Coq also uses `.v`, so only the first few are read.
     let vReads = 0;
     const accept = (path: string): boolean => {
       if (!/\.v$/i.test(path)) return true;
       if (vReads >= MAX_V_READS) return false;
       vReads++;
-      return isHdlText(path, readFileSync(path, "utf8"));
+      const text = readHead(path);
+      return text !== undefined && isHdlText(path, text);
     };
     const hit = findSource(root.path, 6, accept);
     return hit ? { reason: `found ${hit}` } : null;
