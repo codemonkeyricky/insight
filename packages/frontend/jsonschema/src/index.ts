@@ -159,6 +159,8 @@ const TS_RE = /\.tsx?$/;
 const TS_SKIP = /\/dist\/|\/node_modules\/|\/test\/|\.test\.|\/generated\//;
 const KIND_TOKEN = /["'`]((?:structure|packaging|flow|calls|concurrency|sync|effects|state|x-[a-z0-9-]+)\.[a-z0-9-]+(?:\.[a-z0-9-]+)*)["'`]/g;
 const EMIT_BEFORE = /kind\s*:\s*$/;
+/** A positional emit call on the same line, e.g. emitNode(call, container, "sync", "sync.condvar", ...). */
+const EMIT_CALL_BEFORE = /\bemit\w*\([^)]*$/;
 
 /** Scans the TypeScript files under packages/ and apps/ for quoted kind names. Each file keeps one hit per (kind, how). */
 async function scanTs(ctx: ExtractContext): Promise<TsScan> {
@@ -178,7 +180,10 @@ async function scanTs(ctx: ExtractContext): Promise<TsScan> {
     for (const m of text.matchAll(KIND_TOKEN)) {
       const kind = m[1] ?? "";
       const idx = m.index ?? 0;
-      const how: "emit" | "read" = EMIT_BEFORE.test(text.slice(Math.max(0, idx - 40), idx)) ? "emit" : "read";
+      const lineStart = text.lastIndexOf("\n", idx - 1) + 1;
+      const linePrefix = text.slice(lineStart, idx);
+      const how: "emit" | "read" =
+        EMIT_BEFORE.test(text.slice(Math.max(0, idx - 40), idx)) || EMIT_CALL_BEFORE.test(linePrefix) ? "emit" : "read";
       const key = `${kind}|${how}`;
       if (seen.has(key)) continue;
       seen.add(key);
