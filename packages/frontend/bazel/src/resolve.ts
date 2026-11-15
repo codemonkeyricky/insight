@@ -35,11 +35,14 @@ async function loadExternals(ctx: ResolveContext): Promise<Externals> {
   return parseExternals(texts);
 }
 
-/** The header a target exposes under an include path, through strip_include_prefix and include_prefix. */
+/**
+ * The header a target exposes under an include path, through strip_include_prefix and include_prefix. Without
+ * strip_include_prefix a header keeps its workspace-relative path (absl/base/config.h stays absl/base/config.h),
+ * because the workspace root is on the include path. It is not made relative to the package.
+ */
 function exposedAs(t: BazelTarget, header: string): string {
   let rel = header;
   if (t.stripPrefix !== undefined && header.startsWith(`${t.stripPrefix}/`)) rel = header.slice(t.stripPrefix.length + 1);
-  else if (t.pkg !== "" && header.startsWith(`${t.pkg}/`)) rel = header.slice(t.pkg.length + 1);
   return joinPath(t.includePrefix ?? "", rel);
 }
 

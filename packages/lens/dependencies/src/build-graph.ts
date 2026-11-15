@@ -53,6 +53,8 @@ function visibleTo(entries: unknown[], pkg: string): "allowed" | "denied" | "unk
     }
     if (entry === "//visibility:public") return "allowed";
     if (entry === "//visibility:private") continue;
+    // Another repository's package (@repo//pkg:__pkg__ or __subpackages__) admits no package of this one.
+    if (/^@[^/]+\/\/[^:]*:(__pkg__|__subpackages__)$/.test(entry)) continue;
     const m = /^(\/\/[^:]*):(__pkg__|__subpackages__)$/.exec(entry);
     if (!m) {
       unknown = true;

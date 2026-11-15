@@ -492,6 +492,18 @@ describe("build-graph: visibility", () => {
     expect(rulesOf(result, "visibility")).toEqual([]);
   });
 
+  it("admits a package named beside another repository's entry, and reads another repository's package as admitting nothing here", async () => {
+    const shared = ["//lib:__pkg__", "@do_not_use_for_gloop_visibility_only//gloop/util/random:__subpackages__"];
+    expect(rulesOf(await visCheck(shared, "//lib:src"), "visibility")).toEqual([]);
+    expect(rulesOf(await visCheck(shared, "//app:main"), "visibility").map((f) => f.id)).toEqual(["visibility://app:main>//lib/c:y"]);
+    expect(rulesOf(await visCheck(["//app:__pkg__", "@other//x:__pkg__"], "//app:main"), "visibility")).toEqual([]);
+  });
+
+  it("does not treat an other-repository entry as unknown, so a denial stands", async () => {
+    const found = rulesOf(await visCheck(["@other//gloop:__subpackages__"], "//app:main"), "visibility");
+    expect(found.map((f) => f.id)).toEqual(["visibility://app:main>//lib/c:y"]);
+  });
+
   it("treats an empty visibility list as private and counts the violation", async () => {
     const result = await visCheck([], "//app:main");
     expect(rulesOf(result, "visibility")).toHaveLength(1);

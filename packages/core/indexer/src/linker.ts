@@ -105,6 +105,7 @@ export async function link(input: LinkInput): Promise<LinkResult> {
     const ctx: ResolveContext = {
       root: input.root,
       fromFile: file,
+      attrs: edge.attrs,
       hasFile: (p) => fileSet.has(p),
       hasNode: (n) => nodes.has(n),
       listFiles: () => input.files,

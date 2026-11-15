@@ -1,4 +1,5 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -620,5 +621,89 @@ describe("macro and custom rules", () => {
     const edges = edgesOf(await extractAll());
     expect(edges).toContainEqual(expect.objectContaining({ kind: "packaging.dep-edge", from: "//ext:consumer", to: "@abseil-cpp" }));
     expect(edges).toContainEqual(expect.objectContaining({ kind: "packaging.dep-edge", from: "//ext:consumer", to: "@com_google_googletest" }));
+  });
+});
+
+describe("visibility expressions", () => {
+  const vis = (build: string, name = "x") => parseBuildFile("absl/random/internal/BUILD", build, [], new Set(["absl/random/internal"])).find((t) => t.name === name);
+
+  it("reads a module-level variable bound to a list of strings", () => {
+    const t = vis('ALLOWED = ["//app:__pkg__", "//lib:__subpackages__"]\ncc_library(name = "x", visibility = ALLOWED)');
+    expect(t?.visibility).toEqual(["//app:__pkg__", "//lib:__subpackages__"]);
+  });
+
+  it("concatenates lists and variables with +, in order", () => {
+    const t = vis('BASE = ["//app:__pkg__"]\ncc_library(name = "x", visibility = BASE + ["//lib:__pkg__"] + BASE)');
+    expect(t?.visibility).toEqual(["//app:__pkg__", "//lib:__pkg__", "//app:__pkg__"]);
+  });
+
+  it("omits visibility when a variable is unknown, rather than emitting a partial list", () => {
+    const t = vis('cc_library(name = "x", visibility = UNKNOWN + ["//lib:__pkg__"])');
+    expect(t).not.toHaveProperty("visibility");
+  });
+
+  it("omits visibility for a call or select(), and for a name bound twice", () => {
+    expect(vis('cc_library(name = "x", visibility = select({"//conditions:default": ["//a:__pkg__"]}))')).not.toHaveProperty("visibility");
+    expect(vis('cc_library(name = "x", visibility = make_vis() + ["//a:__pkg__"])')).not.toHaveProperty("visibility");
+    expect(vis('V = ["//a:__pkg__"]\nV = ["//b:__pkg__"]\ncc_library(name = "x", visibility = V)')).not.toHaveProperty("visibility");
+  });
+
+  it("applies package(default_visibility) through the same evaluation, to targets that set none", () => {
+    const build = 'DEFAULT = ["//absl/random:__pkg__", "@do_not_use_for_gloop_visibility_only//gloop/util/random:__subpackages__"]\npackage(default_visibility = DEFAULT)\ncc_library(name = "a")\ncc_library(name = "b", visibility = ["//visibility:public"])';
+    const parsed = parseBuildFile("absl/random/internal/BUILD", build, [], new Set(["absl/random/internal"]));
+    expect(parsed.find((t) => t.name === "a")?.visibility).toEqual([
+      "//absl/random:__pkg__",
+      "@do_not_use_for_gloop_visibility_only//gloop/util/random:__subpackages__",
+    ]);
+    expect(parsed.find((t) => t.name === "b")?.visibility).toEqual(["//visibility:public"]);
+  });
+
+  it("does not fall back to the package default when the target's own visibility cannot be read", () => {
+    const build = 'package(default_visibility = ["//visibility:public"])\ncc_library(name = "x", visibility = UNKNOWN)';
+    expect(vis(build)).not.toHaveProperty("visibility");
+  });
+
+  it("reads randen_engine's shape: a package variable, then default + [] in the target", () => {
+    const build = [
+      'default_package_visibility = ["//absl/random:__pkg__", "@do_not_use_for_gloop_visibility_only//gloop/util/random:__subpackages__"]',
+      'package(default_visibility = default_package_visibility, features = ["x"])',
+      'cc_library(name = "randen_engine", hdrs = ["randen_engine.h"], visibility = default_package_visibility + [\n    ],\n    deps = [":randen"])',
+    ].join("\n");
+    expect(vis(build, "randen_engine")?.visibility).toEqual([
+      "//absl/random:__pkg__",
+      "@do_not_use_for_gloop_visibility_only//gloop/util/random:__subpackages__",
+    ]);
+  });
+});
+
+describe("header exposure without strip_include_prefix", () => {
+  it("answers an include with the workspace-relative path of a header in another package", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bazel-expose-"));
+    const put = (rel: string, text: string) => {
+      mkdirSync(join(dir, dirname(rel)), { recursive: true });
+      writeFileSync(join(dir, rel), text);
+    };
+    put("absl/algorithm/BUILD.bazel", 'cc_library(name = "algorithm", hdrs = ["algorithm.h"], deps = ["//absl/base:config"])');
+    put("absl/base/BUILD.bazel", 'cc_library(name = "config", hdrs = ["config.h"])');
+    put("absl/algorithm/algorithm.h", "");
+    put("absl/base/config.h", "");
+    const all = ["absl/algorithm/BUILD.bazel", "absl/base/BUILD.bazel", "absl/algorithm/algorithm.h", "absl/base/config.h"];
+    const ctx = { root: { path: dir, name: "t", allowBuildTools: false }, fromFile: "absl/algorithm/algorithm.h", hasFile: (p: string) => all.includes(p), hasNode: () => true, listFiles: () => [...all] };
+    try {
+      expect(await resolver.resolve({ scheme: "cpp.include", text: "absl/base/config.h" }, ctx)).toMatchObject({ targets: ["absl/base/config.h"], confidence: "inferred" });
+      expect(await resolver.resolve({ scheme: "cpp.include", text: "config.h" }, ctx)).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("glob patterns", () => {
+  it("reads the include patterns of glob(include = [...]) given by keyword, as well as positionally", () => {
+    const files = ["gt/src/a.cc", "gt/src/b.cc", "gt/include/x.h", "gt/include/sub/y.h"];
+    const kw = parseBuildFile("gt/BUILD", 'cc_library(name = "gt", srcs = glob(\n    include = ["src/*.cc", "include/**/*.h"],\n    exclude = ["src/b.cc"],\n))', files, new Set(["gt"]));
+    expect(kw[0]?.srcs).toEqual(["gt/include/sub/y.h", "gt/include/x.h", "gt/src/a.cc"]);
+    const positional = parseBuildFile("gt/BUILD", 'cc_library(name = "gt", srcs = glob(["src/*.cc"]))', files, new Set(["gt"]));
+    expect(positional[0]?.srcs).toEqual(["gt/src/a.cc", "gt/src/b.cc"]);
   });
 });

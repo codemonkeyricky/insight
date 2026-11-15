@@ -360,3 +360,20 @@ describe("build-graph narrowing", () => {
     expect(result.narrowed).toBe(1);
   });
 });
+
+describe("linker passes the edge attributes to resolvers", () => {
+  it("gives a resolver the attrs of the edge that holds the reference", async () => {
+    const seen: unknown[] = [];
+    const spy: Resolver = {
+      scheme: "test.ref",
+      priority: 5,
+      async resolve(_ref, ctx) {
+        seen.push(ctx.attrs);
+        return null;
+      },
+    };
+    const edge = { edge: { from: "a.cc", to: { unresolved: { scheme: "test.ref", text: "time.h" } }, facet: "packaging", kind: "packaging.include", attrs: { system: true, text: "time.h" }, provenance: PROV }, file: "a.cc" } as const;
+    await run([{ id: "spy", resolver: spy }], [edge]);
+    expect(seen).toEqual([{ system: true, text: "time.h" }]);
+  });
+});

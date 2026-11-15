@@ -1,6 +1,6 @@
 import { posix } from "node:path";
 import type { Span } from "@insight/ir";
-import { globsIn, labelsIn, stringsIn, topLevelCalls, tokenize, type Arg, type Call, type Tok } from "./starlark.js";
+import { globsIn, labelsIn, matchClose, splitArgs, stringsIn, topLevelCalls, tokenize, type Arg, type Call, type Tok } from "./starlark.js";
 
 /** Rules whose names start with cc_ are C++ targets: cc_library, cc_binary, cc_test, and so on. */
 const CC_PREFIX = "cc_";
@@ -60,7 +60,7 @@ export interface BazelTarget {
   stripPrefix?: string;
   /** Prefix added to header paths when they are exposed to includes. */
   includePrefix?: string;
-  /** Absolute visibility labels: the target's own `visibility`, else its package's `default_visibility`. Absent when neither is set. */
+  /** Absolute visibility labels: the target's own `visibility`, else its package's `default_visibility`. Absent when neither is set, or when the value is an expression that cannot be read. */
   visibility?: string[];
   /** Whether the target is read like a cc_library: its headers, include directories and cc-only fields. cc_* rules, and macros with deps and sources. */
   cc: boolean;
@@ -151,11 +151,78 @@ function fileOf(text: string, pkg: string): string | undefined {
   return joinPath(pkg, text);
 }
 
+/** A value a BUILD expression evaluates to: a list of strings, or undefined when it cannot be read. */
+type ListValue = string[] | undefined;
+
+/** Module-level variables bound to lists of strings. A name bound twice (or not at all) is unknown. */
+export type ModuleVars = Map<string, ListValue>;
+
+/** Reads one term at `i`: a list literal of strings, or a name bound in `vars`. Anything else is unknown. */
+function evalTerm(toks: Tok[], i: number, vars: ModuleVars): { value: ListValue; end: number } {
+  const t = toks[i];
+  if (t === undefined) return { value: undefined, end: i };
+  if (t.kind === "op" && t.value === "[") {
+    const close = matchClose(toks, i);
+    if (close < 0) return { value: undefined, end: toks.length };
+    const out: string[] = [];
+    let known = true;
+    for (const arg of splitArgs(toks.slice(i + 1, close))) {
+      const only = arg.tokens.length === 1 && arg.key === undefined ? arg.tokens[0] : undefined;
+      if (only?.kind === "str") out.push(only.value);
+      else known = false;
+    }
+    return { value: known ? out : undefined, end: close + 1 };
+  }
+  if (t.kind === "id") return { value: vars.get(t.value), end: i + 1 };
+  return { value: undefined, end: i };
+}
+
+/** Reads a term or a `+` concatenation of terms, from `i`. Returns the value and the index after it. */
+function evalExpr(toks: Tok[], i: number, vars: ModuleVars): { value: ListValue; end: number } {
+  let { value, end } = evalTerm(toks, i, vars);
+  while (toks[end]?.kind === "op" && toks[end]?.value === "+") {
+    const next = evalTerm(toks, end + 1, vars);
+    value = value !== undefined && next.value !== undefined ? [...value, ...next.value] : undefined;
+    end = next.end;
+  }
+  return { value, end };
+}
+
+/** The value of a whole argument expression. Anything left over after the expression makes it unknown. */
+function evaluate(toks: Tok[], vars: ModuleVars): ListValue {
+  const r = evalExpr(toks, 0, vars);
+  return r.end === toks.length ? r.value : undefined;
+}
+
+/**
+ * Reads the module-level assignments of a BUILD file (`NAME = [...] + OTHER`) into the lists they bind. A name
+ * assigned twice is recorded as unknown, since which value a call sees depends on where it stands.
+ */
+export function moduleVariables(toks: Tok[]): ModuleVars {
+  const vars: ModuleVars = new Map();
+  const assigned = new Map<string, number>();
+  let depth = 0;
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i] as Tok;
+    if (t.kind === "op" && ["(", "[", "{"].includes(t.value)) depth++;
+    else if (t.kind === "op" && [")", "]", "}"].includes(t.value)) depth--;
+    if (depth !== 0 || t.kind !== "id") continue;
+    const next = toks[i + 1];
+    if (!(next?.kind === "op" && next.value === "=")) continue;
+    const count = (assigned.get(t.value) ?? 0) + 1;
+    assigned.set(t.value, count);
+    const { value, end } = evalExpr(toks, i + 2, vars);
+    vars.set(t.value, count === 1 && end > i + 2 ? value : undefined);
+  }
+  return vars;
+}
+
 /** Absolute form of a visibility label: ":__subpackages__" in package p becomes "//p:__subpackages__". */
-function visibilityOf(args: Arg[], key: string, pkg: string): string[] | undefined {
+function visibilityOf(args: Arg[], key: string, pkg: string, vars: ModuleVars): string[] | undefined {
   const arg = args.find((a) => a.key === key);
   if (arg === undefined) return undefined;
-  return stringsIn(arg.tokens).map((text) => {
+  const values = evaluate(arg.tokens, vars);
+  return values?.map((text) => {
     const target = labelOf(text, pkg);
     return "external" in target ? target.external : target.id;
   });
@@ -188,9 +255,11 @@ function fileList(toks: Tok[], pkg: string, files: string[], subpackages: Set<st
 export function parseBuildFile(buildFile: string, text: string, files: string[], subpackages: Set<string>): BazelTarget[] {
   const pkg = packageOf(buildFile);
   const targets: BazelTarget[] = [];
-  const calls = topLevelCalls(tokenize(text));
+  const toks = tokenize(text);
+  const vars = moduleVariables(toks);
+  const calls = topLevelCalls(toks);
   const pkgCall = calls.find((c) => c.name === "package");
-  const defaultVisibility = pkgCall === undefined ? undefined : visibilityOf(pkgCall.args, "default_visibility", pkg);
+  const defaultVisibility = pkgCall === undefined ? undefined : visibilityOf(pkgCall.args, "default_visibility", pkg, vars);
   for (const call of calls) {
     const modelled = isModelledRule(call.name);
     if (!modelled && !isUnknownRule(call)) continue;
@@ -213,7 +282,9 @@ export function parseBuildFile(buildFile: string, text: string, files: string[],
     const mainFile = main === undefined ? undefined : fileOf(main, pkg);
     const srcs = fileList(arg("srcs"), pkg, files, subpackages);
     if (mainFile !== undefined && !srcs.includes(mainFile)) srcs.push(mainFile);
-    const ownVisibility = visibilityOf(call.args, "visibility", pkg) ?? defaultVisibility;
+    // A target that sets visibility never takes the package default, even when its value cannot be read.
+    const hasOwnVisibility = call.args.some((a) => a.key === "visibility");
+    const ownVisibility = hasOwnVisibility ? visibilityOf(call.args, "visibility", pkg, vars) : defaultVisibility;
     targets.push({
       id: `//${pkg}:${name}`,
       name,
