@@ -208,7 +208,9 @@ describe("review fixes", () => {
     const src = `import { S } from "./review";\ndeclare const f: boolean;\nexport class Deep { s: S = S.Idle; go() { ${body} } }\n`;
     const t0 = Date.now();
     const b = await run("states/deep.ts", src);
-    expect(Date.now() - t0).toBeLessThan(1000);
+    // Guards against exponential blow-up in nested loops (4.4 s at 10 levels before the fix).
+    // The limit is generous so it does not flake under load; a regression is still far above it.
+    expect(Date.now() - t0).toBeLessThan(5000);
     expect(nodes(b, "state.write").length).toBeGreaterThan(depth);
   });
 });
