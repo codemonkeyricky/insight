@@ -21,10 +21,10 @@
         "frontend-cpp"
       ],
       "filesScanned": 121,
-      "filesWithRecords": 89,
+      "filesWithRecords": 88,
       "filesWithErrors": 0,
       "nodes": 0,
-      "edges": 1881
+      "edges": 1745
     },
     {
       "facet": "concurrency",
@@ -83,7 +83,7 @@
       "filesScanned": 225,
       "filesWithRecords": 225,
       "filesWithErrors": 0,
-      "nodes": 1610,
+      "nodes": 1629,
       "edges": 0
     },
     {
@@ -149,7 +149,7 @@
     "asyncWithoutAwait": 0
   },
   "recordsByKind": {
-    "calls.call": 1810,
+    "calls.call": 1674,
     "calls.reference": 71,
     "concurrency.spawn-thread": 5,
     "concurrency.spawns": 3,
@@ -169,10 +169,10 @@
     "packaging.include": 889,
     "packaging.target-contains": 199,
     "structure.file": 225,
-    "structure.function": 1064,
+    "structure.function": 1065,
     "structure.namespace": 191,
     "structure.package": 6,
-    "structure.type": 124,
+    "structure.type": 142,
     "sync.lock-acquire": 4,
     "sync.lock-release": 5,
     "x-cpp.scoped-lock": 1
