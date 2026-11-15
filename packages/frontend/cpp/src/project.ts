@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { NodeId } from "@insight/ir";
+import { blankAttrMacros, closeParen, discoverAttrMacros } from "./macros.js";
 import { getParser, type SyntaxNode, type Tree } from "./parser.js";
 
 export const FRONTEND_ID = "frontend-cpp";
@@ -13,33 +14,91 @@ export const norm = (s: string): string => s.replace(/\s+/g, "");
  */
 export const normName = (s: string): string =>
   norm(s.replace(/\s+/g, " ").replace(/\boperator (?=[A-Za-z_])/g, "operator")).replace(//g, " ");
-/**
- * A class, struct or union head, and the run of ALL_CAPS words that an export macro leaves between the keyword and the
- * real name. Group 3 is the run, and the lookahead is the real name followed by `final`, a base clause, a brace, a
- * template list or a semicolon. `final` itself is never the name. A macro may take one argument list, not nested.
- */
-const CLASS_HEAD =
-  /\b(class|struct|union)(\s+)((?:(?:[A-Z][A-Z0-9_]+\s*\([^()\n;{}]*\)|[A-Z][A-Z0-9_]+)\s+)+)(?=(?!final\b)[A-Za-z_]\w*\s*(?:final\b|:(?!:)|\{|<|;))/g;
-/** One macro word, with its argument list when it has one. */
-const MACRO_WORD = /[A-Z][A-Z0-9_]+(?:\s*\([^()\n;{}]*\))?/g;
-
 /** An export macro word: at least two characters, and either containing `_` or at least three characters. */
 const isExportMacro = (word: string): boolean => word.includes("_") || word.length >= 3;
 
+const MACRO_WORD_RE = /[A-Z][A-Z0-9_]+/y;
+const NAME_RE = /(?:::)?[A-Za-z_]\w*(?:\s*::\s*[A-Za-z_]\w*)*/y;
+const TERMINATOR_RE = /\s*(?:final\b|:(?!:)|\{|<|;)/y;
+const KEYWORD_RE = /\b(class|struct|union)\b/g;
+const WS_RE = /\s*/y;
+const MAX_ARGS = 400;
+
+const matchAt = (re: RegExp, text: string, at: number): RegExpExecArray | null => {
+  re.lastIndex = at;
+  return re.exec(text);
+};
+
+/** The end of an argument list that opens at i, or -1 when it holds `;`, `{` or `}` or is too long. */
+function argsEnd(text: string, i: number): number {
+  const end = closeParen(text, i);
+  if (end < 0 || end - i > MAX_ARGS || /[;{}]/.test(text.slice(i, end))) return -1;
+  return end;
+}
+
 /**
  * The source with the export macros in class heads blanked. `class BENCHMARK_EXPORT Counter {` reads as
- * `class                 Counter {`, so tree-sitter sees the real name and body. Every blanked character becomes a
- * space and newlines are kept, so byte offsets, lines and columns are the same as in the original text.
+ * `class                 Counter {`, so tree-sitter sees the real name and body. This is the fallback for macros the
+ * project does not define. After the keyword it accepts ALL_CAPS macro words (with nested argument lists), `[[...]]`,
+ * `alignas(...)`, `__attribute__((...))` and `__declspec(...)`, then a possibly qualified name, then `final`, `:`,
+ * `{`, `<` or `;`. Only the macro words are blanked. Every blanked character becomes a space and newlines are kept, so
+ * byte offsets, lines and columns are the same as in the original text.
  */
 export function blankClassHeadMacros(text: string): string {
   if (!/\b(?:class|struct|union)\s/.test(text)) return text;
-  return text.replace(CLASS_HEAD, (_match: string, _keyword: string, _gap: string, run: string) => {
-    const blank = run.replace(MACRO_WORD, (token) => {
-      const word = token.split("(")[0]?.trimEnd() ?? token;
-      return isExportMacro(word) ? token.replace(/[^\n]/g, " ") : token;
-    });
-    return _match.slice(0, _match.length - run.length) + blank;
-  });
+  const ranges: [number, number][] = [];
+  KEYWORD_RE.lastIndex = 0;
+  for (let kw = KEYWORD_RE.exec(text); kw; kw = KEYWORD_RE.exec(text)) {
+    let p = kw.index + kw[0].length;
+    const found: [number, number][] = [];
+    for (;;) {
+      p += matchAt(WS_RE, text, p)?.[0].length ?? 0;
+      const name = matchAt(NAME_RE, text, p);
+      if (name && name[0] !== "final" && matchAt(TERMINATOR_RE, text, p + name[0].length)) {
+        ranges.push(...found);
+        KEYWORD_RE.lastIndex = Math.max(KEYWORD_RE.lastIndex, p);
+        break;
+      }
+      const word = matchAt(MACRO_WORD_RE, text, p);
+      if (word && isExportMacro(word[0]) && !/\w/.test(text[p + word[0].length] ?? "")) {
+        let q = p + word[0].length;
+        const gap = matchAt(WS_RE, text, q)?.[0].length ?? 0;
+        if (text[q + gap] === "(") {
+          const end = argsEnd(text, q + gap);
+          if (end < 0) break;
+          q = end;
+        }
+        found.push([p, q]);
+        p = q;
+        continue;
+      }
+      const attr = /(?:alignas|__attribute__|__declspec)(?=\s*\()/y;
+      attr.lastIndex = p;
+      const a = attr.exec(text);
+      if (a) {
+        const open = text.indexOf("(", p);
+        const end = argsEnd(text, open);
+        if (end < 0) break;
+        p = end;
+        continue;
+      }
+      if (text.startsWith("[[", p)) {
+        const end = text.indexOf("]]", p);
+        if (end < 0 || end - p > MAX_ARGS) break;
+        p = end + 2;
+        continue;
+      }
+      break;
+    }
+  }
+  if (ranges.length === 0) return text;
+  let out = "";
+  let at = 0;
+  for (const [a, b] of ranges) {
+    out += text.slice(at, a) + text.slice(a, b).replace(/[^\n]/g, " ");
+    at = b;
+  }
+  return out + text.slice(at);
 }
 
 /** One piece of a name. `top` is false for anything inside a template argument list. */
@@ -209,6 +268,8 @@ export interface Project {
   coroutines: Set<NodeId>;
   /** Lambdas bound to a variable, by the variable's name. Lambdas are kept out of byQName and bySimple, so a call never reaches one. */
   lambdaBindings: Map<string, FnDecl[]>;
+  /** For each file, the other files that define the attribute macros it uses. A change to one re-extracts the file. */
+  macroDeps: Map<string, string[]>;
 }
 
 const walk = (node: SyntaxNode, visit: (n: SyntaxNode) => void): void => {
@@ -392,8 +453,14 @@ function addLambdas(rel: string, lambdas: SyntaxNode[], fns: Map<string, FnDecl>
 export async function buildProject(texts: Map<string, string>): Promise<Project> {
   const parser = await getParser();
   const units = new Map<string, Unit>();
+  const macros = discoverAttrMacros(texts);
+  const macroDeps = new Map<string, string[]>();
   for (const [rel, text] of texts) {
-    const tree = parser.parse(blankClassHeadMacros(text));
+    const blanked = blankAttrMacros(text, macros);
+    const defining = new Set<string>();
+    for (const name of blanked.used) for (const f of macros.get(name)?.files ?? []) if (f !== rel) defining.add(f);
+    macroDeps.set(rel, [...defining].sort());
+    const tree = parser.parse(blankClassHeadMacros(blanked.text));
     if (!tree) throw new Error(`could not parse ${rel}`);
     const root = tree.rootNode;
     // A file can be wrong without an ERROR node (a MISSING token), so the root stands in for it.
@@ -465,7 +532,7 @@ export async function buildProject(texts: Map<string, string>): Promise<Project>
     }
   }
 
-  return { units, fns, fnsByFile, byQName, bySimple, members, coroutines, lambdaBindings };
+  return { units, fns, fnsByFile, byQName, bySimple, members, coroutines, lambdaBindings, macroDeps };
 }
 
 /** A lock name for a mutex expression. Members of the enclosing class are qualified by that class. */

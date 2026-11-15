@@ -6,6 +6,8 @@ import { type IRRecord } from "@insight/ir";
 import { createCoreRegistry } from "@insight/ir/node";
 import { runFrontendConformance, type IRBatch, type ProjectRoot } from "@insight/sdk";
 import frontend from "../src/index.js";
+import { blankAttrMacros, discoverAttrMacros } from "../src/macros.js";
+import { blankClassHeadMacros } from "../src/project.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "fixtures", "sample-cpp");
@@ -292,5 +294,110 @@ describe("frontend-cpp class export macros and member candidates", () => {
     // Control: the same ten overloads in one file are kept, so the drop above comes from the cross-file cap.
     const same: Record<string, string> = { "cap/same.cc": `${Array.from({ length: 10 }, (_, i) => `void f(int a, int b${i}) {}`).join("\n")}\nvoid caller() { f(1, 2); }\n` };
     expect(callEdges(await extractFiles(same)).some((e) => e.from === "cap/same.cc#caller")).toBe(true);
+  });
+});
+
+describe("frontend-cpp define-driven attribute macros", () => {
+  const run = async (sources: Record<string, string>): Promise<IRBatch[]> => {
+    const names = Object.keys(sources);
+    const ctx = { root, files: names, listFiles: () => names, readFile: async (f: string) => sources[f] ?? "", log: () => undefined };
+    const batches: IRBatch[] = [];
+    for await (const batch of frontend.extract(ctx)) batches.push(batch);
+    return batches;
+  };
+  const qnames = (batches: IRBatch[]) =>
+    allRecords(batches).flatMap((r) => ("node" in r && r.node.kind === "structure.function" ? [String(r.node.attrs.qualifiedName)] : []));
+  const macrosOf = (src: string) => discoverAttrMacros(new Map([["m.h", src]]));
+
+  it("scopes an out-of-line method of a class with a defined export macro and an attribute", async () => {
+    const src = '#define EXP __attribute__((visibility("default")))\nclass EXP [[nodiscard]] Foo { public: int bar(); };\nint Foo::bar(){return 1;}\n';
+    expect(qnames(await run({ "a.h": src }))).toContain("Foo::bar");
+  });
+
+  it("uses the class-head fallback for two macros defined outside the project", async () => {
+    const src = "class OUTSIDE_API OTHER_EXPORT Foo { public: int bar() { return 1; } };\n";
+    expect(qnames(await run({ "a.h": src }))).toContain("Foo::bar");
+  });
+
+  it("names a method with a trailing annotation macro", async () => {
+    const src = "#define LOCK(x) __attribute__((acquire_capability(x)))\nclass S { int mu; public: void lock() LOCK(mu) {} };\n";
+    const names = qnames(await run({ "a.h": src }));
+    expect(names).toContain("S::lock");
+    expect(names.some((n) => n.includes("LOCK"))).toBe(false);
+  });
+
+  it("keeps a class intact when a member has an empty annotation macro", async () => {
+    const src = "#define GUARDED(x)\nclass S { int v GUARDED(mu); public: void f() {} };\nvoid after() {}\n";
+    const names = qnames(await run({ "a.h": src }));
+    expect(names).toEqual(expect.arrayContaining(["S::f", "after"]));
+  });
+
+  it("keeps methods scoped when macros sit inside the class body", async () => {
+    const src = [
+      "#define CACHE_ALIGNED __attribute__((aligned(64)))",
+      "#define NO_ALIAS __declspec(noalias)",
+      "#define MUST_USE [[nodiscard]]",
+      "namespace bm {",
+      "class API CACHE_ALIGNED State {",
+      " public:",
+      "  MUST_USE bool KeepRunning();",
+      "  NO_ALIAS void PauseTiming() {}",
+      " private:",
+      "  CACHE_ALIGNED int x_;",
+      "};",
+      "void Free() {}",
+      "}",
+    ].join("\n");
+    const names = qnames(await run({ "state.h": src }));
+    expect(names).toEqual(expect.arrayContaining(["bm::State::PauseTiming", "bm::Free"]));
+  });
+
+  it("does not blank a macro that is not attribute-like", () => {
+    const macros = macrosOf("#define MYTYPE int\n#define MIXED_X __attribute__((a))\n#define MIXED_X static\n");
+    expect(macros.has("MYTYPE")).toBe(false);
+    expect(macros.has("MIXED_X")).toBe(false);
+    expect(blankAttrMacros("MYTYPE f();", macros).text).toBe("MYTYPE f();");
+  });
+
+  it("resolves attribute macros that use other attribute macros", () => {
+    const macros = macrosOf("#define A_ATTR __attribute__((x))\n#define B_ATTR A_ATTR inline\n#define C_ATTR static A_ATTR\n");
+    expect([...macros.keys()].sort()).toEqual(["A_ATTR", "B_ATTR"]);
+  });
+
+  it("leaves comments, strings, raw strings and define lines alone and keeps length and lines", async () => {
+    const macros = macrosOf("#define EXP __attribute__((x))\n");
+    const src = '// EXP in comment\nconst char* s = "EXP"; /* EXP */\nconst char* r = R"x(EXP)x";\n#define USE EXP\nEXP void f() {}\n';
+    const out = blankAttrMacros(src, macros).text;
+    expect(out.length).toBe(src.length);
+    expect(out.split("\n").length).toBe(src.split("\n").length);
+    expect(out).toBe(src.replace("EXP void f", "    void f"));
+  });
+
+  it("keeps the line number of a function after blanking", async () => {
+    const src = "#define EXP __attribute__((x))\nclass EXP Foo {\n public:\n  int bar() const EXP { return 0; }\n};\n";
+    const fn = allRecords(await run({ "a.h": src })).flatMap((r) => ("node" in r && r.node.kind === "structure.function" ? [r.node] : []))[0];
+    expect(fn?.span?.start[0]).toBe(3);
+  });
+
+  it("swallows nested macro arguments", async () => {
+    const src = "#define FOO(a, b) __attribute__((x))\nclass S { void f() FOO((a), b) {} };\n";
+    const names = qnames(await run({ "a.h": src }));
+    expect(names).toEqual(["S::f"]);
+    expect(blankAttrMacros("FOO((a),b) x", discoverAttrMacros(new Map([["m", "#define FOO(a, b)\n"]]))).text).toBe(" ".repeat(10) + " x");
+  });
+
+  it("handles alignas and a qualified name after an undefined export macro", async () => {
+    expect(qnames(await run({ "a.h": "class EXP alignas(8) X { public: void f() {} };\n" }))).toContain("X::f");
+    expect(qnames(await run({ "a.h": "class EXP Outer::Inner { public: void g() {} };\nvoid after() {}\n" }))).toEqual(expect.arrayContaining(["after"]));
+    expect(blankClassHeadMacros("class EXP Outer::Inner {")).toBe("class     Outer::Inner {");
+    expect(blankClassHeadMacros("class FOO : public Bar {")).toBe("class FOO : public Bar {");
+    expect(blankClassHeadMacros("class EXP FOO(a(b)) X final {")).toBe("class " + " ".repeat(3 + 1 + 9 + 1) + "X final {");
+  });
+
+  it("lists the header that defines a used macro as a dependency", async () => {
+    const batches = await run({ "attr.h": "#define EXP __attribute__((x))\n", "use.h": "class EXP Foo { public: void f() {} };\n", "other.h": "void g() {}\n" });
+    const by = (f: string) => batches.find((b) => b.file === f);
+    expect(by("use.h")?.dependsOn).toContain("attr.h");
+    expect(by("other.h")?.dependsOn ?? []).not.toContain("attr.h");
   });
 });

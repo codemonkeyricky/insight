@@ -242,7 +242,7 @@ export function emitUnit(project: Project, rel: string): IRBatch {
   const syncProv: Provenance = { frontend: FRONTEND_ID, confidence: "inferred" };
   const ids = new Ids((project.fnsByFile.get(rel) ?? []).map((d) => d.id));
   const records: IRRecord[] = [];
-  const deps = new Set<string>();
+  const deps = new Set<string>(project.macroDeps.get(rel) ?? []);
   const node = (n: IRNode) => records.push({ node: n });
   const edge = (e: IREdge) => records.push({ edge: e });
   const coroutines = new Set<NodeId>();
