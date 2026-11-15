@@ -8,7 +8,7 @@ import frontend from "../src/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "fixtures", "data-ts");
-const files = ["data/counters.ts", "data/registry.ts", "data/meter.ts", "data/globals.ts", "data/state.ts", "data/writer.ts", "data/deep.ts", "data/globals-2.ts", "data/hoisted.ts"];
+const files = ["data/counters.ts", "data/registry.ts", "data/meter.ts", "data/globals.ts", "data/state.ts", "data/writer.ts", "data/deep.ts", "data/globals-2.ts", "data/hoisted.ts", "data/gx-a.ts", "data/gx-z.ts", "data/pattern.ts"];
 const root: ProjectRoot = { path: fixtureRoot, name: "data-ts", allowBuildTools: false };
 const readFile = async (rel: string) => readFileSync(join(fixtureRoot, rel), "utf8");
 
@@ -161,6 +161,28 @@ describe("frontend-typescript data facts, const bound to a call result", () => {
     const v = "data/hoisted.ts#var:r";
     expect(dataNodes(b).find((n) => n.id === v)?.attrs).toMatchObject({ constBound: true, mutable: true });
     expect(dataEdges(b).filter((e) => e.to === v && e.kind === "data.write")).toEqual([]);
+  });
+
+  it("e7: a global written through different heads in two files is one node: qualifiedName globalThis.<name>, span of the first writing file", async () => {
+    const b = await extractAll();
+    const g = "<global>#global:gx";
+    const copies = dataNodes(b).filter((n) => n.id === g);
+    expect(copies.length).toBeGreaterThan(1);
+    // Every copy is the same, whichever file the linker keeps: the lexicographically first writer (data/gx-a.ts) decides the span.
+    expect(new Set(copies.map((n) => JSON.stringify(n.attrs))).size).toBe(1);
+    expect(new Set(copies.map((n) => JSON.stringify(n.span))).size).toBe(1);
+    expect(copies[0]).toMatchObject({ attrs: { qualifiedName: "globalThis.gx" }, span: { file: "data/gx-a.ts" } });
+    expect(dataEdges(b)).toContainEqual(expect.objectContaining({ from: fnId(b, "setZ"), to: g, kind: "data.write", attrs: { how: "assign" } }));
+  });
+
+  it("e8: a destructuring assignment writes its targets: a shorthand local and a global in an array pattern", async () => {
+    const b = await extractAll();
+    expect(dataEdges(b)).toContainEqual(expect.objectContaining({ from: fnId(b, "fill"), to: "data/pattern.ts#var:cache", kind: "data.write", attrs: { how: "assign" } }));
+    expect(dataEdges(b)).toContainEqual(expect.objectContaining({ from: fnId(b, "swap"), to: "<global>#global:px", kind: "data.write", attrs: { how: "assign" } }));
+    // The same global in an array literal on the right of an assignment, or returned, is still a read.
+    expect(dataEdges(b).filter((e) => e.from === fnId(b, "readsInArray") && e.to === "<global>#global:px")).toEqual([
+      expect.objectContaining({ kind: "data.read", attrs: {} }),
+    ]);
   });
 
   it("d3: a global written through globalThis has no parent", async () => {

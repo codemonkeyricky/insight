@@ -23,7 +23,7 @@ function findSource(dir: string, depth: number): string | undefined {
 
 export const frontend: Frontend = {
   id: FRONTEND_ID,
-  version: "0.2.5",
+  version: "0.2.6",
   provides: ["structure", "packaging", "flow", "calls", "effects", "concurrency", "sync", "state", "data"],
 
   async detect(root: ProjectRoot) {

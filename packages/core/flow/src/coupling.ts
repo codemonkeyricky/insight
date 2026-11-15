@@ -536,12 +536,16 @@ export function moduleSurface(nodes: readonly IRNode[], edges: readonly IREdge[]
       if (cm !== undefined && cm !== fromM) surface.add(callee);
     }
   }
-  // Re-exports: from a file to the file it re-exports, with the names it passes on.
-  const reexports = new Map<string, { to: string; names: readonly string[] | "*" }[]>();
+  // Re-exports: from a file to the file it re-exports, with the names it passes on. A named one gives each name's
+  // original (`from`, in the file it re-exports) and exported (`as`, in this file) name; `export *` passes everything.
+  const reexports = new Map<string, { to: string; names: readonly { from: string; as: string }[] | "*" }[]>();
   for (const e of edges) {
     if (e.kind !== "packaging.re-export" || typeof e.to !== "string") continue;
     const raw = e.attrs?.names;
-    const names: readonly string[] | "*" = Array.isArray(raw) && !raw.includes("*") ? (raw as string[]) : "*";
+    const alias = e.attrs?.as;
+    const names: readonly { from: string; as: string }[] | "*" = Array.isArray(raw) && !raw.includes("*")
+      ? (raw as string[]).map((from, i) => ({ from: String(from), as: Array.isArray(alias) && typeof alias[i] === "string" ? String(alias[i]) : String(from) }))
+      : "*";
     const list = reexports.get(e.from);
     if (list) list.push({ to: e.to, names });
     else reexports.set(e.from, [{ to: e.to, names }]);
@@ -587,8 +591,9 @@ export function moduleSurface(nodes: readonly IRNode[], edges: readonly IREdge[]
       if (names === "*") {
         if (a.all || a.names.size > 0) grant(to, a.all, [...a.names]);
       } else {
-        const passed = names.filter((n) => a.all || a.names.has(n));
-        if (passed.length > 0) grant(to, false, passed);
+        // The file is granted the original names of the ones it exports (`deepSrc` for `export { deepSrc as midAlias }`).
+        const passed = names.filter((n) => a.all || a.names.has(n.as));
+        if (passed.length > 0) grant(to, false, passed.map((n) => n.from));
       }
     }
   }

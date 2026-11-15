@@ -681,3 +681,47 @@ export function internal(): number {
     expect(ix.surface.has("pkgs/c/src/impl.ts#internal")).toBe(false);
   });
 });
+
+describe("a rename in the middle of a re-export chain", () => {
+  // The entry re-exports midAlias; mid2 re-exports deepSrc under that name. deepSrc is the function the chain reaches.
+  const CHAIN_FILES: Record<string, string> = {
+    "package.json": JSON.stringify({ name: "root", private: true }),
+    "pkgs/d/package.json": JSON.stringify({ name: "d" }),
+    "pkgs/d/src/index.ts": `export { midAlias } from "./mid2.js";
+export { pub as published } from "./impl.js";
+`,
+    "pkgs/d/src/mid2.ts": `export { deepSrc as midAlias } from "./deep2.js";
+`,
+    "pkgs/d/src/deep2.ts": `export function deepSrc(): number {
+  return 1;
+}
+export function deep2Other(): number {
+  return 2;
+}
+`,
+    "pkgs/d/src/impl.ts": `export function pub(): number {
+  return 3;
+}
+export function internal(): number {
+  return 4;
+}
+`,
+  };
+  let ix: Awaited<ReturnType<typeof load>>;
+  beforeAll(async () => {
+    ix = await load(CHAIN_FILES);
+  });
+
+  it("the source name behind a renamed re-export is on the surface, through the chain", () => {
+    expect(ix.surface.has("pkgs/d/src/deep2.ts#deepSrc")).toBe(true);
+  });
+
+  it("a function the chain does not name stays off the surface", () => {
+    expect(ix.surface.has("pkgs/d/src/deep2.ts#deep2Other")).toBe(false);
+  });
+
+  it("an entry's own export-as rename still puts the source name on the surface (no regression)", () => {
+    expect(ix.surface.has("pkgs/d/src/impl.ts#pub")).toBe(true);
+    expect(ix.surface.has("pkgs/d/src/impl.ts#internal")).toBe(false);
+  });
+});

@@ -1,12 +1,14 @@
 import ts from "typescript";
 import { createHash } from "node:crypto";
+import { globalWritesIn } from "./data.js";
 
 /**
- * Digest of a file's API: its text with every function body removed. A body-only change leaves
- * the digest alone, so dependents keep their shards. Top-level statements still count.
+ * Digest of a file's API: its text with every function body removed, plus its global writes. A body-only change leaves
+ * the digest alone, so dependents keep their shards, unless it moves or changes a global write. Top-level statements still count.
  */
 export function apiDigest(relPath: string, text: string): string {
-  const sf = ts.createSourceFile(relPath, text, ts.ScriptTarget.Latest, false, scriptKind(relPath));
+  // Parents are set: the global writes are found through them.
+  const sf = ts.createSourceFile(relPath, text, ts.ScriptTarget.Latest, true, scriptKind(relPath));
   const cuts: [number, number][] = [];
   const visit = (node: ts.Node): void => {
     if (
@@ -34,6 +36,10 @@ export function apiDigest(relPath: string, text: string): string {
     pos = end;
   }
   out += text.slice(pos);
+  // Global writes are part of the API, since a reader of a global depends on them. A body-only change that moves or drops one
+  // is seen. A file with none adds nothing, so its digest is unchanged.
+  const writes = globalWritesIn(sf);
+  if (writes.length > 0) out += `\n//global-writes:${writes.map((w) => `${w.name}@${w.start}-${w.end}`).join(",")}`;
   return createHash("sha256").update(out).digest("hex");
 }
 

@@ -79,7 +79,7 @@ Base kinds shipped by the core:
 | `packaging.build-target` | packaging | node | – |  |
 | `packaging.import` | packaging | edge | – |  |
 | `packaging.export` | packaging | edge | – |  |
-| `packaging.re-export` | packaging | edge | `packaging.export` |  |
+| `packaging.re-export` | packaging | edge | `packaging.export` | Attrs `names` and `as`. `names` lists the original names the file re-exports (`deepSrc` for `export { deepSrc as midAlias } from`), or `["*"]` for `export *`. `as` gives the exported name of each, by position, and is absent for `export *`. A downstream name maps back through `as` to the `names` entry it came from. |
 | `packaging.include` | packaging | edge | – |  |
 | `packaging.dep-edge` | packaging | edge | – | A build-level dependency between targets or packages. |
 | `packaging.target-contains` | packaging | edge | – | A build target contains a file. |
@@ -153,7 +153,9 @@ Other attributes added with the System tab, all from the same schema files:
 | --- | --- | --- | --- |
 | `data.variable` | `name`, `qualifiedName` | yes | `qualifiedName` is `Class.name` for a static, `globalThis.name` (or `window`, `self`) for a global, and `name` otherwise. |
 | | `storage` | yes | `global`, `module`, `file-static`, `function-static`, `class-static` or `extern-decl`. |
-| | `exported`, `mutable` | yes | `exported` is true when the variable is visible outside its file. `mutable` is false for a `const` whose initializer is not a new expression or a literal, and for a frozen or `as const` literal, and for a `readonly` static. |
+| | `exported`, `mutable` | yes | `exported` is true when the variable is visible outside its file. `mutable` is true for a `let` or `var`, for a class static that is not `readonly`, and for every global. A `const` is mutable only when its initializer can hold state: a literal, a `new` expression or a call result. A frozen (`Object.freeze(…)`) or `as const` literal is not. |
+| | `constBound` | no | `true` on a `const` whose initializer is a mutable container (`mutable` is true). The flow layer counts it as state only when some function writes it, through a property, an element, a mutating call or a destructuring target. |
+| | Global id and parent | – | A global's id is `<global>#global:<name>`, with no file part and no parent. Each file that writes the global emits the same node. Its `qualifiedName` is always `globalThis.<name>` (whatever head the write used), and its span is the first write in the lexicographically first writing file. A read of a global is recorded only when some project file writes it, and each reader depends on every writer, so a removed writer drops the read. |
 | | `type` | no | The declared type, when known. |
 
 ### Which frontend emits each kind

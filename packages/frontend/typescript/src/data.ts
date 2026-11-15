@@ -17,6 +17,8 @@ export interface DataHelpers {
   moduleId?: string;
   sf: ts.SourceFile;
   spanOf(node: ts.Node): Span;
+  /** The span of a node in another project file (`file`'s source). */
+  spanIn(file: string, node: ts.Node): Span;
   provenance: Provenance;
   /** Records that this file depends on another project file (its variable is a write target here). */
   dependOn(rel: string): void;
@@ -147,28 +149,81 @@ function globalPropertyName(ref: ts.PropertyAccessExpression, checker: ts.TypeCh
   return ref.name.text;
 }
 
-const writtenGlobalsCache = new WeakMap<Project, Set<string>>();
+/** A file's first write of a global: the file, and the reference node that writes it. */
+interface GlobalWrite {
+  rel: string;
+  node: ts.Node;
+}
+
+const writtenGlobalsCache = new WeakMap<Project, Map<string, GlobalWrite[]>>();
 /**
- * The names of every global property that some file writes. A read of a global is recorded only when some file writes it, so
- * reads of host properties (`window.location`) that no project code writes add no variables.
+ * Every global property that some file writes, with the files that write it sorted by file, each with its first write. A read
+ * of a global is recorded only when some file writes it, so reads of host properties (`window.location`) that no project code
+ * writes add no variables.
  */
-function writtenGlobals(project: Project): Set<string> {
+function writtenGlobals(project: Project): Map<string, GlobalWrite[]> {
   const hit = writtenGlobalsCache.get(project);
   if (hit !== undefined) return hit;
-  const names = new Set<string>();
+  const names = new Map<string, GlobalWrite[]>();
+  for (const rel of project.rels) {
+    const sf = project.sourceFor(rel);
+    if (sf === undefined) continue;
+    const visit = (n: ts.Node): void => {
+      if (ts.isPropertyAccessExpression(n)) {
+        const name = globalPropertyName(n, project.checker);
+        if (name !== undefined && accessOf(n) !== undefined) {
+          const writes = names.get(name) ?? [];
+          // The walk is in source order, so the first write a file makes is the one kept.
+          if (!writes.some((w) => w.rel === rel)) writes.push({ rel, node: n });
+          names.set(name, writes);
+        }
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+  }
+  for (const writes of names.values()) writes.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
+  writtenGlobalsCache.set(project, names);
+  return names;
+}
+
+/**
+ * The global writes in a file, found by syntax alone (no checker): each `globalThis.x`, `window.x` or `self.x` written, with
+ * its span in the text. The API digest uses it, so a file whose global writes move or change is seen by its readers and
+ * writers, even when the write sits in a function body. The head is not checked for shadowing, which only over-matches.
+ */
+export function globalWritesIn(sf: ts.SourceFile): { name: string; start: number; end: number }[] {
+  const out: { name: string; start: number; end: number }[] = [];
   const visit = (n: ts.Node): void => {
     if (ts.isPropertyAccessExpression(n)) {
-      const name = globalPropertyName(n, project.checker);
-      if (name !== undefined && accessOf(n) !== undefined) names.add(name);
+      const head = unwrapExpr(n.expression);
+      if (ts.isIdentifier(head) && GLOBAL_HEADS.has(head.text) && accessOf(n) !== undefined) {
+        out.push({ name: n.name.text, start: n.getStart(sf), end: n.getEnd() });
+      }
     }
     ts.forEachChild(n, visit);
   };
-  for (const rel of project.rels) {
-    const sf = project.sourceFor(rel);
-    if (sf !== undefined) visit(sf);
+  visit(sf);
+  return out;
+}
+
+/**
+ * Whether a reference is a target of a destructuring assignment: an element of an array or object literal pattern (through
+ * nested patterns, spreads and shorthand or renamed properties) that is the left side of `=`, or the head of a for-of.
+ */
+function isPatternTarget(ref: ts.Node): boolean {
+  let node: ts.Node = ref;
+  for (;;) {
+    const p: ts.Node | undefined = node.parent;
+    if (p === undefined) return false;
+    if (ts.isShorthandPropertyAssignment(p) && p.name === node) node = p;
+    else if (ts.isPropertyAssignment(p) && p.initializer === node) node = p;
+    else if (ts.isSpreadElement(p) || ts.isSpreadAssignment(p)) node = p;
+    else if (ts.isArrayLiteralExpression(p) || ts.isObjectLiteralExpression(p)) node = p;
+    else {
+      return (ts.isBinaryExpression(p) && p.left === node && p.operatorToken.kind === ts.SyntaxKind.EqualsToken) || (ts.isForOfStatement(p) && p.initializer === node);
+    }
   }
-  writtenGlobalsCache.set(project, names);
-  return names;
 }
 
 /** How a reference is used: a write (with its access kind), or undefined for a read. A write through the reference's own properties or elements writes the reference (`state.cache.set(…)`, `a.b.c = 1`, `x[i].f = v`). */
@@ -196,6 +251,8 @@ function accessOf(ref: ts.Expression): Access | undefined {
       p = gp;
       continue;
     }
+    // A destructuring target writes the reference, or the chain it is in (`[a.b] = xs` mutates `a`).
+    if (isPatternTarget(node)) return deep ? "mutate" : "assign";
     return undefined;
   }
 }
@@ -297,15 +354,21 @@ export function emitData(h: DataHelpers): DataOutput {
       if (name !== undefined) {
         const how = accessOf(ref);
         // A read of a global counts only when project code writes it (see writtenGlobals).
-        if (how === undefined && !writtenGlobals(project).has(name)) return;
+        const writers = writtenGlobals(project).get(name);
+        if (how === undefined && writers === undefined) return;
+        // Every reference depends on each file that writes the global. A writer change re-extracts the reference, and a
+        // read whose writers are all gone is dropped. Writers also depend on each other, since they share the node below.
+        for (const w of writers ?? []) h.dependOn(w.rel);
         const id = globalId(name);
         if (how !== undefined) {
+          // Every writer emits the same node: the first writer's write is its span, whichever file is extracted.
+          const first = writers![0]!;
           pushNode({
             id,
             facet: "data",
             kind: "data.variable",
-            attrs: { name, qualifiedName: `${(unwrapExpr(ref.expression) as ts.Identifier).text}.${name}`, storage: "global", exported: true, mutable: true },
-            span: h.spanOf(ref),
+            attrs: { name, qualifiedName: `globalThis.${name}`, storage: "global", exported: true, mutable: true },
+            span: h.spanIn(first.rel, first.node),
             provenance,
           });
         }
