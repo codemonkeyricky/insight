@@ -79,6 +79,16 @@ function sizeOf(path) {
   return statSync(path).isDirectory() ? treeSize(path).bytes : statSync(path).size;
 }
 
+/** Removes every `.bin` folder under a node_modules tree, at any depth. */
+function removeBinFolders(modulesDir) {
+  for (const entry of readdirSync(modulesDir, { withFileTypes: true })) {
+    const path = join(modulesDir, entry.name);
+    if (!entry.isDirectory()) continue;
+    if (entry.name === ".bin") rmSync(path, { recursive: true, force: true });
+    else removeBinFolders(path);
+  }
+}
+
 /** Removes the source and native build parts of every tree-sitter-* grammar package under node_modules (nested ones included). */
 function pruneGrammarPackages(modulesDir) {
   let removedBytes = 0;
@@ -162,7 +172,9 @@ const deployDir = mkdtempSync(join(tmpdir(), "insight-hosted-deploy-"));
 try {
   run("pnpm", ["--filter", "@insight/hosted", "deploy", "--prod", "--config.node-linker=hoisted", deployDir]);
   const modules = join(deployDir, "node_modules");
-  rmSync(join(modules, ".bin"), { recursive: true, force: true });
+  // Every .bin folder, nested ones included: a Function runs no package binaries, and they are symlinks into this temporary
+  // folder. cpSync's dereference does not reach nested links on every Node version, so they would dangle in the bundle.
+  removeBinFolders(modules);
   rmSync(join(modules, "better-sqlite3"), { recursive: true, force: true });
 
   const plugins = builtinPlugins();
