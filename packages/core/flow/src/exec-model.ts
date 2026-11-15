@@ -162,7 +162,8 @@ function programEntryAttr(v: unknown): ExecProgramEntry | undefined {
 }
 
 /**
- * A program: a build target that links an executable (targetKind `add_executable` or a `*_binary` rule). Tests and
+ * A program: a build target that links an executable (`output` "executable", or, when a frontend sends no `output`, the
+ * targetKind `add_executable` or a `*_binary` rule). Tests and
  * libraries are not programs. Only targets with a file inside the scope are listed.
  */
 export interface ExecProgram {
@@ -410,6 +411,16 @@ function reachBy(roots: readonly string[], next: (id: string) => readonly string
   return seen;
 }
 
+/**
+ * Whether a build target is a program. A frontend's `output` decides it when it sends one, whatever the rule is called.
+ * Without `output`, the rule name decides: `add_executable` (CMake) or a `*_binary` rule (Bazel and others).
+ */
+function isProgramTarget(attrs: IRNode["attrs"], targetKind: string): boolean {
+  const output = strAttr(attrs, "output");
+  if (output !== undefined) return output === "executable";
+  return targetKind === "add_executable" || targetKind.endsWith("_binary");
+}
+
 export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], scope: string, opts: ExecModelOptions = {}): ExecModel {
   const max = opts.maxFunctions ?? MAX_EXEC_FUNCTIONS;
   const fold = opts.lambdas !== true;
@@ -629,7 +640,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
   for (const n of nodes) {
     if (n.kind !== "packaging.build-target") continue;
     const targetKind = strAttr(n.attrs, "targetKind");
-    if (targetKind === undefined || !(targetKind === "add_executable" || targetKind.endsWith("_binary"))) continue;
+    if (targetKind === undefined || !isProgramTarget(n.attrs, targetKind)) continue;
     const files = [...(contains.get(n.id) ?? [])].sort(byText);
     if (!files.some((f) => insideScope(f, scope))) continue;
     // A program built only from test, fixture or sample files is left out unless the scope is one of those, as their

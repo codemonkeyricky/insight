@@ -81,7 +81,7 @@ Base kinds shipped by the core:
 | `packaging.include` | packaging | edge | – |  |
 | `packaging.dep-edge` | packaging | edge | – | A build-level dependency between targets or packages. |
 | `packaging.target-contains` | packaging | edge | – | A build target contains a file. |
-| `packaging.external` | packaging | node | – | A third-party package the project depends on, such as a Bazel module or repository. `attrs` are `name` and `source` (required: `bzlmod`, `workspace` or `lockfile`), plus `version`, `repoName`, `registry`, `url`, `sha256`, `dev` and `override`. |
+| `packaging.external` | packaging | node | – | A third-party package the project depends on, such as a Bazel module, a CMake dependency or a Conan package. `attrs` are `name`, `manager` and `source` (all required; `manager` is the owning build or package manager, `source` is how it is obtained, see [Build-system packages](#build-system-packages)), plus `version`, `repoName`, `registry`, `url`, `sha256`, `dev` and `override`. |
 | `calls.call-site` | calls | node | – |  |
 | `calls.dynamic-dispatch` | calls | node | – |  |
 | `calls.callback-registration` | calls | node | – |  |
@@ -113,6 +113,19 @@ Base kinds shipped by the core:
 | `effects.unknown` | effects | node | – | An external call no catalog recognises. Kept rather than dropped. |
 
 `calls.reference` has no parent on purpose. A query for a parent also returns its extensions, so extending `calls.call` would make every call query return references too.
+
+## Build-system packages
+
+Every build-system frontend (Bazel, CMake, Ninja, Make, and so on) fills the same contract, so the core reads each one the same way. The contract is open: a frontend may name its own `manager`, `source`, `override` and `targetKind` values, and the core accepts any non-empty string for them.
+
+- **`structure.package`** `{name, root, buildSystem}`: one node per package directory. `root` is the directory relative to the repository root, and `buildSystem` names the frontend's build system. Ids are scoped by the frontend so that two build systems can describe the same directory without a clash: `//lib` for a Bazel package, `cmake:lib` for a CMake one.
+- **`packaging.build-target`** `{name, label, targetKind, output, visibility?}`: one node per build target. `label` is the target's full name in its build system, `targetKind` is the build system's own rule or command name (for example `cc_binary` or `add_library`), and `output` is one of `executable`, `library`, `test` or `other`. The core uses `output` to decide what counts as a program; when it is absent, the core falls back to matching the name.
+- **`packaging.target-contains`**: an edge from a build target to a file it compiles or otherwise owns.
+- **`packaging.dep-edge`**: an edge from a build target to another build target, or to a `packaging.external` node when the dependency is third-party.
+- **`packaging.external`** `{name, version?, manager, source, override?, ...}`: one node per third-party package. `manager` is the package manager that owns it (`bazel`, `cmake`, `conan`, `vcpkg`, `npm`, …). `source` says how it is obtained (examples: `bzlmod`, `workspace`, `lockfile`, `find_package`, `FetchContent`, `pkg-config`, `vendored`). `override` says how a version override is applied (examples: `git`, `archive`, `local`, `single_version`, `multiple_version`).
+- **`cpp.include` resolver role**: a build system that knows which package owns an include answers the `cpp.include` reference itself, and leaves `fallback` unset. The syntactic C++ resolver (`packages/frontend/cpp`) is a guesser and declares `fallback: true`, so the core uses its answers only when no build-system resolver answered.
+
+Packages from several build systems are merged by `root`: two `structure.package` nodes with the same `root` describe one package. The core keeps one package per directory, and takes its display name from the node whose `buildSystem` sorts first (a node without `buildSystem` sorts last), with ties broken by node id, so the result does not depend on record order.
 
 ## Writing a kind definition
 

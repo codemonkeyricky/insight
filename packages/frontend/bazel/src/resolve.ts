@@ -1,51 +1,19 @@
 import { readFile } from "node:fs/promises";
 import { join, posix } from "node:path";
-import type { ResolveAnswer, ResolveContext, Resolver } from "@insight/sdk";
+import { externalsForInclude, type CppExternal, type ResolveAnswer, type ResolveContext, type Resolver } from "@insight/sdk";
 import { buildModel, closureOf, isBuildFile, joinPath, ownersOf, type BazelModel, type BazelTarget } from "./model.js";
 import { EXTERNAL_FILES, externalIdOf, parseExternals, repoOf, type Externals } from "./externals.js";
 
-/** Include path prefixes that name a module, mapped to the module's name in the Bazel registry. */
-const MODULE_ALIASES = new Map<string, string>([
-  ["absl", "abseil-cpp"],
-  ["gtest", "googletest"],
-  ["gmock", "googletest"],
-  ["benchmark", "google_benchmark"],
-  ["google/protobuf", "protobuf"],
-  ["grpc", "grpc"],
-  ["grpcpp", "grpc"],
-  ["fmt", "fmt"],
-  ["spdlog", "spdlog"],
-  ["nlohmann", "nlohmann_json"],
-  ["boost", "boost"],
-  ["re2", "re2"],
-  ["glog", "glog"],
-  ["gflags", "gflags"],
-]);
-
 /** An external repository, by id, with the name and repo_name that an include path can match. */
-export interface ExternalName {
-  id: string;
-  name: string;
-  repoName?: string;
-}
+export type ExternalName = CppExternal;
 
 /**
- * The external repositories an include path names, by id. A path with one segment names none, so `<string>`
- * and `"foo.h"` are never external. A path whose first segment (or `google/protobuf`) is a known module
- * matches an external of that module's name (boost also matches boost.*). Otherwise the first segment
- * matches an external's name or repo_name.
+ * The external repositories an include path names, by id. The rules are shared with the other build-system
+ * frontends (see externalsForInclude in @insight/sdk): a path with one segment names none, and a known module
+ * prefix matches the module's external before the first segment is tried as a name or repo_name.
  */
 export function externalMatches(include: string, externals: ExternalName[]): string[] {
-  const parts = include.split("/");
-  if (parts.length < 2) return [];
-  const key = parts[0] === "google" && parts[1] === "protobuf" ? "google/protobuf" : (parts[0] ?? "");
-  const module = MODULE_ALIASES.get(key);
-  if (module !== undefined) {
-    const found = externals.filter((e) => e.name === module || (module === "boost" && e.name.startsWith("boost.")));
-    if (found.length > 0) return found.map((e) => e.id).sort();
-  }
-  const first = parts[0] ?? "";
-  return externals.filter((e) => e.name === first || e.repoName === first).map((e) => e.id).sort();
+  return externalsForInclude(include, externals).map((m) => m.id);
 }
 
 /** Reads every BUILD file of the project. Each lookup re-reads them, so an edit is seen at once. */

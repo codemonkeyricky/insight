@@ -134,3 +134,56 @@ describe("archModel on a TypeScript-style project", () => {
     expect(JSON.stringify(model)).not.toContain("declared");
   });
 });
+
+describe("packages from several build systems", () => {
+  // Bazel's "//lib" and CMake's "cmake:lib" both describe the lib directory; CMake's "cmake:tools" is the only one for tools.
+  const bazelLib = fx.node("//lib", "structure", "structure.package", { attrs: { name: "//lib", root: "lib", buildSystem: "bazel" } });
+  const cmakeLib = fx.node("cmake:lib", "structure", "structure.package", { attrs: { name: "lib", root: "lib", buildSystem: "cmake" } });
+  const cmakeTools = fx.node("cmake:tools", "structure", "structure.package", { attrs: { name: "tools", root: "tools", buildSystem: "cmake" } });
+  const noSystem = fx.node("//plain", "structure", "structure.package", { attrs: { name: "//plain", root: "lib" } });
+  const sources: IRNode[] = [
+    file("lib/core.cc"),
+    file("tools/main.cc"),
+    fn("lib/core.cc", "run"),
+    fn("tools/main.cc", "main"),
+    target("//lib:core", "//lib"),
+    target("cmake:tools:tool", "cmake:tools", "add_executable"),
+  ];
+  const packages: IRNode[] = [bazelLib, cmakeLib, cmakeTools];
+  const edgesOf = () => [contains("//lib:core", "lib/core.cc"), contains("cmake:tools:tool", "tools/main.cc")];
+
+  /** The same records in two orders: forward, and reversed. */
+  const bothOrders = (nodes: IRNode[]): IRNode[][] => [nodes, [...nodes].reverse()];
+
+  it("merges packages by root and names each by the buildSystem that sorts first, the same in both record orders", () => {
+    const outputs = bothOrders([...packages, ...sources]).map((ns) => {
+      const model = archModel(fx.view({ nodes: ns, edges: edgesOf() }));
+      return model.packages.map((p) => [p.id, p.name]);
+    });
+    expect(outputs[0]).toEqual([
+      ["lib", "//lib"],
+      ["tools", "tools"],
+    ]);
+    expect(outputs[1]).toEqual(outputs[0]);
+  });
+
+  it("gives a package with no buildSystem the name only when no other build system names its directory", () => {
+    const withPlain = [...packages, noSystem, ...sources];
+    const model = archModel(fx.view({ nodes: withPlain, edges: edgesOf() }));
+    expect(model.packages.find((p) => p.id === "lib")?.name).toBe("//lib");
+    const plainOnly = [noSystem, ...sources];
+    expect(archModel(fx.view({ nodes: plainOnly, edges: edgesOf() })).packages.find((p) => p.id === "lib")?.name).toBe("//plain");
+  });
+
+  it("gives the same System components whatever the record order", () => {
+    const outputs = bothOrders([...packages, ...sources]).map((ns) => {
+      const doc: IRDocument = { nodes: ns, edges: edgesOf(), findings: [] };
+      return systemModel(buildProjectModel(doc), "").components.map((c) => [c.id, c.kind, c.files]);
+    });
+    expect(outputs[0]).toEqual([
+      ["lib", "package", 1],
+      ["tools", "package", 1],
+    ]);
+    expect(outputs[1]).toEqual(outputs[0]);
+  });
+});

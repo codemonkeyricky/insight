@@ -843,6 +843,52 @@ describe("execModel: programs", () => {
     expect(model.threads[0]?.roots).toEqual(["tools/util.c#util"]);
   });
 
+  describe("build-target output", () => {
+    /** A build target with an explicit `output` attribute, as a build-system frontend sends it. */
+    function outputTarget(id: string, targetKind: string, output: string | undefined): IRNode {
+      const node = targetNode(id, targetKind);
+      return output === undefined ? node : { ...node, attrs: { ...node.attrs, output } };
+    }
+
+    it("treats output executable as a program whatever the targetKind, such as a custom rule", () => {
+      const nodes = [outputTarget("BUILD:tool", "my_custom_tool", "executable"), fnNode("tools/tool.c", "main", 0)];
+      const edges = [containsEdge("BUILD:tool", "tools/tool.c")];
+      const model = execModel(nodes, edges, "");
+      expect(model.programs.map((p) => [p.id, p.targetKind])).toEqual([["BUILD:tool", "my_custom_tool"]]);
+    });
+
+    it("does not treat output library as a program, even when its name ends in _binary", () => {
+      const nodes = [outputTarget("//lib:foo_binary", "cc_binary", "library"), fnNode("lib/foo.cc", "main", 0)];
+      const edges = [containsEdge("//lib:foo_binary", "lib/foo.cc")];
+      expect(execModel(nodes, edges, "").programs).toEqual([]);
+    });
+
+    it("keeps the name rule when a target sends no output", () => {
+      const nodes = [
+        outputTarget("//app:server", "cc_binary", undefined),
+        outputTarget("//lib:core", "cc_library", undefined),
+        fnNode("app/server.cc", "main", 0),
+        fnNode("lib/core.cc", "core", 0),
+      ];
+      const edges = [containsEdge("//app:server", "app/server.cc"), containsEdge("//lib:core", "lib/core.cc")];
+      expect(execModel(nodes, edges, "").programs.map((p) => p.id)).toEqual(["//app:server"]);
+    });
+
+    it("gives the same programs whatever the record order, with output set", () => {
+      const nodes = [
+        outputTarget("//app:tool", "custom_rule", "executable"),
+        outputTarget("//lib:foo_binary", "cc_binary", "library"),
+        fnNode("app/tool.cc", "main", 0),
+        fnNode("lib/foo.cc", "foo", 0),
+      ];
+      const edges = [containsEdge("//app:tool", "app/tool.cc"), containsEdge("//lib:foo_binary", "lib/foo.cc")];
+      const a = execModel(nodes, edges, "");
+      const b = execModel([...nodes].reverse(), [...edges].reverse(), "");
+      expect(b.programs).toEqual(a.programs);
+      expect(a.programs.map((p) => p.id)).toEqual(["//app:tool"]);
+    });
+  });
+
   it("leaves out a program built only from test or sample files, unless the scope is one of them", () => {
     const nodes = [
       fnNode("samples/demo/main.cc", "main", 0),

@@ -2,12 +2,14 @@ import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join, posix } from "node:path";
 import type { IRRecord, NodeId } from "@insight/ir";
 import type { ExtractContext, Frontend, IRBatch, ProjectRoot } from "@insight/sdk";
-import { buildModel, isBuildFile, type BazelModel, type BazelTarget } from "./model.js";
+import { buildModel, isBuildFile, outputOf, type BazelModel, type BazelTarget } from "./model.js";
 import { EXTERNAL_FILES, externalIdOf, parseExternals, repoOf, type Externals } from "./externals.js";
 
 export { resolver } from "./resolve.js";
 
 export const FRONTEND_ID = "frontend-bazel";
+/** The build system named on every package and external package this frontend emits. */
+const BUILD_SYSTEM = "bazel";
 const PROV = { frontend: FRONTEND_ID, confidence: "exact" as const };
 const SKIP_DIRS = new Set(["node_modules", ".git", ".insight", "bazel-out", "bazel-bin", "bazel-testlogs"]);
 
@@ -44,7 +46,7 @@ function externalRecords(externals: Externals): IRRecord[] {
       id,
       facet: "packaging",
       kind: "packaging.external",
-      attrs: decl.attrs,
+      attrs: { ...decl.attrs, manager: BUILD_SYSTEM },
       ...(decl.span !== undefined ? { span: decl.span } : {}),
       provenance: { frontend: FRONTEND_ID, confidence: decl.confidence },
     },
@@ -60,7 +62,7 @@ function batchFor(file: string, model: BazelModel, files: Set<string>, externals
       id: packageId(dir),
       facet: "structure",
       kind: "structure.package",
-      attrs: { name: packageId(dir), root: dir === "" ? "." : dir },
+      attrs: { name: packageId(dir), root: dir === "" ? "." : dir, buildSystem: BUILD_SYSTEM },
       provenance: PROV,
     },
   });
@@ -76,6 +78,7 @@ function batchFor(file: string, model: BazelModel, files: Set<string>, externals
           name: t.name,
           label: t.id,
           targetKind: t.kind,
+          output: outputOf(t),
           source: "static",
           ...(t.visibility !== undefined ? { visibility: t.visibility } : {}),
         },
@@ -118,7 +121,7 @@ function batchFor(file: string, model: BazelModel, files: Set<string>, externals
 
 export const frontend: Frontend = {
   id: FRONTEND_ID,
-  version: "0.2.0",
+  version: "0.3.0",
   provides: ["packaging", "structure"],
 
   async detect(root: ProjectRoot) {

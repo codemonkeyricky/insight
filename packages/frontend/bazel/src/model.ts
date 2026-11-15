@@ -66,6 +66,23 @@ export interface BazelTarget {
   cc: boolean;
   /** `heuristic` for a target read from a macro or custom rule rather than a known Bazel rule. */
   confidence: "exact" | "heuristic";
+  /** Whether the call sets a `main` attribute: the entry file of a binary. */
+  hasMain: boolean;
+}
+
+/** What a build target produces, as the build-target `output` attribute: an executable, a library, a test, or other. */
+export type BuildOutput = "executable" | "library" | "test" | "other";
+
+/**
+ * The output of a target. A *_binary rule is an executable and a *_test rule a test; cc_library is a library.
+ * A macro or custom rule read heuristically is a library when it has headers or no `main`, else other.
+ */
+export function outputOf(t: BazelTarget): BuildOutput {
+  if (t.kind.endsWith(BINARY_SUFFIX)) return "executable";
+  if (t.kind.endsWith("_test")) return "test";
+  if (t.kind === "cc_library") return "library";
+  if (t.confidence === "heuristic" && (t.hdrs.length > 0 || !t.hasMain)) return "library";
+  return "other";
 }
 
 export interface BazelModel {
@@ -218,6 +235,7 @@ export function parseBuildFile(buildFile: string, text: string, files: string[],
       ...(ownVisibility !== undefined ? { visibility: ownVisibility } : {}),
       cc,
       confidence: modelled ? "exact" : "heuristic",
+      hasMain: arg("main").length > 0,
     });
   }
   return targets;

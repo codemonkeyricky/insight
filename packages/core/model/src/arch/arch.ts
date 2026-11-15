@@ -1,5 +1,5 @@
 import { edgeTargets, type IRView } from "@insight/sdk";
-import type { IREdge, NodeId, Span } from "@insight/ir";
+import type { IREdge, IRNode, NodeId, Span } from "@insight/ir";
 import { buildModuleGraph } from "./module-graph.js";
 
 /** Layer order used when the caller does not supply its own `layerOf`. */
@@ -162,12 +162,39 @@ const lastSegment = (path: string): string => path.slice(path.lastIndexOf("/") +
  * from package.json files among the structure.file nodes. The TypeScript frontend emits no
  * package nodes, so the second source is the one that usually applies.
  */
+/** The buildSystem a structure.package node names, or undefined when it names none. */
+function buildSystemOf(node: IRNode): string | undefined {
+  const value = (node.attrs as { buildSystem?: unknown }).buildSystem;
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+/**
+ * The structure.package node that names a directory's package when several build systems describe it. The node whose
+ * buildSystem sorts first wins; a node with no buildSystem sorts last; ties go to the lower node id. So the result does
+ * not depend on record order.
+ */
+function winningPackage(a: IRNode, b: IRNode): IRNode {
+  const sa = buildSystemOf(a);
+  const sb = buildSystemOf(b);
+  if (sa !== sb) {
+    if (sa === undefined) return b;
+    if (sb === undefined) return a;
+    return sa < sb ? a : b;
+  }
+  return a.id <= b.id ? a : b;
+}
+
 function packageRoots(view: IRView): PkgRoot[] {
   const roots = new Map<string, PkgRoot>();
+  const winners = new Map<string, IRNode>();
   for (const node of view.nodes({ kind: "structure.package" })) {
-    const attrs = node.attrs as { name?: unknown; root?: unknown };
+    const attrs = node.attrs as { root?: unknown };
     const path = typeof attrs.root === "string" ? attrs.root : node.id;
-    if (roots.has(path)) continue;
+    const current = winners.get(path);
+    winners.set(path, current === undefined ? node : winningPackage(current, node));
+  }
+  for (const [path, node] of winners) {
+    const attrs = node.attrs as { name?: unknown };
     roots.set(path, { path, name: typeof attrs.name === "string" ? attrs.name : path === "." ? "." : lastSegment(path) });
   }
   for (const node of view.nodes({ kind: "structure.file" })) {

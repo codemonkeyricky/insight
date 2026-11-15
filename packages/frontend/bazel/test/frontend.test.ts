@@ -7,7 +7,7 @@ import { createCoreRegistry } from "@insight/ir/node";
 import { runFrontendConformance, type IRBatch, type ProjectRoot } from "@insight/sdk";
 import frontend from "../src/index.js";
 import { externalMatches, resolver, type ExternalName } from "../src/resolve.js";
-import { buildModel, globRegex, labelOf, parseBuildFile } from "../src/model.js";
+import { buildModel, globRegex, labelOf, outputOf, parseBuildFile } from "../src/model.js";
 import { externalIdOf, parseExternals, repoOf } from "../src/externals.js";
 import { globsIn, labelsIn, stringsIn, tokenize, topLevelCalls } from "../src/starlark.js";
 
@@ -104,6 +104,47 @@ describe("frontend-bazel", () => {
     const actual = toGolden(await extractAll());
     if (process.env.UPDATE_GOLDEN === "1") writeFileSync(goldenFile, actual);
     expect(actual).toBe(readFileSync(goldenFile, "utf8"));
+  });
+});
+
+describe("build-system contract", () => {
+  const build = [
+    'cc_library(name = "core", hdrs = ["core.h"], srcs = ["core.cc"])',
+    'cc_test(name = "core_test", srcs = ["core_test.cc"], deps = [":core"])',
+    'cc_binary(name = "app", srcs = ["app.cc"], deps = [":core"])',
+    'py_binary(name = "tool", srcs = ["tool.py"], main = "tool.py")',
+    'my_macro(name = "helpers", srcs = ["helpers.cc"], deps = [":core"])',
+    'my_macro(name = "runner", srcs = ["runner.cc"], main = "runner.cc", deps = [":core"])',
+    'my_macro(name = "plain", srcs = ["plain.cc"], hdrs = ["plain.h"], deps = [":core"])',
+  ].join("\n");
+  const buildFiles = ["x/core.h", "x/core.cc", "x/core_test.cc", "x/app.cc", "x/tool.py", "x/helpers.cc", "x/runner.cc", "x/plain.cc", "x/plain.h"];
+  const targets = Object.fromEntries(
+    parseBuildFile("x/BUILD", build, buildFiles, new Set(["x"])).map((t) => [t.name, t]),
+  );
+
+  it("classifies each target's output by its rule, and by its header and main for a heuristic macro", () => {
+    expect(targets.core).toMatchObject({ kind: "cc_library" });
+    expect(outputOf(targets.core!)).toBe("library");
+    expect(outputOf(targets.core_test!)).toBe("test");
+    expect(outputOf(targets.app!)).toBe("executable");
+    expect(outputOf(targets.tool!)).toBe("executable");
+    expect(targets.helpers?.confidence).toBe("heuristic");
+    expect(outputOf(targets.helpers!)).toBe("library");
+    expect(outputOf(targets.runner!)).toBe("other");
+    expect(outputOf(targets.plain!)).toBe("library");
+  });
+
+  it("names the build system on every package and external, and the output on every target", async () => {
+    const records = allRecords(await extractAll());
+    const nodes = records.flatMap((r) => ("node" in r ? [r.node] : []));
+    const packages = nodes.filter((n) => n.kind === "structure.package");
+    expect(packages.length).toBeGreaterThan(0);
+    for (const p of packages) expect(p.attrs).toMatchObject({ buildSystem: "bazel" });
+    const externals = nodes.filter((n) => n.kind === "packaging.external");
+    expect(externals.length).toBeGreaterThan(0);
+    for (const e of externals) expect(e.attrs).toMatchObject({ manager: "bazel" });
+    const outputs = Object.fromEntries(nodes.filter((n) => n.kind === "packaging.build-target").map((n) => [n.id, n.attrs.output]));
+    expect(outputs).toMatchObject({ "//lib:core": "library", "//lib:core_test": "test", "//:app": "executable" });
   });
 });
 
