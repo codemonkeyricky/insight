@@ -43,7 +43,7 @@ export interface StateHelpers {
 export interface StateOutput {
   nodes: IRNode[];
   /** Attrs to merge onto the calls.call edge of a call expression. */
-  callAttrs: Map<ts.CallExpression, { knownState: Record<string, string[]>; knownStale?: string[] }>;
+  callAttrs: Map<ts.CallExpression, { knownState?: Record<string, string[]>; knownStale?: string[]; knownEntry?: string[] }>;
 }
 
 interface KS {
@@ -53,8 +53,22 @@ interface KS {
   stale: boolean;
   guards: string[];
   texts: string[];
+  /** The distinguished "entry" unknown: the value the holder had when the function was entered (set is null). */
+  entry?: boolean;
 }
-type Env = Map<string, KS> | null;
+/**
+ * `entry` on the map: keys that are absent still hold their entry value (nothing wrote, tested or awaited since the
+ * function started). Without it an absent key is plain unknown.
+ */
+type EnvMap = Map<string, KS> & { entry?: boolean };
+type Env = EnvMap | null;
+const entryEnv = (): EnvMap => {
+  const m: EnvMap = new Map();
+  m.entry = true;
+  return m;
+};
+const entryKS = (r: KS): KS => ({ holder: r.holder, receiver: r.receiver, set: null, stale: false, guards: [], texts: [], entry: true });
+const unknownKS = (r: KS): KS => ({ holder: r.holder, receiver: r.receiver, set: null, stale: false, guards: [], texts: [] });
 
 interface Spec {
   holder: Holder;
@@ -81,6 +95,7 @@ interface WriteRec {
   receiver?: string;
   from?: string[];
   stale?: boolean;
+  fromEntry?: boolean;
   guards?: string[];
   guardMatch?: "receiver" | "holder";
   event?: string;
@@ -107,6 +122,8 @@ interface CondMode {
   exit?: boolean;
   other?: string;
 }
+
+const relMaps = new WeakMap<Project, Map<ts.SourceFile, string>>();
 
 const REACT_MODULES = new Set(["react", "preact/hooks", "preact/compat"]);
 
@@ -146,22 +163,40 @@ function alwaysExits(s: ts.Statement | undefined): boolean {
   return false;
 }
 
+/** Whether a statement contains a return, throw, break or continue (outside nested functions). */
+function exitsEarly(n: ts.Node): boolean {
+  if (ts.isReturnStatement(n) || ts.isThrowStatement(n) || ts.isBreakStatement(n) || ts.isContinueStatement(n)) return true;
+  if (isFnLike(n)) return false;
+  return ts.forEachChild(n, (c) => (exitsEarly(c) ? true : undefined)) === true;
+}
+
 function cloneKS(k: KS): KS {
   return { ...k, set: k.set ? new Set(k.set) : null, guards: [...k.guards], texts: [...k.texts] };
 }
 function clone(env: Env): Env {
   if (!env) return null;
-  const out = new Map<string, KS>();
+  const out: EnvMap = new Map();
+  if (env.entry) out.entry = true;
   for (const [k, v] of env) out.set(k, cloneKS(v));
   return out;
 }
 function join(a: Env, b: Env): Env {
   if (!a) return b;
   if (!b) return a;
-  const out = new Map<string, KS>();
-  for (const [k, x] of a) {
-    const y = b.get(k);
-    if (!y) continue;
+  const out: EnvMap = new Map();
+  out.entry = !!(a.entry && b.entry);
+  const keys = new Set([...a.keys(), ...b.keys()]);
+  for (const k of keys) {
+    const x0 = a.get(k);
+    const y0 = b.get(k);
+    const ref = (x0 ?? y0)!;
+    const x = x0 ?? (a.entry ? entryKS(ref) : undefined);
+    const y = y0 ?? (b.entry ? entryKS(ref) : undefined);
+    if (!x || !y) {
+      // Unknown on one side: absent means entry when the result keeps the marker, so spell the unknown out.
+      if (out.entry) out.set(k, unknownKS(ref));
+      continue;
+    }
     out.set(k, {
       holder: x.holder,
       receiver: x.receiver,
@@ -169,20 +204,29 @@ function join(a: Env, b: Env): Env {
       stale: x.stale || y.stale,
       guards: x.guards.filter((g) => y.guards.includes(g)),
       texts: x.texts.filter((g) => y.texts.includes(g)),
+      ...(x.entry && y.entry ? { entry: true } : {}),
     });
   }
   return out;
 }
 function sig(env: Env): string {
   if (!env) return "dead";
-  return [...env.entries()]
-    .map(([k, v]) => `${k}=${v.set ? [...v.set].sort().join(",") : "*"}${v.stale ? "!" : ""}`)
-    .sort()
-    .join(";");
+  return (
+    (env.entry ? "E|" : "|") +
+    [...env.entries()]
+      .map(([k, v]) => `${k}=${v.set ? [...v.set].sort().join(",") : "*"}${v.stale ? "!" : ""}${v.entry ? "E" : ""}`)
+      .sort()
+      .join(";")
+  );
 }
+/** An await or yield: known sets may be out of date, and the entry value is no longer the current one. */
 function markStale(env: Env): void {
   if (!env) return;
-  for (const v of env.values()) if (v.set) v.stale = true;
+  env.entry = false;
+  for (const v of env.values()) {
+    if (v.set) v.stale = true;
+    v.entry = false;
+  }
 }
 
 export function emitState(h: StateHelpers): StateOutput {
@@ -260,10 +304,17 @@ export function emitState(h: StateHelpers): StateOutput {
   const relOfNode = (n: ts.Node): string | undefined => {
     const file = n.getSourceFile();
     if (file === sf) return rel;
-    for (const r of project.rels) {
-      if (project.sourceFor(r) === file) return r;
+    if (file.isDeclarationFile) return undefined;
+    let m = relMaps.get(project);
+    if (!m) {
+      m = new Map();
+      for (const r of project.rels) {
+        const f = project.sourceFor(r);
+        if (f) m.set(f, r);
+      }
+      relMaps.set(project, m);
     }
-    return undefined;
+    return m.get(file);
   };
 
   const enclosingFn = (n: ts.Node): ts.Node | undefined => {
@@ -514,6 +565,8 @@ export function emitState(h: StateHelpers): StateOutput {
     const body = fn.body;
     if (body && ts.isBlock(body)) {
       for (const s of body.statements) {
+        // A statement before the assignment that can leave the function makes the assignment conditional.
+        if (exitsEarly(s)) break;
         if (!ts.isExpressionStatement(s)) continue;
         const e = stripParens(s.expression);
         if (!ts.isBinaryExpression(e) || e.operatorToken.kind !== ts.SyntaxKind.EqualsToken) continue;
@@ -664,7 +717,8 @@ export function emitState(h: StateHelpers): StateOutput {
     if (positive) target = new Set(spec.values);
     else if (hd.domain) target = new Set(hd.domain.filter((v) => !spec.values.includes(v)));
     else target = null;
-    const cur = env.get(key);
+    const own = env.get(key);
+    const cur: KS | undefined = own ?? (env.entry ? entryKS({ holder: hd, receiver: spec.receiver } as KS) : undefined);
     let next: Set<string> | null;
     let stale = false;
     if (target === null) {
@@ -685,15 +739,15 @@ export function emitState(h: StateHelpers): StateOutput {
     const texts = cur ? [...cur.texts] : [];
     if (id !== undefined && !guards.includes(id)) guards.push(id);
     if (other && !texts.includes(other)) texts.push(other);
-    env.set(key, { holder: hd, receiver: spec.receiver, set: next, stale, guards, texts });
+    env.set(key, { holder: hd, receiver: spec.receiver, set: next, stale, guards, texts, ...(target === null && cur?.entry ? { entry: true } : {}) });
     return env;
   };
 
   interface Jump {
-    kind: "switch" | "loop";
+    kind: "switch" | "loop" | "block";
     breaks: Env[];
     continues: Env[];
-    label?: string;
+    labels: string[];
   }
   let silent = false;
   let unitParent = "";
@@ -708,12 +762,15 @@ export function emitState(h: StateHelpers): StateOutput {
   let currentFn: ts.Node | undefined;
   let currentClassId: string | undefined;
 
+  /** Only the innermost try records; a closing try hands its record to the next one out. */
   const noteThrowable = (at: number, isAwait: boolean): void => {
-    for (const t of tryStack) {
-      t.throwables.push(at);
-      if (isAwait) t.awaited = true;
-    }
+    const t = tryStack[tryStack.length - 1];
+    if (!t) return;
+    t.throwables.push(at);
+    if (isAwait) t.awaited = true;
   };
+  let work = 0;
+  const WORK_BUDGET = 20000;
 
   const enclosingClass = (n: ts.Node): ts.ClassLikeDeclaration | undefined => {
     for (let p = n.parent; p; p = p.parent) if (ts.isClassDeclaration(p) || ts.isClassExpression(p)) return p;
@@ -751,6 +808,7 @@ export function emitState(h: StateHelpers): StateOutput {
     via?: string,
   ): void => {
     const { ks, match } = lookupForWrite(env, hd, receiver);
+    const atEntry = op === "set" && receiver === "this" && env !== null && (ks ? ks.entry === true : match === undefined && env.entry === true);
     const rec: WriteRec = { node, parent: unitParent, holder: hd, op };
     if (value !== undefined) rec.value = value;
     else rec.dynamic = true;
@@ -758,6 +816,8 @@ export function emitState(h: StateHelpers): StateOutput {
     if (ks && ks.set && ks.set.size > 0) {
       rec.from = orderSet(hd, ks.set);
       if (ks.stale) rec.stale = true;
+    } else if (atEntry) {
+      rec.fromEntry = true;
     }
     if (ks && ks.guards.length > 0 && match) {
       rec.guards = [...ks.guards];
@@ -773,7 +833,7 @@ export function emitState(h: StateHelpers): StateOutput {
     if (receiver !== undefined && env) {
       const key = keyOf(hd, receiver);
       env.set(key, { holder: hd, receiver, set: value !== undefined ? new Set([value]) : null, stale: false, guards: [], texts: [] });
-      for (const t of tryStack) t.writes.push({ key, hd, value, at, receiver });
+      tryStack[tryStack.length - 1]?.writes.push({ key, hd, value, at, receiver });
     }
   };
 
@@ -844,13 +904,23 @@ export function emitState(h: StateHelpers): StateOutput {
     if (!cd || !env) return;
     const state: Record<string, string[]> = {};
     const stale: string[] = [];
+    const entry: string[] = [];
     for (const ks of env.values()) {
       if (ks.receiver !== "this" || ks.holder.classId !== cd.id || !ks.set || ks.set.size === 0) continue;
       state[ks.holder.id] = orderSet(ks.holder, ks.set);
       if (ks.stale) stale.push(ks.holder.id);
     }
-    if (Object.keys(state).length === 0) return;
-    callAttrs.set(call, { knownState: state, ...(stale.length ? { knownStale: stale.sort() } : {}) });
+    for (const hd of declared) {
+      if (hd.classId !== cd.id || state[hd.id]) continue;
+      const ks = env.get(keyOf(hd, "this"));
+      if (ks ? ks.entry === true : env.entry === true) entry.push(hd.id);
+    }
+    if (Object.keys(state).length === 0 && entry.length === 0) return;
+    callAttrs.set(call, {
+      ...(Object.keys(state).length ? { knownState: state } : {}),
+      ...(stale.length ? { knownStale: stale.sort() } : {}),
+      ...(entry.length ? { knownEntry: entry.sort() } : {}),
+    });
   };
 
   const handleCall = (call: ts.CallExpression, env: Env): void => {
@@ -911,6 +981,17 @@ export function emitState(h: StateHelpers): StateOutput {
         if (ts.isPropertyAccessExpression(l) || ts.isIdentifier(l)) {
           if (ts.isPropertyAccessExpression(l)) env = effects(l.expression, env);
           const rd = readOf(l);
+          if (!rd && ts.isPropertyAccessExpression(l)) {
+            // A set accessor that just stores its parameter in a holder: the assignment is the write.
+            const asym = resolveAlias(checker.getSymbolAtLocation(l.name));
+            const aset = asym?.declarations?.find((d) => ts.isSetAccessorDeclaration(d)) as ts.SetAccessorDeclaration | undefined;
+            const st = aset ? setterOf(aset) : null;
+            if (aset && st && st.receiverIsThis) {
+              const inCtor = currentFn !== undefined && ts.isConstructorDeclaration(currentFn) && recvText(l.expression) === "this" && st.holder.classId !== undefined && st.holder.classId === currentClassId;
+              doWrite(env, n, st.holder, inCtor ? "init" : "set", assignValue(n.right), recvText(l.expression), n.end, h.declOf(asym)?.id);
+            }
+            return env;
+          }
           if (rd) {
             const sd = currentFn ? setterOfNode(currentFn) : null;
             if (sd && sd.assign === n) return env;
@@ -1062,6 +1143,13 @@ export function emitState(h: StateHelpers): StateOutput {
 
   const labelOf = (clause: ts.CaseClause | ts.DefaultClause): string => (ts.isCaseClause(clause) ? clause.expression.getText(sf).slice(0, 60) : "default");
 
+  /** Every label directly in front of this statement. */
+  const labelsOf = (s: ts.Node): string[] => {
+    const out: string[] = [];
+    for (let p = s.parent; p && ts.isLabeledStatement(p); p = p.parent) out.push(p.label.text);
+    return out;
+  };
+
   function stmts(list: readonly ts.Statement[], env: Env): Env {
     let cur: Env = env;
     let dead = false;
@@ -1075,7 +1163,17 @@ export function emitState(h: StateHelpers): StateOutput {
     return dead ? null : cur;
   }
 
+  const widenAll = (entry: Env): Env => {
+    const out = clone(entry);
+    if (!out) return out;
+    out.entry = false;
+    for (const [k, v] of out) out.set(k, unknownKS(v));
+    return out;
+  };
+
   function loopFix(entry: Env, step: (head: Env) => Env): Env {
+    // Out of budget (deeply nested loops): unknown and not entry, without iterating.
+    if (work > WORK_BUDGET) return widenAll(entry);
     let head: Env = clone(entry);
     const saved = silent;
     silent = true;
@@ -1084,9 +1182,17 @@ export function emitState(h: StateHelpers): StateOutput {
       const nh = join(clone(entry), back);
       if (sig(nh) === sig(head)) break;
       head = nh;
+      if (work > WORK_BUDGET) {
+        head = widenAll(head);
+        break;
+      }
       if (i === 2) {
         // widen: drop whatever still changes
-        if (head) for (const k of [...head.keys()]) if (!entry || !entry.has(k) || sig(new Map([[k, head.get(k)!]])) !== sig(new Map([[k, entry.get(k)!]]))) head.delete(k);
+        if (head) {
+          for (const k of [...head.keys()]) {
+            if (!entry || !entry.has(k) || sig(new Map([[k, head.get(k)!]])) !== sig(new Map([[k, entry.get(k)!]]))) head.set(k, unknownKS(head.get(k)!));
+          }
+        }
       }
     }
     silent = saved;
@@ -1094,11 +1200,10 @@ export function emitState(h: StateHelpers): StateOutput {
   }
 
   function loop(s: ts.IterationStatement, env: Env): Env {
-    const j: Jump = { kind: "loop", breaks: [], continues: [] };
-    const label = ts.isLabeledStatement(s.parent) ? s.parent.label.text : undefined;
-    if (label) j.label = label;
+    const j: Jump = { kind: "loop", breaks: [], continues: [], labels: labelsOf(s) };
     let afterCond: (e: Env) => { t: Env; f: Env };
     let isDo = false;
+    let isAwaitLoop = false;
     if (ts.isForStatement(s)) {
       if (s.initializer) env = ts.isVariableDeclarationList(s.initializer) ? effectsAll(s.initializer.declarations, env) : effects(s.initializer, env);
       afterCond = (e) => (s.condition ? cond(s.condition, e, { top: true, whole: true }) : { t: e, f: null });
@@ -1111,6 +1216,7 @@ export function emitState(h: StateHelpers): StateOutput {
       // for-of / for-in
       env = effects((s as ts.ForOfStatement | ts.ForInStatement).expression, env);
       afterCond = (e) => ({ t: e, f: clone(e) });
+      if (ts.isForOfStatement(s) && s.awaitModifier) isAwaitLoop = true;
     }
     const body = s.statement;
     const run = (head: Env): { end: Env; f: Env } => {
@@ -1120,6 +1226,11 @@ export function emitState(h: StateHelpers): StateOutput {
       jumps = [...saved, j];
       let bodyEnd: Env;
       let f: Env;
+      if (isAwaitLoop) {
+        // `for await` awaits the iterator on every pass, and that await can throw.
+        markStale(head);
+        noteThrowable(s.getStart(sf), true);
+      }
       if (isDo) {
         const be = stmt(body, head);
         const merged = j.continues.reduce<Env>((acc, c) => join(acc, c), be);
@@ -1145,6 +1256,7 @@ export function emitState(h: StateHelpers): StateOutput {
   }
 
   function stmt(s: ts.Statement, env: Env): Env {
+    work++;
     if (!env) env = new Map();
     if (ts.isBlock(s)) return stmts(s.statements, env);
     if (ts.isExpressionStatement(s)) return effects(s.expression, env);
@@ -1159,16 +1271,29 @@ export function emitState(h: StateHelpers): StateOutput {
       return null;
     }
     if (ts.isBreakStatement(s)) {
-      const target = s.label ? [...jumps].reverse().find((x) => x.label === s.label!.text) : [...jumps].reverse()[0];
+      const target = s.label ? [...jumps].reverse().find((x) => x.labels.includes(s.label!.text)) : [...jumps].reverse().find((x) => x.kind !== "block");
       target?.breaks.push(env);
       return null;
     }
     if (ts.isContinueStatement(s)) {
-      const target = s.label ? [...jumps].reverse().find((x) => x.label === s.label!.text) : [...jumps].reverse().find((x) => x.kind === "loop");
+      const target = s.label ? [...jumps].reverse().find((x) => x.labels.includes(s.label!.text)) : [...jumps].reverse().find((x) => x.kind === "loop");
       target?.continues.push(env);
       return null;
     }
-    if (ts.isLabeledStatement(s)) return stmt(s.statement, env);
+    if (ts.isLabeledStatement(s)) {
+      if (ts.isLabeledStatement(s.parent)) return stmt(s.statement, env); // the outermost label does the work
+      let inner: ts.Statement = s.statement;
+      while (ts.isLabeledStatement(inner)) inner = inner.statement;
+      // Loops and switches register their own labels; any other labelled statement is a break target of its own.
+      if (ts.isIterationStatement(inner, false) || ts.isSwitchStatement(inner)) return stmt(inner, env);
+      const j: Jump = { kind: "block", breaks: [], continues: [], labels: labelsOf(inner) };
+      const saved = jumps;
+      jumps = [...saved, j];
+      let out: Env = stmt(inner, env);
+      jumps = saved;
+      for (const b of j.breaks) out = join(out, b);
+      return out;
+    }
     if (ts.isIfStatement(s)) {
       const exitsThen = alwaysExits(s.thenStatement);
       const exitsElse = alwaysExits(s.elseStatement);
@@ -1211,7 +1336,7 @@ export function emitState(h: StateHelpers): StateOutput {
         }
       }
     }
-    const j: Jump = { kind: "switch", breaks: [], continues: [] };
+    const j: Jump = { kind: "switch", breaks: [], continues: [], labels: labelsOf(s) };
     const saved = jumps;
     jumps = [...saved, j];
     const key = rd ? keyOf(rd.holder, rd.receiver) : undefined;
@@ -1257,8 +1382,11 @@ export function emitState(h: StateHelpers): StateOutput {
           if (!silent) tests.set(first, rec);
           if (!hasDefault) entry = narrow(entry, spec, true, id, undefined);
         }
-        if (hasDefault && allValues.length > 0) {
-          entry = narrow(entry, { holder: rd.holder, receiver: rd.receiver, values: allValues, negated: false, node: s }, false, undefined, undefined);
+        if (hasDefault) {
+          // Default is reached by anything the other groups do not take (this group's own case values stay in).
+          const mine = new Set(vals);
+          const others = allValues.filter((v) => !mine.has(v));
+          if (others.length > 0) entry = narrow(entry, { holder: rd.holder, receiver: rd.receiver, values: others, negated: false, node: s }, false, undefined, undefined);
         }
       }
       const merged: Env = fall ? join(fall, entry) : entry;
@@ -1287,21 +1415,24 @@ export function emitState(h: StateHelpers): StateOutput {
     tryStack.push(col);
     const tryEnd = stmt(s.tryBlock, env);
     tryStack.pop();
-    for (const outer of tryStack) {
+    const outer = tryStack[tryStack.length - 1];
+    if (outer) {
       outer.writes.push(...col.writes);
       outer.throwables.push(...col.throwables);
       if (col.awaited) outer.awaited = true;
     }
     // Catch / exceptional entry (A2).
-    const exc: Env = clone(entry) ?? new Map();
-    const followed = col.writes.filter((w) => col.throwables.some((t) => t >= w.at));
+    const exc: EnvMap = clone(entry) ?? new Map();
+    let lastThrow = -1;
+    for (const t of col.throwables) if (t > lastThrow) lastThrow = t;
+    const followed = col.writes.filter((w) => lastThrow >= w.at);
     const touched = new Set(col.writes.map((w) => w.key));
     for (const key of touched) {
       const base = entry?.get(key);
       const ws = followed.filter((w) => w.key === key);
       const any = col.writes.find((w) => w.key === key)!;
       if (!base || base.set === null) {
-        exc.delete(key);
+        exc.set(key, unknownKS({ holder: any.hd, receiver: any.receiver } as KS));
         continue;
       }
       const set = new Set(base.set);
@@ -1310,7 +1441,7 @@ export function emitState(h: StateHelpers): StateOutput {
         if (w.value === undefined) unknown = true;
         else set.add(w.value);
       }
-      if (unknown) exc.delete(key);
+      if (unknown) exc.set(key, unknownKS({ holder: any.hd, receiver: any.receiver } as KS));
       else exc.set(key, { holder: any.hd, receiver: any.receiver, set, stale: base.stale, guards: [...base.guards], texts: [...base.texts] });
     }
     if (col.awaited) markStale(exc);
@@ -1320,9 +1451,15 @@ export function emitState(h: StateHelpers): StateOutput {
     }
     let after: Env = s.catchClause ? join(tryEnd, catchEnd) : tryEnd;
     if (s.finallyBlock) {
+      // The finally block's own facts see every way in (normal and exceptional)...
       const finEntry = join(clone(after), clone(exc));
-      const fin = stmt(s.finallyBlock, finEntry);
-      after = after === null ? null : fin;
+      stmt(s.finallyBlock, finEntry);
+      // ...but what follows it comes only from the normal paths.
+      if (after === null) return null;
+      const saved = silent;
+      silent = true;
+      after = stmt(s.finallyBlock, after);
+      silent = saved;
     }
     return after;
   }
@@ -1364,6 +1501,7 @@ export function emitState(h: StateHelpers): StateOutput {
     caseStack = [];
     tryStack = [];
     silent = false;
+    work = 0;
     body();
   };
 
@@ -1379,8 +1517,17 @@ export function emitState(h: StateHelpers): StateOutput {
     if (!fn || !fn.body) continue;
     const f = fn;
     runUnit(decl.id, f, () => {
-      if (ts.isBlock(f.body!)) stmts(f.body.statements, new Map());
-      else effects(f.body!, new Map());
+      const env = entryEnv();
+      if (ts.isConstructorDeclaration(f)) {
+        // `constructor(private s: S = S.A)` initialises the field before the body runs.
+        for (const p of f.parameters) {
+          if (!p.initializer || !ts.isIdentifier(p.name)) continue;
+          const hd = holderOfSym(checker.getSymbolAtLocation(p.name));
+          if (hd && hd.decl === p) doWrite(env, p.initializer, hd, "init", assignValue(p.initializer), "this", p.end);
+        }
+      }
+      if (ts.isBlock(f.body!)) stmts(f.body.statements, env);
+      else effects(f.body!, env);
     });
   }
   function fnFromProp(n: ts.Node): ts.FunctionLikeDeclaration | undefined {
@@ -1451,6 +1598,7 @@ export function emitState(h: StateHelpers): StateOutput {
         ...(w.receiver ? { receiver: w.receiver } : {}),
         ...(w.from ? { from: w.from } : {}),
         ...(w.stale ? { stale: true } : {}),
+        ...(w.fromEntry ? { fromEntry: true } : {}),
         ...(guards && guards.length ? { guards, guardMatch: w.guardMatch } : {}),
         ...(w.event !== undefined ? { event: w.event } : {}),
         ...(guards && guards.length && w.guardText ? { guardText: w.guardText } : {}),

@@ -25,6 +25,7 @@
         "receiver": { "type": "string" },
         "from": { "type": "array", "items": { "type": "string" } },
         "stale": { "type": "boolean" },
+        "fromEntry": { "type": "boolean" },
         "guards": { "type": "array", "items": { "type": "string" } },
         "guardMatch": { "enum": ["receiver", "holder"] },
         "event": { "type": "string" },

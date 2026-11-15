@@ -109,3 +109,97 @@ describe("frontend-typescript state facts", () => {
     expect(grp.attrs.values).toEqual(['"idle"', '"busy"']);
   });
 });
+
+describe("review fixes", () => {
+  async function run(file: string, src?: string): Promise<IRBatch[]> {
+    const batches: IRBatch[] = [];
+    const lf = [file];
+    const rf = src === undefined ? readFile : async (rel: string) => (rel === file ? src : readFile(rel));
+    const ctx = { root, files: lf, listFiles: () => [...lf], readFile: rf, log: () => undefined };
+    for await (const batch of frontend.extract(ctx)) batches.push(batch);
+    return batches;
+  }
+  let cache: IRBatch[] | undefined;
+  const review = async () => (cache ??= await run("states/review.ts"));
+  const wr = async (fn: string) => nodes(await review(), "state.write").filter((n) => n.parent === `states/review.ts#${fn}`);
+  const calls = async (fn: string) =>
+    (await review()).flatMap((b) => b.records).flatMap((r) => ("edge" in r && r.edge.kind === "calls.call" && r.edge.from === `states/review.ts#${fn}` ? [r.edge] : []));
+
+  it("entry: a join with a non-entry set drops fromEntry", async () => {
+    const [b, c] = await wr("Entry.step");
+    expect(b!.attrs).toMatchObject({ value: "S.B", fromEntry: true });
+    expect(c!.attrs.from).toBeUndefined();
+    expect(c!.attrs.fromEntry).toBeUndefined();
+  });
+  it("entry: a first write is fromEntry, one after an await is not", async () => {
+    expect((await wr("Entry.go"))[0]!.attrs).toMatchObject({ fromEntry: true });
+    expect((await wr("Entry.goAwait"))[0]!.attrs.fromEntry).toBeUndefined();
+  });
+  it("entry: a call before any write has knownEntry; a tested call has knownState", async () => {
+    const inner = (await calls("Entry.outer")).find((e) => e.attrs?.knownEntry);
+    expect(inner?.attrs?.knownEntry).toEqual(["states/review.ts#Entry.s"]);
+    expect(inner?.attrs?.knownState).toBeUndefined();
+    const tested = (await calls("Entry.outerTested"))[0]!;
+    expect(tested.attrs).toMatchObject({ knownState: { "states/review.ts#Entry.s": ["S.A"] } });
+    expect(tested.attrs?.knownEntry).toBeUndefined();
+  });
+  it("bug 1: the state after finally comes from the normal paths", async () => {
+    const ws = await wr("Fin.run");
+    expect(ws[ws.length - 1]!.attrs.from).toEqual(["S.B", "S.C"]);
+  });
+  it("bug 2: a setter with an early exit before the assignment is not a setter", async () => {
+    expect((await wr("Guarded.caller")).filter((n) => n.attrs.via)).toEqual([]);
+    expect((await wr("Guarded.set"))[0]!.attrs.dynamic).toBe(true);
+  });
+  it("bug 4: an assignment through a set accessor is a write with via", async () => {
+    const ws = await wr("Acc.go");
+    expect(ws).toHaveLength(1);
+    expect(ws[0]!.attrs).toMatchObject({ holder: "states/review.ts#Acc._s", value: "S.B", op: "set" });
+    expect(ws[0]!.attrs.via).toBeTruthy();
+    // the accessor body itself adds nothing
+    const all = nodes(await review(), "state.write").filter((n) => n.attrs.holder === "states/review.ts#Acc._s");
+    expect(all).toHaveLength(2);
+  });
+  it("bug 5: case A + default keeps A", async () => {
+    const [w] = await wr("Sw.run");
+    expect(w!.attrs.from).toContain("S.A");
+    expect(w!.attrs.from).not.toContain("S.B");
+  });
+  it("bug 6: break out of a labelled block or switch reaches the join", async () => {
+    const blk = await wr("Lbl.blk");
+    expect(blk[blk.length - 1]!.attrs.from).toEqual(["S.A", "S.B"]);
+    const sw = await wr("Lbl.sw");
+    expect(sw[sw.length - 1]!.attrs.from).toContain("S.A");
+  });
+  it("bug 7: for await goes stale and can throw", async () => {
+    const run1 = await wr("FA.run");
+    expect(run1[1]!.attrs).toMatchObject({ from: ["S.A"], stale: true });
+    const g = await wr("FA.guarded");
+    const c = g.find((n) => n.attrs.value === "S.C")!;
+    expect(c.attrs.from).toEqual(["S.Idle", "S.A"]);
+    expect(c.attrs.stale).toBe(true);
+  });
+  it("bug 8: a parameter-property initializer is an init write", async () => {
+    const ws = nodes(await review(), "state.write").filter((n) => n.attrs.holder === "states/review.ts#PP.s");
+    expect(ws).toHaveLength(1);
+    expect(ws[0]!.attrs).toMatchObject({ op: "init", value: "S.A" });
+  });
+  it("gaps: while loop writes, nested try", async () => {
+    const w = await wr("Loops.w");
+    expect(w[1]!.attrs.from).toEqual(["S.A"]);
+    expect(w[3]!.attrs.from).toEqual(["S.A", "S.B"]);
+    const nt = await wr("Loops.nt");
+    expect(nt.find((n) => n.attrs.value === "S.B")!.attrs.from).toEqual(["S.Idle", "S.A"]);
+    expect(nt.find((n) => n.attrs.value === "S.D")!.attrs.from).toEqual(["S.Idle", "S.A", "S.B", "S.C"]);
+  });
+  it("risk 9: deeply nested loops stay cheap", async () => {
+    const depth = 10;
+    let body = "this.s = S.B;";
+    for (let i = 0; i < depth; i++) body = `this.s = S.A; while (f) { ${body} this.s = S.C; if (f) continue; this.s = S.D; }`;
+    const src = `import { S } from "./review";\ndeclare const f: boolean;\nexport class Deep { s: S = S.Idle; go() { ${body} } }\n`;
+    const t0 = Date.now();
+    const b = await run("states/deep.ts", src);
+    expect(Date.now() - t0).toBeLessThan(1000);
+    expect(nodes(b, "state.write").length).toBeGreaterThan(depth);
+  });
+});
