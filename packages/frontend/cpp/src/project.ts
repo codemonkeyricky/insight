@@ -7,20 +7,84 @@ export const FRONTEND_ID = "frontend-cpp";
 export const CPP_RE = /\.(?:c|cc|cpp|cxx|h|hh|hpp|hxx|inl)$/i;
 
 export const norm = (s: string): string => s.replace(/\s+/g, "");
+/** One piece of a name. `top` is false for anything inside a template argument list. */
+interface ScanToken {
+  text: string;
+  top: boolean;
+}
+
+/** Operator symbols that start with `<` or `>`. Longer first, so `<=>` wins over `<=` and `<`. */
+const ANGLE_OPERATOR_SYMBOLS = ["<=>", "<<=", ">>=", "<<", ">>", "<=", ">=", "<", ">"];
+
+/** `operator<`, `operator<<`, `operator<=>` and so on, starting at i, with the whitespace before the symbol dropped. */
+function angleOperatorAt(s: string, i: number): { text: string; end: number } | undefined {
+  if (!s.startsWith("operator", i) || (i > 0 && /[\w$]/.test(s[i - 1] ?? ""))) return undefined;
+  let j = i + "operator".length;
+  if (/[\w$]/.test(s[j] ?? "")) return undefined;
+  while (j < s.length && /\s/.test(s[j] ?? "")) j++;
+  const sym = ANGLE_OPERATOR_SYMBOLS.find((x) => s.startsWith(x, j));
+  return sym ? { text: `operator${sym}`, end: j + sym.length } : undefined;
+}
+
 /**
- * Template argument lists removed, nested ones too, so std::lock_guard<std::mutex> becomes std::lock_guard and
- * Foo<T>::bar becomes Foo::bar. An unclosed `<` (as in operator<) drops the rest of the string, as before.
+ * Splits a name into tokens, marking the ones outside template argument lists. A `<` or `>` inside parentheses
+ * does not count, `<=`, `<=>`, `>=` and `<<` are not brackets, and `>>` closes two levels. An unclosed `<` leaves
+ * the rest of the string inside a template argument list.
  */
-export const stripTemplates = (s: string): string => {
-  let out = "";
+function scanTopLevel(s: string): ScanToken[] {
+  const out: ScanToken[] = [];
   let depth = 0;
-  for (const ch of s) {
-    if (ch === "<") depth++;
-    else if (ch === ">" && depth > 0) depth--;
-    else if (depth === 0) out += ch;
+  let parens = 0;
+  let i = 0;
+  while (i < s.length) {
+    if (depth === 0) {
+      const op = angleOperatorAt(s, i);
+      if (op) {
+        out.push({ text: op.text, top: true });
+        i = op.end;
+        continue;
+      }
+    }
+    const ch = s[i];
+    let len = 1;
+    let bracket = false;
+    if (s.startsWith("<=>", i)) len = 3;
+    else if (s.startsWith("<=", i) || s.startsWith(">=", i) || s.startsWith("<<", i)) len = 2;
+    else if (s.startsWith(">>", i)) {
+      len = 2;
+      if (parens === 0 && depth > 0) {
+        depth = Math.max(0, depth - 2);
+        bracket = true;
+      }
+    } else if (ch === "<") {
+      if (parens === 0) {
+        depth++;
+        bracket = true;
+      }
+    } else if (ch === ">") {
+      if (parens === 0 && depth > 0) {
+        depth--;
+        bracket = true;
+      }
+    } else if (ch === "(") parens++;
+    else if (ch === ")") parens = Math.max(0, parens - 1);
+    if (!bracket) out.push({ text: s.slice(i, i + len), top: depth === 0 });
+    i += len;
   }
   return out;
-};
+}
+
+/**
+ * Template argument lists removed, nested ones too, so std::lock_guard<std::mutex> becomes std::lock_guard and
+ * Foo<T>::bar becomes Foo::bar. Operator names keep their symbol, so operator<< stays operator<<. An unclosed `<`
+ * (not part of an operator) drops the rest of the string, as before.
+ * A copy of this lives in packages/core/indexer/src/narrow.ts (stripTemplateArgs). Keep the two in step.
+ */
+export const stripTemplates = (s: string): string =>
+  scanTopLevel(s)
+    .filter((t) => t.top)
+    .map((t) => t.text)
+    .join("");
 export const nodeKey = (n: SyntaxNode): string => `${n.startIndex}:${n.endIndex}:${n.type}`;
 
 export interface Scope {
@@ -55,7 +119,10 @@ export function scopeOf(node: SyntaxNode): Scope {
 /** The function_declarator inside a function definition, past pointer and reference wrappers. */
 export function functionDeclarator(fn: SyntaxNode): SyntaxNode | null {
   let d: SyntaxNode | null = fn.childForFieldName("declarator");
-  while (d && d.type !== "function_declarator") d = d.childForFieldName("declarator");
+  // A reference or pointer wrapper has no named field in tree-sitter-cpp, so its inner declarator is found as a child.
+  while (d && d.type !== "function_declarator") {
+    d = d.childForFieldName("declarator") ?? d.namedChildren.find((c) => c.type === "function_declarator" || c.type.endsWith("_declarator")) ?? null;
+  }
   return d;
 }
 
@@ -114,11 +181,50 @@ const walk = (node: SyntaxNode, visit: (n: SyntaxNode) => void): void => {
   for (const child of node.namedChildren) walk(child, visit);
 };
 
+/** `Foo::` or `Foo<T>::` from text before a name, as the qualifier names. Anything before the last top-level space is a return type. */
+function scopeParts(prefix: string): string[] {
+  const tokens = scanTopLevel(prefix);
+  let from = 0;
+  tokens.forEach((t, k) => {
+    if (t.top && /\s/.test(t.text)) from = k + 1;
+  });
+  const scope = norm(
+    tokens
+      .slice(from)
+      .filter((t) => t.top)
+      .map((t) => t.text)
+      .join(""),
+  )
+    .replace(/^::/, "")
+    .replace(/::$/, "");
+  return scope === "" ? [] : scope.split("::");
+}
+
 function declaredName(fn: SyntaxNode): { qname: string; simple: string } | undefined {
   const fd = functionDeclarator(fn);
-  const name = fd?.childForFieldName("declarator");
-  if (!name) return undefined;
-  const bare = stripTemplates(norm(name.text));
+  const head = fd?.childForFieldName("declarator");
+  if (!head) return undefined;
+  // The name is the last node of the declarator's qualified chain. A macro before the return type makes tree-sitter
+  // read the macro as the type, so the real return type can sit at the start of that chain. The scope therefore comes
+  // from the text before the name, after its last top-level space.
+  let name: SyntaxNode = head;
+  while (name.type === "qualified_identifier" && name.namedChildCount > 0) name = name.namedChildren[name.namedChildCount - 1] ?? name;
+  if (name.type === "ERROR") return declaredNameFromText(head);
+  const raw = name.text;
+  let offset = name.startIndex - head.startIndex;
+  if (head.text.substring(offset, offset + raw.length) !== raw) offset = head.text.lastIndexOf(raw);
+  if (offset < 0) return declaredNameFromText(head);
+  const simple =
+    name.type === "operator_name"
+      ? raw.replace(/\s+/g, " ").replace(/^operator (?=[^\w\s])/, "operator")
+      : stripTemplates(norm(raw));
+  const parts = [...scopeParts(head.text.slice(0, offset)), simple];
+  return { qname: parts.join("::"), simple };
+}
+
+/** Fallback when no name node can be found: the declarator's text, template arguments stripped. */
+function declaredNameFromText(head: SyntaxNode): { qname: string; simple: string } {
+  const bare = stripTemplates(norm(head.text));
   const parts = bare.replace(/^::/, "").split("::");
   return { qname: parts.join("::"), simple: parts[parts.length - 1] ?? bare };
 }
