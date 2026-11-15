@@ -27,7 +27,7 @@ const VERSION = /^\d+(\.\d+)*$/;
 /** A link item that is a bare library name (no path, generator expression or namespace). */
 const BARE_NAME = /^[A-Za-z_][A-Za-z0-9_+.-]*$/;
 /** Header files a target's include directories own. */
-const HEADER = /\.(h|hh|hpp|hxx|inc|ipp)$/i;
+const HEADER = /\.(h|hh|hpp|hxx|inc|ipp|inl|tcc)$/i;
 /** Variables a directory argument may use that the reader resolves. */
 const KNOWN_VARS = new Set(["PROJECT_SOURCE_DIR", "CMAKE_SOURCE_DIR", "CMAKE_CURRENT_SOURCE_DIR", "CMAKE_CURRENT_LIST_DIR"]);
 
@@ -587,17 +587,47 @@ export function buildCmakeModel(texts, files) {
   }
   // Header ownership: a header under a target's include directory (not the project root) belongs to that target,
   // as the include directory is how its sources and its users reach it. Inferred, since no file lists them.
+  const headers = headerIndex(files);
   for (const t of targets.values()) {
     const dirs = [...new Set(t.includeDirs ?? [])].filter((d) => d !== "" && !d.startsWith(".."));
     t.headers = [];
     if (dirs.length === 0) continue;
     const owned = new Set(t.sources);
-    for (const f of files) {
-      if (!HEADER.test(f) || owned.has(f)) continue;
-      if (dirs.some((d) => f.startsWith(`${d}/`))) t.headers.push(f);
+    const hits = new Set();
+    for (const d of dirs) {
+      const prefix = `${d}/`;
+      for (let i = lowerBound(headers, prefix); i < headers.length && headers[i][0].startsWith(prefix); i++) {
+        if (!owned.has(headers[i][0])) hits.add(headers[i][1]);
+      }
     }
+    t.headers = [...hits].sort((a, b) => a - b).map((i) => files[i]);
   }
   return model;
+}
+
+/**
+ * The header files of a file list, as [path, index] pairs sorted by path. The files under one directory are then a
+ * contiguous run, so an include directory is a prefix range rather than a scan of every file.
+ */
+function headerIndex(files) {
+  const out = [];
+  files.forEach((f, idx) => {
+    if (HEADER.test(f)) out.push([f, idx]);
+  });
+  out.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] - b[1]));
+  return out;
+}
+
+/** The first position in a headerIndex whose path is not less than key. */
+function lowerBound(index, key) {
+  let lo = 0;
+  let hi = index.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (index[mid][0] < key) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
 }
 
 /** Include directories a target's own sources see: its own, plus what the libraries it links export. */

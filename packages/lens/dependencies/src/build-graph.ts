@@ -22,7 +22,7 @@ const EXTERNAL = "packaging.external";
 const PACKAGE = "structure.package";
 const FILE = "structure.file";
 /** Header files, by extension. A target that owns one can be used through includes. */
-const HEADER_FILE = /\.(h|hh|hpp|hxx|inc|ipp)$/i;
+const HEADER_FILE = /\.(h|hh|hpp|hxx|inc|ipp|inl|tcc)$/i;
 
 /** A target's dependency closure: the targets and externals it reaches, and whether a dependency is unresolved. */
 interface Reach {

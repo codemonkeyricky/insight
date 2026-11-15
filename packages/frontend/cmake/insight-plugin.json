@@ -5,6 +5,11 @@
   "irVersion": "^1.0",
   "detect": ["**/CMakeLists.txt"],
   "files": ["**/CMakeLists.txt"],
+  "inputs": [
+    "**/CMakeLists.txt",
+    "**/*.cmake",
+    "**/*.{h,hh,hpp,hxx,inc,ipp,inl,tcc}"
+  ],
   "provides": ["packaging", "structure"],
   "roles": {
     "frontend": "./index.js",
