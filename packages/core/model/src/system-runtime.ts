@@ -2,7 +2,7 @@
 // component on one runtime), and the in-process resources (queues, locks, semaphores, condvars, env) and kernel ops.
 // Built from execModel with the Flow grounding rules, so a thread exists only where the IR grounds it. Pure: the same
 // model and scope give the same plan, whatever order the IR arrives in (every list is sorted by id).
-import { execCoroutineId, execModel, execProgramId, execThreadId, hasRuntimeContext, UNTHREADED_ID, UNTHREADED_LABEL, type ExecFunctionRef, type ExecModel, type ExecProgram, type ExecSpawn, type ExecSpawnStatus, type ExecThread } from "@insight/flow";
+import { execCoroutineId, execModel, isNoisePath, execProgramId, execThreadId, hasRuntimeContext, UNTHREADED_ID, UNTHREADED_LABEL, type ExecFunctionRef, type ExecModel, type ExecProgram, type ExecSpawn, type ExecSpawnStatus, type ExecThread } from "@insight/flow";
 import type { NodeId } from "@insight/ir";
 import type { ProjectModel } from "./model.js";
 import type { Site } from "./system.js";
@@ -144,9 +144,10 @@ function addTo(map: Map<string, Set<string>>, key: string, value: string): void 
 
 /**
  * The runtime plan of one scope. `compOfFile` gives the System component of an in-scope file (undefined for a file outside
- * the scope). When the scope has no runtime context the plan is "none" and holds no runtimes.
+ * the scope). When the scope has no runtime context the plan is "none" and holds no runtimes. `tests` keeps the spawns and
+ * programs whose code lies in a test, fixture or sample file; without it they are left out, as the files are.
  */
-export function buildRuntimePlan(model: ProjectModel, scope: string, compOfFile: (file: string) => string | undefined): RuntimePlan {
+export function buildRuntimePlan(model: ProjectModel, scope: string, compOfFile: (file: string) => string | undefined, tests = true): RuntimePlan {
   const exec = execModel(model.doc.nodes, model.doc.edges, scope, { maxFunctions: Infinity });
   const mode: SystemRuntimeMode = exec.truncated ? "truncated" : hasRuntimeContext(exec) ? "grounded" : "none";
   const grounded = mode === "grounded";
@@ -243,7 +244,8 @@ export function buildRuntimePlan(model: ProjectModel, scope: string, compOfFile:
       spawn?: SystemSpawn;
     }
     const specs: ThreadSpec[] = [];
-    const threadIds = new Set(exec.threads.filter((t) => t.grounded && t.kind !== "process").map((t) => t.id));
+    // A thread spawned from a test, fixture or sample file runs no code of the program: it is left out unless tests are shown.
+    const threadIds = new Set(exec.threads.filter((t) => t.grounded && t.kind !== "process" && (tests || t.spawn === undefined || !isNoisePath(t.spawn.file))).map((t) => t.id));
     const programOfThread = new Map<string, string>();
     for (const p of exec.programs) {
       for (const tid of p.threads) {
@@ -262,6 +264,8 @@ export function buildRuntimePlan(model: ProjectModel, scope: string, compOfFile:
         continue;
       }
       if (t.spawn.status !== "resolved") continue;
+      // A resolved process started from a test, fixture or sample file gets no program of its own (same rule as threads).
+      if (!tests && isNoisePath(t.spawn.file)) continue;
       const rootFile = fnById.get(t.roots[0] ?? "")?.file ?? t.roots[0] ?? "";
       const pid = `program:${t.spawn.node}`;
       runtimes.set(pid, { id: pid, kind: "program", label: rootFile, programKind: "node", spawn });
