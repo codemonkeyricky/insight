@@ -9,7 +9,7 @@ packages/
     flow/    @insight/flow      control-flow charts and execution model
     indexer/ @insight/indexer   plugin loader, Merkle, shards, pipeline, SQLite index (Node only)
   frontend/ bazel cmake cpp typescript    (plugins: produce IR)
-  lens/     calls concurrency-map dependencies effects execution flow-complexity lock-order   (plugins: consume IR)
+  lens/     calls concurrency-map dependencies effects execution flow-complexity lock-order states   (plugins: consume IR)
 apps/ cli export hosted server storage-worker web   (deployables)
 ```
 

@@ -623,22 +623,55 @@ frontend and its version. Land them one after the other, and take the next patch
 
 ## Out of scope / known limits (document, don't build)
 
+Updated after the review rounds; `docs/states-lens.md` "Limits" lists every bullet here.
+
 - Protocol or lifecycle states inferred from effects (open → read → close), and implicit states such as a nullable
   object that is either "loaded" or not.
-- Open-domain holders (`status: string`), booleans by default, and states held in Maps, arrays or computed keys.
+- Open-domain holders (`status: string`), and states held in Maps, arrays or computed keys. Booleans are never holders
+  (the frontend rejects them; there is no `includeBooleans` setting).
 - `return V` as a write, compound assignments, and writes through aliases (`const r = this; r.state = …` is matched only
-  when the checker resolves the symbol).
+  when the checker resolves the symbol). A local copy (`const s = this.state; if (s === A)`) is not a read of the
+  holder.
 - A guard is recognised only within the same function, plus cross-call depth ≤ 2 over exact `this.m()` calls carrying
-  `knownState`. Guards through callbacks, `||`, `.includes`, getters (stompjs `get active()`), and helpers like
-  `isIdle(s)` are not followed.
-- Calls to other methods don't reset the known set, so a callee that writes the holder can make a later `from` too
-  narrow. `await`/`yield` only mark it stale (inferred).
-- Setter helpers are recognised only when they assign a parameter straight to the holder, unconditionally.
+  `knownState` or `knownEntry`. Guards through callbacks, `||`, `.includes` and helpers that take arguments
+  (`isIdle(s)`) are not followed. Getters and zero-argument methods that return one comparison are followed (A3), as is
+  a plain `get x() { return this._x }`.
+- Calls and the known set. A call to a same-class method that writes the holder (directly or through other methods of
+  the class) makes the set unknown, but the callee's exit values are not used, so the later `from` is unknown, not
+  narrow. A call to a method of another class, or to a free function, does not reset the set, so a callee that writes
+  the holder through another object can still make a later `from` too narrow. `await`/`yield` mark the set stale
+  (inferred).
+- Function-valued-property wipe. A `this.x()` call to an abstract member, an interface-typed member or a
+  function-valued property declared in project source, and a call that cannot be resolved, make every holder of the
+  class unknown (arcs from `any state`). Members from `.d.ts`, lib or `node_modules` do not wipe. This is
+  conservative: it can turn an exact arc into an `any state` arc.
+- Synchronous callbacks count (an IIFE, the `new Promise` executor, and callbacks to `forEach`, `map`, `filter`,
+  `some`, `every`, `find`, `findIndex`, `reduce`, `flatMap`, `sort`). Stored callbacks are not followed: a function
+  assigned to a property, registered as a handler, or passed to `setTimeout` or `.then` is analysed on its own, with an
+  unknown entry state, and a write it makes is not seen by the code that stores it.
+- Calls the analysis does not see (review round 5). `super.x()` does not invalidate the known set. A synchronous
+  callback written directly in the same method body (`xs.forEach(() => this.s = Idle)` followed by a write) is not
+  counted as a write before the later one. `this.m.call(this)`, `.apply` and `.bind` are not followed. A method
+  reference passed as a callback (`xs.forEach(this.m)`) is not followed. In the first four cases the later write keeps
+  its entry marker and is filled from the callers, so a wrong inferred (dashed) arc can result.
+- Sync-callback detection is by method name (`forEach`, `map`, …), so a non-array method with such a name is treated
+  as synchronous. That is sound but less precise.
+- Loop work budget. Each function gets a fixed budget of statement steps (20,000). Loops are iterated to a fixed point
+  and widened; past the budget (deeply nested loops) every holder is widened to unknown without iterating, so writes
+  after the loop show as `any state`.
+- Multi-holder correlation. Each holder is analysed alone. A guard on one holder says nothing about another, so two
+  fields that move together (stompjs `Client.state` and `_intendedState`) give arcs the code can't take, and the arc is
+  drawn dashed. `DEACTIVATING → ACTIVE` in stompjs is the known case.
+- A `catch` may keep a twin arc from a value written last in the `try` when a later call could throw (a logging call
+  counts), as `Connected → Disconnected` in SignalR. It is inferred.
+- Setter helpers are recognised only when they assign a parameter straight to the holder, unconditionally, once, with
+  no earlier statement that can leave the function.
 - Declarative machines (xstate configs, transition tables as object literals) are a possible later dialect, not this
   one.
 - Very large repos (all of aspnetcore) are indexed by subfolder locally; the hosted path takes the whole tarball.
 - All instances of a type share one machine. A guard on `a.status` constrains `b.status` only when there is no receiver
   (an inferred `holder` match).
 - `useState` with no type argument has an open domain, and gets no `unentered` findings.
-- C++ is syntactic (heuristic): enum-typed fields by type-name text, and no macros or templates.
+- C++ is syntactic (heuristic): enum-typed fields by type-name text, `this->x` or a bare member name, `==`/`!=` and
+  `switch` only, no cross-call knowledge, no predicates, no stale marking, no macros or templates.
 - Findings only on the project pass. Scoped views show partial machines.

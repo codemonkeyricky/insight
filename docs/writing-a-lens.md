@@ -114,10 +114,20 @@ If two findings share an id, the core appends `#<i>` to the second. The diff giv
 ### Views
 
 - `graph`: `{ type: "graph", id, title, nodes: [{ id, label, group?, span? }], edges: [{ from, to, kind, label?, confidence?, span? }] }`.
-- `table`: `{ type: "table", id, title, columns, rows }`. Cells are strings, numbers, booleans or `null`.
+- `table`: `{ type: "table", id, title, columns, rows, spans? }`. Cells are strings, numbers, booleans or `null`.
+  `spans` has one entry per row, a source range `{ file, start, end }` or `null`. The page shows a line link on a row that has one, and the link opens the source panel at that range. Without `spans` a row is plain text.
 - `tree`: `{ type: "tree", id, title, root: { label, children? } }`.
+- `state-machine`: one state diagram.
+  ```ts
+  { type: "state-machine", id, title,
+    holder: { id, name, file?, domainKind: "enum" | "union" | "open", span? },
+    states: { id, label, kind: "initial" | "any" | "state" | "unentered", span? }[],
+    transitions: { id, from, to, label?, confidence, sites: { span?, fn?, guard?, confidence? }[] }[],
+    notes?: string[] }
+  ```
+  `from` and `to` are state ids. `kind` `initial` is the filled start dot, `any` is the dashed "any state" pill, `unentered` is a greyed state, and `state` is an ordinary box. `confidence` picks the arc style: solid for `exact`, dashed for `inferred`, dotted for `heuristic`. `sites` are the source places behind the arc. `label` is the text on it, and `notes` are lines shown under the diagram.
 
-Give each view an `id` that is unique within the lens. The lens page draws graph views with cytoscape and renders table views as HTML. It does not draw tree views yet: a lens can return one, and the API passes it on, but the page shows nothing for it.
+Give each view an `id` that is unique within the lens. The lens page draws graph views with cytoscape and renders table views as HTML. A result with `state-machine` views gets a machine list (holder, states, transitions) beside one diagram, laid out with elkjs and drawn as SVG, instead of every view stacked. The first machine is selected, and the choice is kept in the page hash as `machine=<holder id>`, so a reload keeps it. Clicking an arc opens its first site in the source panel and lists every site in a side panel. The lens's tables are drawn below as usual. A result counts as having content when it has a `state-machine` view with at least one transition. See [states-lens.md](states-lens.md) for the lens that uses it. It does not draw tree views yet: a lens can return one, and the API passes it on, but the page shows nothing for it.
 
 ### Metrics
 
