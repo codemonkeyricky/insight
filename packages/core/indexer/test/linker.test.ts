@@ -413,6 +413,69 @@ describe("build-graph narrowing", () => {
     expect(edge?.to).toBe("app/peer.cc#g");
     expect(result.narrowed).toBe(1);
   });
+
+  /** One caller in `callerFile`, both in //app:a's closure (the caller's own target), and a free function outside it. */
+  const headerCase = (callerFile: string) => [
+    target("//app:a"), target("//other:o"),
+    owns("//app:a", "app/main.cc"), owns("//app:a", "app/util.h"), owns("//app:a", "app/peer.cc"), owns("//other:o", "other/o.cc"),
+    fn("app/main.cc#main", "app/main.cc"), fn("app/util.h#helper", "app/util.h"),
+    fn("app/peer.cc#g", "app/peer.cc"), fn("other/o.cc#f", "other/o.cc"),
+    call(`${callerFile}#${callerFile === "app/util.h" ? "helper" : "main"}`, ["app/peer.cc#g", "other/o.cc#f"]),
+  ];
+
+  it("(i) does not narrow a call from a header, and narrows the same call from a .cc", async () => {
+    const headerRecords: IRRecord[] = headerCase("app/util.h");
+    const headerResult = await linkRecords(headerRecords, "app/util.h", [...FILES, "app/util.h", "app/peer.cc"]);
+    const headerEdge = headerResult.doc.edges.find((e) => e.kind === "calls.call");
+    expect(headerEdge?.to).toEqual({ candidates: ["app/peer.cc#g", "other/o.cc#f"] });
+    expect(headerEdge?.provenance.resolvedBy).toBeUndefined();
+    expect(headerResult.narrowed).toBe(0);
+
+    const ccRecords: IRRecord[] = headerCase("app/main.cc");
+    const ccResult = await linkRecords(ccRecords, "app/main.cc", [...FILES, "app/util.h", "app/peer.cc"]);
+    const ccEdge = ccResult.doc.edges.find((e) => e.kind === "calls.call");
+    expect(ccEdge?.to).toBe("app/peer.cc#g");
+    expect(ccResult.narrowed).toBe(1);
+  });
+
+  it("(j) keeps an out-of-line template method whose qualified name is Foo<T>::bar", async () => {
+    // The method is parented to its file, as the C++ frontend does for out-of-line definitions. Its qualified name
+    // carries template arguments, so the type check must strip them. It is outside the caller's closure, and so is
+    // the free function beside it, which is the one that gets dropped.
+    const records: IRRecord[] = [
+      target("//app:a"), target("//lib:x"), target("//other:o"),
+      owns("//app:a", "app/main.cc"), owns("//lib:x", "lib/x.cc"), owns("//other:o", "other/o.cc"),
+      dep("//lib:x", "//app:a"),
+      fn("app/main.cc#main", "app/main.cc"),
+      typeIn("lib/x.cc#Foo", "lib/x.cc"), outOfLine("lib/x.cc#Foo::bar", "lib/x.cc", "Foo<T>::bar"),
+      fn("other/o.cc#free", "other/o.cc"),
+      call("app/main.cc#main", ["lib/x.cc#Foo::bar", "other/o.cc#free"]),
+    ];
+    const result = await linkRecords(records, "app/main.cc", FILES);
+    const edge = result.doc.edges.find((e) => e.kind === "calls.call");
+    expect(edge?.to).toBe("lib/x.cc#Foo::bar");
+    expect(edge?.provenance.resolvedBy).toContain("build-graph");
+    expect(result.narrowed).toBe(1);
+  });
+
+  it("(k) keeps a method survivor without promoting it, when the build graph does not link it", async () => {
+    // Method M is outside the caller's closure and free F is outside it too. F is dropped. M survives only because
+    // methods are always kept, so the edge narrows to M but stays heuristic: no build-graph evidence links M.
+    const records: IRRecord[] = [
+      target("//app:a"), target("//lib:x"), target("//other:o"),
+      owns("//app:a", "app/main.cc"), owns("//lib:x", "lib/x.cc"), owns("//other:o", "other/o.cc"),
+      fn("app/main.cc#main", "app/main.cc"),
+      typeIn("lib/x.cc#Circle", "lib/x.cc"), outOfLine("lib/x.cc#Circle::area", "lib/x.cc", "Circle::area"),
+      fn("other/o.cc#free", "other/o.cc"),
+      call("app/main.cc#main", ["lib/x.cc#Circle::area", "other/o.cc#free"]),
+    ];
+    const result = await linkRecords(records, "app/main.cc", FILES);
+    const edge = result.doc.edges.find((e) => e.kind === "calls.call");
+    expect(edge?.to).toBe("lib/x.cc#Circle::area");
+    expect(edge?.provenance.confidence).toBe("heuristic");
+    expect(edge?.provenance.resolvedBy).toContain("build-graph");
+    expect(result.narrowed).toBe(1);
+  });
 });
 
 describe("linker passes the edge attributes to resolvers", () => {

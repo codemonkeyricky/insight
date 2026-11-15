@@ -7,8 +7,20 @@ export const FRONTEND_ID = "frontend-cpp";
 export const CPP_RE = /\.(?:c|cc|cpp|cxx|h|hh|hpp|hxx|inl)$/i;
 
 export const norm = (s: string): string => s.replace(/\s+/g, "");
-/** Template arguments removed, so std::lock_guard<std::mutex> becomes std::lock_guard. */
-export const stripTemplates = (s: string): string => s.replace(/<.*$/, "");
+/**
+ * Template argument lists removed, nested ones too, so std::lock_guard<std::mutex> becomes std::lock_guard and
+ * Foo<T>::bar becomes Foo::bar. An unclosed `<` (as in operator<) drops the rest of the string, as before.
+ */
+export const stripTemplates = (s: string): string => {
+  let out = "";
+  let depth = 0;
+  for (const ch of s) {
+    if (ch === "<") depth++;
+    else if (ch === ">" && depth > 0) depth--;
+    else if (depth === 0) out += ch;
+  }
+  return out;
+};
 export const nodeKey = (n: SyntaxNode): string => `${n.startIndex}:${n.endIndex}:${n.type}`;
 
 export interface Scope {

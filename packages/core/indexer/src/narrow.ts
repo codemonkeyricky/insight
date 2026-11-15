@@ -13,13 +13,42 @@ interface Reach {
   open: boolean;
 }
 
+/** C and C++ header-like files. Their code is compiled into each includer, so the includer's link closure decides. */
+const HEADER_RE = /\.(?:h|hh|hpp|hxx|h\+\+|inc|inl|ipp|tcc|cuh)$/i;
+
+/** Template argument lists removed, nested ones too: `Foo<T>::bar` becomes `Foo::bar`. Unclosed `<` drops the rest. */
+function stripTemplateArgs(s: string): string {
+  let out = "";
+  let depth = 0;
+  for (const ch of s) {
+    if (ch === "<") depth++;
+    else if (ch === ">" && depth > 0) depth--;
+    else if (depth === 0) out += ch;
+  }
+  return out;
+}
+
+/**
+ * How a candidate fared. `linked`: a shared frontend's build graph says one of its owners is in the caller's reach,
+ * or the reach is open. `kept`: kept without build-graph evidence (a method, no file, or no shared frontend). `dropped`:
+ * a shared frontend says not linked and none says linked.
+ */
+type Verdict = "linked" | "kept" | "dropped";
+
 /**
  * Narrows ambiguous `calls.call` candidates with the build graph, per build system (the frontend that owns each
  * target). For each frontend that owns both the caller's file and the candidate's file: the candidate is linked when
  * one of its owners is in the caller's dependency closure, or when that closure is open. A candidate is dropped only
  * when some shared frontend says not linked and none says linked. A candidate with no shared frontend (or in no
- * target) is kept. Methods (see `isMethod`) are always kept, so narrowing only drops free functions. Edits edges in
- * place and returns how many changed. Never adds edges.
+ * target) is kept. Methods (see `isMethod`) are always kept, so narrowing only drops free functions.
+ *
+ * A call from a C/C++ header (see `HEADER_RE`) is never narrowed: header code is compiled into each includer, so
+ * the includer's link closure decides, and this pass only knows the header owner's closure.
+ *
+ * An edge narrowed to one target is promoted from "heuristic" to "inferred" only when that target was `linked`.
+ * A survivor kept for any other reason (a method, no file, no shared frontend) keeps its confidence.
+ *
+ * Edits edges in place and returns how many changed. Never adds edges.
  */
 export function narrowByBuildGraph(nodes: ReadonlyMap<NodeId, IRNode>, edges: ShardEdge[]): number {
   const owners = new Map<NodeId, Set<NodeId>>();
@@ -98,8 +127,9 @@ export function narrowByBuildGraph(nodes: ReadonlyMap<NodeId, IRNode>, edges: Sh
       cur = n.parent;
     }
     const node = nodes.get(id);
-    const name = node?.attrs?.qualifiedName ?? node?.attrs?.name;
-    if (typeof name !== "string") return false;
+    const raw = node?.attrs?.qualifiedName ?? node?.attrs?.name;
+    if (typeof raw !== "string") return false;
+    const name = stripTemplateArgs(raw);
     const sep = name.lastIndexOf("::");
     if (sep <= 0) return false;
     const prefixLast = name.slice(0, sep).split("::").pop() ?? "";
@@ -136,6 +166,7 @@ export function narrowByBuildGraph(nodes: ReadonlyMap<NodeId, IRNode>, edges: Sh
     if (typeof to !== "object" || !("candidates" in to)) continue;
 
     const callerFile = fileOf(edge.from) ?? entry.file;
+    if (HEADER_RE.test(callerFile)) continue;
     const callerByFrontend = ownersByFrontend(callerFile);
     if (callerByFrontend.size === 0) continue;
 
@@ -151,36 +182,38 @@ export function narrowByBuildGraph(nodes: ReadonlyMap<NodeId, IRNode>, edges: Sh
     }
 
     /**
-     * Keep unless some shared frontend says not linked and none says linked. Methods are never dropped: virtual
+     * Dropped only when some shared frontend says not linked and none says linked. Methods are never dropped: virtual
      * dispatch can reach any override, including a sibling implementation the caller's binary links.
      */
-    const keeps = (candidate: NodeId): boolean => {
-      if (isMethod(candidate)) return true;
+    const verdictOf = (candidate: NodeId): Verdict => {
+      if (isMethod(candidate)) return "kept";
       const file = fileOf(candidate);
-      if (file === undefined) return true;
+      if (file === undefined) return "kept";
       const candidateByFrontend = ownersByFrontend(file);
       let shared = 0;
       for (const [f, reach] of reachByFrontend) {
         const candidateOwners = candidateByFrontend.get(f);
         if (!candidateOwners) continue;
         shared++;
-        if (reach.open) return true;
-        for (const t of candidateOwners) if (reach.targets.has(t)) return true;
+        if (reach.open) return "linked";
+        for (const t of candidateOwners) if (reach.targets.has(t)) return "linked";
       }
-      return shared === 0;
+      return shared === 0 ? "kept" : "dropped";
     };
 
     const candidates = to.candidates;
-    const kept = candidates.filter(keeps);
-    if (kept.length === 0 || kept.length === candidates.length) continue;
+    const verdicts = candidates.map((c) => ({ id: c, verdict: verdictOf(c) }));
+    const survivors = verdicts.filter((v) => v.verdict !== "dropped");
+    if (survivors.length === 0 || survivors.length === candidates.length) continue;
 
-    const [first, ...rest] = kept as [NodeId, ...NodeId[]];
+    const [first, ...rest] = survivors.map((v) => v.id) as [NodeId, ...NodeId[]];
     edge.to = rest.length === 0 ? first : { candidates: [first, ...rest] };
     const provenance: Provenance = {
       ...edge.provenance,
       resolvedBy: edge.provenance.resolvedBy ? `${edge.provenance.resolvedBy}+build-graph` : "build-graph",
     };
-    if (rest.length === 0 && edge.provenance.confidence === "heuristic") provenance.confidence = "inferred";
+    const lone = survivors.length === 1 ? survivors[0] : undefined;
+    if (lone?.verdict === "linked" && edge.provenance.confidence === "heuristic") provenance.confidence = "inferred";
     edge.provenance = provenance;
     narrowed++;
   }
