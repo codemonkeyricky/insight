@@ -209,10 +209,10 @@ describe("coupling pass on google/benchmark", () => {
 });
 
 describe("coupling pass on packages/core (self index, TypeScript)", () => {
-  it("keeps every cross, io, conc and escape row, and reports reduction", () => {
+  it("keeps every cross, io, conc and escape row, and reports reduction", (ctx) => {
     if (selfSkipped || self === undefined) {
-      console.log(`coupling reduction [self] skipped: indexing took ${(selfElapsedMs / 1000).toFixed(1)} s, over the ${SELF_BUDGET_MS / 1000} s budget`);
-      return;
+      // Reported as skipped (not passed): the self-index went over its time budget, so nothing was checked here.
+      ctx.skip(`self index took ${(selfElapsedMs / 1000).toFixed(1)} s, over the ${SELF_BUDGET_MS / 1000} s budget`);
     }
     const m = measure(self);
     report("self", m, selfElapsedMs);
