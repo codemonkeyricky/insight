@@ -806,6 +806,15 @@ describe("include matching", () => {
   });
 });
 
+describe("package declared in several files", () => {
+  it("an import of a package that two files declare is a candidate set of both, heuristic", async () => {
+    const edges = edgesOf(allRecords(await extractDir(join(fixturesDir, "package_twice"), ["cfg_a.sv", "cfg_b.sv", "user.sv"])));
+    const imp = edges.find((e) => e.kind === "packaging.import" && e.from === "user.sv#user_m");
+    expect(imp?.to).toEqual({ candidates: ["cfg_a.sv#cfg_pkg", "cfg_b.sv#cfg_pkg"] });
+    expect(imp?.provenance?.confidence).toBe("heuristic");
+  });
+});
+
 describe("system task effects", () => {
   it("a $fopen whose mode is a variable is a write, marked as an unknown mode", async () => {
     const batches = await extractDir(join(fixturesDir, "fopen"), ["mode.sv"]);

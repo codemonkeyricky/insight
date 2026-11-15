@@ -600,19 +600,47 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
         for (const item of n.namedChildren.filter((c) => c.type === "package_import_item")) {
           const pkg = item.namedChildren.find((c) => c.type === "simple_identifier")?.text;
           if (!pkg) continue;
-          const decl = project.decls.get(pkg);
-          const isPkg = decl !== undefined && decl.hdl === "package";
-          if (isPkg) depend(decl.file);
-          const to: NodeId | UnresolvedRef = isPkg ? decl.id : { unresolved: { scheme: "sv.package", text: pkg } };
-          edge({
-            from: f.container,
-            to,
-            facet: "packaging",
-            kind: "packaging.import",
-            attrs: { specifier: pkg },
-            span: spanOf(rel, item),
-            provenance: isPkg && decl.scanned ? heuristic : prov,
-          });
+          const pkgs = (project.declsByName.get(pkg) ?? []).filter((d) => d.hdl === "package");
+          const only = pkgs.length === 1 ? pkgs[0] : undefined;
+          const span = spanOf(rel, item);
+          if (only !== undefined) {
+            depend(only.file);
+            edge({
+              from: f.container,
+              to: only.id,
+              facet: "packaging",
+              kind: "packaging.import",
+              attrs: { specifier: pkg },
+              span,
+              provenance: only.scanned ? heuristic : prov,
+            });
+          } else if (pkgs.length === 0) {
+            edge({
+              from: f.container,
+              to: { unresolved: { scheme: "sv.package", text: pkg } },
+              facet: "packaging",
+              kind: "packaging.import",
+              attrs: { specifier: pkg },
+              span,
+              provenance: prov,
+            });
+          } else {
+            // Several files declare the package. Each is a candidate, and each file is a dependency.
+            for (const d of pkgs) depend(d.file);
+            const cands = pkgs
+              .map((d) => d.id)
+              .sort()
+              .slice(0, MAX_CANDIDATES) as [NodeId, ...NodeId[]];
+            edge({
+              from: f.container,
+              to: { candidates: cands },
+              facet: "packaging",
+              kind: "packaging.import",
+              attrs: { specifier: pkg },
+              span,
+              provenance: heuristic,
+            });
+          }
         }
         break;
       }
