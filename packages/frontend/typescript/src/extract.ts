@@ -1131,9 +1131,37 @@ function workerCtors(project: Project, expr: ts.Expression, depth = 0): ts.NewEx
     const sf = e.getSourceFile();
     return matchWorker(e, importBindings(sf), workerEnvFor(project, sf))?.api === "Worker" ? [e] : [];
   }
+  // `c ? a : b`, `a ?? b` and `a || b` may hold either side's worker.
+  if (ts.isConditionalExpression(e)) return [...workerCtors(project, e.whenTrue, depth + 1), ...workerCtors(project, e.whenFalse, depth + 1)];
+  if (ts.isBinaryExpression(e) && (e.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken || e.operatorToken.kind === ts.SyntaxKind.BarBarToken)) {
+    return [...workerCtors(project, e.left, depth + 1), ...workerCtors(project, e.right, depth + 1)];
+  }
   if (ts.isIdentifier(e)) {
-    const d = project.checker.getSymbolAtLocation(e)?.valueDeclaration;
-    return d !== undefined && ts.isVariableDeclaration(d) && d.initializer !== undefined ? workerCtors(project, d.initializer, depth + 1) : [];
+    const symbol = project.checker.getSymbolAtLocation(e);
+    const d = symbol?.valueDeclaration;
+    if (symbol === undefined || d === undefined || !ts.isVariableDeclaration(d)) return [];
+    const out: ts.NewExpression[] = [];
+    if (d.initializer !== undefined) out.push(...workerCtors(project, d.initializer, depth + 1));
+    // A `let` or `var` may be assigned after its declaration: every `name = expr` in the declaring scope counts.
+    if ((ts.getCombinedNodeFlags(d) & ts.NodeFlags.Const) === 0) {
+      let scope: ts.Node = d;
+      while (scope.parent !== undefined && !(ts.isSourceFile(scope) || ts.isFunctionLike(scope) || ts.isBlock(scope) || ts.isModuleBlock(scope))) {
+        scope = scope.parent;
+      }
+      const scan = (n: ts.Node): void => {
+        if (
+          ts.isBinaryExpression(n) &&
+          n.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+          ts.isIdentifier(n.left) &&
+          project.checker.getSymbolAtLocation(n.left) === symbol
+        ) {
+          out.push(...workerCtors(project, n.right, depth + 1));
+        }
+        ts.forEachChild(n, scan);
+      };
+      scan(scope);
+    }
+    return out;
   }
   if (ts.isPropertyAccessExpression(e) && e.expression.kind === ts.SyntaxKind.ThisKeyword) {
     const cls = enclosingClass(e);
