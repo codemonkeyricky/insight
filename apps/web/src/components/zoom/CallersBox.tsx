@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 import { CHART_HEAD, CHART_PAD } from "@insight/flow";
 import { CALLOUT_INSET, callerRowRect, callersLines, CALLERS_CAP, CALLER_ROW_H, CALLERS_W, type Expansion } from "../../zoom/expand";
-import { mergeCallers, type CallerRow } from "../../zoom/callers";
+import { mergeCallers, refOfCallersKey, type CallerRow } from "../../zoom/callers";
 import { readLambdas } from "../../zoom/lambdaPref";
 import { displayName } from "../../zoom/names";
 import { fitLabel, labelChars } from "../../zoom/lod";
@@ -22,7 +22,7 @@ interface Props {
   expansion: Expansion;
   /** The label scale: the camera's scale in its quarter-octave bucket (lod.ts). */
   k: number;
-  /** A box closing (its fade-out): it fetches nothing and shows no rows. */
+  /** A box closing (its fade-out): it fetches nothing, and shows the rows it last showed. */
   closing?: boolean;
   /** Whether a caller's function is open above this box in its own chain (a recursion): its row shows ↺ and selects. */
   inChain: (fnId: string) => boolean;
@@ -31,27 +31,50 @@ interface Props {
   onOpen: (row: CallerRow, index: number) => void;
   /** Selects a caller: a click on its row. A function selects its function; a file row opens its file at the line. */
   onSelect: (row: CallerRow) => void;
-  /** Reports how many rows the box lays out (see callersLines), so the map can grow the box. */
-  onLines: (lines: number) => void;
+  /**
+   * Reports how many rows the box lays out (see callersLines), so the map can grow the box, and the ids of the callers its
+   * rows show, in order (undefined while they load or failed), so the charts opened from them follow their rows.
+   */
+  onLines: (lines: number, ids: readonly string[] | undefined) => void;
 }
 
 type Loaded = { key: string; rows?: CallerRow[]; error?: string };
 
-/** The ref of a callers box: its key without the "callers:" prefix. */
-const refOf = (e: Expansion): string => e.fnId.slice("callers:".length);
+/**
+ * The rows each box last loaded, by project, scope, function and the Lambdas choice. A box that opens again starts from
+ * them (and fetches afresh), and a closing box keeps showing them while it fades. Kept small: the oldest entry goes first.
+ */
+const lastRows = new Map<string, CallerRow[]>();
+const LAST_ROWS_MAX = 64;
+/** Forgets every box's last rows (for tests, which mount boxes of one function with different rows). */
+export function forgetCallerRows(): void {
+  lastRows.clear();
+}
+function remember(key: string, rows: CallerRow[]) {
+  lastRows.delete(key);
+  lastRows.set(key, rows);
+  if (lastRows.size > LAST_ROWS_MAX) lastRows.delete(lastRows.keys().next().value as string);
+}
 
 export function CallersBox({ id, scope, expansion, k, closing = false, inChain, onClose, onOpen, onSelect, onLines }: Props) {
-  const ref = refOf(expansion);
+  const ref = refOfCallersKey(expansion.fnId);
   const { x, y, w, h } = expansion;
-  const key = `${id}\0${scope}\0${ref}`;
-  const [loaded, setLoaded] = useState<Loaded>();
+  // The Lambdas choice is read once: the Flow view mounts the map afresh when it changes, so a box never outlives it.
+  const lambdas = readLambdas();
+  const key = `${id}\0${scope}\0${ref}\0${lambdas ? "1" : "0"}`;
+  const [loaded, setLoaded] = useState<Loaded | undefined>(() => {
+    const rows = lastRows.get(key);
+    return rows === undefined ? undefined : { key, rows };
+  });
   useEffect(() => {
     if (closing) return;
     let cancelled = false;
-    const lambdas = readLambdas();
     api.getRefs(id, scope, ref).then(
       (refs) => {
-        if (!cancelled) setLoaded({ key, rows: mergeCallers(refs.calledBy, lambdas) });
+        if (cancelled) return;
+        const rows = mergeCallers(refs.calledBy, lambdas);
+        remember(key, rows);
+        setLoaded({ key, rows });
       },
       (e: unknown) => {
         if (!cancelled) setLoaded({ key, error: e instanceof Error ? e.message : String(e) });
@@ -61,13 +84,17 @@ export function CallersBox({ id, scope, expansion, k, closing = false, inChain, 
     return () => {
       cancelled = true;
     };
-  }, [id, scope, ref, key, closing]);
+  }, [id, scope, ref, key, lambdas, closing]);
   const shown = loaded?.key === key ? loaded : undefined;
-  const rows = closing ? undefined : shown?.rows;
+  // A closing box is a fresh copy drawn for the fade: it shows the rows the open box last showed.
+  const rows = closing ? lastRows.get(key) : shown?.rows;
   const lines = callersLines(rows?.length);
+  const ids = rows?.map((r) => r.id);
+  const idsKey = ids?.join("\0");
   useEffect(() => {
-    if (!closing) onLines(lines);
-  }, [lines, closing]);
+    if (!closing) onLines(lines, ids);
+    // `ids` is new on every render: its joined key stands for it.
+  }, [lines, idsKey, closing]);
 
   const o = { x: x + CHART_PAD, y: y + CHART_HEAD + CHART_PAD };
   const rowW = CALLERS_W - 2 * CHART_PAD;
@@ -115,7 +142,7 @@ export function CallersBox({ id, scope, expansion, k, closing = false, inChain, 
         {!closing && rows === undefined && (
           <CallersNote y={0} rowW={rowW} k={k} text={shown?.error !== undefined ? `Callers are not available: ${shown.error}` : "Loading callers…"} />
         )}
-        {!closing && rows !== undefined && rows.length === 0 && (
+        {rows !== undefined && rows.length === 0 && (
           <CallersNote y={0} rowW={rowW} k={k} text="No callers found" note="Entry point, or called from outside the index." />
         )}
         {shownRows.map((r, i) => (
@@ -189,7 +216,7 @@ function CallerLine({ row, index, rowW, k, chained, onOpen, onSelect }: { row: C
         }}
       />
       {name !== null && (
-        <text x={r.x + 10} y={top + 12} dominantBaseline="central" className="zm-caller-name" onClick={() => onSelect(row)}>
+        <text x={r.x + 10} y={top + 12} dominantBaseline="central" className="zm-caller-name">
           {name}
         </text>
       )}

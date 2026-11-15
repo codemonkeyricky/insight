@@ -4,7 +4,8 @@ import { layoutFunction, relayout, type FunctionFlow, type Rect } from "@insight
 import type { RefRow } from "@insight/model";
 import { FlowChart } from "../src/components/FlowChart";
 import { ExpansionShape } from "../src/components/zoom/Expansion";
-import { mergeCallers } from "../src/zoom/callers";
+import { callersKey as keyOf, isCallersKey, mergeCallers, refOfCallersKey } from "../src/zoom/callers";
+import { LatestLoad } from "../src/zoom/latestLoad";
 import {
   CALLERS_W,
   EXPAND_GAP,
@@ -16,6 +17,8 @@ import {
   closeExpansion,
   headerAnchor,
   hangCallersFrom,
+  hangsFromCallers,
+  syncCallerRows,
   loadFunctionChart,
   openCallers,
   refusedCallersPlan,
@@ -294,13 +297,22 @@ describe("hanging a card's callers box (N3)", () => {
     expect(hangCallersFrom(withBox, "A", "n", view)).toBe(withBox);
   });
 
-  it("closes the card's other step children with their chains, so the box never lands on one (M2)", () => {
+  it("a reattached chart keeps the callees it had open, and the card's callers box closes instead (M2)", () => {
+    // A was open in a callee chain elsewhere, with B (and B's C) open to its right, when it reattaches to its card.
     const a = openExpansion([], "A", boxAnchor, chart("A", 300, 200), view);
     const withChild = openExpansion(a, "B", at("A", "s1"), chart("B", 200, 100), view);
     const withGrand = openExpansion(withChild, "C", at("B", "bs"), chart("C", 100, 100), view);
     const withBox = openCallers(withGrand, "A", boxAnchor, "A", 3, view);
+    const withRow = openExpansion(withBox, "D", { kind: "step", fnId: callersKey("A"), stepId: "d", rect: callerRowRect(0) }, chart("D", 100, 100), view);
+    const hung = hangCallersFrom(withRow, "A", "n", view);
+    expect(hung.map((e) => e.fnId).sort()).toEqual(["A", "B", "C"]);
+    for (const x of hung) for (const y of hung) if (x !== y) expect(overlaps(x, y)).toBe(false);
+  });
+
+  it("a reattached chart with nothing open to its right takes the card's callers box on its header", () => {
+    const a = openExpansion([], "A", boxAnchor, chart("A", 300, 200), view);
+    const withBox = openCallers(a, "A", boxAnchor, "A", 3, view);
     const hung = hangCallersFrom(withBox, "A", "n", view);
-    expect(hung.map((e) => e.fnId).sort()).toEqual(["A", callersKey("A")].sort());
     expect(find(hung, callersKey("A")).anchor).toMatchObject({ kind: "step", fnId: "A", stepId: HEADER_STEP });
     for (const x of hung) for (const y of hung) if (x !== y) expect(overlaps(x, y)).toBe(false);
   });
@@ -346,5 +358,76 @@ describe("a refused callers click and off-map loads (M1)", () => {
     await loadFunctionChart(store, plan.select);
     expect(chartOf).toHaveBeenCalledTimes(1);
     expect(chartOf).toHaveBeenCalledWith("A");
+  });
+});
+
+describe("callers keys", () => {
+  it("one helper names, tests and reads a callers box's key", () => {
+    expect(keyOf("f#a")).toBe(callersKey("f#a"));
+    expect(isCallersKey(keyOf("f#a"))).toBe(true);
+    expect(isCallersKey("f#a")).toBe(false);
+    expect(refOfCallersKey(keyOf("f#a"))).toBe("f#a");
+    expect(refOfCallersKey("f#a")).toBe("f#a");
+  });
+});
+
+describe("a caller's chart and the async frame (item 4)", () => {
+  it("a chart hung from a callers row, and the callees opened from it, hang from the callers box; the card's own chain does not", () => {
+    const a = openExpansion([], "A", boxAnchor, chart("A", 300, 200), view);
+    const withCallee = openExpansion(a, "B", { kind: "step", fnId: "A", stepId: "s1", rect: { x: 0, y: 40, w: 10, h: 10 } }, chart("B", 200, 100), view);
+    const withBox = openCallers(withCallee, "B", headerAnchor(find(withCallee, "B")), "B", 3, view);
+    const withCaller = openExpansion(withBox, "P", { kind: "step", fnId: callersKey("B"), stepId: "P", rect: callerRowRect(0) }, chart("P", 200, 100), view);
+    const withDeep = openExpansion(withCaller, "Q", { kind: "step", fnId: "P", stepId: "q", rect: { x: 0, y: 40, w: 10, h: 10 } }, chart("Q", 100, 100), view);
+    expect(hangsFromCallers(withDeep, find(withDeep, "P"))).toBe(true);
+    expect(hangsFromCallers(withDeep, find(withDeep, "Q"))).toBe(true);
+    expect(hangsFromCallers(withDeep, find(withDeep, "B"))).toBe(false);
+    expect(hangsFromCallers(withDeep, find(withDeep, "A"))).toBe(false);
+  });
+});
+
+describe("caller charts follow their rows (item 8)", () => {
+  const open = () => {
+    const box = openCallers([], "A", boxAnchor, "A", 3, view);
+    return openExpansion(box, "P", { kind: "step", fnId: callersKey("A"), stepId: "P", rect: callerRowRect(0) }, chart("P", 200, 100), view);
+  };
+
+  it("rows that keep their order move nothing", () => {
+    const list = open();
+    expect(syncCallerRows(list, "A", ["P", "Q"], view)).toBe(list);
+  });
+
+  it("a caller whose row moved takes its chart's anchor to the new row", () => {
+    const list = open();
+    const moved = syncCallerRows(list, "A", ["Q", "R", "P"], view);
+    expect(find(moved, "P").anchor.rect).toEqual(callerRowRect(2));
+    expect(find(moved, "P").y).toBeGreaterThan(find(list, "P").y);
+  });
+
+  it("a caller whose row is gone, or hidden past the cap, closes its chart", () => {
+    const list = open();
+    expect(syncCallerRows(list, "A", ["Q"], view).some((e) => e.fnId === "P")).toBe(false);
+    const many = Array.from({ length: 13 }, (_, i) => `x${i}`).concat("P");
+    expect(syncCallerRows(list, "A", many, view).some((e) => e.fnId === "P")).toBe(false);
+  });
+});
+
+describe("the latest load per parent (item 5)", () => {
+  it("a later click on the same parent supersedes an earlier one; other parents are independent", () => {
+    const loads = new LatestLoad();
+    const first = loads.start(callersKey("A"));
+    const second = loads.start(callersKey("A"));
+    const other = loads.start("B");
+    expect(loads.isLatest(callersKey("A"), first)).toBe(false);
+    expect(loads.isLatest(callersKey("A"), second)).toBe(true);
+    expect(loads.isLatest("B", other)).toBe(true);
+  });
+});
+
+describe("reflow of a header-hung box", () => {
+  it("keeps the anchor object when the parent's width did not change", () => {
+    const parent = openExpansion([], "A", boxAnchor, chart("A", 300, 200), view);
+    const list = openCallers(parent, "A", headerAnchor(find(parent, "A")), "A", 2, view);
+    const again = reflow(list, view);
+    expect(find(again, callersKey("A")).anchor).toBe(find(list, callersKey("A")).anchor);
   });
 });

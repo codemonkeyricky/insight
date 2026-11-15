@@ -30,7 +30,7 @@ const CHEV_INSET = 6;
  * flow along the edge paths (see zoom/flowToken.ts). Motion is off under reduced motion, while the page is hidden, and
  * while the chart is off screen (see zoom/flowMotion.ts). The token runs on the most recently opened charts only.
  */
-export function FlowChart({ id, fn, scope, onNodeClick, onNodeOpen, onCallers, callersOpenOf, selectedId, motion = true }: { id: string; fn: FunctionFlow; scope: string; onNodeClick?: FlowNodeClick; onNodeOpen?: FlowNodeOpen; onCallers?: FlowNodeCallers; callersOpenOf?: (node: FlowNode) => boolean; selectedId?: string; motion?: boolean }) {
+export function FlowChart({ id, fn, scope, onNodeClick, onNodeOpen, onCallers, callersOpenOf, k = 1, selectedId, motion = true }: { id: string; fn: FunctionFlow; scope: string; onNodeClick?: FlowNodeClick; onNodeOpen?: FlowNodeOpen; onCallers?: FlowNodeCallers; callersOpenOf?: (node: FlowNode) => boolean; /** The map's label scale, for the frames' Callers buttons (see CallersButton). */ k?: number; selectedId?: string; motion?: boolean }) {
   const uid = useId();
   const key = uid.replace(/[^a-zA-Z0-9]/g, "");
   const glow = `glow-${key}`;
@@ -68,7 +68,7 @@ export function FlowChart({ id, fn, scope, onNodeClick, onNodeOpen, onCallers, c
           <rect key={`band-${n.id}`} x={n.line!.band!.x} y={n.line!.band!.y} width={n.line!.band!.w} height={n.line!.band!.h} rx={10} className={`flow-band c${laneOf(n.lane)}`} data-band={n.id} style={delayStyle(nodeDelay.get(n.id) ?? 140)} />
         ))}
         {fn.nodes.filter(isNest).map((n) => (
-          <NestFrame key={n.id} node={n} onNodeClick={onNodeClick} onNodeOpen={onNodeOpen} onCallers={onCallers} callersOpen={callersOpenOf?.(n) ?? false} selected={n.id === selectedId} delay={nodeDelay.get(n.id) ?? 140} />
+          <NestFrame key={n.id} node={n} onNodeClick={onNodeClick} onNodeOpen={onNodeOpen} onCallers={onCallers} callersOpen={callersOpenOf?.(n) ?? false} k={k} selected={n.id === selectedId} delay={nodeDelay.get(n.id) ?? 140} />
         ))}
       </g>
       <g>
@@ -158,7 +158,7 @@ const keywordOf = (n: FlowNode): string | undefined => {
  * (a call station, the label, a fold mark). Its rows and edges are drawn over the band by the chart. A click on the header
  * selects it; a double-click, Enter or Space on it, or a click on the fold mark, folds the callee back.
  */
-function NestFrame({ node, onNodeClick, onNodeOpen, onCallers, callersOpen, selected, delay }: { node: FlowNode; onNodeClick?: FlowNodeClick; onNodeOpen?: FlowNodeOpen; onCallers?: FlowNodeCallers; callersOpen: boolean; selected: boolean; delay: number }) {
+function NestFrame({ node, onNodeClick, onNodeOpen, onCallers, callersOpen, k, selected, delay }: { node: FlowNode; onNodeClick?: FlowNodeClick; onNodeOpen?: FlowNodeOpen; onCallers?: FlowNodeCallers; callersOpen: boolean; k: number; selected: boolean; delay: number }) {
   const { x, y, w, h } = node;
   const lane = laneOf((node.lane ?? 0) + 1);
   const lc = laneOf(node.lane);
@@ -184,7 +184,7 @@ function NestFrame({ node, onNodeClick, onNodeOpen, onCallers, callersOpen, sele
         <Chevron node={node} x={x + w - CHEV_INSET - CHEV_HIT / 2} y={y} fold onNodeOpen={onNodeOpen} />
         {onCallers !== undefined && node.target !== undefined && (
           // Left of the fold mark: the callers of the callee this frame nests.
-          <CallersButton x={x + w - CHEV_INSET - CHEV_HIT - 4 - CALLERS_BTN_W} y={y + (NEST_HEAD - CALLERS_BTN_H) / 2} name={node.label} open={callersOpen} onClick={() => onCallers(node)} />
+          <CallersButton x={x + w - CHEV_INSET - CHEV_HIT - 4 - CALLERS_BTN_W} y={y + (NEST_HEAD - CALLERS_BTN_H) / 2} name={node.label} open={callersOpen} onClick={() => onCallers(node)} k={k} />
         )}
       </g>
     </g>

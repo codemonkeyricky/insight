@@ -8,7 +8,18 @@ import { keyActivates } from "./keys";
 export const CALLERS_BTN_W = 78;
 export const CALLERS_BTN_H = 22;
 
-export function CallersButton({ x, y, name, open, onClick }: { x: number; y: number; name: string; open: boolean; onClick: () => void }) {
+/**
+ * The label keeps its size on screen (11 px) while the pill zooms with the map, so a zoomed-out pill is too small for it:
+ * below FULL_K the pill shows the ◂ alone, and below GLYPH_K, where the pill is shorter than the glyph, it is not drawn.
+ */
+const LABEL_PX = 64;
+const GLYPH_PX = 10;
+export const FULL_K = LABEL_PX / CALLERS_BTN_W;
+export const GLYPH_K = GLYPH_PX / CALLERS_BTN_H;
+
+/** `k` is the map's label scale (lod.ts): the pill's size on screen is its size times `k`. */
+export function CallersButton({ x, y, name, open, onClick, k = 1 }: { x: number; y: number; name: string; open: boolean; onClick: () => void; k?: number }) {
+  if (k < GLYPH_K) return null;
   const label = `Show callers of ${name}`;
   return (
     <g
@@ -33,7 +44,7 @@ export function CallersButton({ x, y, name, open, onClick }: { x: number; y: num
       <title>{label}</title>
       <rect x={x} y={y} width={CALLERS_BTN_W} height={CALLERS_BTN_H} rx={CALLERS_BTN_H / 2} className="zm-callers-bg" />
       <text x={x + CALLERS_BTN_W / 2} y={y + CALLERS_BTN_H / 2} dominantBaseline="central" textAnchor="middle">
-        ◂ callers
+        {k >= FULL_K ? "◂ callers" : "◂"}
       </text>
     </g>
   );

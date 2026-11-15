@@ -100,7 +100,7 @@ export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClic
         )}
       </g>
       {onCallers !== undefined && (
-        <CallersButton x={x + w - CHART_HEAD - 4 - CALLERS_BTN_W} y={y + (CHART_HEAD - CALLERS_BTN_H) / 2} name={chart.name} open={callersOpen} onClick={onCallers} />
+        <CallersButton x={x + w - CHART_HEAD - 4 - CALLERS_BTN_W} y={y + (CHART_HEAD - CALLERS_BTN_H) / 2} name={chart.name} open={callersOpen} onClick={onCallers} k={k} />
       )}
       <g
         className="zm-expansion-close"
@@ -126,7 +126,7 @@ export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClic
       </g>
       {chartShown(chart.width * k) && (
         <g transform={`translate(${x + CHART_PAD} ${y + CHART_HEAD + CHART_PAD})`} onClick={(ev) => ev.stopPropagation()}>
-          <FlowChart id={id} fn={chart} scope={scope} onNodeClick={onNodeClick} onNodeOpen={onNodeOpen} onCallers={onNodeCallers} callersOpenOf={callersOpenOf} selectedId={selectedId} motion={motion} />
+          <FlowChart id={id} fn={chart} scope={scope} onNodeClick={onNodeClick} onNodeOpen={onNodeOpen} onCallers={onNodeCallers} callersOpenOf={callersOpenOf} k={k} selectedId={selectedId} motion={motion} />
         </g>
       )}
     </g>

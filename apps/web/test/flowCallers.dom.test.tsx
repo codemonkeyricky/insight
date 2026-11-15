@@ -3,7 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { FunctionFlow } from "@insight/flow";
 import type { RefRow } from "@insight/model";
-import { CallersBox } from "../src/components/zoom/CallersBox";
+import { CallersBox, forgetCallerRows } from "../src/components/zoom/CallersBox";
+import { CallersButton, FULL_K, GLYPH_K } from "../src/components/zoom/CallersControl";
 import { callersKey, CALLERS_W, type Expansion } from "../src/zoom/expand";
 import type { CallerRow } from "../src/zoom/callers";
 
@@ -13,6 +14,7 @@ vi.mock("../src/api", () => ({ api: { getRefs } }));
 afterEach(() => {
   cleanup();
   getRefs.mockReset();
+  forgetCallerRows();
 });
 
 const chart = (name: string) => ({ id: name, name, width: 200, height: 100, nodes: [], edges: [] }) as unknown as FunctionFlow;
@@ -118,5 +120,53 @@ describe("stale callers fetch", () => {
   it("a closing box fetches nothing", () => {
     mount({ expansion: expansion("pump"), closing: true });
     expect(getRefs).not.toHaveBeenCalled();
+  });
+});
+
+describe("callers box rows over time", () => {
+  it("reports the callers its rows show, in order, so the charts opened from them follow their rows", async () => {
+    getRefs.mockResolvedValue({ calledBy: [refRow({ id: "f#a" }), refRow({ id: "f#b" }), refRow({ id: "f#a", kind: "dispatch" })] });
+    const { props } = mount();
+    expect(props.onLines).toHaveBeenCalledWith(3, undefined);
+    await waitFor(() => expect(props.onLines).toHaveBeenLastCalledWith(2, ["f#a", "f#b"]));
+  });
+
+  it("a closing box keeps showing the rows it last showed while it fades, and fetches nothing", async () => {
+    getRefs.mockResolvedValue({ calledBy: [refRow({ id: "f#a", name: "alpha" }), refRow({ id: "f#b", name: "beta" })] });
+    const { props, rerender } = mount();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Select alpha" })).toBeTruthy());
+    getRefs.mockClear();
+    rerender(
+      <svg>
+        <CallersBox {...props} closing />
+      </svg>,
+    );
+    expect(screen.getByRole("button", { name: "Select alpha" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Select beta" })).toBeTruthy();
+    expect(getRefs).not.toHaveBeenCalled();
+  });
+});
+
+describe("the Callers button when zoomed out", () => {
+  const draw = (k: number) =>
+    render(
+      <svg>
+        <CallersButton x={0} y={0} name="pump" open={false} onClick={() => undefined} k={k} />
+      </svg>,
+    );
+
+  it("shows its full label at 1×, the ◂ alone where the label would overflow the pill, and nothing below that", () => {
+    expect(FULL_K).toBeGreaterThan(0.5);
+    expect(GLYPH_K).toBeLessThan(0.5);
+    expect(GLYPH_K).toBeGreaterThan(0.3);
+    draw(1);
+    expect(screen.getByRole("button", { name: "Show callers of pump" }).textContent).toContain("◂ callers");
+    cleanup();
+    draw(0.5);
+    const compact = screen.getByRole("button", { name: "Show callers of pump" });
+    expect(compact.querySelector("text")?.textContent).toBe("◂");
+    cleanup();
+    draw(0.3);
+    expect(screen.queryByRole("button", { name: "Show callers of pump" })).toBeNull();
   });
 });

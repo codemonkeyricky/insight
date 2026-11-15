@@ -5,6 +5,7 @@
 // so these rules are unit tested (test/expand.test.ts).
 import { CHART_FIT_MAX_K, CHART_HEAD, CHART_PAD, relayout, type Camera, type FunctionFlow, type InlineEntry, type InlineTree, type Rect } from "@insight/flow";
 import { zoneLetter } from "./zones";
+import { callersKey, isCallersKey } from "./callers";
 
 /** The room between an anchor and the expansion beside it. */
 export const EXPAND_GAP = 40;
@@ -46,8 +47,9 @@ export const CALLERS_CAP = 12;
 /** The anchor step id of a box hung from an expansion's header (its right edge, see headerRect). */
 export const HEADER_STEP = "@header";
 
-/** The key of a function's callers box. Like a chart's key it is the function's identity: one callers box per function. */
-export const callersKey = (ref: string): string => `callers:${ref}`;
+export { callersKey };
+
+const sameRect = (a: Rect, b: Rect): boolean => a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
 
 /** The rect, in its parent's chart units, of an expansion's header strip for an expansion `w` wide: its right edge is where a box hung from the header starts. */
 export function headerRect(w: number): Rect {
@@ -191,8 +193,10 @@ export function reflow(list: readonly Expansion[], view: Rect | undefined): Expa
       const parent = byFn.get(e.anchor.fnId);
       const from = parent === undefined ? undefined : place(parent, hops + 1);
       if (from === undefined) return undefined;
-      // A box hung from a header takes its rect from the parent's current width, so it follows a resized parent.
-      const rect = e.anchor.stepId === HEADER_STEP ? headerRect(from.w) : e.anchor.rect;
+      // A box hung from a header takes its rect from the parent's current width, so it follows a resized parent. The
+      // anchor is rebuilt only when the parent's width changed.
+      const head = e.anchor.stepId === HEADER_STEP ? headerRect(from.w) : undefined;
+      const rect = head !== undefined && !sameRect(head, e.anchor.rect) ? head : e.anchor.rect;
       at = { ...placeOnStep(from, rect, view), pivot: pivotOf(from.pivot) };
       if (rect !== e.anchor.rect) {
         const out: Expansion = { ...e, ...at, anchor: { ...e.anchor, rect } };
@@ -263,19 +267,64 @@ export function callersAt(list: readonly Expansion[], ref: string, anchor: Ancho
 /**
  * The list with the callers box of `ref` moved from its card (`nodeId`, a box anchor) to the header of `ref`'s own chart. A
  * card's chart opens in the card's place, and the box the card had open follows the chart's header; its rows and their charts
- * follow the box. A box hung from anywhere else stays where it is, and the chart's own children are not closed.
+ * follow the box. A box hung from anywhere else stays where it is.
+ *
+ * A chart has one right-hand child (see closeSiblings), and the chart's own children win: a chart that was open elsewhere and
+ * reattaches to its card keeps the callees it had open, and the card's callers box closes (with what hangs from it) instead
+ * of closing them. Its header's Callers button opens the box again.
  */
 export function hangCallersFrom(list: readonly Expansion[], ref: string, nodeId: string, view: Rect | undefined): Expansion[] {
   const head = list.find((e) => e.fnId === ref);
   const kept = list.find((e) => e.fnId === callersKey(ref));
   if (head === undefined || kept === undefined) return list as Expansion[];
   if (kept.anchor.kind !== "box" || kept.anchor.nodeId !== nodeId) return list as Expansion[];
-  // The card's other right-hand children close first, with their chains, so the box never lands on one (M2). The box is
-  // reattached in place, not opened: openExpansion would also close the chart's siblings, and this is the same rule.
-  const anchor = headerAnchor(head);
-  const cleared = closeSiblings(list, kept.fnId, anchor);
-  const moved = { ...kept, anchor, x: 0, y: 0, pivot: 0 };
-  return reflow([...cleared.filter((e) => e !== kept), moved], view);
+  const hasChild = list.some((e) => e !== kept && e.anchor.kind === "step" && e.anchor.fnId === ref);
+  if (hasChild) return closeExpansion(list, kept.fnId);
+  // The box is reattached in place, not opened: its rows' charts keep hanging from it.
+  const moved = { ...kept, anchor: headerAnchor(head), x: 0, y: 0, pivot: 0 };
+  return reflow([...list.filter((e) => e !== kept), moved], view);
+}
+
+/**
+ * The list with the charts hung from the rows of the callers box of `ref` anchored to their rows again, after the box's rows
+ * (`ids`, in the order shown) loaded or changed. A chart follows its caller's row by the caller's id; a chart whose row is
+ * gone (or now hidden past the cap) closes with its chain. Returns `list` itself when nothing moved.
+ */
+export function syncCallerRows(list: readonly Expansion[], ref: string, ids: readonly string[], view: Rect | undefined): Expansion[] {
+  const key = callersKey(ref);
+  const shown = ids.slice(0, CALLERS_CAP);
+  let out = list as Expansion[];
+  let moved = false;
+  for (const e of list) {
+    if (e.anchor.kind !== "step" || e.anchor.fnId !== key || e.anchor.stepId === undefined) continue;
+    const index = shown.indexOf(e.anchor.stepId);
+    if (index < 0) {
+      out = closeExpansion(out, e.fnId);
+      continue;
+    }
+    const rect = callerRowRect(index);
+    if (rect.y === e.anchor.rect.y) continue;
+    out = out.map((x) => (x.fnId === e.fnId ? { ...x, anchor: { ...e.anchor, rect } } : x));
+    moved = true;
+  }
+  if (out === list) return out;
+  return moved ? reflow(out, view) : out;
+}
+
+/**
+ * Whether an expansion hangs, through its chain, from a callers box: a caller's chart opened from a row, and the callees
+ * opened from that chart. Such a chart is not part of its root box's thread (a caller is not a callee of the box), so it gets
+ * no async frame.
+ */
+export function hangsFromCallers(list: readonly Expansion[], e: Expansion): boolean {
+  let cur: Expansion | undefined = e;
+  for (let hops = 0; cur !== undefined && hops <= list.length; hops++) {
+    if (cur.anchor.kind !== "step") return false;
+    const parentId: string = cur.anchor.fnId;
+    if (isCallersKey(parentId)) return true;
+    cur = list.find((x) => x.fnId === parentId);
+  }
+  return false;
 }
 
 /** The ids a selection of a refused callers click uses: the box is revealed by its key, its function is selected. */
@@ -285,7 +334,7 @@ export function refusedCallersPlan(ref: string): { box: string; select: string }
 
 /** The function's chart from `store`. A callers box is no function, so its id asks the store for nothing. */
 export async function loadFunctionChart(store: { chartOf(fnId: string): Promise<FunctionFlow | undefined> }, fnId: string): Promise<FunctionFlow | undefined> {
-  if (fnId.startsWith("callers:")) return undefined;
+  if (isCallersKey(fnId)) return undefined;
   return store.chartOf(fnId);
 }
 

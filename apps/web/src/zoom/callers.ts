@@ -16,6 +16,18 @@ export interface CallerRow {
   candidate: boolean;
 }
 
+/** The prefix of a callers box's key: the box is an expansion keyed by its function's id behind this prefix. */
+const CALLERS_PREFIX = "callers:";
+
+/** The key of a function's callers box. Like a chart's key it is the function's identity: one callers box per function. */
+export const callersKey = (ref: string): string => `${CALLERS_PREFIX}${ref}`;
+
+/** Whether an expansion key is a callers box's (see callersKey), not a function's. */
+export const isCallersKey = (key: string): boolean => key.startsWith(CALLERS_PREFIX);
+
+/** The function whose callers a callers box lists, from the box's key. A function's own key is returned as it is. */
+export const refOfCallersKey = (key: string): string => (isCallersKey(key) ? key.slice(CALLERS_PREFIX.length) : key);
+
 /** The edge kinds a caller row lists. A reference (a function passed as a value) is not a caller, so it is left out. */
 const CALLER_KINDS: ReadonlySet<RefRow["kind"]> = new Set(["call", "dispatch", "spawn"]);
 
