@@ -153,19 +153,19 @@ describe("frontend-systemverilog", () => {
   });
 });
 
-describe("review fixes", () => {
+describe("structure, processes and calls", () => {
   const facts = async () => {
     const records = allRecords(await extractAll());
     return { records, nodes: nodesOf(records), edges: edgesOf(records) };
   };
 
-  it("fix 1: labelled begin blocks name their process", async () => {
+  it("labelled begin blocks name their process", async () => {
     const { nodes } = await facts();
     const ids = nodes.filter((n) => n.attrs.hdl === "process").map((n) => n.attrs.name);
     expect(ids).toEqual(expect.arrayContaining(["rtl_nonansi.boot", "rtl_nonansi.seq_proc", "rtl_nonansi.comb_blk"]));
   });
 
-  it("fix 2: super.m() resolves to the base class, this.m() to the own class", async () => {
+  it("super.m() resolves to the base class, this.m() to the own class", async () => {
     const { edges } = await facts();
     const sup = edges.filter((e) => e.kind === "calls.call" && e.attrs?.callee === "super.log");
     expect(sup).toHaveLength(1);
@@ -176,7 +176,7 @@ describe("review fixes", () => {
     expect(edges.some((e) => e.kind === "calls.call" && e.attrs?.callee === "super.log" && e.to === "dv_env.sv#dv_child.log")).toBe(false);
   });
 
-  it("fix 3: constructors are functions named Class.new, and out-of-class definitions are scoped to their class", async () => {
+  it("constructors are functions named Class.new, and out-of-class definitions are scoped to their class", async () => {
     const { nodes, edges } = await facts();
     const ctor = nodes.find((n) => n.id === "dv_env.sv#dv_child.new");
     expect(ctor?.kind).toBe("structure.function");
@@ -193,7 +193,7 @@ describe("review fixes", () => {
     expect(superNew?.to).toEqual({ unresolved: { scheme: "sv.call", text: "super.new" } });
   });
 
-  it("fix 4: functions in generate branches get the generate path, and same-named ones never share an id", async () => {
+  it("functions in generate branches get the generate path, and same-named ones never share an id", async () => {
     const { nodes } = await facts();
     const g1 = nodes.find((n) => n.id === "rtl2.sv#rtl_nonansi.g1.pick");
     const g2 = nodes.find((n) => n.id === "rtl2.sv#rtl_nonansi.g2.pick");
@@ -205,7 +205,7 @@ describe("review fixes", () => {
     expect(duplicateIds((await facts()).records)).toEqual([]);
   });
 
-  it("fix 5: calls outside processes are attributed to the module, not dropped", async () => {
+  it("calls outside processes are attributed to the module, not dropped", async () => {
     const { edges } = await facts();
     const assignCall = edges.find((e) => e.kind === "calls.call" && e.attrs?.callee === "f");
     expect(assignCall?.from).toBe("rtl2.sv#rtl_nonansi");
@@ -213,7 +213,7 @@ describe("review fixes", () => {
     expect(edges.some((e) => e.kind === "calls.call" && e.from === "rtl2.sv#rtl_nonansi" && e.attrs?.callee === "pick")).toBe(true);
   });
 
-  it("fix 6: inherited, typed-handle and DPI calls resolve; the handle of an unknown type stays unresolved", async () => {
+  it("inherited, typed-handle and DPI calls resolve; the handle of an unknown type stays unresolved", async () => {
     const { nodes, edges } = await facts();
     // Unqualified call through two extends levels: dv_grand -> dv_child -> dv_base.
     expect(edges.find((e) => e.kind === "calls.call" && e.from === "dv_env.sv#dv_grand.go")?.to).toBe("dv_pkg.sv#dv_base.log");
@@ -231,7 +231,7 @@ describe("review fixes", () => {
     expect(edges.find((e) => e.kind === "calls.call" && e.attrs?.callee === "c_add")?.to).toBe("dv_pkg.sv#dv_pkg.c_add");
   });
 
-  it("fix 4b: two files with identical byte offsets keep their own module ids", async () => {
+  it("two files with identical byte offsets keep their own module ids", async () => {
     const col = await extractDir(join(fixturesDir, "collide"), ["p1.sv", "p2.sv"]);
     const nodes = nodesOf(allRecords(col));
     expect(nodes.find((n) => n.id === "p1.sv#alpha")?.parent).toBe("p1.sv");
@@ -239,7 +239,7 @@ describe("review fixes", () => {
     expect(duplicateIds(allRecords(col))).toEqual([]);
   });
 
-  it("fix 6: an instantiated module defined twice is a candidate set, not an exact match", async () => {
+  it("an instantiated module defined twice is a candidate set, not an exact match", async () => {
     const amb = await extractDir(join(fixturesDir, "ambiguous"), ["gate_a.sv", "gate_b.sv", "top_amb.sv"]);
     const edges = edgesOf(allRecords(amb));
     const inst = edges.find((e) => e.kind === "x-sv.instantiates" && e.attrs?.instance === "u_g");
@@ -247,7 +247,7 @@ describe("review fixes", () => {
     expect(inst?.provenance?.confidence).toBe("heuristic");
   });
 
-  it("fix 7: a header the grammar cannot parse still defines its module, with a heuristic line span", async () => {
+  it("a header the grammar cannot parse still defines its module, with a heuristic line span", async () => {
     const { nodes } = await facts();
     const m = nodes.find((n) => n.id === "unparsed_hdr.sv#prim_alert_sender");
     expect(m?.kind).toBe("structure.type");
@@ -256,13 +256,13 @@ describe("review fixes", () => {
     expect(m?.span?.end[1]).toBe("module prim_alert_sender".length);
   });
 
-  it("fix 7: a deliberate parse error still produces the finding", async () => {
+  it("a deliberate parse error still produces the finding", async () => {
     const { records } = await facts();
     const findings = records.flatMap((r) => ("finding" in r ? [r.finding] : []));
     expect(findings.some((f) => f.span?.file === "syntax_err.sv")).toBe(true);
   });
 
-  it("fix 8: non-ANSI port directions, interface ports without a direction, and typed parameters", async () => {
+  it("non-ANSI port directions, interface ports without a direction, and typed parameters", async () => {
     const { nodes, edges } = await facts();
     const nonansi = nodes.find((n) => n.id === "rtl2.sv#rtl_nonansi")?.attrs.ports;
     expect(nonansi).toEqual([
@@ -294,7 +294,7 @@ describe("review fixes", () => {
   });
 });
 
-describe("round 2 fixes", () => {
+describe("cross-file resolution", () => {
   const round2 = join(fixturesDir, "round2");
   /** Extracts `targets` from a project whose files are all `all`, the way the pipeline's retry does. */
   const extractSome = async (dir: string, all: string[], targets: string[], log: (m: string) => void = () => undefined) => {
@@ -311,14 +311,14 @@ describe("round 2 fixes", () => {
   };
   const callsFrom = (records: IRRecord[], from: string) => edgesOf(records).filter((e) => e.kind === "calls.call" && e.from === from);
 
-  it("fix 1: calls in a module instantiation's parameter and port connections are emitted and resolve to pk.f", async () => {
+  it("calls in a module instantiation's parameter and port connections are emitted and resolve to pk.f", async () => {
     const records = allRecords(await extractDir(round2, ["pk.sv", "sub.sv", "inst.sv"]));
     const calls = callsFrom(records, "inst.sv#top_inst");
     expect(calls.map((e) => e.attrs?.callee).sort()).toEqual(["pk::f", "pk::f"]);
     expect(calls.map((e) => e.to)).toEqual(["pk.sv#pk.f", "pk.sv#pk.f"]);
   });
 
-  it("fix 2: $unit functions and file-level DPI imports resolve from a module; several project-wide matches are candidates", async () => {
+  it("$unit functions and file-level DPI imports resolve from a module; several project-wide matches are candidates", async () => {
     const files = ["unit_dpi.sv", "unit_other.sv", "dup_a.sv", "dup_b.sv"];
     const records = allRecords(await extractDir(round2, files));
     const byCallee = (callee: string) => edgesOf(records).find((e) => e.kind === "calls.call" && e.attrs?.callee === callee);
@@ -335,7 +335,7 @@ describe("round 2 fixes", () => {
     expect(byCallee("dupf")?.provenance?.confidence).toBe("heuristic");
   });
 
-  it("fix 3: a retry over the same project gives the same facts as the full run, and the index is reused", async () => {
+  it("a retry over the same project gives the same facts as the full run, and the index is reused", async () => {
     const all = ["pk.sv", "sub.sv", "inst.sv", "ctor.sv"];
     const full = allRecords(await extractSome(round2, all, all));
     const retry = allRecords(await extractSome(round2, all, ["inst.sv"]));
@@ -346,7 +346,7 @@ describe("round 2 fixes", () => {
     expect(await buildProject(texts)).toBe(await buildProject(new Map(texts)));
   });
 
-  it("fix 3: sources over the cross-file limit are indexed one file at a time, with a logged reason", async () => {
+  it("sources over the cross-file limit are indexed one file at a time, with a logged reason", async () => {
     const logs: string[] = [];
     const all = ["pk.sv", "sub.sv", "inst.sv"];
     const batches = await extractSome(round2, all, all, (m) => logs.push(m));
@@ -371,7 +371,7 @@ describe("round 2 fixes", () => {
     expect(batches.length).toBe(3);
   });
 
-  it("fix 4: the fallback scan skips lifetime keywords, the class of interface class, and comments", async () => {
+  it("the fallback scan skips lifetime keywords, the class of interface class, and comments", async () => {
     const records = allRecords(await extractDir(round2, ["lexer_err.sv"]));
     const names = nodesOf(records).map((n) => n.attrs.name);
     expect(names).toEqual(expect.arrayContaining(["lt_mod", "ifc_k", "lt_pkg"]));
@@ -380,7 +380,7 @@ describe("round 2 fixes", () => {
     }
   });
 
-  it("fix 5: a non-ANSI `output reg b;` keeps its output direction", async () => {
+  it("a non-ANSI `output reg b;` keeps its output direction", async () => {
     const nodes = nodesOf(allRecords(await extractDir(round2, ["nonansi_var.sv"])));
     expect(nodes.find((n) => n.id === "nonansi_var.sv#nonansi_v")?.attrs.ports).toEqual([
       { name: "a", dir: "input" },
@@ -388,7 +388,7 @@ describe("round 2 fixes", () => {
     ]);
   });
 
-  it("fix 6: new() is a call to the declared class's constructor, super.new is the base constructor, and C::type_id::create stays unresolved", async () => {
+  it("new() is a call to the declared class's constructor, super.new is the base constructor, and C::type_id::create stays unresolved", async () => {
     const edges = edgesOf(allRecords(await extractDir(round2, ["ctor.sv"])));
     const news = callsFrom(allRecords(await extractDir(round2, ["ctor.sv"])), "ctor.sv#child_c.run_it").filter((e) => e.attrs?.callee === "base_c.new");
     expect(news.map((e) => e.to)).toEqual(["ctor.sv#base_c.new", "ctor.sv#base_c.new"]);
@@ -400,7 +400,7 @@ describe("round 2 fixes", () => {
     expect(edges.find((e) => e.attrs?.callee === "base_c::type_id::create")?.to).toEqual({ unresolved: { scheme: "sv.call", text: "base_c::type_id::create" } });
   });
 
-  it("fix 7: a caller in a generate branch takes that branch's definition; a caller outside them gets the candidates", async () => {
+  it("a caller in a generate branch takes that branch's definition; a caller outside them gets the candidates", async () => {
     const edges = edgesOf(allRecords(await extractDir(round2, ["gen_pick.sv"])));
     const g1 = edges.find((e) => e.kind === "calls.call" && e.from === "gen_pick.sv#gen_pick.g1.initial[1]");
     const g2 = edges.find((e) => e.kind === "calls.call" && e.from === "gen_pick.sv#gen_pick.g2.initial[2]");
@@ -413,13 +413,13 @@ describe("round 2 fixes", () => {
   });
 });
 
-describe("round 3 fixes", () => {
+describe("class handles, cache invalidation and size limits", () => {
   const round2 = join(fixturesDir, "round2");
   const round3 = join(fixturesDir, "round3");
   const callsFrom = (records: IRRecord[], from: string) => edgesOf(records).filter((e) => e.kind === "calls.call" && e.from === from);
   const pairs = (edges: IREdge[]) => edges.map((e) => [e.attrs?.callee, e.to]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
 
-  it("fix 1: a class handle declared after another declaration (a net declaration in the tree) resolves for new, method calls and array elements", async () => {
+  it("a class handle declared after another declaration (a net declaration in the tree) resolves for new, method calls and array elements", async () => {
     const records = allRecords(await extractDir(round3, ["handles.sv"]));
     const calls = callsFrom(records, "handles.sv#handles_mod.initial[1]");
     expect(pairs(calls)).toEqual([
@@ -431,7 +431,7 @@ describe("round 3 fixes", () => {
     ]);
   });
 
-  it("fix 2: an `interface class` in an errored file is a class, not an instantiable interface", async () => {
+  it("an `interface class` in an errored file is a class, not an instantiable interface", async () => {
     const records = allRecords(await extractDir(round3, ["iface_class.sv"]));
     const ic = nodesOf(records).find((n) => n.attrs.name === "ic");
     expect(ic?.kind).toBe("structure.type");
@@ -441,7 +441,7 @@ describe("round 3 fixes", () => {
     expect(inst?.to).toEqual({ unresolved: { scheme: "sv.module", text: "ic" } });
   });
 
-  it("fix 3: super.new is found in the tree, so a comment or string that says super.new() adds no edge", async () => {
+  it("super.new is found in the tree, so a comment or string that says super.new() adds no edge", async () => {
     const edges = edgesOf(allRecords(await extractDir(round3, ["super_new.sv"])));
     expect(callsFrom(allRecords(await extractDir(round3, ["super_new.sv"])), "super_new.sv#quiet_c.new")).toEqual([]);
     const supers = edges.filter((e) => e.kind === "calls.call" && e.attrs?.callee === "super.new");
@@ -449,14 +449,14 @@ describe("round 3 fixes", () => {
     expect(supers.map((e) => e.to)).toEqual(["super_new.sv#base_c.new"]);
   });
 
-  it("fix 4: a $unit function of the same file wins over a file-level import of a package function with the same name", async () => {
+  it("a $unit function of the same file wins over a file-level import of a package function with the same name", async () => {
     const edges = edgesOf(allRecords(await extractDir(round3, ["unit_pref.sv"])));
     const f = edges.find((e) => e.kind === "calls.call" && e.attrs?.callee === "f");
     expect(f?.to).toBe("unit_pref.sv#f");
     expect(f?.provenance?.confidence).toBe("exact");
   });
 
-  it("fix 5: an edit to the text invalidates the cached index, and a finished extract run keeps it", async () => {
+  it("an edit to the text invalidates the cached index, and a finished extract run keeps it", async () => {
     const a = new Map([["a.sv", "module m1; endmodule\n"]]);
     const first = await buildProject(a);
     const edited = await buildProject(new Map([["a.sv", "module m2; endmodule\n"]]));
@@ -472,7 +472,7 @@ describe("round 3 fixes", () => {
     expect(await buildProject(texts)).toBe(before);
   });
 
-  it("fix 6: over-limit sources are sized from the file system, so each file is read once", async () => {
+  it("over-limit sources are sized from the file system, so each file is read once", async () => {
     const all = ["pk.sv", "sub.sv", "inst.sv"];
     let reads = 0;
     const ctx = {
@@ -489,7 +489,7 @@ describe("round 3 fixes", () => {
     expect(reads).toBe(all.length);
   });
 
-  it("fix 6: without sizes from the file system, reading stops once the total is over the limit", async () => {
+  it("without sizes from the file system, reading stops once the total is over the limit", async () => {
     const all = ["pk.sv", "sub.sv", "inst.sv"];
     let reads = 0;
     const ctx = {
@@ -508,7 +508,7 @@ describe("round 3 fixes", () => {
   });
 });
 
-describe("index cache across retries", () => {
+describe("index cache and retries", () => {
   const round2 = join(fixturesDir, "round2");
   const all = ["pk.sv", "sub.sv", "inst.sv", "ctor.sv"];
   const readRound2 = (rel: string) => readFileSync(join(round2, rel), "utf8");
@@ -525,7 +525,7 @@ describe("index cache across retries", () => {
     return out;
   };
 
-  it("(a) a retry over the same project reuses the index: the pre-pass parses once", async () => {
+  it("a retry over the same project reuses the index: the pre-pass parses once", async () => {
     releaseProject();
     const before = indexStats.builds;
     await extractWith(all);
@@ -535,7 +535,7 @@ describe("index cache across retries", () => {
     expect(indexStats.builds - before).toBe(1);
   });
 
-  it("(b) changing one file's text between calls rebuilds the index, and the retry then reuses the new one", async () => {
+  it("changing one file's text between calls rebuilds the index, and the retry then reuses the new one", async () => {
     releaseProject();
     await extractWith(all);
     const built = indexStats.builds;
@@ -546,7 +546,7 @@ describe("index cache across retries", () => {
     expect(indexStats.builds - built).toBe(1);
   });
 
-  it("(c) the cached index holds no source text", async () => {
+  it("the cached index holds no source text", async () => {
     releaseProject();
     const texts = new Map(all.map((rel) => [rel, readRound2(rel)]));
     const index = await buildProject(texts);
