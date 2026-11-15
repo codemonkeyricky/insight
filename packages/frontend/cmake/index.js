@@ -92,7 +92,7 @@ function batchFor(file, model, fileSet) {
 /** @type {import("@insight/sdk").Frontend} */
 const frontend = {
   id: FRONTEND_ID,
-  version: "0.2.0",
+  version: "0.2.1",
   provides: ["packaging", "structure"],
 
   async detect(root) {
