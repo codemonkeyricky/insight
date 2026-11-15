@@ -17,8 +17,41 @@ import {
   type Scene,
   type SceneLayout,
   type SceneNode,
+  type SceneSyncResource,
 } from "@insight/flow";
 import type { MapBuild, MapNode, MapSelected } from "./source";
+
+/** The most site lines a sync edge's tooltip lists; the rest are counted. */
+const SYNC_SITES_MAX = 12;
+
+/**
+ * The tooltip lines of a sync edge: every site of its shared resources, as "name: fn file:line op", in resource order. A
+ * resource the model does not list has no sites. Past SYNC_SITES_MAX lines the rest are counted in one more line.
+ */
+export function syncSites(model: ExecModel, resources: readonly SceneSyncResource[]): string[] {
+  const names = new Map(model.functions.map((f): [string, string] => [f.id, f.name]));
+  const lines: string[] = [];
+  for (const r of resources) {
+    const res = model.resources?.find((x) => x.kind === r.kind && x.name === r.name);
+    for (const s of res?.sites ?? []) lines.push(`${r.name}: ${names.get(s.fn) ?? s.fn} ${s.file}:${s.line} ${s.op}`);
+  }
+  if (lines.length <= SYNC_SITES_MAX) return lines;
+  return [...lines.slice(0, SYNC_SITES_MAX), `… and ${lines.length - SYNC_SITES_MAX} more`];
+}
+
+/**
+ * The threads a function runs on, as the scene names them: "Main thread", "Worker". Undefined for a function with no thread
+ * (plain code flow on the project). Empty placements give undefined too.
+ */
+export function execRunsOn(index: ExecIndex, scene: Scene, fnId: string): string | undefined {
+  const labels: string[] = [];
+  for (const p of index.placements.get(fnId) ?? []) {
+    if (p.thread === "" || p.thread === EXEC_PROJECT_ROOT) continue;
+    const label = scene.nodes.get(p.thread)?.label;
+    if (label !== undefined && !labels.includes(label)) labels.push(label);
+  }
+  return labels.length === 0 ? undefined : labels.join(", ");
+}
 
 /** The separator between a scope and a node id in a focus. A path cannot hold it. */
 const FOCUS_SEP = "\u0001";

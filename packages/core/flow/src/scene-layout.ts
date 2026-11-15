@@ -2,7 +2,7 @@
 // drawn for an open set: frames, boxes and the edges between the visible boxes. See scene.ts for the model.
 import { PROJECT_ID, type Rect, type ScopeLink, type ScopeTree } from "./scope-map.js";
 import { LAYERED, ZOOM_SIZE, edgeCurve, frameSize, readLayout, type ContainerLayout, type LayoutGraph, type Placed, type PlacedEdge, type PlacedItem, type Size } from "./zoom-layout.js";
-import { type Scene, type SceneEdge, SceneEdgeKind, SceneLayout, SceneNode } from "./scene.js";
+import { addSyncResources, type Scene, type SceneEdge, type SceneEdgeKind, type SceneSyncResource, SceneLayout, SceneNode } from "./scene.js";
 
 /** What a solver answers for one container graph: ELK's shape, reduced to what readLayout reads. */
 export interface SolvedGraph {
@@ -21,6 +21,10 @@ export interface SceneMapEdge {
   candidate: boolean;
   /** For a sync edge, what the threads share: "lock" or "channel". Sync edges of different hows are kept apart. */
   how?: string;
+  /** For a sync edge: every resource the two boxes share, merged over the scene edges that climb to them. */
+  resources?: SceneSyncResource[];
+  /** For a sync edge: true when it runs from sender to receiver (a channel). */
+  directed?: boolean;
 }
 
 /**
@@ -163,14 +167,16 @@ export function sceneEdges(scene: Scene, open: ReadonlySet<string>): SceneMapEdg
     const b = sceneBoxOf(scene, visible, e.to);
     if (a === undefined || b === undefined || a === b) continue;
     const how = e.kind === "sync" ? e.how : undefined;
-    const key = `${a}\u0000${b}\u0000${e.kind}\u0000${how ?? ""}`;
+    const key = `${a}\u0000${b}\u0000${e.kind}\u0000${how ?? ""}\u0000${e.directed === true ? "directed" : ""}`;
     let m = acc.get(key);
     if (!m) {
       m = { from: a, to: b, kind: e.kind, count: 0, candidate: false, ...(how !== undefined ? { how } : {}) };
+      if (e.kind === "sync" && e.directed === true) m.directed = true;
       acc.set(key, m);
     }
     m.count += e.count;
     m.candidate ||= e.candidate === true;
+    if (e.kind === "sync" && e.resources !== undefined) m.resources = addSyncResources(m.resources ?? [], e.resources);
   }
   return [...acc.values()];
 }
@@ -521,8 +527,12 @@ export function placeSceneLayout(scene: Scene, layout: SceneLayout, open: Readon
 }
 
 /** The edges drawn for an open set, each with its curve between the two placed rectangles. */
-export function placeSceneEdges(scene: Scene, open: ReadonlySet<string>, rects: ReadonlyMap<string, Rect>): (PlacedEdge & { kind: SceneEdgeKind; how?: string })[] {
-  const out: (PlacedEdge & { kind: SceneEdgeKind; how?: string })[] = [];
+export function placeSceneEdges(
+  scene: Scene,
+  open: ReadonlySet<string>,
+  rects: ReadonlyMap<string, Rect>,
+): (PlacedEdge & { kind: SceneEdgeKind; how?: string; resources?: SceneSyncResource[]; directed?: boolean })[] {
+  const out: (PlacedEdge & { kind: SceneEdgeKind; how?: string; resources?: SceneSyncResource[]; directed?: boolean })[] = [];
   for (const e of sceneEdges(scene, open)) {
     const a = rects.get(e.from);
     const b = rects.get(e.to);
@@ -537,6 +547,8 @@ export function placeSceneEdges(scene: Scene, open: ReadonlySet<string>, rects: 
       stub: false,
       candidate: e.candidate,
       d: edgeCurve(a, b),
+      ...(e.resources !== undefined ? { resources: e.resources } : {}),
+      ...(e.directed !== undefined ? { directed: e.directed } : {}),
     });
   }
   return out;

@@ -634,12 +634,17 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   /** The view an expansion is placed on: the visible world, except on a slotted build, where the layout keeps the room. */
   const placeView = (b: MapBuild) => (b.slotted ? undefined : visibleWorld(cameraRef.current, sizeOf()));
 
-  /** A function's chart, or undefined when it has none to draw (no chart source, no such function, too large, empty). */
+  /**
+   * A function's chart, or undefined when it has none to draw (no chart source, no such function, too large, empty). The
+   * build on the map annotates it (MapSource.annotateChart), so its sync rows name their peers.
+   */
   const loadChart = async (fnId: string): Promise<FunctionFlow | undefined> => {
     if (charts === undefined) return undefined;
     try {
       const f = await loadFunctionChart(charts.store, fnId);
-      return f === undefined || f.tooLarge || f.nodes.length === 0 ? undefined : f;
+      if (f === undefined || f.tooLarge || f.nodes.length === 0) return undefined;
+      const b = buildRef.current;
+      return b !== undefined && source.annotateChart !== undefined ? source.annotateChart(b, fnId, f) : f;
     } catch {
       return undefined;
     }
@@ -1594,7 +1599,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
                 data-sd={e.d}
                 className={edgeClass(e)}
                 style={{ strokeWidth: edgeWidth(e) }}
-                markerEnd={`url(#${arrowId})`}
+                // A sync edge between two peers (a lock, say) has no direction, so it has no arrowhead; a channel's runs sender to receiver.
+                markerEnd={e.kind === "sync" && e.directed !== true ? undefined : `url(#${arrowId})`}
               >
                 <title>{edgeTitle(e)}</title>
               </path>
@@ -1683,6 +1689,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
                         }}
                         callersOpenOf={(n) => n.target !== undefined && callersAt(expansions, n.target, { kind: "step", fnId: e.fnId, stepId: n.id })}
                         motion={motion}
+                        runsOn={view !== undefined ? source.runsOn?.(view, e.fnId) : undefined}
                       />
                     )}
                   </g>

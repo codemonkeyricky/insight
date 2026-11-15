@@ -24,7 +24,7 @@ export interface ListBase {
 }
 
 /** A function's name as a link to the placement it opens. Without a placement, the text alone. */
-function FnLink({
+export function FnLink({
   base,
   fn,
   nodeId,

@@ -147,6 +147,7 @@ describe("the panels", () => {
         roots={false}
         store={new ZoomStore("p1")}
         index={index}
+        model={m}
         nodeId="thread:main>leaf"
         selected={selected}
         onOpen={() => {}}
@@ -187,7 +188,7 @@ describe("the panels", () => {
     const selected = execSelected(scene, new Map(m.functions.map((f) => [f.id, f])), flat.id);
     if (selected === undefined) throw new Error("no selection");
     const html = renderToStaticMarkup(
-      <ExecFunctionPanel id="p1" scope="src" roots={false} store={new ZoomStore("p1")} index={index} nodeId={flat.id} selected={selected} onOpen={() => {}} />,
+      <ExecFunctionPanel id="p1" scope="src" roots={false} store={new ZoomStore("p1")} index={index} model={m} nodeId={flat.id} selected={selected} onOpen={() => {}} />,
     );
     expect(html).toContain("Plain code flow, no runtime context found");
     expect(html).not.toContain("Runs on");
