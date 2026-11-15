@@ -685,6 +685,12 @@ describe("scope keys and lookup order", () => {
     expect(edge?.to).toEqual({ unresolved: { scheme: "sv.call", text: "print" } });
   });
 
+  it("a file a package includes resolves its calls to that package's functions", async () => {
+    const batches = await extractDir(join(fixturesDir, "incpkg"), ["pkg.sv", "cls.sv"]);
+    const edge = calls(batches, "helper").find((e) => e.from.startsWith("cls.sv#"));
+    expect(edge?.to).toBe("pkg.sv#pk.helper");
+  });
+
   it("a call through an interface-typed handle resolves to the interface's task", async () => {
     const batches = await extractDir(scopes, ["bus.sv"]);
     const edge = calls(batches, "vif.drive")[0];
