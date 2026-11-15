@@ -211,6 +211,28 @@ describe("GET /api/status for a private index", () => {
   });
 });
 
+describe("GET /api/status for a private index, with an expired access token", () => {
+  it("refreshes the session on the private status path and answers 200", async () => {
+    const h = await harness();
+    await handleIndex(submit("acme/secret", ALICE), h.deps);
+    await Promise.all(h.jobs);
+    const expired = `${SESSION_COOKIE}=${sealValue(
+      { t: "tok-alice-old", id: 1, login: "alice", av: "x", r: "ref-alice", e: NOW - 1000, re: NOW + 86_400_000 },
+      SESSION_KEY,
+    )}`;
+    const res = await handleStatus(getReq(`/api/status?repo=acme/secret&sha=${SHA}&visibility=private`, expired), {
+      storage: h.storage,
+      env: AUTH_ENV,
+      fetch: h.fake.fetch,
+      now: () => NOW,
+    });
+    expect(res.status).toBe(200);
+    expect((await json(res)).state).toBe("done");
+    expect(h.fake.calls.some((c) => c.url === "https://github.com/login/oauth/access_token")).toBe(true);
+    expect(setCookieValue(res.headers.getSetCookie(), SESSION_COOKIE)).toBeDefined();
+  });
+});
+
 function privateDeps(h: { storage: IndexDeps["storage"]; fake: { fetch: IndexDeps["fetch"] } }, env: Record<string, string> = AUTH_ENV): PrivateDeps {
   return { env, fetch: h.fake.fetch, now: () => NOW, storage: h.storage };
 }

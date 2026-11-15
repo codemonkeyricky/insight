@@ -2,7 +2,7 @@
 // file (GitHub's contents API), the latest index of a repo, and the repos the app can see for the signed-in user. Every
 // read checks the user's access with GitHub first; the signature is what the storage Worker checks.
 import { createHmac } from "node:crypto";
-import { authConfigFromEnv, installUrlOf, requireAccess, requireSession, type Env } from "./auth.js";
+import { authConfigFromEnv, installUrlOf, requireAccess, requireSession, type Clock, type Env } from "./auth.js";
 import { parseRepoInput } from "./github.js";
 import { errorResponse, json, withCookies } from "./http.js";
 import { parseKey } from "./session.js";
@@ -75,7 +75,7 @@ export function sourcePathError(path: string): string | undefined {
 export interface PrivateDeps {
   env: Env;
   fetch: FetchLike;
-  now: () => number;
+  now: Clock;
   /** The index store; read only by GET /api/private/latest. Defaults to the environment's store. */
   storage?: Storage;
 }
