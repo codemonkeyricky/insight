@@ -53,7 +53,7 @@ describe("registry dispatch", () => {
       "src/gates.ts#separate.parse",
       "src/parsers.ts#byExit",
     ]);
-    expect(run?.attrs).toEqual({ callee: "def.parse", how: "interface" });
+    expect(run?.attrs).toEqual({ callee: "def.parse", how: "interface", callEnd: [20, 25] });
     expect(run?.provenance.confidence).toBe("heuristic");
   });
 
@@ -85,6 +85,6 @@ describe("registry dispatch", () => {
     const { edges } = await extract();
     const use = callFrom(edges, "src/alias.ts#use", "h.handle");
     expect(candidatesOf(use as IREdge)).toEqual(["src/alias.ts#doubler.handle"]);
-    expect(use?.attrs).toEqual({ callee: "h.handle", how: "interface" });
+    expect(use?.attrs).toEqual({ callee: "h.handle", how: "interface", callEnd: [8, 20] });
   });
 });
