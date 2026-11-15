@@ -431,3 +431,24 @@ describe("linker passes the edge attributes to resolvers", () => {
     expect(seen).toEqual([{ system: true, text: "time.h" }]);
   });
 });
+
+describe("resolve runCache", () => {
+  it("gives every resolve call of one link run the same map, and a new link run a new map", async () => {
+    const seen: Map<string, unknown>[] = [];
+    const resolver: Resolver = {
+      scheme: "test.ref",
+      priority: 5,
+      async resolve(_ref, ctx) {
+        if (ctx.runCache === undefined) throw new Error("runCache missing");
+        seen.push(ctx.runCache);
+        return null;
+      },
+    };
+    const linkers: LinkResolver[] = [{ id: "fixture-cache", resolver }];
+    await run(linkers, [refEdge("a.cc", "b.h"), refEdge("a.cc", "c.h")]);
+    await run(linkers, [refEdge("a.cc", "b.h")]);
+    expect(seen).toHaveLength(3);
+    expect(seen[0]).toBe(seen[1]);
+    expect(seen[2]).not.toBe(seen[0]);
+  });
+});

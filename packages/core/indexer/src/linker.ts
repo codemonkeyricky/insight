@@ -98,6 +98,8 @@ export async function link(input: LinkInput): Promise<LinkResult> {
   }
 
   const extra: { edge: IREdge; file: string }[] = [];
+  // One map for this link run only, shared by every resolve call in it (see ResolveContext.runCache).
+  const runCache = new Map<string, unknown>();
   for (const { edge, file } of edges) {
     const to = edge.to;
     if (typeof to === "string" || "candidates" in to) continue;
@@ -109,6 +111,7 @@ export async function link(input: LinkInput): Promise<LinkResult> {
       hasFile: (p) => fileSet.has(p),
       hasNode: (n) => nodes.has(n),
       listFiles: () => input.files,
+      runCache,
     };
     const answers: { id: string; answer: ResolveAnswer; fallback: boolean }[] = [];
     for (const { id, resolver, fallback } of byScheme.get(ref.scheme) ?? []) {
