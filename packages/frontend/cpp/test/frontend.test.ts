@@ -87,3 +87,17 @@ describe("frontend-cpp", () => {
     expect(actual).toBe(readFileSync(goldenFile, "utf8"));
   });
 });
+
+describe("frontend-cpp out-of-line class template methods", () => {
+  it("names template <class T> void Foo<T>::bar() as Foo::bar, without template arguments", async () => {
+    const src = "template <class T>\nclass Foo {\n public:\n  void bar();\n};\n\ntemplate <class T>\nvoid Foo<T>::bar() {}\n";
+    const file = "tpl/foo.cc";
+    const ctx = { root, files: [file], listFiles: () => [file], readFile: async () => src, log: () => undefined };
+    const batches: IRBatch[] = [];
+    for await (const batch of frontend.extract(ctx)) batches.push(batch);
+    const fns = allRecords(batches).flatMap((r) => ("node" in r && r.node.kind === "structure.function" ? [r.node] : []));
+    const bar = fns.find((n) => n.id === `${file}#Foo::bar`);
+    expect(bar?.attrs.name).toBe("bar");
+    expect(bar?.attrs.qualifiedName).toBe("Foo::bar");
+  });
+});
