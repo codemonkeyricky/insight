@@ -653,4 +653,33 @@ describe("system model: spawns and posts of the same component", () => {
     expect((s.edges ?? []).some((e) => e.verb === "enqueues" && e.from === "thread:main:entry:node:src/main.ts|src/main.ts" && e.to === inbox)).toBe(true);
     expect((s.edges ?? []).some((e) => e.verb === "dequeues" && e.from === inbox && e.to === "thread:src/main.ts@spawn:10|src/worker.ts")).toBe(true);
   });
+
+  it("does not guess the receiver of a post from a worker that also spawns a worker", () => {
+    // main spawns a.ts; a.ts#run spawns b.ts and posts. The post could be to main (its spawner) or to b (its child).
+    const a = spawn("src/main.ts", "main", 10, "Worker", "src/a.ts#(module)");
+    const b = spawn("src/a.ts", "run", 4, "Worker", "src/b.ts#(module)");
+    const doc: IRDocument = {
+      nodes: [
+        file("package.json"), file("src/main.ts"), file("src/a.ts"), file("src/b.ts"),
+        moduleFn("src/main.ts", { nodeEntry: true }), fn("src/main.ts", "main"),
+        moduleFn("src/a.ts"), fn("src/a.ts", "run"),
+        moduleFn("src/b.ts"), fn("src/b.ts", "work"),
+        effect("src/a.ts", "run", 6, "effects.message.post", { api: "postMessage" }),
+        a.node, b.node,
+      ],
+      edges: [
+        call("src/main.ts#(module)", "src/main.ts#main", "src/main.ts", 30),
+        call("src/a.ts#(module)", "src/a.ts#run", "src/a.ts", 1),
+        call("src/b.ts#(module)", "src/b.ts#work", "src/b.ts", 1),
+        a.edge, b.edge,
+      ],
+      findings: [],
+    };
+    const s = systemModel(buildProjectModel(doc), "");
+    expect(s.runtime).toBe("grounded");
+    const posts = (s.edges ?? []).filter((e) => e.verb === "enqueues" && e.label === "postMessage");
+    expect(posts.length).toBeGreaterThan(0);
+    for (const e of posts) expect(e.to).not.toMatch(/:inbox$/);
+    expect((s.resources ?? []).some((r) => r.label === "inbox (unknown peer)")).toBe(true);
+  });
 });

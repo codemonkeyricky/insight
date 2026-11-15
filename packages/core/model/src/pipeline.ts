@@ -107,7 +107,7 @@ export function pipelineModel(model: ProjectModel, scopePath: string, opts: Pipe
     if (sysById.has(id)) compOfFile.set(file, id);
   }
   const compOf = (file: string | undefined): string | undefined => (file === undefined ? undefined : compOfFile.get(file));
-  const sequences = sequencePipelines(model, inner, compOf, tests);
+  const sequences = sequencePipelines(model, compOf, tests);
 
   // Interface relations grouped by their shared edge: one group is one call site with its candidates.
   const groups = new Map<IREdge, Rel[]>();
@@ -134,9 +134,7 @@ export function pipelineModel(model: ProjectModel, scopePath: string, opts: Pipe
 
     const span: Span | undefined = first.edge.span;
     const callee = typeof first.edge.attrs?.callee === "string" ? first.edge.attrs.callee : "";
-    const dot = callee.lastIndexOf(".");
-    const receiver = dot >= 0 ? callee.slice(0, dot) : "";
-    const calleeMember = dot >= 0 ? callee.slice(dot + 1) : callee;
+    const { receiver, member: calleeMember } = splitCallee(callee);
     const members = calleeMember !== "" ? [calleeMember] : [...new Set(rels.map((r) => targetMember(r.to)))].sort();
     const fn = enclosingFn(model, first.from);
     const raw: RawSite = {
@@ -316,6 +314,30 @@ function siteOfRel(model: ProjectModel, rel: Rel): Site {
 }
 
 /** The member name a target contributes: the function name after '#', or the id's tail. */
+/**
+ * A callee's receiver and member, split at its last "." outside brackets and parentheses: `frontend.extract` gives frontend
+ * and extract, and `REG[k].run` gives `REG[k]` and run. A registry lookup `HANDLERS[msg.kind]` names no member: its receiver
+ * is HANDLERS, and the member is left empty so the candidates' names are used.
+ */
+export function splitCallee(callee: string): { receiver: string; member: string } {
+  let depth = 0;
+  let dot = -1;
+  for (let i = 0; i < callee.length; i++) {
+    const c = callee[i];
+    if (c === "[" || c === "(") depth++;
+    else if ((c === "]" || c === ")") && depth > 0) depth--;
+    else if (c === "." && depth === 0) dot = i;
+  }
+  const tail = dot >= 0 ? callee.slice(dot + 1) : callee;
+  const open = tail.indexOf("[");
+  if (open >= 0 && tail.endsWith("]")) {
+    // An element access names no member. Its receiver is the text before the brackets.
+    const head = tail.slice(0, open);
+    return { receiver: dot >= 0 ? `${callee.slice(0, dot)}.${head}` : head, member: "" };
+  }
+  return { receiver: dot >= 0 ? callee.slice(0, dot) : "", member: tail };
+}
+
 function targetMember(id: NodeId): string {
   const hash = id.indexOf("#");
   const tail = hash >= 0 ? id.slice(hash + 1) : id;

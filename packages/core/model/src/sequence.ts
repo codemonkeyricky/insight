@@ -56,11 +56,9 @@ export function enclosingFn(model: ProjectModel, id: NodeId): NodeId | undefined
  */
 export function sequencePipelines(
   model: ProjectModel,
-  inner: string,
   compOf: (file: string | undefined) => string | undefined,
   tests: boolean,
 ): PipelineSequence[] {
-  void inner; // scope membership is already in compOf
   const inScope = (file: string | undefined): boolean => file !== undefined && compOf(file) !== undefined && (tests || !isNoisePath(file));
 
   const isModuleEntry = (id: NodeId): boolean => model.byId.get(id)?.attrs.module === true;
@@ -86,6 +84,9 @@ export function sequencePipelines(
     callers.add(caller);
     callersOf.set(rel.to, callers);
   }
+  // A stage must call STAGE_TARGETS_MIN distinct functions besides itself: counted once per function, not per orchestrator.
+  const targetCount = new Map<NodeId, number>();
+  for (const [caller, rels] of callsBy) targetCount.set(caller, new Set(rels.map((r) => r.to).filter((t) => t !== caller)).size);
 
   const candidates: Array<{ seq: PipelineSequence; score: number }> = [];
   for (const fn of model.functions) {
@@ -94,23 +95,20 @@ export function sequencePipelines(
     if (own.length === 0) continue;
     const distinctCallees = new Set(own.map((r) => r.to)).size;
 
-    // Each callee's stage site: its call with the smallest call end (callEnd, else span end), so `f(g(x))` puts g before f.
-    const best = new Map<NodeId, { key: number; rel: Rel }>();
+    // Each callee's stage site: its call with the smallest order key (callEnd, else span end), so `f(g(x))` puts g before f.
+    const keyOf = orderKeys(model, fn, own);
+    const best = new Map<NodeId, { key: OrderKey; rel: Rel }>();
     for (const rel of own) {
       const callee = model.functionById.get(rel.to);
       if (callee === undefined || callee.file === fn.file || !isStage(callee)) continue;
-      const key = callEnd(rel);
+      if ((callersOf.get(rel.to)?.size ?? 0) > FAN_IN_MAX || (targetCount.get(rel.to) ?? 0) < STAGE_TARGETS_MIN) continue;
+      const key = keyOf(rel);
       const cur = best.get(rel.to);
-      if (cur === undefined || key < cur.key) best.set(rel.to, { key, rel });
+      if (cur === undefined || cmpKey(key, cur.key) < 0) best.set(rel.to, { key, rel });
     }
     if (best.size < MIN_STAGES) continue;
 
-    const stages = [...best.entries()]
-      .filter(([callee]) => {
-        const targets = new Set((callsBy.get(callee) ?? []).map((r) => r.to).filter((t) => t !== callee));
-        return targets.size >= STAGE_TARGETS_MIN && (callersOf.get(callee)?.size ?? 0) <= FAN_IN_MAX;
-      })
-      .sort((a, b) => a[1].key - b[1].key || cmp(a[0], b[0]));
+    const stages = [...best.entries()].sort((a, b) => cmpKey(a[1].key, b[1].key) || cmp(a[0], b[0]));
     const files = new Set(stages.map(([callee]) => model.functionById.get(callee)?.file ?? ""));
     if (stages.length < MIN_STAGES || files.size < MIN_STAGE_FILES) continue;
 
@@ -148,16 +146,54 @@ export function sequencePipelines(
     .map((c) => c.seq);
 }
 
+type Pos = readonly [number, number];
+/** Where a call sorts: the end of the orchestrator's own call it runs under (`at`), then its own end inside that (`sub`). */
+type OrderKey = { at: Pos; sub: Pos };
+const LAST: Pos = [Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER];
+const NONE: Pos = [-1, -1];
+
+const cmpPos = (a: Pos, b: Pos): number => a[0] - b[0] || a[1] - b[1];
+const cmpKey = (a: OrderKey, b: OrderKey): number => cmpPos(a.at, b.at) || cmpPos(a.sub, b.sub);
+
 /**
- * The position a call finishes at, as one number: line * 1e6 + column. The frontend records the whole call expression's end
- * as `callEnd`, because the span covers only the callee name, which would put `f(g(x))` the wrong way round. Without it,
- * the span's end is used. A call with neither sorts last.
+ * The position a call finishes at, as [line, column]. The frontend records the whole call expression's end as `callEnd`,
+ * because the span covers only the callee name, which would put `f(g(x))` the wrong way round. Without it, the span's end
+ * is used. A call with neither sorts last.
  */
-function callEnd(rel: Rel): number {
+function callEnd(rel: Rel): Pos {
   const end = rel.edge.attrs?.callEnd;
-  if (Array.isArray(end) && typeof end[0] === "number" && typeof end[1] === "number") return end[0] * 1e6 + end[1];
+  if (Array.isArray(end) && typeof end[0] === "number" && typeof end[1] === "number") return [end[0], end[1]];
   const span: Span | undefined = rel.edge.span;
-  return span ? span.end[0] * 1e6 + span.end[1] : Number.MAX_SAFE_INTEGER;
+  return span ? [span.end[0], span.end[1]] : LAST;
+}
+
+/**
+ * The order keys of an orchestrator's calls. A call made directly by `fn` sorts at its own end. A call made inside an
+ * anonymous callback of `fn` sorts right after the call of `fn` that the callback is passed to, so `s1(x, () => s2())` puts
+ * s1 first: the callback runs once s1 has started. A callback that is not inside one of `fn`'s calls keeps its own end.
+ */
+function orderKeys(model: ProjectModel, fn: FunctionEntity, own: Rel[]): (rel: Rel) => OrderKey {
+  const direct = own.filter((r) => r.from === fn.id && r.edge.span !== undefined);
+  return (rel) => {
+    const end = callEnd(rel);
+    if (rel.from === fn.id) return { at: end, sub: NONE };
+    // The callback directly under fn that holds this call.
+    let top = rel.from;
+    for (let depth = 0; depth < 1000; depth++) {
+      const parent = model.byId.get(top)?.parent;
+      if (parent === undefined || parent === fn.id) break;
+      top = parent;
+    }
+    const start = model.byId.get(top)?.span?.start;
+    if (start === undefined) return { at: end, sub: NONE };
+    let host: Rel | undefined;
+    for (const d of direct) {
+      const ds = (d.edge.span as Span).start;
+      if (cmpPos(ds, start) > 0 || cmpPos(callEnd(d), start) < 0) continue;
+      if (host === undefined || cmpPos(ds, (host.edge.span as Span).start) > 0) host = d;
+    }
+    return host === undefined ? { at: end, sub: NONE } : { at: callEnd(host), sub: end };
+  };
 }
 
 function cmp(a: string, b: string): number {

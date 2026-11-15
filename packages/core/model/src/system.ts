@@ -299,19 +299,28 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
     threadsSpawnedBy.set(t.spawn.owner, list);
   }
   // Where a grounded post with no dispatch goes when its thread structure names the receiver: the spawner's inbox when the
-  // posting thread was spawned, else the one thread its function spawns (with that thread's worker slice). Undefined otherwise.
+  // posting thread was spawned, or the one thread its function spawns (with that thread's worker slice). The post records no
+  // receiver, so when both apply (a middle worker that posts and spawns), or the receiver is the posting thread itself, the
+  // receiver is not known: undefined, and the post goes to the peer inbox.
   const postInbox = (rt: string | undefined, owner: string | undefined): { thread: string; worker?: string } | undefined => {
     const self = rt === undefined ? undefined : plan.threadOf(rt);
     const sp = self === undefined ? undefined : spawnOfThread.get(self);
+    let up: { thread: string } | undefined;
     if (sp !== undefined && sp.owner !== undefined) {
       const spawner = plan.owners(sp.owner, sp.file)[0];
       const thread = spawner === undefined ? undefined : plan.threadOf(spawner);
-      if (thread !== undefined) return { thread };
+      if (thread !== undefined && thread !== self) up = { thread };
     }
-    const spawned = threadsSpawnedBy.get(owner ?? "") ?? [];
-    if (spawned.length !== 1) return undefined;
-    const w = spawned[0] as { rt: string; comp?: string };
-    return { thread: w.rt, ...(w.comp !== undefined ? { worker: plan.sliceId(w.rt, w.comp) } : {}) };
+    const spawned = (threadsSpawnedBy.get(owner ?? "") ?? []).filter((w) => w.rt !== self);
+    const down =
+      spawned.length === 1
+        ? (() => {
+            const w = spawned[0] as { rt: string; comp?: string };
+            return { thread: w.rt, ...(w.comp !== undefined ? { worker: plan.sliceId(w.rt, w.comp) } : {}) };
+          })()
+        : undefined;
+    if (up !== undefined && down !== undefined) return undefined;
+    return up ?? down;
   };
   for (const node of model.doc.nodes) {
     if (!node.kind.startsWith("effects.")) continue;

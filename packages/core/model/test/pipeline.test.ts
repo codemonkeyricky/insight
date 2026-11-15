@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { IRDocument, IREdge, IRNode } from "@insight/ir";
 import * as fx from "@insight/sdk/testing";
 import { buildProjectModel, pipelineModel, type PipelineModel } from "../src/index.js";
+import { splitCallee } from "../src/pipeline.js";
 
 const file = (path: string): IRNode => fx.node(path, "structure", "structure.file", { attrs: { path }, span: fx.span(path, 0, 0, 0, 0) });
 
@@ -163,5 +164,17 @@ describe("pipelineModel order and rules", () => {
     expect(m.points).toEqual([]);
     expect(m.columns).toEqual([]);
     expect(m.reason).toBe("no extension points in this scope");
+  });
+});
+
+describe("splitCallee", () => {
+  it("splits at the last dot outside brackets, and a registry lookup names no member", () => {
+    expect(splitCallee("frontend.extract")).toEqual({ receiver: "frontend", member: "extract" });
+    expect(splitCallee("this.lenses.run")).toEqual({ receiver: "this.lenses", member: "run" });
+    expect(splitCallee("run")).toEqual({ receiver: "", member: "run" });
+    expect(splitCallee("HANDLERS[msg.kind]")).toEqual({ receiver: "HANDLERS", member: "" });
+    expect(splitCallee("this.handlers[msg.kind]")).toEqual({ receiver: "this.handlers", member: "" });
+    expect(splitCallee("REG[a.b].run")).toEqual({ receiver: "REG[a.b]", member: "run" });
+    expect(splitCallee("get(x.y).run")).toEqual({ receiver: "get(x.y)", member: "run" });
   });
 });

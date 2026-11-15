@@ -129,6 +129,78 @@ describe("sequence pipelines", () => {
     expect(seqs.map((s) => s.id)).toEqual([RUN_FN, `${o}#o1`, `${o}#o2`]);
   });
 
+  it("puts a stage called inside a callback after the stage the callback is passed to", () => {
+    // `s1(input, () => s2())` on line 10: s1's name at [2,4), its call ends at column 30; the callback spans [12,28) and calls
+    // s2 at [18,20), ending at column 24. s2's call ends before s1's, yet s1 runs first.
+    const anon = fx.node(`${RUN}#λ10:12`, "structure", "structure.function", { attrs: { name: "λ10:12", anonymous: true }, parent: RUN_FN, span: fx.span(RUN, 10, 12, 10, 28) });
+    const calls = [
+      call(RUN_FN, stageId("s1"), RUN, 10, 2, 4, [10, 30]),
+      call(anon.id, stageId("s2"), RUN, 10, 18, 20, [10, 24]),
+      ...runCalls([["s3", 11], ["s4", 12], ["s5", 13]]),
+    ];
+    const seqs = sequencesOf(doc([anon], [], {}, calls));
+    expect(seqs[0]?.stages.map((s) => s.name)).toEqual(["s1", "s2", "s3", "s4", "s5"]);
+  });
+
+  it("orders calls on one very long line by column, past a million columns", () => {
+    const seqs = sequencesOf(doc([], [], {}, runCalls([["s1", 10, 2, 4, [10, 1500010]], ["s2", 11, 2, 4, [11, 5]], ["s3", 12], ["s4", 13], ["s5", 14]])));
+    expect(seqs[0]?.stages.map((s) => s.name)).toEqual(["s1", "s2", "s3", "s4", "s5"]);
+  });
+
+  it("uses the name span end when an older index has no callEnd, so a wrapping call sorts first", () => {
+    // `s2(s1(x))` without callEnd: s2's name ends at column 4, s1's at 7. This is the documented fallback.
+    const seqs = sequencesOf(doc([], [], {}, runCalls([["s2", 10, 2, 4], ["s1", 10, 5, 7], ["s3", 11], ["s4", 12], ["s5", 13]])));
+    expect(seqs[0]?.stages.map((s) => s.name)).toEqual(["s2", "s1", "s3", "s4", "s5"]);
+  });
+
+  it("does not count registry or interface candidates as stages", () => {
+    // run makes three exact stage calls and one registry call with candidates s4 and s5: three stages only, no sequence.
+    const registry = fx.edge(RUN_FN, [stageId("s4"), stageId("s5")], "calls", "calls.call", { span: fx.span(RUN, 13, 2, 13, 12), attrs: { callee: "STAGES[k]", how: "registry" } });
+    expect(sequencesOf(doc([], [registry], {}, runCalls([["s1", 10], ["s2", 11], ["s3", 12]])))).toEqual([]);
+  });
+
+  it("finds no sequence when every stage is in one file", () => {
+    const one = "b/src/one.ts";
+    const names = ["t1", "t2", "t3", "t4"];
+    const extraNodes = [file(one), ...names.flatMap((n) => [fn(one, n), fn(one, `${n}A`), fn(one, `${n}B`)])];
+    const extraEdges = names.flatMap((n) => [call(`${one}#${n}`, `${one}#${n}A`, one, 3), call(`${one}#${n}`, `${one}#${n}B`, one, 4)]);
+    const calls = names.map((n, i) => call(RUN_FN, `${one}#${n}`, RUN, 10 + i));
+    expect(sequencesOf(doc(extraNodes, extraEdges, {}, calls))).toEqual([]);
+  });
+
+  it("does not count a leaf helper (fewer than two calls of its own) as a stage", () => {
+    const leaf = "c/src/leaf.ts";
+    const extraNodes = [file(leaf), fn(leaf, "leaf"), fn(leaf, "leafA")];
+    const extraEdges = [call(`${leaf}#leaf`, `${leaf}#leafA`, leaf, 3), call(RUN_FN, `${leaf}#leaf`, RUN, 9)];
+    const seqs = sequencesOf(doc(extraNodes, extraEdges));
+    expect(seqs[0]?.stages.map((s) => s.name)).toEqual(["s1", "s2", "s3", "s4", "s5"]);
+  });
+
+  it("keeps 16 stages and counts the rest in more", () => {
+    const extra = Array.from({ length: 15 }, (_, i) => `x${i}`);
+    const nodes: IRNode[] = [];
+    const edges: IREdge[] = [];
+    for (const [i, n] of extra.entries()) {
+      const path = `c/src/x${i}.ts`;
+      nodes.push(file(path), fn(path, n), fn(path, `${n}A`), fn(path, `${n}B`));
+      edges.push(call(`${path}#${n}`, `${path}#${n}A`, path, 3), call(`${path}#${n}`, `${path}#${n}B`, path, 4), call(RUN_FN, `${path}#${n}`, RUN, 20 + i));
+    }
+    const seqs = sequencesOf(doc(nodes, edges));
+    expect(seqs[0]?.stages).toHaveLength(16);
+    expect(seqs[0]?.more).toBe(4);
+    expect(seqs[0]?.stages.at(-1)?.order).toBe(15);
+  });
+
+  it("leaves out stages in test folders unless tests are on", () => {
+    const t = "c/test/t.test.ts";
+    const extraNodes = [file(t), fn(t, "tt"), fn(t, "ttA"), fn(t, "ttB")];
+    const extraEdges = [call(`${t}#tt`, `${t}#ttA`, t, 3), call(`${t}#tt`, `${t}#ttB`, t, 4), call(RUN_FN, `${t}#tt`, RUN, 20)];
+    const off = pipelineModel(buildProjectModel(doc(extraNodes, extraEdges)), "").sequences;
+    expect(off[0]?.stages.map((s) => s.name)).not.toContain("tt");
+    const on = pipelineModel(buildProjectModel(doc(extraNodes, extraEdges)), "", { tests: true }).sequences;
+    expect(on[0]?.stages.map((s) => s.name)).toContain("tt");
+  });
+
   it("has no reason when the scope has sequences but no extension points", () => {
     const m = pipelineModel(buildProjectModel(doc()), "");
     expect(m.points).toEqual([]);
