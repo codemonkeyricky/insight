@@ -128,6 +128,23 @@ Return `null` to leave the reference open. The manifest's `roles.resolver.scheme
 
 When a dependency changes, dependents are re-extracted unless the dependency's *API* did not change. Implement `apiDigest(relPath, text)` to return a digest of what other files can see (exported names, signatures). Without it, the file's whole content hash is used, which is correct and slower.
 
+## Build-system frontends
+
+A frontend that reads a build system (Bazel, CMake, and later Ninja or Make) draws the package boundaries and the
+third-party packages of a C++ project. Its facts follow the build-system contract, which the core reads the same way for
+every build system. See [build-systems.md](build-systems.md) for what the two existing frontends read, and
+[ir-reference.md](ir-reference.md#build-system-packages) for the record shapes. At minimum, a build-system frontend emits:
+
+- `structure.package` `{name, root, buildSystem}` for each package directory, with an id scoped to the build system (`//lib`, `cmake:lib`).
+- `packaging.build-target` `{name, label, targetKind, output, source}` for each target, with `output` one of `executable`, `library`, `test` or `other`, and `parent` set to its package id.
+- `packaging.target-contains` from each target to each file it owns.
+- `packaging.dep-edge` from each target to a target, to a `packaging.external` node, or to `{unresolved: {scheme, text}}` when it cannot tell.
+- `packaging.external` `{name, source, manager}` for each third-party package the build declares, with `version` and `override` when known.
+- Optionally, a `cpp.include` resolver. A build-system resolver leaves `fallback` unset. The syntactic C++ resolver sets `"fallback": true`, so its answers count only when no other resolver answered (see [Resolvers](#resolvers)).
+
+Set `provenance.frontend` and a `confidence` on every record. A heuristic read of a macro is `heuristic`, and a parse the
+build file states outright is `exact`.
+
 ## Test it with the conformance kit
 
 `runFrontendConformance` in `@insight/sdk` runs the frontend twice over the given files and reports these checks by name:

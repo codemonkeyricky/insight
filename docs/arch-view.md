@@ -9,7 +9,8 @@ package it draws that scope, as described under "Scoped view" below.
 ### Data flow
 
 - The model is built by `archModel(view)` in `packages/core/model/src/arch/arch.ts`. It reads an `IRView` over the whole
-  snapshot and returns plain JSON: `layers`, `packages`, `edges`, `unresolved`, `externals` and `violations`.
+  snapshot and returns plain JSON: `layers`, `packages`, `edges`, `unresolved`, `externals`, `externalPackages` and
+  `violations`.
 - The server builds it in `scopeArchOf` (`apps/server/src/reader.ts`) and serves it at
   `GET /api/projects/:id/scope/arch?path=`. The path is required and names a scope as the other scope routes do. The
   model is the same for every scope, so the path only checks that the scope exists. Errors match `/scope/exec`.
@@ -24,8 +25,9 @@ package it draws that scope, as described under "Scoped view" below.
 - Columns, left to right, one per layer in `model.layers` that holds packages. The layers come from the path of each
   package (`defaultLayerOf`: `frontend-*` or `frontend/*` under `packages/` or `plugins/`, `packages/lens/*` (and `lens-*`), `packages/core/*` (the kernel group: ir, sdk, model, flow, indexer; layer `ir`), and `apps/*`), and
   any other package is in "other".
-- Packages come from `package.json` files among the indexed files, or from `structure.package` nodes when a frontend
-  emits them. A file belongs to its nearest package root. Each box shows the file count.
+- Packages come from `structure.package` nodes when a frontend emits them (a Bazel or CMake package is named by its
+  node), and from `package.json` files among the indexed files for the directories no node names. A file belongs to its
+  nearest package root. Each box shows the file count. See "Build packages and external packages" below.
 - An arrow for each pair of packages with at least one import or call between them. The label is the import count, or
   the call count with a "c" when the IR saw no import. The width grows with the count, from 1 to 4 px. A dashed arrow
   means the weakest confidence of its evidence is not exact.
@@ -68,6 +70,31 @@ scope)` in `apps/web/src/arch/scoped.ts`, a pure function of the root model, so 
   the Flow tab. At the root, a package or folder click also opens Arch, at that scope.
 - A boundary card for the root package is named "project root". A sibling folder is named by its path inside the
   package, and its full path is in the card's tooltip.
+
+### Build packages and external packages
+
+When the project has build-system packages (see [build-systems.md](build-systems.md)), the Arch tab shows what the build
+declares next to the code.
+
+- **External packages.** The side panel lists every `packaging.external` node of the project under "External packages",
+  grouped by `manager` (the build system that declares it, for example `bazel` or `cmake`; `other` when a node names
+  none). Each row has the name, a version chip when the node has a version, and badges: `dev` for a dev dependency,
+  `override: <kind>` when an override applies, and the `source` (for example `bzlmod`, `lockfile`, `find_package`,
+  `FetchContent`). The list is shown at the root and in a scope.
+- **Externals of a scope.** In a scoped view, the side panel's "External packages of <package>" list has one row per
+  external that the scope's package imports or depends on. A row with a build id groups under its manager and shows its
+  version chip. A `declared` badge marks an external that a build target of the package depends on. Rows without a build
+  id (npm packages, Node built-ins) keep the plain list with their import counts.
+- **Arrows between packages.** Only the root (project) diagram carries the build's arrows. When the project has
+  build-target dependencies, each package-to-package arrow is marked by what the build declares:
+  - **Dotted** (a fine dotted line, muted): the build declares the pair (a target of one package depends on a target of
+    the other), and the code has no import or call across it.
+  - **Warning colour** (the warning colour instead of the normal stroke): the code uses the pair (an import or a call),
+    and no build target declares it. The arrowhead is drawn in the warning colour too.
+  - Otherwise the arrow is drawn as before. The arrow's tooltip says "declared" or "not declared in the build" when the
+    model knows.
+- The side panel explains the two arrow styles only when the model carries build-target dependencies. Scoped views do not
+  draw the build's arrows, because the scope's edges come from file imports and do not carry the declared mark.
 
 ### What the diagram does not show
 
