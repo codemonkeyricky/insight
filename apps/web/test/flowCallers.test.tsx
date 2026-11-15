@@ -35,6 +35,7 @@ import {
 const chart = (id: string, width: number, height: number) => ({ id, name: id, width, height, nodes: [], edges: [] }) as unknown as FunctionFlow;
 const view: Rect = { x: 0, y: 0, w: 1000, h: 800 };
 const box: Rect = { x: 100, y: 50, w: 230, h: 44 };
+const inPlaceAnchor = { kind: "box" as const, nodeId: "n", rect: { x: 400, y: 100, w: 230, h: 44 }, inPlace: true };
 const boxAnchor = { kind: "box" as const, nodeId: "n", rect: box };
 const row = (over: Partial<RefRow> & { id: string; kind: RefRow["kind"] }): RefRow =>
   ({
@@ -141,27 +142,27 @@ describe("merging callers", () => {
 
 describe("callers box placement", () => {
   it("opens to the left of a function box and reflow keeps it there", () => {
-    const list = openCallers([], "A", boxAnchor, "A", 3, view);
+    const list = openCallers([], "A", boxAnchor, "A", 3, undefined);
     const c = find(list, callersKey("A"));
     expect(c.kind).toBe("callers");
     expect(c.x + c.w).toBe(box.x - EXPAND_GAP);
     expect(c.side).toBe("left");
     expect(c.w).toBe(CALLERS_W);
-    expect(reflow(list, view).find((e) => e.fnId === callersKey("A"))?.x).toBe(c.x);
+    expect(reflow(list, undefined).find((e) => e.fnId === callersKey("A"))?.x).toBe(c.x);
   });
 
   it("hangs a callers box from a chart's header to the chart's left", () => {
-    const parent = openExpansion([], "A", boxAnchor, chart("A", 300, 200), view);
+    const parent = openExpansion([], "A", inPlaceAnchor, chart("A", 300, 200), undefined);
     const p = find(parent, "A");
-    const list = openCallers(parent, "A", headerAnchor(p), "A", 2, view);
+    const list = openCallers(parent, "A", headerAnchor(p), "A", 2, undefined);
     const c = find(list, callersKey("A"));
     expect(c.x).toBe(p.x - c.w - EXPAND_GAP);
     expect(c.y).toBe(p.y);
   });
 
   it("follows a resized parent: the callers box keeps its place left of the parent, and the anchor stays at the header's left edge", () => {
-    const parent = openExpansion([], "A", boxAnchor, chart("A", 300, 200), view);
-    const list = openCallers(parent, "A", headerAnchor(find(parent, "A")), "A", 2, view);
+    const parent = openExpansion([], "A", inPlaceAnchor, chart("A", 300, 200), undefined);
+    const list = openCallers(parent, "A", headerAnchor(find(parent, "A")), "A", 2, undefined);
     const p = find(list, "A");
     const grown = reflow(list.map((e) => (e.fnId === "A" ? { ...e, w: p.w + 200 } : e)), view);
     const c = find(grown, callersKey("A"));
@@ -219,16 +220,17 @@ describe("one right-hand child per chart", () => {
     const all = two.filter((e) => e.anchor.kind === "step" && e.anchor.fnId === "P");
     expect(all).toHaveLength(1);
     for (const a of two) for (const b of two) if (a !== b) expect(overlaps(a, b)).toBe(false);
-    expect(find(two, callersKey("Y")).x + find(two, callersKey("Y")).w).toBeLessThan(p.x);
+    expect(find(two, callersKey("Y")).side).toBeUndefined();
+    expect(find(two, callersKey("Y")).x).toBe(p.x + p.w + EXPAND_GAP);
   });
 });
 
 describe("a card's chart over its callers box", () => {
   it("opening the card's chart re-anchors its callers box on the chart's header, and the chart opened from a row survives", () => {
-    const card = openCallers([], "A", boxAnchor, "A", 3, view);
-    const withChart = openExpansion(card, "A", boxAnchor, chart("A", 300, 200), view);
-    const hung = hangCallersFrom(withChart, "A", "n", view);
-    const withRow = openExpansion(hung, "B", { kind: "step", fnId: callersKey("A"), stepId: "b", rect: callerRowRect(0) }, chart("B", 200, 100), view);
+    const card = openCallers([], "A", boxAnchor, "A", 3, undefined);
+    const withChart = openExpansion(card, "A", inPlaceAnchor, chart("A", 300, 200), undefined);
+    const hung = hangCallersFrom(withChart, "A", "n", undefined);
+    const withRow = openExpansion(hung, "B", { kind: "step", fnId: callersKey("A"), stepId: "b", rect: callerRowRect(0) }, chart("B", 200, 100), undefined);
     const head = find(withRow, "A");
     const c = find(withRow, callersKey("A"));
     expect(c.anchor).toMatchObject({ kind: "step", fnId: "A", stepId: HEADER_STEP });
@@ -242,14 +244,14 @@ describe("a card's chart over its callers box", () => {
 describe("callers box anchors", () => {
   it("a box open at one anchor is not open at another: the header's button is not shown open for the card's box", () => {
     const card = toggleCallers([], "A", boxAnchor, "A", view);
-    const chartOpen = openExpansion(card, "A", boxAnchor, chart("A", 300, 200), view);
+    const chartOpen = openExpansion(card, "A", inPlaceAnchor, chart("A", 300, 200), view);
     const hung = hangCallersFrom(chartOpen, "A", "n", view);
     expect(callersAt(hung, "A", headerAnchor(find(hung, "A")))).toBe(true);
     expect(callersAt(hung, "A", boxAnchor)).toBe(false);
   });
 
   it("clicking a button whose function has a callers box elsewhere moves the box there, and does not close it", () => {
-    const parent = openExpansion([], "A", boxAnchor, chart("A", 300, 200), view);
+    const parent = openExpansion([], "A", inPlaceAnchor, chart("A", 300, 200), view);
     const p = find(parent, "A");
     const atBox = toggleCallers(parent, "A", boxAnchor, "A", view);
     expect(callersAt(atBox, "A", boxAnchor)).toBe(true);
@@ -263,7 +265,7 @@ describe("callers box anchors", () => {
 
 describe("recursion", () => {
   it("a caller already open above its box is in the chain: opening it again is refused, so the row selects instead", () => {
-    const parent = openExpansion([], "A", boxAnchor, chart("A", 300, 200), view);
+    const parent = openExpansion([], "A", inPlaceAnchor, chart("A", 300, 200), view);
     const withCallers = toggleCallers(parent, "A", headerAnchor(find(parent, "A")), "A", view);
     expect(chainHas(withCallers, callersKey("A"), "A")).toBe(true);
     const again = openExpansion(withCallers, "A", { kind: "step", fnId: callersKey("A"), stepId: "A", rect: callerRowRect(0) }, chart("A", 300, 200), view);
@@ -317,7 +319,7 @@ describe("a call step opens its callee at a sibling step (N1)", () => {
   const at = (fnId: string, stepId: string) => ({ kind: "step" as const, fnId, stepId, rect: { x: 0, y: 40, w: 10, h: 10 } });
 
   it("A's s1 opens B, B's step opens C, then A's s2 (also calling C) moves C to s2 and closes B's chain", () => {
-    const a = openExpansion([], "A", boxAnchor, chart("A", 300, 200), view);
+    const a = openExpansion([], "A", inPlaceAnchor, chart("A", 300, 200), view);
     const b = openExpansion(a, "B", at("A", "s1"), chart("B", 200, 100), view);
     const c = openExpansion(b, "C", at("B", "bs"), chart("C", 100, 100), view);
     expect(c.map((e) => e.fnId).sort()).toEqual(["A", "B", "C"]);
@@ -329,7 +331,7 @@ describe("a call step opens its callee at a sibling step (N1)", () => {
   });
 
   it("moving an open callee to another step keeps its own chain attached to it", () => {
-    const a = openExpansion([], "A", boxAnchor, chart("A", 300, 200), view);
+    const a = openExpansion([], "A", inPlaceAnchor, chart("A", 300, 200), view);
     const b = openExpansion(a, "B", at("A", "s1"), chart("B", 200, 100), view);
     const withC = openExpansion(b, "C", at("B", "bs"), chart("C", 100, 100), view);
     const next = openExpansion(withC, "B", at("A", "s3"), chart("B", 200, 100), view);
@@ -339,7 +341,7 @@ describe("a call step opens its callee at a sibling step (N1)", () => {
   });
 
   it("a genuine cycle is still refused: the anchor lies inside the callee's own chain", () => {
-    const a = openExpansion([], "A", boxAnchor, chart("A", 300, 200), view);
+    const a = openExpansion([], "A", inPlaceAnchor, chart("A", 300, 200), view);
     const b = openExpansion(a, "B", at("A", "s1"), chart("B", 200, 100), view);
     expect(openExpansion(b, "A", at("B", "bs"), chart("A", 300, 200), view)).toBe(b);
   });
@@ -348,14 +350,14 @@ describe("a call step opens its callee at a sibling step (N1)", () => {
 describe("hanging a card's callers box (N3)", () => {
   it("moves only a box hung from this card; a box hung elsewhere is left alone", () => {
     const elsewhere: Rect = { x: 500, y: 300, w: 230, h: 44 };
-    const a = openExpansion([], "A", boxAnchor, chart("A", 300, 200), view);
+    const a = openExpansion([], "A", inPlaceAnchor, chart("A", 300, 200), view);
     const withBox = openCallers(a, "A", { kind: "box", nodeId: "m", rect: elsewhere }, "A", 3, view);
     expect(hangCallersFrom(withBox, "A", "n", view)).toBe(withBox);
   });
 
   it("a reattached chart keeps the callees it had open, and the card's callers box closes instead (M2)", () => {
     // A was open in a callee chain elsewhere, with B (and B's C) open to its right, when it reattaches to its card.
-    const a = openExpansion([], "A", boxAnchor, chart("A", 300, 200), view);
+    const a = openExpansion([], "A", inPlaceAnchor, chart("A", 300, 200), view);
     const withChild = openExpansion(a, "B", at("A", "s1"), chart("B", 200, 100), view);
     const withGrand = openExpansion(withChild, "C", at("B", "bs"), chart("C", 100, 100), view);
     const withBox = openCallers(withGrand, "A", boxAnchor, "A", 3, view);
@@ -366,7 +368,7 @@ describe("hanging a card's callers box (N3)", () => {
   });
 
   it("a reattached chart with nothing open to its right takes the card's callers box on its header", () => {
-    const a = openExpansion([], "A", boxAnchor, chart("A", 300, 200), view);
+    const a = openExpansion([], "A", inPlaceAnchor, chart("A", 300, 200), view);
     const withBox = openCallers(a, "A", boxAnchor, "A", 3, view);
     const hung = hangCallersFrom(withBox, "A", "n", view);
     expect(find(hung, callersKey("A")).anchor).toMatchObject({ kind: "step", fnId: "A", stepId: HEADER_STEP });
@@ -374,7 +376,7 @@ describe("hanging a card's callers box (N3)", () => {
   });
 
   it("the box hung on the header does not overlap a step child that stays open beside it (M2)", () => {
-    const a = openExpansion([], "A", boxAnchor, chart("A", 300, 200), view);
+    const a = openExpansion([], "A", inPlaceAnchor, chart("A", 300, 200), view);
     const withBox = openCallers(a, "A", boxAnchor, "A", 3, view);
     const withChild = openExpansion(withBox, "B", at("A", "s1"), chart("B", 200, 100), view);
     const hung = hangCallersFrom(withChild, "A", "n", view);
@@ -385,7 +387,7 @@ describe("hanging a card's callers box (N3)", () => {
 });
 
 describe("a loaded chart opens only while the map still shows its context (N2)", () => {
-  const a = openExpansion([], "A", boxAnchor, chart("A", 300, 200), view);
+  const a = openExpansion([], "A", inPlaceAnchor, chart("A", 300, 200), view);
   const started = { context: "p\u0001", path: "src" };
 
   it("a relayout of the same focus (a new build, same scope) still opens it", () => {
@@ -429,7 +431,7 @@ describe("callers keys", () => {
 
 describe("a caller's chart and the async frame (item 4)", () => {
   it("a chart hung from a callers row, and the callees opened from it, hang from the callers box; the card's own chain does not", () => {
-    const a = openExpansion([], "A", boxAnchor, chart("A", 300, 200), view);
+    const a = openExpansion([], "A", inPlaceAnchor, chart("A", 300, 200), view);
     const withCallee = openExpansion(a, "B", { kind: "step", fnId: "A", stepId: "s1", rect: { x: 0, y: 40, w: 10, h: 10 } }, chart("B", 200, 100), view);
     const withBox = openCallers(withCallee, "B", headerAnchor(find(withCallee, "B")), "B", 3, view);
     const withCaller = openExpansion(withBox, "P", { kind: "step", fnId: callersKey("B"), stepId: "P", rect: callerRowRect(0) }, chart("P", 200, 100), view);
@@ -481,7 +483,7 @@ describe("the latest load per parent (item 5)", () => {
 
 describe("reflow of a header-hung box", () => {
   it("keeps the anchor object when the parent's width did not change", () => {
-    const parent = openExpansion([], "A", boxAnchor, chart("A", 300, 200), view);
+    const parent = openExpansion([], "A", inPlaceAnchor, chart("A", 300, 200), view);
     const list = openCallers(parent, "A", headerAnchor(find(parent, "A")), "A", 2, view);
     const again = reflow(list, view);
     expect(find(again, callersKey("A")).anchor).toBe(find(list, callersKey("A")).anchor);

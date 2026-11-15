@@ -146,6 +146,15 @@ function writeShift(root: SVGGElement, sh: ShiftState) {
     if (dx === 0) el.removeAttribute("transform");
     else el.setAttribute("transform", `translate(${dx} 0)`);
   }
+  // A frame that spans a pivot (it holds the card a box opens beside) widens by the shift of its right edge less the shift of
+  // its left, so what slid right stays inside it. Its body, header and right-aligned count follow.
+  for (const el of root.querySelectorAll<SVGElement>("g[data-sw]")) {
+    const x = Number(el.getAttribute("data-sx"));
+    const w = Number(el.getAttribute("data-sw"));
+    const dw = displayShift(sh, x + w) - displayShift(sh, x);
+    for (const r of el.querySelectorAll<SVGRectElement>("rect.zm-frame-body, rect.zm-frame-head")) r.setAttribute("width", String(w + dw));
+    for (const t of el.querySelectorAll<SVGTextElement>("text[data-cx]")) t.setAttribute("x", String(Number(t.getAttribute("data-cx")) + dw));
+  }
   for (const el of root.querySelectorAll<SVGPathElement>("path[data-sd]")) {
     const nums = (el.getAttribute("data-sd") ?? "").match(/-?\d+(?:\.\d+)?/g)?.map(Number);
     if (nums === undefined || nums.length !== 8) continue;
@@ -1782,7 +1791,7 @@ export function FrameShape({
   const head = ZOOM_SIZE.head;
   const text = headerLabels(node?.label ?? nameOfId(item.id), node?.detail, rect.w * k);
   return (
-    <g className={`zm-frame${node ? ` zm-${node.kind}` : ""} ${lineClass(line)}`} data-sx={rect.x} data-fid={item.id}>
+    <g className={`zm-frame${node ? ` zm-${node.kind}` : ""} ${lineClass(line)}`} data-sx={rect.x} data-sw={rect.w} data-fid={item.id}>
       <title>{node?.title || (node ? (node.detail ? `${node.label} (${node.detail})` : node.label) : item.id)}</title>
       <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={16} className="zm-frame-body" />
       <g className="zm-hit" onClick={() => onOpen(item.id)}>
@@ -1793,7 +1802,7 @@ export function FrameShape({
           </text>
         )}
         {text.detail !== null && (
-          <text x={rect.x + rect.w - 12} y={rect.y + head / 2} dominantBaseline="central" textAnchor="end" className="zm-count">
+          <text x={rect.x + rect.w - 12} data-cx={rect.x + rect.w - 12} y={rect.y + head / 2} dominantBaseline="central" textAnchor="end" className="zm-count">
             {text.detail}
           </text>
         )}

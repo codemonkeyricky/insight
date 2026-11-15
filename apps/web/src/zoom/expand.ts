@@ -127,19 +127,18 @@ export function detailLetter(index: number): string {
 
 /**
  * How far an item at `placed` (its rect, or an edge point as {x}) moves when a detail of width `width` opens at `pivotX`:
- * to the right, nothing at or left of the pivot and the detail's width plus the gap right of it, so the columns slide over
- * and the detail fits in the room they leave. A left-side detail (`side` "left") mirrors it: nothing at or right of the
- * pivot, and the width plus the gap to the left of it.
+ * nothing at or left of the pivot and the detail's width plus the gap right of it, so the columns slide over and the
+ * detail fits in the room they leave. A left-side box shifts the same way: its pivot is just left of its card, so the card
+ * and everything right of it slide right and the box takes the room the card left.
  */
-export function shiftOf(placed: { x: number }, pivotX: number, width: number, side?: "left"): number {
-  if (side === "left") return placed.x < pivotX ? -(width + EXPAND_GAP) : 0;
+export function shiftOf(placed: { x: number }, pivotX: number, width: number): number {
   return placed.x > pivotX ? width + EXPAND_GAP : 0;
 }
 
 /** The total shift an item at x moves by, summed over every open expansion (a chain's details add up). */
 export function shiftAt(list: readonly Expansion[], x: number): number {
   let dx = 0;
-  for (const e of list) dx += shiftOf({ x }, e.pivot, e.w, e.side);
+  for (const e of list) dx += shiftOf({ x }, e.pivot, e.w);
   return dx;
 }
 
@@ -171,11 +170,14 @@ export function clampTop(desired: number, view: Rect | undefined): number {
 }
 
 /**
- * Where an expansion of width `w` beside a function box goes: right of the box, or left of it for a left-side expansion
- * (`w` is then its width), top level with the box's top (see clampTop).
+ * Where an expansion of width `w` beside a function box goes: right of the box. A left-side expansion (`left`, its width)
+ * goes left of the box in a slotted map (the layout keeps the room), and at the box's own left edge in an unslotted one:
+ * the box and everything right of it slide right by its width plus the gap, so it takes the room the box left. Top level
+ * with the box's top (see clampTop).
  */
 export function placeOnBox(rect: Rect, view: Rect | undefined, left?: { w: number }): { x: number; y: number } {
-  return { x: left === undefined ? rect.x + rect.w + EXPAND_GAP : rect.x - left.w - EXPAND_GAP, y: view === undefined ? rect.y + SLOT_TOP : clampTop(rect.y, view) };
+  const x = left === undefined ? rect.x + rect.w + EXPAND_GAP : view === undefined ? rect.x - left.w - EXPAND_GAP : rect.x;
+  return { x, y: view === undefined ? rect.y + SLOT_TOP : clampTop(rect.y, view) };
 }
 
 /**
@@ -186,10 +188,26 @@ export function placeOnStep(parent: Expansion, rect: Rect, view: Rect | undefine
   return { x: left === undefined ? parent.x + parent.w + EXPAND_GAP : parent.x - left.w - EXPAND_GAP, y: clampTop(contentOrigin(parent).y + rect.y, view) };
 }
 
+/** How far left of its card a left box's pivot sits, so the card itself (at the card's x) is right of it. */
+const LEFT_PIVOT_EPS = 0.5;
+
+/**
+ * Whether an expansion opens to the left of its anchor: a callers box anchored on its chain's root (the function card, or
+ * the in-place chart that replaced the card), and anything chained from a left-side box. A callers box anchored inside a
+ * chart that opens to the right of its card or of another chart (its header, a call step, a nested frame) opens to the right,
+ * like the chart does. `from` is the placed parent of a step-anchored expansion.
+ */
+function opensLeft(e: Expansion, from: Expansion | undefined): boolean {
+  if (from?.side === "left") return true;
+  if (e.kind !== "callers") return false;
+  if (e.anchor.kind === "box") return e.anchor.inPlace !== true;
+  return from?.anchor.kind === "box" && from.anchor.inPlace === true;
+}
+
 /**
  * Places every expansion from its anchor, each parent before the children it holds. An expansion whose parent is not in
- * the list is dropped with its chain. The list's order is kept. A box's detail takes the box's right edge as its pivot; a
- * step's detail takes its parent's pivot.
+ * the list is dropped with its chain. The list's order is kept. A box's detail takes the box's right edge as its pivot (a left box
+ * the card's left edge); a step's detail takes its parent's pivot.
  */
 export function reflow(list: readonly Expansion[], view: Rect | undefined): Expansion[] {
   const byFn = new Map(list.map((e) => [e.fnId, e] as const));
@@ -199,33 +217,33 @@ export function reflow(list: readonly Expansion[], view: Rect | undefined): Expa
     if (done !== undefined) return done;
     if (hops > list.length) return undefined;
     let at: { x: number; y: number; pivot: number };
-    // A slotted map's expansions never shift the columns: the layout keeps their room, so the pivot is past every box.
     let from: Expansion | undefined;
     if (e.anchor.kind === "step") {
       const parent = byFn.get(e.anchor.fnId);
       from = parent === undefined ? undefined : place(parent, hops + 1);
       if (from === undefined) return undefined;
     }
-    // Left-side: a callers box, or a box opened from a left-side one (the parent is placed first, so its side is current).
-    const isLeft = e.kind === "callers" || from?.side === "left";
+    const isLeft = opensLeft(e, from);
     // The side is rebuilt each time: a stale `side` never survives a move.
     const { side: _stale, ...plain } = e;
     const withSide = (o: Omit<Expansion, "side">): Expansion => (isLeft ? { ...o, side: "left" } : o);
     const left = isLeft ? e : undefined;
-    const pivotOf = (p: number) => (view === undefined ? (isLeft ? -Infinity : Infinity) : p);
+    // A slotted map's expansions never shift the columns: the layout keeps their room, so the pivot is past every box. In
+    // an unslotted map a left box on a card pivots just left of the card (the card and what is right of it slide right);
+    // what hangs from a left box adds no shift of its own.
     if (e.anchor.kind === "box") {
       // An in-place expansion takes the card's own top-left corner: it is the card, grown.
       const where = e.anchor.inPlace === true ? { x: e.anchor.rect.x, y: e.anchor.rect.y } : placeOnBox(e.anchor.rect, view, left);
-      at = { ...where, pivot: pivotOf(isLeft ? e.anchor.rect.x : e.anchor.rect.x + e.anchor.rect.w) };
+      const pivot = view === undefined ? Infinity : isLeft ? e.anchor.rect.x - LEFT_PIVOT_EPS : e.anchor.rect.x + e.anchor.rect.w;
+      at = { ...where, pivot };
     } else {
       if (from === undefined) return undefined;
       // A box hung from a header takes its rect from the parent's current width, so it follows a resized parent. The
       // anchor is rebuilt only when the parent's width changed.
       const head = e.anchor.stepId === HEADER_STEP ? headerRect(from.w, isLeft) : undefined;
       const rect = head !== undefined && !sameRect(head, e.anchor.rect) ? head : e.anchor.rect;
-      // A left-side box of a right-side parent slides the columns left of the parent's own left edge.
-      const pivot = from.side === "left" ? from.pivot : isLeft ? from.x : from.pivot;
-      at = { ...placeOnStep(from, rect, view, left), pivot: pivotOf(pivot) };
+      const pivot = view === undefined || isLeft ? Infinity : from.pivot;
+      at = { ...placeOnStep(from, rect, view, left), pivot };
       if (rect !== e.anchor.rect) {
         const out = withSide({ ...plain, ...at, anchor: { ...e.anchor, rect } });
         placed.set(e.fnId, out);
@@ -305,6 +323,8 @@ export function hangCallersFrom(list: readonly Expansion[], ref: string, nodeId:
   const head = list.find((e) => e.fnId === ref);
   const kept = list.find((e) => e.fnId === callersKey(ref));
   if (head === undefined || kept === undefined) return list as Expansion[];
+  // Only a chart that replaced its card (in place) takes the box: a chart beside the card opens to the right, and the box stays left of the card.
+  if (head.anchor.kind !== "box" || head.anchor.inPlace !== true) return list as Expansion[];
   if (kept.anchor.kind !== "box" || kept.anchor.nodeId !== nodeId) return list as Expansion[];
   const hasChild = list.some((e) => e !== kept && e.anchor.kind === "step" && e.anchor.fnId === ref);
   if (hasChild) return closeExpansion(list, kept.fnId);
@@ -522,14 +542,14 @@ export function footprintOf(list: readonly Expansion[]): Map<string, RootRoom> {
     let out: Rel;
     if (e.anchor.kind === "box") {
       const cw = e.anchor.rect.w;
-      const left = e.kind === "callers";
+      const left = opensLeft(e, undefined);
       // In place, the expansion starts at the card's own left edge and top, so it takes the card's slot and grows from it.
       out = e.anchor.inPlace === true ? { x: 0, y: 0, root: e.anchor.nodeId, cw, left } : { x: left ? -(e.w + EXPAND_GAP) : cw + EXPAND_GAP, y: SLOT_TOP, root: e.anchor.nodeId, cw, left };
     } else {
       const parent = byFn.get(e.anchor.fnId);
       const from = parent === undefined ? undefined : place(parent, hops + 1);
       if (parent === undefined || from === undefined) return undefined;
-      const left = e.kind === "callers" || from.left;
+      const left = from.left || opensLeft(e, parent);
       out = { x: left ? from.x - e.w - EXPAND_GAP : from.x + parent.w + EXPAND_GAP, y: from.y + CHART_HEAD + CHART_PAD + e.anchor.rect.y, root: from.root, cw: from.cw, left };
     }
     rel.set(e.fnId, out);
@@ -543,7 +563,7 @@ export function footprintOf(list: readonly Expansion[]): Map<string, RootRoom> {
     extent.set(p.root, { ...cur, minX: Math.min(cur.minX, p.x), maxX: Math.max(cur.maxX, p.x + e.w), h: Math.max(cur.h, p.y + e.h) });
   }
   const room = new Map<string, RootRoom>();
-  for (const [root, x] of extent) room.set(root, { left: x.minX < 0 ? -x.minX + SLOT_PAD : 0, w: Math.max(0, x.maxX - x.cw + SLOT_PAD), h: x.h + SLOT_PAD });
+  for (const [root, x] of extent) room.set(root, { left: x.minX < 0 ? -x.minX + SLOT_PAD : 0, w: x.maxX > x.cw ? x.maxX - x.cw + SLOT_PAD : 0, h: x.h + SLOT_PAD });
   return room;
 }
 
