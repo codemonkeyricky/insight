@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { type IRRecord, type IREdge, type IRNode, validateIR } from "@insight/ir";
 import { createCoreRegistry } from "@insight/ir/node";
 import { runFrontendConformance, type IRBatch, type ProjectRoot } from "@insight/sdk";
-import frontend, { extractFiles } from "../src/index.js";
+import frontend, { extractFiles, resolver } from "../src/index.js";
 import { buildProject, Ids, indexStats, releaseProject } from "../src/project.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -972,5 +972,22 @@ describe("bind directives", () => {
       ["chk.sv#chk", "inferred"],
       ["chk.sv#chk", "inferred"],
     ]);
+  });
+});
+
+describe("one include matcher for the linker and the resolver", () => {
+  const dir = join(fixturesDir, "include_suffix_updir");
+  const files = ["rtl/p.sv", "rtl/t.sv", "vendor2/vendor/x.svh"];
+
+  it("an include with ../ that names no file by path links by suffix, and the resolver settles it to the same file", async () => {
+    const listFiles = () => [...files];
+    const ctx = { root: { path: dir, name: "x", allowBuildTools: false }, fromFile: "rtl/p.sv", hasFile: (f: string) => files.includes(f), hasNode: () => false, listFiles };
+    const answer = await resolver.resolve({ scheme: "sv.include", text: "../vendor/x.svh" } as never, ctx as never);
+    expect(answer).toEqual({ targets: ["vendor2/vendor/x.svh"], confidence: "inferred", note: "unique file with this path suffix" });
+  });
+
+  it("p's function lookup sees the functions of the suffix-linked include", async () => {
+    const edge = edgesOf(allRecords(await extractDir(dir, files))).find((e) => e.kind === "calls.call" && e.attrs?.callee === "p::fx");
+    expect(edge?.to).toBe("vendor2/vendor/x.svh#fx");
   });
 });

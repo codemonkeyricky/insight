@@ -1,6 +1,7 @@
 import type { NodeId } from "@insight/ir";
 import { createHash } from "node:crypto";
 import { posix } from "node:path";
+import { matchInclude } from "./include-match.js";
 import { getParser, type SyntaxNode } from "./parser.js";
 
 export const FRONTEND_ID = "frontend-systemverilog";
@@ -560,9 +561,6 @@ export async function indexProject(texts: Map<string, string>): Promise<Project>
   return p;
 }
 
-/** The directory part of a project path, with its trailing slash, or "" at the root. */
-const dirOf = (rel: string): string => rel.slice(0, rel.lastIndexOf("/") + 1);
-
 /**
  * Maps each file a package includes to that package (see Project.includedIn). The include names a file relative to
  * the including file's directory first. Failing that, it names a file whose path ends with its text, but only when
@@ -570,13 +568,12 @@ const dirOf = (rel: string): string => rel.slice(0, rel.lastIndexOf("/") + 1);
  */
 function linkIncludes(p: Project): void {
   const rels = [...p.units.keys()].sort();
-  const known = new Set(rels);
   // Each include resolved to its project file, per including file, in source order.
   const resolved = new Map<string, Array<{ site: IncludeSite; target: string }>>();
   for (const unit of p.units.values()) {
     const list: Array<{ site: IncludeSite; target: string }> = [];
     for (const site of unit.includes) {
-      const target = includeTarget(known, rels, unit.rel, site.text);
+      const target = includeTarget(rels, unit.rel, site.text);
       if (target !== undefined && target !== unit.rel) list.push({ site, target });
     }
     resolved.set(unit.rel, list);
@@ -639,14 +636,11 @@ function linkIncludes(p: Project): void {
 
 /**
  * The project file an include names, or undefined when none or several match by suffix. The directory-relative
- * path uses the text as written. The suffix match drops leading "./" and "../" segments first.
+ * file wins; otherwise the one file whose path ends with the include's text (see matchInclude).
  */
-function includeTarget(known: Set<string>, rels: string[], from: string, text: string): string | undefined {
-  const relative = posix.normalize(`${dirOf(from)}${text}`);
-  if (known.has(relative)) return relative;
-  const t = text.replace(/^(?:\.{1,2}\/)+/, "");
-  const matches = rels.filter((r) => r === t || r.endsWith(`/${t}`));
-  return matches.length === 1 ? matches[0] : undefined;
+function includeTarget(rels: string[], from: string, text: string): string | undefined {
+  const match = matchInclude(from, text, rels);
+  return match.exact ?? (match.suffix.length === 1 ? match.suffix[0] : undefined);
 }
 
 /**
