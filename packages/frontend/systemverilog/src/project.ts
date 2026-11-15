@@ -7,6 +7,12 @@ import { getParser, type SyntaxNode } from "./parser.js";
 export const FRONTEND_ID = "frontend-systemverilog";
 export const SV_RE = /\.(?:v|sv|svh|vh)$/i;
 
+/**
+ * A word that only Verilog and SystemVerilog sources use at the top level. A `.v` file without one is not Verilog
+ * (Coq also uses `.v`), so it is not indexed.
+ */
+export const HDL_TEXT_RE = /\b(module|macromodule|primitive|package|interface|config|library)\b/;
+
 /** Most candidates an edge names. Past this the set is cut. */
 export const MAX_CANDIDATES = 32;
 

@@ -991,3 +991,16 @@ describe("one include matcher for the linker and the resolver", () => {
     expect(edge?.to).toBe("vendor2/vendor/x.svh#fx");
   });
 });
+
+describe("a .v file that is not Verilog", () => {
+  const dir = join(fixturesDir, "coq_only");
+
+  it("a project whose only .v file is Coq is not detected as a Verilog project", async () => {
+    expect(await frontend.detect({ path: dir, name: "coq", allowBuildTools: false })).toBeNull();
+  });
+
+  it("the Coq .v file yields an empty batch: no finding and no file node", async () => {
+    const batches = await extractDir(dir, ["Foo.v"]);
+    expect(batches).toEqual([{ file: "Foo.v", records: [] }]);
+  });
+});
