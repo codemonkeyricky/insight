@@ -1,5 +1,6 @@
 import type { NodeId } from "@insight/ir";
 import { createHash } from "node:crypto";
+import { posix } from "node:path";
 import { getParser, type SyntaxNode } from "./parser.js";
 
 export const FRONTEND_ID = "frontend-systemverilog";
@@ -498,21 +499,28 @@ export async function indexProject(texts: Map<string, string>): Promise<Project>
 const dirOf = (rel: string): string => rel.slice(0, rel.lastIndexOf("/") + 1);
 
 /**
- * Maps each file a package includes to that package (see Project.includedIn). An include matches a file whose path is
- * its text or ends with "/" plus its text. Several matches keep only those in the including file's directory, when any.
+ * Maps each file a package includes to that package (see Project.includedIn). The include names a file relative to
+ * the including file's directory first. Failing that, it names a file whose path ends with its text, but only when
+ * exactly one project file does.
  */
 function linkIncludes(p: Project): void {
   const rels = [...p.units.keys()].sort();
+  const known = new Set(rels);
   for (const unit of p.units.values()) {
     for (const inc of unit.includes) {
-      let matches = rels.filter((r) => r === inc.text || r.endsWith(`/${inc.text}`));
-      if (matches.length > 1) {
-        const near = matches.filter((r) => r.startsWith(dirOf(unit.rel)));
-        if (near.length > 0) matches = near;
-      }
-      for (const m of matches) if (m !== unit.rel && !p.includedIn.has(m)) p.includedIn.set(m, { pkg: inc.pkg, from: unit.rel });
+      const target = includeTarget(known, rels, unit.rel, inc.text);
+      if (target !== undefined && target !== unit.rel && !p.includedIn.has(target)) p.includedIn.set(target, { pkg: inc.pkg, from: unit.rel });
     }
   }
+}
+
+/** The project file an include names, or undefined when none or several match by suffix. `text` may start with "./" or "../". */
+function includeTarget(known: Set<string>, rels: string[], from: string, text: string): string | undefined {
+  const t = text.replace(/^\.\//, "");
+  const relative = posix.normalize(`${dirOf(from)}${t}`);
+  if (known.has(relative)) return relative;
+  const matches = rels.filter((r) => r === t || r.endsWith(`/${t}`));
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 /**

@@ -782,6 +782,30 @@ describe("name resolution by scope", () => {
   });
 });
 
+describe("include matching", () => {
+  const dir = join(fixturesDir, "include_match");
+  const files = ["pkg.sv", "h.svh", "other/h.svh", "t.sv", "rtl/pk2.sv", "rtl/a/defs.svh", "rtl/b/defs.svh", "rtl/t2.sv", "rtl/pk3.sv", "inc/x.svh", "rtl/t3.sv"];
+  const callTo = async (callee: string) => {
+    const edges = edgesOf(allRecords(await extractDir(dir, files)));
+    return edges.find((e) => e.kind === "calls.call" && e.attrs?.callee === callee)?.to;
+  };
+
+  it("a root include takes the file in its own directory, not another file with the same name", async () => {
+    expect(await callTo("p::ha")).toBe("h.svh#ha");
+    // other/h.svh is not included, so its hb is not a function of p.
+    expect(await callTo("p::hb")).toEqual({ unresolved: { scheme: "sv.call", text: "p::hb" } });
+  });
+
+  it("an include that matches two files by suffix links neither", async () => {
+    expect(await callTo("p2::da")).toEqual({ unresolved: { scheme: "sv.call", text: "p2::da" } });
+    expect(await callTo("p2::db")).toEqual({ unresolved: { scheme: "sv.call", text: "p2::db" } });
+  });
+
+  it("an include with ../ resolves against the including file's directory", async () => {
+    expect(await callTo("p3b::xf")).toBe("inc/x.svh#xf");
+  });
+});
+
 describe("system task effects", () => {
   it("a $fopen whose mode is a variable is a write, marked as an unknown mode", async () => {
     const batches = await extractDir(join(fixturesDir, "fopen"), ["mode.sv"]);
