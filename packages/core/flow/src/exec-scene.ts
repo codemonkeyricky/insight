@@ -6,8 +6,8 @@
 // A function is drawn once per place it runs: a helper two threads call has a box in each thread, and the call edges
 // of one thread stay inside that thread. Pure and deterministic: the scene depends only on the model's content, not
 // on the order of its call pairs.
-import type { ExecCoroutine, ExecFunctionRef, ExecModel, ExecProgram, ExecResourceSite, ExecSpawn, ExecThread } from "./exec-model.js";
-import type { Scene, SceneEdge, SceneEdgeKind, SceneLevel, SceneNode } from "./scene.js";
+import type { ExecCoroutine, ExecFunctionRef, ExecModel, ExecProgram, ExecResource, ExecResourceSite, ExecSpawn, ExecThread } from "./exec-model.js";
+import { addSyncResources, syncEdgeKey, type Scene, type SceneEdge, type SceneEdgeKind, type SceneLevel, type SceneNode } from "./scene.js";
 import { LAYERED, ZOOM_SIZE } from "./zoom-layout.js";
 import { programHeaderNames } from "./names.js";
 
@@ -15,6 +15,8 @@ import { programHeaderNames } from "./names.js";
 export const EXEC_PROJECT_ROOT = "project";
 /** Most sync edges one lock or channel adds. The rest are skipped, in the order the pairs are made. */
 export const MAX_SYNC_EDGES_PER_RESOURCE = 50;
+/** The name the IR gives a channel whose identity it could not resolve. Such a channel is listed but never paired. */
+const DYNAMIC_CHANNEL = "<dynamic>";
 /** The synthetic process that holds the grounded main threads no program owns. */
 export const MAIN_PROCESS_ID = "prog:main";
 
@@ -345,8 +347,7 @@ export function buildExecScene(model: ExecModel): Scene {
   const edges = new Map<string, SceneEdge>();
   const addEdge = (from: string, to: string, kind: SceneEdgeKind, how?: string, candidate?: boolean): void => {
     if (from === to) return;
-    // A lock and a channel that join the same two placements stay two edges: the same pair with another `how` is a new key.
-    const k = `${from}\u0000${to}\u0000${kind}\u0000${kind === "sync" ? (how ?? "") : ""}`;
+    const k = `${from}\u0000${to}\u0000${kind}`;
     const e = edges.get(k);
     if (e !== undefined) {
       e.count += 1;
@@ -420,8 +421,10 @@ export function buildExecScene(model: ExecModel): Scene {
     if (fromRoot !== undefined && nodes.has(execThreadId(t.id))) addEdge(fromRoot, execThreadId(t.id), "spawn", spawn.how, spawn.candidates);
   }
 
-  // Sync edges, one per resource and thread pair. The site is the first one of the right op that a thread runs; a
-  // placement is the thread's own when the function has one there, else its first.
+  // Sync edges, one per resource pair of threads. The site is the first one of the right op that a thread runs; a
+  // placement is the thread's own when the function has one there, else its first. Resources that join the same two
+  // placements merge into one edge that names them all. A channel edge runs from sender to receiver; the others are
+  // undirected, and a directed and an undirected edge on one pair stay two edges.
   const threadKeys = model.threads.map((t) => execThreadId(t.id));
   const firstSite = (sites: readonly ExecResourceSite[], ops: readonly string[], threadKey: string): string | undefined => {
     for (const s of sites) {
@@ -431,10 +434,24 @@ export function buildExecScene(model: ExecModel): Scene {
     }
     return undefined;
   };
+  const addSync = (from: string, to: string, r: ExecResource, directed: boolean): void => {
+    if (from === to) return;
+    const k = syncEdgeKey(from, to, directed);
+    const part = { name: r.name, kind: r.kind };
+    const e = edges.get(k);
+    if (e === undefined) {
+      edges.set(k, { from, to, kind: "sync", count: 1, how: r.kind, directed, resources: [part] });
+      return;
+    }
+    e.count += 1;
+    e.resources = addSyncResources(e.resources ?? [], [part]);
+  };
   for (const r of model.resources ?? []) {
+    // A channel whose name the IR could not resolve is one resource for every such channel: listed, but never paired.
+    if (r.kind === "channel" && r.name === DYNAMIC_CHANNEL) continue;
     const pairs: [string, string][] = [];
-    if (r.kind === "lock") {
-      const at = threadKeys.map((k) => firstSite(r.sites, ["acquire"], k));
+    if (r.kind === "lock" || r.kind === "condvar" || r.kind === "semaphore" || r.kind === "atomic") {
+      const at = threadKeys.map((k) => firstSite(r.sites, r.kind === "lock" ? ["acquire"] : ["wait", "notify", "acquire", "release", "op"], k));
       for (let i = 0; i < at.length; i++) {
         const a = at[i];
         if (a === undefined) continue;
@@ -443,20 +460,21 @@ export function buildExecScene(model: ExecModel): Scene {
           if (b !== undefined) pairs.push([a, b]);
         }
       }
-    } else {
-      // Each thread that sends to a channel reaches each other thread that receives from it.
-      const sendAt = threadKeys.map((k) => firstSite(r.sites, ["send"], k));
-      const recvAt = threadKeys.map((k) => firstSite(r.sites, ["recv"], k));
-      for (let i = 0; i < sendAt.length; i++) {
-        const a = sendAt[i];
-        if (a === undefined) continue;
-        for (let j = 0; j < recvAt.length; j++) {
-          const b = recvAt[j];
-          if (b !== undefined && i !== j) pairs.push([a, b]);
-        }
+      for (const [a, b] of pairs.slice(0, MAX_SYNC_EDGES_PER_RESOURCE)) addSync(a, b, r, false);
+      continue;
+    }
+    // Each thread that sends to a channel reaches each other thread that receives from it.
+    const sendAt = threadKeys.map((k) => firstSite(r.sites, ["send"], k));
+    const recvAt = threadKeys.map((k) => firstSite(r.sites, ["recv"], k));
+    for (let i = 0; i < sendAt.length; i++) {
+      const a = sendAt[i];
+      if (a === undefined) continue;
+      for (let j = 0; j < recvAt.length; j++) {
+        const b = recvAt[j];
+        if (b !== undefined && i !== j) pairs.push([a, b]);
       }
     }
-    for (const [a, b] of pairs.slice(0, MAX_SYNC_EDGES_PER_RESOURCE)) addEdge(a, b, "sync", r.kind);
+    for (const [a, b] of pairs.slice(0, MAX_SYNC_EDGES_PER_RESOURCE)) addSync(a, b, r, true);
   }
 
   const edgeList = [...edges.values()].sort(

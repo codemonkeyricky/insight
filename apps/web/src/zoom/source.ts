@@ -215,14 +215,15 @@ export const lineClass = (line: RuntimeLine): string => `zm-line-${line}`;
 /** The edge's classes: stubs dashed, candidates dotted, spawns and dispatches marked by kind, sync edges by what is shared. */
 export function edgeClass(e: Pick<MapEdge, "stub" | "candidate" | "kind" | "how">): string {
   const base = e.stub ? "zm-edge stub" : e.candidate ? "zm-edge candidate" : "zm-edge";
-  if (e.kind === "sync") return `${base} sync${e.how === "lock" || e.how === "channel" ? ` ${e.how}` : ""}`;
+  if (e.kind === "sync") return `${base} sync${e.how ? ` ${e.how}` : ""}`;
   return e.kind === "spawn" || e.kind === "dispatch" ? `${base} ${e.kind}` : base;
 }
 
 /** The edge's tooltip. */
 export function edgeTitle(e: Pick<MapEdge, "stub" | "count" | "stubCount" | "kind" | "how">): string {
   if (e.kind === "sync" && e.how === "channel") return e.count === 1 ? "Sends on a channel the other receives" : `${e.count} channels from one to the other`;
-  if (e.kind === "sync") return e.count === 1 ? "Both take the same lock" : `${e.count} locks both take`;
+  if (e.kind === "sync" && e.how === "lock") return e.count === 1 ? "Both take the same lock" : `${e.count} locks both take`;
+  if (e.kind === "sync") return e.count === 1 ? `Both use the same ${e.how}` : `${e.count} ${e.how}s both use`;
   if (e.kind === "spawn") return e.count === 1 ? "Spawns this" : `${e.count} spawns`;
   if (e.kind === "dispatch") return e.count === 1 ? "1 dispatch" : `${e.count} dispatches`;
   return e.stub ? `${e.count} calls, ${e.stubCount} leave the scope` : `${e.count} calls`;

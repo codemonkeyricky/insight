@@ -24,6 +24,9 @@ const ZERO_STATS: ExecModelStats = {
   functionsCoroutineOnly: 0,
   functionsUnthreaded: 0,
   functionsListed: 0,
+  condvars: 0,
+  semaphores: 0,
+  atomics: 0,
 };
 
 const fn = (id: string, line = 1, extra: Partial<ExecFunctionRef> = {}): ExecFunctionRef => ({
