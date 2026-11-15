@@ -30,6 +30,7 @@ export {
   type ArchPackage,
   type ArchEdge,
   type ArchExternal,
+  type ArchExternalPackage,
   type ArchUnresolved,
   type ArchViolation,
   type ArchFile,
