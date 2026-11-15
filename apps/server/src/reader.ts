@@ -21,9 +21,11 @@ import {
 } from "@insight/indexer";
 import {
   buildFileFlow,
+  couplingIndex,
   execModel,
   summarizeFlows,
   summarizeScope,
+  type CouplingIndex,
   type ExecModel,
   type FileFlow,
   type FileFlowSummary,
@@ -324,11 +326,25 @@ export function fileFacts(paths: ProjectPaths, snapshot: string, file: string): 
   return { symbols, findings: allFindings(paths, snapshot).filter((f) => f.span?.file === file) };
 }
 
-/** The control-flow charts of the functions in one file, rebuilt from the snapshot's IR. */
+const couplingCache = new Map<string, CouplingIndex>();
+
+/** The project-wide coupling index of a snapshot, built once and kept for the last few snapshots. */
+function couplingFor(paths: ProjectPaths, snapshot: string): CouplingIndex {
+  const key = `${paths.root}|${snapshot}`;
+  const hit = couplingCache.get(key);
+  if (hit) return hit;
+  const snap = loadSnapshot(paths, snapshot);
+  const index = couplingIndex([...snap.nodes.values()], snap.edges);
+  couplingCache.set(key, index);
+  if (couplingCache.size > CACHE_LIMIT) couplingCache.delete(couplingCache.keys().next().value as string);
+  return index;
+}
+
+/** The control-flow charts of the functions in one file, rebuilt from the snapshot's IR, each with its coupling chart. */
 export function fileFlow(paths: ProjectPaths, snapshot: string, file: string): FileFlow {
   const snap = loadSnapshot(paths, snapshot);
   const nodes = [...snap.nodes.values()].filter((n) => n.span?.file === file);
-  return buildFileFlow(file, nodes, snap.edges.filter((e) => e.span?.file === file));
+  return buildFileFlow(file, nodes, snap.edges.filter((e) => e.span?.file === file), { coupling: couplingFor(paths, snapshot) });
 }
 
 /** How branchy each file is, for the folder and project scopes of the flow view. */

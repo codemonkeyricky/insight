@@ -1,6 +1,8 @@
 import type { IREdge, IRNode } from "@insight/ir";
 import { factsForFile } from "./build.js";
+import { couplingChart, couplingFacts, type CouplingFootprint } from "./coupling.js";
 import { layoutFunction, measure } from "./layout.js";
+import { moduleMap, type ModuleMap } from "./modules.js";
 import type { FileFlow } from "./types.js";
 
 export * from "./types.js";
@@ -19,15 +21,41 @@ export * from "./names.js";
 export * from "./modules.js";
 export * from "./coupling.js";
 
+/** What the coupling view needs from the whole project: its modules and every function's footprint. Built once per snapshot. */
+export interface CouplingIndex {
+  modules: ModuleMap;
+  footprints: ReadonlyMap<string, CouplingFootprint>;
+}
+
+/** The coupling index of a project's IR records. */
+export function couplingIndex(nodes: readonly IRNode[], edges: readonly IREdge[]): CouplingIndex {
+  const { modules, footprints } = couplingFacts(nodes, edges);
+  return { modules, footprints };
+}
+
 /**
  * The control-flow chart of every function in one source file, rebuilt from the IR.
  *
  * The TypeScript frontend records decisions, loops, try blocks, returns, calls, awaits, spawns and
  * side effects with their source ranges. Containment of those ranges gives the nesting, so this
  * works for any frontend that emits the same flow facts.
+ *
+ * With `opts.coupling`, each function also carries its coupling chart (see `FunctionFlow.coupling`).
+ * The index describes the whole project; `nodes` and `edges` may hold only this file.
  */
-export function buildFileFlow(file: string, nodes: Iterable<IRNode>, edges: Iterable<IREdge>): FileFlow {
-  return { file, functions: factsForFile(file, nodes, edges).map((f) => layoutFunction(f)) };
+export function buildFileFlow(file: string, nodes: Iterable<IRNode>, edges: Iterable<IREdge>, opts: { coupling?: CouplingIndex } = {}): FileFlow {
+  const coupling = opts.coupling;
+  const facts = factsForFile(file, nodes, edges, coupling ? { sources: true } : {});
+  return {
+    file,
+    functions: facts.map((f) => {
+      const flow = layoutFunction(f);
+      if (coupling === undefined || flow.tooLarge) return flow;
+      const pruned = couplingChart(f.id, f.items, coupling.modules, coupling.footprints);
+      const chart = layoutFunction({ id: f.id, name: f.name, async: f.async, ...(f.span ? { span: f.span } : {}), items: pruned.items });
+      return { ...flow, coupling: { ...pruned.info, chart, rows: { all: flow.nodes.length, coupling: chart.nodes.length } } };
+    }),
+  };
 }
 
 /** What the project, folder and file scopes show for the flow view: how branchy each file is. */

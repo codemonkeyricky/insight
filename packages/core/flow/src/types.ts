@@ -1,4 +1,5 @@
 import type { Item } from "./build.js";
+import type { CouplingInfo } from "./coupling.js";
 
 /** A source range copied from the IR. Lines are 0-based, so add 1 to show a line number. */
 export interface FlowSpan {
@@ -119,6 +120,12 @@ export interface FunctionFlow {
    * steps (see `relayout`). Absent on a chart too large to draw.
    */
   items?: Item[];
+  /**
+   * The coupling view: the function's chart pruned to the rows that cross a module, do I/O, spawn work, or throw out. Set
+   * only when the file flow was built with a coupling index and the full chart fits. `rows` counts the laid-out boxes of
+   * the full chart (`all`) and of the coupling chart (`coupling`).
+   */
+  coupling?: CouplingInfo & { chart: FunctionFlow; rows: { all: number; coupling: number } };
 }
 
 export interface FileFlow {
