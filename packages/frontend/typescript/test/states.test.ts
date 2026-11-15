@@ -274,3 +274,50 @@ describe("review round 2", () => {
     expect(p!.attrs.fromEntry).toBe(true);
   });
 });
+
+describe("review round 3", () => {
+  let cache: IRBatch[] | undefined;
+  const rv = async (): Promise<IRBatch[]> => {
+    if (cache) return cache;
+    const batches: IRBatch[] = [];
+    const lf = ["states/review3.ts"];
+    const ctx = { root, files: lf, listFiles: () => [...lf], readFile, log: () => undefined };
+    for await (const batch of frontend.extract(ctx)) batches.push(batch);
+    return (cache = batches);
+  };
+  const wr = async (fn: string) =>
+    nodes(await rv(), "state.write")
+      .filter((n) => n.parent === `states/review3.ts#${fn}`)
+      .sort((x, y) => x.span!.start[0] - y.span!.start[0]);
+  const lastOf = async (fn: string) => {
+    const w = await wr(fn);
+    return w[w.length - 1]!.attrs;
+  };
+
+  it("item 1: call invalidation reaches the catch of the enclosing try", async () => {
+    const [w] = await wr("I1.go");
+    expect(w!.attrs.fromEntry).toBeUndefined();
+  });
+  it("item 2: a method cycle does not cache a partial write set", async () => {
+    expect((await lastOf("I2.go")).fromEntry).toBeUndefined();
+  });
+  it("item 3: a throw in a try with only a finally goes to that finally, then outward", async () => {
+    expect((await lastOf("I3.nestedFinally")).from).toEqual(["S.Idle", "S.C"]);
+  });
+  it("item 5: a throw caught by an inner catch does not reach the outer finally", async () => {
+    const from = (await lastOf("I3.innerCatch")).from as string[];
+    expect(from).not.toContain("S.X");
+    expect(from).toContain("S.A");
+  });
+  it("item 8: implicit throws inside a catch reach its finally", async () => {
+    expect((await lastOf("I3.implicit")).from).toEqual(expect.arrayContaining(["S.F", "S.A"]));
+  });
+  it("item 4: a setter helper invalidates the other holders it writes", async () => {
+    const t = (await wr("I4.go")).find((n) => n.attrs.holder.endsWith(".t"))!;
+    expect(t.attrs.fromEntry).toBeUndefined();
+  });
+  it("item 6: an abstract this.hook() call makes the holders plain unknown", async () => {
+    const [w] = await wr("I6.go");
+    expect(w!.attrs.fromEntry).toBeUndefined();
+  });
+});

@@ -781,7 +781,8 @@ export function emitState(h: StateHelpers): StateOutput {
   let currentClassId: string | undefined;
 
   /** Only the innermost try records; a closing try hands its record to the next one out. */
-  const noteThrowable = (at: number, isAwait: boolean): void => {
+  const noteThrowable = (at: number, isAwait: boolean, env?: Env): void => {
+    if (env) routeAbrupt({ kind: "throw", env, depth: -1 }, finStack.length);
     const t = tryStack[tryStack.length - 1];
     if (!t) return;
     t.throwables.push(at);
@@ -802,22 +803,31 @@ export function emitState(h: StateHelpers): StateOutput {
   interface FinCollector {
     abrupts: Abrupt[];
     jumpDepth: number;
-    inCatch: boolean;
+    phase: "try" | "catch";
+    hasCatch: boolean;
+    hasFinally: boolean;
   }
+  /** Every open try (try or catch phase), innermost last. */
   let finStack: FinCollector[] = [];
-  /** Routes an abrupt exit to the innermost finally it crosses, else to its target. */
+  /**
+   * Routes an abrupt exit outward from stack position `from`. A throw from a try block whose try has a catch stops
+   * there (the catch entry covers it); otherwise it goes to the nearest finally, which then continues it outward.
+   * Return/break/continue go to every finally they cross.
+   */
   const routeAbrupt = (a: Abrupt, from: number): void => {
     for (let i = from - 1; i >= 0; i--) {
       const c = finStack[i]!;
       if (a.kind === "throw") {
-        if (c.inCatch) {
-          c.abrupts.push(a);
+        if (c.phase === "try" && c.hasCatch) return;
+        if (c.hasFinally) {
+          const g = sig(a.env);
+          if (!c.abrupts.some((x) => x.kind === "throw" && sig(x.env) === g)) c.abrupts.push({ ...a, env: clone(a.env) });
           return;
         }
         continue;
       }
-      if (c.jumpDepth > a.depth) {
-        c.abrupts.push(a);
+      if (c.hasFinally && c.jumpDepth > a.depth) {
+        c.abrupts.push({ ...a, env: clone(a.env) });
         return;
       }
     }
@@ -988,51 +998,66 @@ export function emitState(h: StateHelpers): StateOutput {
     });
   };
 
-  /** The holders (receiver `this`) a method writes, directly or through `this.m()` calls (cycle-safe). */
+  /**
+   * The holders (receiver `this`) a method writes, directly or through `this.m()` calls. Computed by a walk over
+   * everything reachable with a visited set, and cached only for the method asked about, so a cycle among methods
+   * never leaves a partial set behind.
+   */
   const writtenCache = new Map<ts.Node, Set<Holder>>();
-  const writtenBy = (fn: ts.FunctionLikeDeclaration): Set<Holder> => {
-    const hit = writtenCache.get(fn);
+  const writtenBy = (root: ts.FunctionLikeDeclaration): Set<Holder> => {
+    const hit = writtenCache.get(root);
     if (hit) return hit;
     const out = new Set<Holder>();
-    writtenCache.set(fn, out); // a cycle sees the partial set; the outer call completes it
-    const walk = (n: ts.Node): void => {
-      if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
-        const l = stripAll(n.left);
-        if (ts.isPropertyAccessExpression(l) && l.expression.kind === ts.SyntaxKind.ThisKeyword) {
-          const rd = readOf(l, false);
-          if (rd) out.add(rd.holder);
-          else {
-            const aset = resolveAlias(checker.getSymbolAtLocation(l.name))?.declarations?.find(ts.isSetAccessorDeclaration);
-            const st = aset ? setterOf(aset) : null;
-            if (st) out.add(st.holder);
+    const seen = new Set<ts.Node>([root]);
+    const visit = (fn: ts.FunctionLikeDeclaration): void => {
+      const walk = (n: ts.Node): void => {
+        if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+          const l = stripAll(n.left);
+          if (ts.isPropertyAccessExpression(l) && l.expression.kind === ts.SyntaxKind.ThisKeyword) {
+            const rd = readOf(l, false);
+            if (rd) out.add(rd.holder);
+            else {
+              const aset = resolveAlias(checker.getSymbolAtLocation(l.name))?.declarations?.find(ts.isSetAccessorDeclaration);
+              const st = aset ? setterOf(aset) : null;
+              if (st) out.add(st.holder);
+            }
+          }
+        } else if (ts.isCallExpression(n)) {
+          const c = stripAll(n.expression);
+          if (ts.isPropertyAccessExpression(c) && c.expression.kind === ts.SyntaxKind.ThisKeyword) {
+            const sy = resolveAlias(checker.getSymbolAtLocation(c.name));
+            const cf = fnNodeFromDecl(sy?.valueDeclaration ?? sy?.declarations?.[0]);
+            if (cf && !ts.isGetAccessorDeclaration(cf) && !seen.has(cf)) {
+              seen.add(cf);
+              visit(cf);
+            }
           }
         }
-      } else if (ts.isCallExpression(n)) {
-        const c = stripAll(n.expression);
-        if (ts.isPropertyAccessExpression(c) && c.expression.kind === ts.SyntaxKind.ThisKeyword) {
-          const sy = resolveAlias(checker.getSymbolAtLocation(c.name));
-          const cf = fnNodeFromDecl(sy?.valueDeclaration ?? sy?.declarations?.[0]);
-          if (cf && !ts.isGetAccessorDeclaration(cf)) {
-            const st = setterOf(cf);
-            if (st) {
-              if (st.receiverIsThis) out.add(st.holder);
-            } else for (const x of writtenBy(cf)) out.add(x);
-          }
-        }
-      }
-      ts.forEachChild(n, walk);
+        ts.forEachChild(n, walk);
+      };
+      if (fn.body) walk(fn.body);
     };
-    if (fn.body) walk(fn.body);
+    visit(root);
+    writtenCache.set(root, out);
     return out;
   };
+  /** Makes a holder plain unknown at a call, for the env and for the enclosing try's catch entry. */
+  const forgetHolders = (holders: Iterable<Holder>, env: Env, call: ts.CallExpression): void => {
+    if (!env) return;
+    for (const hd of holders) {
+      const key = keyOf(hd, "this");
+      env.set(key, unknownKS({ holder: hd, receiver: "this" } as KS));
+      tryStack[tryStack.length - 1]?.writes.push({ key, hd, value: undefined, at: call.getStart(sf), receiver: "this", loops: [...loopStack] });
+    }
+  };
   /** A same-class method that writes a holder leaves its set unknown (not the entry value). */
-  const invalidateWritten = (fn: ts.FunctionLikeDeclaration, callee: ts.Expression, env: Env): void => {
-    if (!env || callee.kind !== ts.SyntaxKind.PropertyAccessExpression || (callee as ts.PropertyAccessExpression).expression.kind !== ts.SyntaxKind.ThisKeyword) return;
-    for (const hd of writtenBy(fn)) env.set(keyOf(hd, "this"), unknownKS({ holder: hd, receiver: "this" } as KS));
+  const invalidateWritten = (fn: ts.FunctionLikeDeclaration, callee: ts.Expression, call: ts.CallExpression, env: Env, except?: Holder): void => {
+    if (!env || !ts.isPropertyAccessExpression(callee) || callee.expression.kind !== ts.SyntaxKind.ThisKeyword) return;
+    forgetHolders([...writtenBy(fn)].filter((x) => x !== except), env, call);
   };
 
   const handleCall = (call: ts.CallExpression, env: Env): void => {
-    noteThrowable(call.getStart(sf), false);
+    noteThrowable(call.getStart(sf), false, env);
     recordCallState(call, env);
     const callee = stripAll(call.expression);
     // useState setter
@@ -1051,21 +1076,31 @@ export function emitState(h: StateHelpers): StateOutput {
     const sym = resolveAlias(checker.getSymbolAtLocation(nameNode));
     const decl = sym?.valueDeclaration ?? sym?.declarations?.[0];
     const fn = fnNodeFromDecl(decl);
-    if (!fn || ts.isGetAccessorDeclaration(fn)) return;
+    if (!fn || (fn && ts.isGetAccessorDeclaration(fn))) {
+      // A `this.x()` that cannot be resolved to a body (abstract, interface-typed, function-valued property) may
+      // write anything: every holder of the class becomes plain unknown.
+      if (!fn && ts.isPropertyAccessExpression(callee) && callee.expression.kind === ts.SyntaxKind.ThisKeyword && env) {
+        const cls = enclosingClass(call);
+        const cd = cls ? project.decls.get(cls) : undefined;
+        if (cd) forgetHolders([...holderById.values()].filter((x) => x.classId === cd.id), env, call);
+      }
+      return;
+    }
     const st = setterOf(fn);
     if (!st) {
-      invalidateWritten(fn, callee, env);
+      invalidateWritten(fn, callee, call, env);
       return;
     }
     const receiver = ts.isPropertyAccessExpression(callee) ? recvText(callee.expression) : "";
     if (st.receiverIsThis !== ts.isPropertyAccessExpression(callee)) {
-      invalidateWritten(fn, callee, env);
+      invalidateWritten(fn, callee, call, env);
       return;
     }
     const a = call.arguments[st.paramIndex];
     const v = a ? assignValue(a) : undefined;
     const via = h.declOf(sym)?.id;
     doWrite(env, call, st.holder, "set", v, receiver, call.getStart(sf), via);
+    invalidateWritten(fn, callee, call, env, st.holder);
   };
 
   function effects(n: ts.Node, env: Env): Env {
@@ -1078,13 +1113,13 @@ export function emitState(h: StateHelpers): StateOutput {
     if (ts.isAwaitExpression(n)) {
       env = effects(n.expression, env);
       markStale(env);
-      noteThrowable(n.getStart(sf), true);
+      noteThrowable(n.getStart(sf), true, env);
       return env;
     }
     if (ts.isYieldExpression(n)) {
       if (n.expression) env = effects(n.expression, env);
       markStale(env);
-      noteThrowable(n.getStart(sf), true);
+      noteThrowable(n.getStart(sf), true, env);
       return env;
     }
     if (ts.isBinaryExpression(n)) {
@@ -1140,7 +1175,7 @@ export function emitState(h: StateHelpers): StateOutput {
     if (ts.isNewExpression(n)) {
       env = effects(n.expression, env);
       if (n.arguments) env = effectsAll(n.arguments, env);
-      noteThrowable(n.getStart(sf), false);
+      noteThrowable(n.getStart(sf), false, env);
       return env;
     }
     if (ts.isObjectLiteralExpression(n)) {
@@ -1369,7 +1404,7 @@ export function emitState(h: StateHelpers): StateOutput {
       if (isAwaitLoop) {
         // `for await` awaits the iterator on every pass, and that await can throw.
         markStale(head);
-        noteThrowable(s.getStart(sf), true);
+        noteThrowable(s.getStart(sf), true, head);
       }
       if (isDo) {
         const be = stmt(body, head);
@@ -1403,13 +1438,13 @@ export function emitState(h: StateHelpers): StateOutput {
     if (ts.isVariableStatement(s)) return effectsAll(s.declarationList.declarations, env);
     if (ts.isReturnStatement(s)) {
       if (s.expression) effects(s.expression, env);
-      routeAbrupt({ kind: "return", env: clone(env), depth: -1 }, finStack.length);
+      routeAbrupt({ kind: "return", env, depth: -1 }, finStack.length);
       return null;
     }
     if (ts.isThrowStatement(s)) {
       effects(s.expression, env);
       noteThrowable(s.getStart(sf), false);
-      routeAbrupt({ kind: "throw", env: clone(env), depth: -1 }, finStack.length);
+      routeAbrupt({ kind: "throw", env, depth: -1 }, finStack.length);
       return null;
     }
     if (ts.isBreakStatement(s)) {
@@ -1555,8 +1590,8 @@ export function emitState(h: StateHelpers): StateOutput {
     const entry = clone(env);
     const col: TryCollector = { writes: [], throwables: [], throwLoops: [], awaited: false };
     tryStack.push(col);
-    const fin: FinCollector | undefined = s.finallyBlock ? { abrupts: [], jumpDepth: jumps.length, inCatch: false } : undefined;
-    if (fin) finStack.push(fin);
+    const fin: FinCollector = { abrupts: [], jumpDepth: jumps.length, phase: "try", hasCatch: !!s.catchClause, hasFinally: !!s.finallyBlock };
+    finStack.push(fin);
     const tryEnd = stmt(s.tryBlock, env);
     tryStack.pop();
     const outer = tryStack[tryStack.length - 1];
@@ -1602,13 +1637,12 @@ export function emitState(h: StateHelpers): StateOutput {
     if (col.awaited) markStale(exc);
     let catchEnd: Env = null;
     if (s.catchClause) {
-      if (fin) fin.inCatch = true;
+      fin.phase = "catch";
       catchEnd = stmt(s.catchClause.block, clone(exc));
-      if (fin) fin.inCatch = false;
     }
+    finStack.pop();
     let after: Env = s.catchClause ? join(tryEnd, catchEnd) : tryEnd;
-    if (fin && s.finallyBlock) {
-      finStack.pop();
+    if (s.finallyBlock) {
       // The finally block's own facts see every way in: normal, exceptional and every abrupt exit...
       let finEntry = join(clone(after), clone(exc));
       for (const a of fin.abrupts) finEntry = join(finEntry, clone(a.env));
