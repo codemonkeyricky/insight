@@ -609,7 +609,9 @@ export function factsForFile(file: string, nodes: Iterable<IRNode>, edges: Itera
     const varId = typeof e.to === "string" ? e.to : undefined;
     const sv = varId === undefined ? undefined : state.get(varId);
     if (varId === undefined || sv === undefined || !sv.mutable) continue;
-    const parent = e.from === `${file}#(module)` ? file : e.from;
+    // The edge's own `from` is the owner. The module entry `<file>#(module)` is a real function node, so it stays; the
+    // bare file id is kept only for a module with no entry node (C++ top-level code, or a file with no module entry).
+    const parent = functions.has(e.from) || e.from !== `${file}#(module)` ? e.from : file;
     if (!functions.has(parent) && parent !== file) continue;
     const write = e.kind === "data.write";
     const name = String(sv.node.attrs.qualifiedName ?? sv.node.attrs.name ?? varId);

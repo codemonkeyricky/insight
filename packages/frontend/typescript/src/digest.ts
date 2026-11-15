@@ -3,8 +3,9 @@ import { createHash } from "node:crypto";
 import { globalWritesIn } from "./data.js";
 
 /**
- * Digest of a file's API: its text with every function body removed, plus its global writes. A body-only change leaves
- * the digest alone, so dependents keep their shards, unless it moves or changes a global write. Top-level statements still count.
+ * Digest of a file's API: its text with every function body removed, plus its global writes. Top-level statements still count.
+ * The global writes enter the digest with their byte offsets, so a body edit above one shifts its offsets and re-extracts
+ * the dependents of that global. The header makes no body-only guarantee for files that write globals.
  */
 export function apiDigest(relPath: string, text: string): string {
   // Parents are set: the global writes are found through them.
