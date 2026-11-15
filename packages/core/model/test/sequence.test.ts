@@ -9,9 +9,15 @@ function fn(path: string, name: string, attrs: Record<string, unknown> = {}): IR
   return fx.node(`${path}#${name}`, "structure", "structure.function", { attrs: { name, ...attrs }, parent: path, span: fx.span(path, 2, 0, 9, 1) });
 }
 
-/** A call from `from` to `to`, on `line`, spanning columns c0 to c1. */
-function call(from: string, to: string, path: string, line: number, c0 = 2, c1 = 12): IREdge {
-  return fx.edge(from, to, "calls", "calls.call", { span: fx.span(path, line, c0, line, c1) });
+/**
+ * A call from `from` to `to`, on `line`. The span covers the callee name (columns c0 to c1), as the frontend emits it; callEnd is
+ * the end of the whole call expression, when given.
+ */
+function call(from: string, to: string, path: string, line: number, c0 = 2, c1 = 12, callEnd?: [number, number]): IREdge {
+  return fx.edge(from, to, "calls", "calls.call", {
+    span: fx.span(path, line, c0, line, c1),
+    ...(callEnd !== undefined ? { attrs: { callEnd } } : {}),
+  });
 }
 
 const RUN = "app/src/run.ts";
@@ -30,9 +36,9 @@ function stageNodes(): { nodes: IRNode[]; edges: IREdge[] } {
   return { nodes, edges };
 }
 
-/** run calls each named stage on its own line, in the order given, unless `at` gives the line and columns. */
-function runCalls(order: Array<[string, number, number?, number?]>): IREdge[] {
-  return order.map(([name, line, c0, c1]) => call(RUN_FN, stageId(name), RUN, line, c0, c1));
+/** run calls each named stage on its own line, in the order given: [name, line, nameStart?, nameEnd?, callEnd?]. */
+function runCalls(order: Array<[string, number, number?, number?, [number, number]?]>): IREdge[] {
+  return order.map(([name, line, c0, c1, callEnd]) => call(RUN_FN, stageId(name), RUN, line, c0, c1, callEnd));
 }
 
 /** The base project: the run orchestrator with five stages, in file order s1 to s5. */
@@ -68,9 +74,10 @@ describe("sequence pipelines", () => {
     expect(seqs[0]?.stages.map((s) => s.order)).toEqual([0, 1, 2, 3, 4]);
   });
 
-  it("puts a nested call's stage before the stage that wraps it", () => {
-    // f(g(x)): s1 is the inner call (ends at column 14), s2 the outer one (ends at column 16) but starts first.
-    const seqs = sequencesOf(doc([], [], {}, runCalls([["s2", 10, 2, 16], ["s1", 10, 10, 14], ["s3", 11], ["s4", 12], ["s5", 13]])));
+  it("puts a nested call's stage before the stage that wraps it, from callEnd", () => {
+    // `s2(s1(x))` at column 2: the names are at [2,4) and [5,7). s1's call ends at column 10, s2's at column 11. The name spans
+    // alone would put s2 first, since its name ends earlier.
+    const seqs = sequencesOf(doc([], [], {}, runCalls([["s2", 10, 2, 4, [10, 11]], ["s1", 10, 5, 7, [10, 10]], ["s3", 11], ["s4", 12], ["s5", 13]])));
     expect(seqs[0]?.stages.map((s) => s.name)).toEqual(["s1", "s2", "s3", "s4", "s5"]);
   });
 

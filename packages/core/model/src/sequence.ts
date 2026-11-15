@@ -94,12 +94,12 @@ export function sequencePipelines(
     if (own.length === 0) continue;
     const distinctCallees = new Set(own.map((r) => r.to)).size;
 
-    // Each callee's stage site: its call with the smallest span end, so `f(g(x))` puts g before f.
+    // Each callee's stage site: its call with the smallest call end (callEnd, else span end), so `f(g(x))` puts g before f.
     const best = new Map<NodeId, { key: number; rel: Rel }>();
     for (const rel of own) {
       const callee = model.functionById.get(rel.to);
       if (callee === undefined || callee.file === fn.file || !isStage(callee)) continue;
-      const key = spanEnd(rel.edge.span);
+      const key = callEnd(rel);
       const cur = best.get(rel.to);
       if (cur === undefined || key < cur.key) best.set(rel.to, { key, rel });
     }
@@ -148,8 +148,15 @@ export function sequencePipelines(
     .map((c) => c.seq);
 }
 
-/** The position of a span's end, as one number: line * 1e6 + column. A missing span sorts last. */
-function spanEnd(span: Span | undefined): number {
+/**
+ * The position a call finishes at, as one number: line * 1e6 + column. The frontend records the whole call expression's end
+ * as `callEnd`, because the span covers only the callee name, which would put `f(g(x))` the wrong way round. Without it,
+ * the span's end is used. A call with neither sorts last.
+ */
+function callEnd(rel: Rel): number {
+  const end = rel.edge.attrs?.callEnd;
+  if (Array.isArray(end) && typeof end[0] === "number" && typeof end[1] === "number") return end[0] * 1e6 + end[1];
+  const span: Span | undefined = rel.edge.span;
   return span ? span.end[0] * 1e6 + span.end[1] : Number.MAX_SAFE_INTEGER;
 }
 
