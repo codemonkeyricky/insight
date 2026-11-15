@@ -86,6 +86,7 @@ interface WriteRec {
   event?: string;
   guardText?: string;
   via?: string;
+  ownerLabel?: string;
 }
 
 interface TestRec {
@@ -270,6 +271,33 @@ export function emitState(h: StateHelpers): StateOutput {
       if (project.decls.has(p) && project.decls.get(p)?.entity.type === "function") return p;
     }
     return undefined;
+  };
+
+  /**
+   * For a write inside an arrow or function expression: `<enclosing function> › <name>` when the lambda is assigned to a
+   * named property or variable (`onClose: () => …`, `x.onclose = () => …`), else `<enclosing function> › λ`.
+   */
+  const lambdaLabel = (n: ts.Node): string | undefined => {
+    const fn = enclosingFn(n);
+    const d = fn ? project.decls.get(fn) : undefined;
+    if (!fn || !d || d.entity.type !== "function" || !d.entity.anonymous) return undefined;
+    let outer: string | undefined;
+    for (let p: ts.Node | undefined = fn.parent; p; p = p.parent) {
+      const od = project.decls.get(p);
+      if (od && od.entity.type === "function" && !od.entity.anonymous) {
+        outer = od.entity.name;
+        break;
+      }
+    }
+    const par = fn.parent;
+    let name: string | undefined;
+    const nameOf = (e: ts.Node): string | undefined =>
+      ts.isIdentifier(e) ? e.text : ts.isPropertyAccessExpression(e) ? e.name.text : ts.isStringLiteralLike(e) ? e.text : undefined;
+    if (par && ts.isPropertyAssignment(par) && par.initializer === fn) name = nameOf(par.name);
+    else if (par && ts.isBinaryExpression(par) && par.right === fn && par.operatorToken.kind === ts.SyntaxKind.EqualsToken) name = nameOf(par.left);
+    else if (par && ts.isVariableDeclaration(par) && par.initializer === fn) name = nameOf(par.name);
+    const tail = name ?? "λ";
+    return outer ? `${outer} › ${tail}` : tail;
   };
 
   const typeOfDecl = (decl: ts.Node & { type?: ts.TypeNode }): ts.Type => (decl.type ? checker.getTypeFromTypeNode(decl.type) : checker.getTypeAtLocation(decl));
@@ -739,6 +767,8 @@ export function emitState(h: StateHelpers): StateOutput {
     const ev = eventFor(keyOf(hd, receiver ?? ""));
     if (ev !== undefined) rec.event = ev;
     if (via) rec.via = via;
+    const ol = lambdaLabel(node);
+    if (ol) rec.ownerLabel = ol;
     if (!silent) writes.set(node, rec);
     if (receiver !== undefined && env) {
       const key = keyOf(hd, receiver);
@@ -1425,6 +1455,7 @@ export function emitState(h: StateHelpers): StateOutput {
         ...(w.event !== undefined ? { event: w.event } : {}),
         ...(guards && guards.length && w.guardText ? { guardText: w.guardText } : {}),
         ...(w.via ? { via: w.via } : {}),
+        ...(w.ownerLabel ? { ownerLabel: w.ownerLabel } : {}),
       },
       span: h.spanOf(w.node),
       provenance: h.provenance,

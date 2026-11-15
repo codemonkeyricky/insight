@@ -29,6 +29,7 @@ interface W {
   guardMatch?: string;
   event?: string;
   guardText?: string;
+  ownerLabel?: string;
   line?: number;
   file?: string;
   confidence?: "exact" | "inferred" | "heuristic";
@@ -49,6 +50,7 @@ const write = (w: W): IRNode => {
       ...(w.guardMatch ? { guardMatch: w.guardMatch } : {}),
       ...(w.event ? { event: w.event } : {}),
       ...(w.guardText ? { guardText: w.guardText } : {}),
+      ...(w.ownerLabel ? { ownerLabel: w.ownerLabel } : {}),
     },
   });
 };
@@ -274,6 +276,21 @@ describe("HttpConnection._connectionState", () => {
   });
 });
 
+describe("lambda labels", () => {
+  it("labels an arc from a lambda by its ownerLabel and keeps the lambda's location in the site", () => {
+    const nodes = [
+      fileNode(), fn("λ12:3", 12), fn("a", 2),
+      holder(H, "Job.status", dom),
+      write({ holder: H, fn: "a", value: q("idle"), op: "init" }),
+      write({ holder: H, fn: "λ12:3", value: q("run"), from: [q("idle")], ownerLabel: "_connect › onWebSocketClose" }),
+    ];
+    const m = stateMachines(fx.view({ nodes })).machines[0]!;
+    const t = m.transitions.find((x) => x.to === q("run"))!;
+    expect(t.label).toBe("_connect › onWebSocketClose");
+    expect(t.sites[0]!.fn).toBe("λ12:3");
+  });
+});
+
 describe("dynamic writes", () => {
   it("gives no edge, and is counted", async () => {
     const nodes = [...jobNodes(), write({ holder: H, fn: "tick", dynamic: true })];
@@ -307,6 +324,20 @@ describe("findings", () => {
     ]);
     const m = (r.views.find((v) => v.type === "state-machine") as StateMachineView).states;
     expect(m.find((s) => s.id === `${H}|${q("fail")}`)?.kind).toBe("unentered");
+  });
+
+  it("raises no value-coverage finding for a holder that is not a machine (A7)", async () => {
+    const H2 = `${FILE}#Iface.transport`;
+    const n = [
+      fileNode(), fn("a", 2),
+      holder(H2, "Iface.transport", [q("none"), q("ws"), q("sse")]),
+      test("tx", H2, "a", [q("none")]),
+    ];
+    const r = await lensStates.run(fx.view({ nodes: n }), ctx());
+    expect(r.findings).toEqual([]);
+    // one init write only: still not a machine
+    const n2 = [...n, write({ holder: H2, fn: "a", value: q("ws"), op: "init" })];
+    expect((await lensStates.run(fx.view({ nodes: n2 }), ctx())).findings).toEqual([]);
   });
 
   it("raises the same on scope \"\" and none with a scope", async () => {

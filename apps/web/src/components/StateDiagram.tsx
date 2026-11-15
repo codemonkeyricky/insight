@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactElement } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactElement } from "react";
 import type { Span, StateMachineTransition, StateMachineView } from "../api";
-import { layoutMachine, type LaidArc, type LaidMachine, type LaidState, type Solve } from "../states/layout";
+import { layoutMachine, nearestArc, type LaidArc, type LaidMachine, type LaidState, type Solve } from "../states/layout";
 import { solveInWorker } from "../states/elkClient";
 
 /** What a click on the diagram reports: the first source line of an arc, or the line of a state. */
@@ -18,6 +18,8 @@ export interface MachineSvgProps {
   /** The transition last picked. */
   selected?: string | null;
   viewBox?: string;
+  /** Rendered size in px. Without it the drawing fills its container. */
+  size?: { width: number; height: number };
   onHot?: (id: string | null) => void;
   onPick?: (pick: MachinePick) => void;
 }
@@ -38,6 +40,21 @@ export function arcName(view: StateMachineView, t: StateMachineTransition): stri
   return `${name(t.from)} to ${name(t.to)}${t.label ? `, ${t.label}` : ""}, ${t.confidence}`;
 }
 
+/** The tooltip of an arc: its name, then every site as `function file:line` (the full location of a lambda). */
+export function arcTitle(view: StateMachineView, t: StateMachineTransition): string {
+  const sites = t.sites.map((x) => `${x.fn ?? ""}${x.fn && x.span ? " " : ""}${x.span ? `${x.span.file}:${x.span.start[0] + 1}` : ""}`.trim()).filter(Boolean);
+  return sites.length > 0 ? `${arcName(view, t)}\n${sites.join("\n")}` : arcName(view, t);
+}
+
+/** The smallest scale the diagram is fitted to. Below it the canvas scrolls instead of shrinking. */
+export const MIN_SCALE = 0.6;
+
+/** Fit scale for a diagram of `w` by `h` in a pane `pane` px wide: never above 1, never below MIN_SCALE, and no taller than `maxH`. */
+export function fitScale(w: number, h: number, pane: number, maxH: number): number {
+  if (w <= 0 || h <= 0 || pane <= 0) return 1;
+  return Math.max(MIN_SCALE, Math.min(1, pane / w, maxH / h));
+}
+
 function StateShape({ s }: { s: LaidState }): ReactElement {
   if (s.kind === "initial") return <circle className="sm-start" cx={s.x + s.w / 2} cy={s.y + s.h / 2} r={s.w / 2} />;
   const cx = s.x + s.w / 2;
@@ -54,7 +71,7 @@ function StateShape({ s }: { s: LaidState }): ReactElement {
 }
 
 /** The drawing alone: no hooks, so tests can walk the element tree. */
-export function MachineSvg({ view, laid, hot = null, selected = null, viewBox, onHot, onPick }: MachineSvgProps): ReactElement {
+export function MachineSvg({ view, laid, hot = null, selected = null, viewBox, size, onHot, onPick }: MachineSvgProps): ReactElement {
   const byTransition = new Map(view.transitions.map((t) => [t.id, t]));
   const byState = new Map(view.states.map((s) => [s.id, s]));
   const hotArc = (a: LaidArc) => hot !== null && (a.id === hot || a.from === hot || a.to === hot);
@@ -63,6 +80,7 @@ export function MachineSvg({ view, laid, hot = null, selected = null, viewBox, o
     <svg
       className={`sm-svg${anyHot ? " sm-svg--hot" : ""}`}
       viewBox={viewBox ?? `0 0 ${laid.width} ${laid.height}`}
+      {...(size ? { width: size.width, height: size.height, style: { width: size.width, height: size.height, maxHeight: "none" } } : {})}
       preserveAspectRatio="xMidYMid meet"
       role="group"
       aria-label={`State diagram of ${view.holder.name}`}
@@ -70,7 +88,23 @@ export function MachineSvg({ view, laid, hot = null, selected = null, viewBox, o
       <g className="sm-arcs">
         {laid.arcs.map((a) => {
           const t = byTransition.get(a.id) as StateMachineTransition;
-          const pick = () => onPick?.({ ...(t.sites[0]?.span ? { span: t.sites[0].span } : {}), label: arcName(view, t), transition: t });
+          const pickOf = (x: StateMachineTransition) => onPick?.({ ...(x.sites[0]?.span ? { span: x.sites[0].span } : {}), label: arcName(view, x), transition: x });
+          const pick = () => pickOf(t);
+          // Two lines can sit under one pointer (a crossing, parallel runs): the line nearest the pointer is the one meant.
+          const click = (e?: MouseEvent<SVGGElement>) => {
+            const svg = e?.currentTarget.ownerSVGElement;
+            const ctm = svg?.getScreenCTM();
+            if (e && svg && ctm && !(e.target as Element).closest?.(".sm-label")) {
+              const pt = svg.createSVGPoint();
+              pt.x = e.clientX;
+              pt.y = e.clientY;
+              const p = pt.matrixTransform(ctm.inverse());
+              const near = nearestArc(laid.arcs, p.x, p.y);
+              const other = near && near.id !== a.id ? byTransition.get(near.id) : undefined;
+              if (other) return pickOf(other);
+            }
+            pick();
+          };
           const cls = ["sm-arc", `sm-arc--${t.confidence}`, hotArc(a) ? "sm-arc--hot" : "", selected === a.id ? "sm-arc--selected" : ""].filter(Boolean).join(" ");
           return (
             <g
@@ -79,13 +113,14 @@ export function MachineSvg({ view, laid, hot = null, selected = null, viewBox, o
               tabIndex={0}
               role="button"
               aria-label={arcName(view, t)}
-              onClick={pick}
+              onClick={click}
               onKeyDown={activate(pick)}
               onMouseEnter={() => onHot?.(a.id)}
               onMouseLeave={() => onHot?.(null)}
               onFocus={() => onHot?.(a.id)}
               onBlur={() => onHot?.(null)}
             >
+              <title>{arcTitle(view, t)}</title>
               <path className="sm-hit" d={a.d} />
               <path className="sm-line" d={a.d} />
               <path className="sm-head" d={a.arrow} />
@@ -139,7 +174,7 @@ export function Legend({ view }: { view: StateMachineView }): ReactElement {
   return (
     <ul className="sm-legend" aria-label="Legend">
       <li>{line("exact")} exact write</li>
-      {kinds.has("inferred") && <li>{line("inferred")} inferred through a caller</li>}
+      {kinds.has("inferred") && <li>{line("inferred")} dashed = inferred: written after an await, or start state taken from the callers</li>}
       {kinds.has("heuristic") && <li>{line("heuristic")} heuristic</li>}
       {view.states.some((s) => s.kind === "unentered") && <li><span className="sm-swatch sm-swatch--unentered" aria-hidden="true" /> never entered</li>}
       <li><span className="sm-swatch sm-swatch--terminal" aria-hidden="true" /> no way out</li>
@@ -169,7 +204,8 @@ export function StateDiagram({ view, onPick, selected = null, solve = solveInWor
   const [hot, setHot] = useState<string | null>(null);
   const [box, setBox] = useState<Box | null>(null);
   const wrap = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ x: number; y: number; box: Box } | null>(null);
+  const [pane, setPane] = useState<number | null>(null);
+  const drag = useRef<{ x: number; y: number; box: Box | null; left: number; top: number } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -188,6 +224,17 @@ export function StateDiagram({ view, onPick, selected = null, solve = solveInWor
       cancelled = true;
     };
   }, [view, solve]);
+
+  useEffect(() => {
+    const el = wrap.current;
+    if (!el) return;
+    const read = () => setPane(el.clientWidth);
+    read();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [laid]);
 
   const fit: Box | null = useMemo(() => (laid ? { x: 0, y: 0, w: laid.width, h: laid.height } : null), [laid]);
   const current = box ?? fit;
@@ -220,10 +267,19 @@ export function StateDiagram({ view, onPick, selected = null, solve = solveInWor
     const d = drag.current;
     const el = wrap.current;
     if (!d || !el) return;
-    const r = el.getBoundingClientRect();
-    const scale = d.box.w / r.width;
+    if (d.box === null) {
+      // Fitted but wider than the pane: the canvas scrolls.
+      el.scrollLeft = d.left - (e.clientX - d.x);
+      el.scrollTop = d.top - (e.clientY - d.y);
+      return;
+    }
+    const svgW = el.querySelector("svg")?.getBoundingClientRect().width ?? el.getBoundingClientRect().width;
+    const scale = d.box.w / svgW;
     setBox({ ...d.box, x: d.box.x - (e.clientX - d.x) * scale, y: d.box.y - (e.clientY - d.y) * scale });
   };
+
+  const scale = pane !== null ? fitScale(laid.width, laid.height, pane, Math.max(300, (typeof window === "undefined" ? 900 : window.innerHeight) * 0.82)) : null;
+  const size = scale !== null ? { width: Math.round(laid.width * scale), height: Math.round(laid.height * scale) } : null;
 
   return (
     <div className="state-diagram">
@@ -234,17 +290,16 @@ export function StateDiagram({ view, onPick, selected = null, solve = solveInWor
       <div
         ref={wrap}
         className="sm-wrap"
-        style={{ maxWidth: Math.round(laid.width * 1.3) }}
         onPointerDown={(e) => {
           if ((e.target as Element).closest(".sm-arc, .sm-state")) return;
-          drag.current = { x: e.clientX, y: e.clientY, box: current };
+          drag.current = { x: e.clientX, y: e.clientY, box, left: e.currentTarget.scrollLeft, top: e.currentTarget.scrollTop };
           (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
         }}
         onPointerMove={move}
         onPointerUp={() => (drag.current = null)}
         onPointerCancel={() => (drag.current = null)}
       >
-        <MachineSvg view={view} laid={laid} hot={hot} selected={selected} viewBox={`${current.x} ${current.y} ${current.w} ${current.h}`} onHot={setHot} {...(onPick ? { onPick } : {})} />
+        <MachineSvg view={view} laid={laid} hot={hot} selected={selected} {...(size ? { size } : {})} viewBox={`${current.x} ${current.y} ${current.w} ${current.h}`} onHot={setHot} {...(onPick ? { onPick } : {})} />
       </div>
       <Legend view={view} />
     </div>

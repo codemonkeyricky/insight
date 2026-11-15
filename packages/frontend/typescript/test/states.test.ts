@@ -27,6 +27,21 @@ const nodes = (batches: IRBatch[], kind: string): IRNode[] =>
   batches.flatMap((b) => b.records).flatMap((r) => ("node" in r && r.node.kind === kind ? [r.node] : []));
 const writesOf = (ns: IRNode[], holder: string) => ns.filter((n) => n.attrs?.holder === holder);
 
+describe("lambda owner labels", () => {
+  it("names a write in a lambda by its enclosing function and the property it is assigned to, else λ", async () => {
+    const batches: IRBatch[] = [];
+    const lf = ["states/lambdas.ts"];
+    const ctx = { root, files: lf, listFiles: () => [...lf], readFile, log: () => undefined };
+    for await (const batch of frontend.extract(ctx)) batches.push(batch);
+    const ws = nodes(batches, "state.write");
+    const labelAt = (line: number) => ws.find((n) => n.span?.start[0] === line - 1)?.attrs.ownerLabel;
+    expect(labelAt(8)).toBeUndefined(); // a plain method write keeps no label
+    expect(labelAt(11)).toBe("connect › onWebSocketClose");
+    expect(labelAt(15)).toBe("connect › onclose");
+    expect(labelAt(18)).toBe("connect › λ");
+  });
+});
+
 describe("frontend-typescript state facts", () => {
   it("matches the golden state records", async () => {
     const lines = stateRecords(await extractAll()).map((r) => JSON.stringify(r)).sort();

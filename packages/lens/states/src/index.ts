@@ -77,6 +77,7 @@ interface Write {
   guardMatch?: string;
   event?: string;
   guardText?: string;
+  ownerLabel?: string;
   owner?: IRNode;
 }
 
@@ -150,6 +151,8 @@ export function stateMachines(view: IRView): StateModel {
     if (gm) w.guardMatch = gm;
     const ev = str(n.attrs.event);
     if (ev) w.event = ev;
+    const ol = str(n.attrs.ownerLabel);
+    if (ol) w.ownerLabel = ol;
     const gt = str(n.attrs.guardText);
     if (gt) w.guardText = gt;
     writes.push(w);
@@ -263,7 +266,7 @@ export function stateMachines(view: IRView): StateModel {
       }
       const ownerName = nameOfFn(w.owner);
       const isFn = w.owner?.kind === "structure.function" || w.owner?.kind.startsWith("structure.function") === true;
-      const label = w.event ?? (isFn ? ownerName : undefined) ?? (w.op === "init" ? "init" : ownerName ?? "write");
+      const label = w.event ?? (isFn ? w.ownerLabel ?? ownerName : undefined) ?? (w.op === "init" ? "init" : ownerName ?? "write");
       let base: Confidence = w.node.provenance.confidence;
       if (w.guardMatch === "holder") base = weaker(base, "inferred");
       if (w.stale) base = weaker(base, "inferred");
@@ -363,7 +366,10 @@ function findingsFor(view: IRView, model: StateModel): LensFinding[] {
     const h = str(w.attrs.holder);
     if (h) writeCount.set(h, (writeCount.get(h) ?? 0) + 1);
   }
+  // Only holders drawn as machines (A7) can have value-coverage findings.
+  const drawn = new Set(model.machines.map((m) => m.holderId));
   for (const [holderId, holder] of holders) {
+    if (!drawn.has(holderId)) continue;
     if (holder.attrs.domainKind === "open" || (writeCount.get(holderId) ?? 0) === 0) continue;
     const writtenValues = model.written.get(holderId) ?? new Set<string>();
     // A4: a narrowed use of a shared enum is not a bug, so ask for at least three distinct written values.

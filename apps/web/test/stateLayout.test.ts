@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 import type { ElkNode } from "elkjs/lib/elk-api";
-import { layoutMachine, type LaidMachine, type Solve } from "../src/states/layout";
+import { layoutMachine, nearestArc, polylineHitsRect, type LaidMachine, type Solve } from "../src/states/layout";
 import { hubConnectionMachine, syntheticMachine, twoStateMachine } from "./fixtures/hubConnectionMachine";
 
 const require = createRequire(import.meta.url);
@@ -57,5 +57,62 @@ describe("layoutMachine", () => {
   it("is the same across two runs", async () => {
     const run = async (): Promise<LaidMachine> => layoutMachine(hubConnectionMachine, solve);
     expect(await run()).toEqual(await run());
+  });
+});
+
+describe("terminal states and any-state arcs", () => {
+  const mk = (names: string[], targets: string[]) => {
+    const states = [
+      { id: "H|*", label: "any state", kind: "any" as const },
+      ...names.map((n) => ({ id: `H|${n}`, label: n, kind: "state" as const })),
+    ];
+    const transitions = targets.map((t) => ({
+      id: `H|*>${t}#f`, from: "H|*", to: `H|${t}`, label: "f", confidence: "exact" as const, sites: [],
+    }));
+    return { ...twoStateMachine, states, transitions } as typeof twoStateMachine;
+  };
+
+  it("counts a `* -> X` arc as an exit for every state except X", async () => {
+    const laid = await layoutMachine(mk(["A", "B", "C"], ["A", "B", "C"]), solve);
+    expect(laid.states.filter((s) => s.terminal)).toEqual([]);
+  });
+
+  it("leaves only the target terminal for a single `* -> A`", async () => {
+    const laid = await layoutMachine(mk(["A", "B"], ["A"]), solve);
+    expect(laid.states.filter((s) => s.terminal).map((s) => s.label)).toEqual(["A"]);
+  });
+});
+
+describe("label placement", () => {
+  it("polylineHitsRect sees a line through a box and not one beside it", () => {
+    const r = { x: 10, y: 10, w: 20, h: 10 };
+    expect(polylineHitsRect([{ x: 20, y: 0 }, { x: 20, y: 40 }], r)).toBe(true);
+    expect(polylineHitsRect([{ x: 50, y: 0 }, { x: 50, y: 40 }], r)).toBe(false);
+    expect(polylineHitsRect([{ x: 0, y: 15 }, { x: 5, y: 15 }, { x: 5, y: 40 }], r, 0)).toBe(false);
+  });
+
+  it("keeps a label off every other arc's line, so a click on that line reaches its own arc", async () => {
+    for (const view of [hubConnectionMachine, syntheticMachine(9)]) {
+      const laid = await layoutMachine(view, solve);
+      for (const a of laid.arcs) {
+        if (!a.label) continue;
+        for (const b of laid.arcs) {
+          if (a === b || b.points.length < 2) continue;
+          expect(polylineHitsRect(b.points, a.label, 0), `${view.title}: label of ${a.id} covers ${b.id}`).toBe(false);
+        }
+      }
+    }
+  });
+});
+
+describe("nearestArc", () => {
+  const arc = (id: string, points: { x: number; y: number }[]) => ({ id, from: "a", to: "b", selfLoop: false, d: "", arrow: "", points });
+  it("picks the nearer of two lines under one pointer, and none when far from all", () => {
+    const vertical = arc("v", [{ x: 314, y: 270 }, { x: 314, y: 374 }]);
+    const diagonal = arc("d", [{ x: 297, y: 238 }, { x: 335, y: 350 }]);
+    expect(nearestArc([vertical, diagonal], 314, 280)?.id).toBe("v");
+    expect(nearestArc([diagonal, vertical], 314, 280)?.id).toBe("v");
+    expect(nearestArc([vertical, diagonal], 303, 280)?.id).toBe("d");
+    expect(nearestArc([vertical, diagonal], 500, 500)).toBeUndefined();
   });
 });

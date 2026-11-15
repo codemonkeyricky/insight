@@ -3,7 +3,7 @@ import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { ElkNode } from "elkjs/lib/elk-api";
-import { Legend, MachineSvg, arcName, type MachinePick } from "../src/components/StateDiagram";
+import { Legend, MIN_SCALE, MachineSvg, arcName, arcTitle, fitScale, type MachinePick } from "../src/components/StateDiagram";
 import { MachineList, SiteList } from "../src/components/MachineSection";
 import { ViewBlock } from "../src/pages/LensPage";
 import { layoutMachine, type Solve } from "../src/states/layout";
@@ -95,7 +95,8 @@ describe("MachineSvg", async () => {
 
   it("shows a legend for the kinds in use", () => {
     const l = renderToStaticMarkup(<Legend view={hubConnectionMachine} />);
-    expect(l).toContain("inferred");
+    expect(l).toContain("exact write");
+    expect(l).toContain("dashed = inferred: written after an await, or start state taken from the callers");
     expect(l).toContain("heuristic");
     expect(l).toContain("never entered");
     expect(renderToStaticMarkup(<Legend view={twoStateMachine} />)).not.toContain("heuristic");
@@ -177,5 +178,33 @@ describe("table spans", () => {
     const html = renderToStaticMarkup(<ViewBlock view={{ ...table, spans: undefined }} projectId="p" onPick={() => undefined} onShow={() => undefined} />);
     expect(html).not.toContain("<th>line</th>");
     expect(html).not.toContain("<button");
+  });
+});
+
+describe("fit scale", () => {
+  it("never goes above 1, so a small machine is not drawn huge", () => {
+    expect(fitScale(200, 150, 1000, 800)).toBe(1);
+  });
+  it("never goes below the minimum, so a narrow pane scrolls instead of shrinking", () => {
+    expect(fitScale(1000, 500, 288, 800)).toBe(MIN_SCALE);
+    expect(fitScale(1000, 500, 800, 800)).toBeCloseTo(0.8);
+  });
+  it("respects the height cap above the minimum", () => {
+    expect(fitScale(500, 1000, 1000, 700)).toBeCloseTo(0.7);
+  });
+  it("renders the svg at an explicit size when given one", () => {
+    const html = renderToStaticMarkup(<MachineSvg view={twoStateMachine} laid={{ width: 400, height: 200, states: [], arcs: [] }} size={{ width: 240, height: 120 }} />);
+    expect(html).toContain('width="240"');
+    expect(html).toContain("max-height:none");
+  });
+});
+
+describe("arc tooltip", () => {
+  it("lists the name and every site's function and file:line", () => {
+    const t = hubConnectionMachine.transitions.find((x) => x.sites.some((y) => y.span && y.fn))!;
+    const title = arcTitle(hubConnectionMachine, t);
+    expect(title.startsWith(arcName(hubConnectionMachine, t))).toBe(true);
+    const site = t.sites.find((y) => y.span && y.fn)!;
+    expect(title).toContain(`${site.fn} ${site.span!.file}:${site.span!.start[0] + 1}`);
   });
 });

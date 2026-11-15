@@ -34,6 +34,8 @@ export interface LaidArc {
   d: string;
   /** The arrowhead polygon (SVG path) at the end of the arc. */
   arrow: string;
+  /** The arc's corner points before rounding (empty for a self-loop). */
+  points: { x: number; y: number }[];
   label?: LaidLabel;
 }
 
@@ -190,12 +192,47 @@ function labelCandidates(text: string, l: ElkLabel, pts: Pt[]): LaidLabel[] {
 type Rect = { x: number; y: number; w: number; h: number };
 const touches = (a: Rect, b: Rect, pad = 3) => a.x < b.x + b.w + pad && b.x < a.x + a.w + pad && a.y < b.y + b.h + pad && b.y < a.y + a.h + pad;
 
+/** True when an orthogonal (or any straight) polyline passes through the rectangle grown by `pad`. */
+export function polylineHitsRect(pts: Pt[], r: Rect, pad = 4): boolean {
+  const x0 = r.x - pad;
+  const y0 = r.y - pad;
+  const x1 = r.x + r.w + pad;
+  const y1 = r.y + r.h + pad;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1] as Pt;
+    const b = pts[i] as Pt;
+    // Liang-Barsky clip of the segment against the rectangle.
+    let t0 = 0;
+    let t1 = 1;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const clip = (p: number, q: number): boolean => {
+      if (p === 0) return q >= 0;
+      const t = q / p;
+      if (p < 0) {
+        if (t > t1) return false;
+        if (t > t0) t0 = t;
+      } else {
+        if (t < t0) return false;
+        if (t < t1) t1 = t;
+      }
+      return true;
+    };
+    if (clip(-dx, a.x - x0) && clip(dx, x1 - a.x) && clip(-dy, a.y - y0) && clip(dy, y1 - a.y)) return true;
+  }
+  return false;
+}
+
 /** Lays the machine out. Deterministic for a given view and solver. */
 export async function layoutMachine(view: StateMachineView, solve: Solve): Promise<LaidMachine> {
   const { graph, loops } = buildGraph(view);
   const solved = await solve(graph);
   const nodeById = new Map((solved.children ?? []).map((n) => [n.id, n]));
   const outgoing = new Set(view.transitions.filter((t) => t.from !== t.to).map((t) => t.from));
+  // An "any state" arc `* -> X` lets every state except X leave.
+  const anyIds = new Set(view.states.filter((s) => s.kind === "any").map((s) => s.id));
+  const anyTargets = view.transitions.filter((t) => anyIds.has(t.from) && t.from !== t.to).map((t) => t.to);
+  const canLeave = (id: string) => outgoing.has(id) || anyTargets.some((to) => to !== id);
 
   const states: LaidState[] = view.states.map((s, i) => {
     const n = nodeById.get(`n${i}`) as ElkNode;
@@ -208,7 +245,7 @@ export async function layoutMachine(view: StateMachineView, solve: Solve): Promi
       y: n.y ?? 0,
       w: size.w,
       h: size.h,
-      terminal: s.kind === "state" && !outgoing.has(s.id),
+      terminal: s.kind === "state" && !canLeave(s.id),
     };
   });
   const stateById = new Map(states.map((s) => [s.id, s]));
@@ -217,6 +254,7 @@ export async function layoutMachine(view: StateMachineView, solve: Solve): Promi
   const arcs: LaidArc[] = [];
   const loopSeen = new Map<string, number>();
   const pending: { arc: LaidArc; candidates: LaidLabel[] }[] = [];
+  const polys = new Map<string, Pt[]>();
   let width = solved.width ?? 0;
   let height = solved.height ?? 0;
   view.transitions.forEach((t, i) => {
@@ -234,7 +272,7 @@ export async function layoutMachine(view: StateMachineView, solve: Solve): Promi
       const label = t.label
         ? { text: t.label, ...labelSize(t.label), x: x0 + LOOP_W - 4, y: cy - labelSize(t.label).h / 2 }
         : undefined;
-      arcs.push({ id: t.id, from: t.from, to: t.to, selfLoop: true, d, arrow: arrowHead({ x: x0, y: cy + r }, -1, 0.15), ...(label ? { label } : {}) });
+      arcs.push({ id: t.id, from: t.from, to: t.to, selfLoop: true, d, points: [], arrow: arrowHead({ x: x0, y: cy + r }, -1, 0.15), ...(label ? { label } : {}) });
       if (label) width = Math.max(width, label.x + label.w + MARGIN);
       return;
     }
@@ -256,13 +294,17 @@ export async function layoutMachine(view: StateMachineView, solve: Solve): Promi
     const len = Math.hypot(dx, dy) || 1;
     body[body.length - 1] = { x: lastP.x - (dx / len) * 6, y: lastP.y - (dy / len) * 6 };
     const l = e?.labels?.[0];
-    const arc: LaidArc = { id: t.id, from: t.from, to: t.to, selfLoop: false, d: roundedPath(body), arrow: arrowHead(lastP, dx, dy) };
+    const arc: LaidArc = { id: t.id, from: t.from, to: t.to, selfLoop: false, d: roundedPath(body), points: pts, arrow: arrowHead(lastP, dx, dy) };
     arcs.push(arc);
+    polys.set(arc.id, pts);
     if (t.label && l) pending.push({ arc, candidates: labelCandidates(t.label, l, pts) });
   });
   const placed: Rect[] = arcs.flatMap((a) => (a.label ? [a.label] : []));
   for (const { arc, candidates } of pending) {
-    const free = candidates.find((c) => !placed.some((r) => touches(c, r)) && !states.some((s) => touches(c, s, 2)));
+    // A label sits on its own arc, never on another arc's line: that would cover the other arc and steal its clicks.
+    const clear = (c: LaidLabel) => !placed.some((r) => touches(c, r)) && !states.some((s) => touches(c, s, 2));
+    const onOther = (c: LaidLabel) => [...polys].some(([id, pts]) => id !== arc.id && polylineHitsRect(pts, c));
+    const free = candidates.find((c) => clear(c) && !onOther(c)) ?? candidates.find(clear);
     const chosen = free ?? (candidates[0] as LaidLabel);
     arc.label = chosen;
     placed.push(chosen);
@@ -278,4 +320,32 @@ export async function layoutMachine(view: StateMachineView, solve: Solve): Promi
     height = Math.max(height, s.y + s.h + MARGIN);
   }
   return { width: Math.ceil(width), height: Math.ceil(height), states, arcs };
+}
+
+/** Distance from (px, py) to the segment a-b. */
+function distToSegment(px: number, py: number, a: Pt, b: Pt): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len2 = dx * dx + dy * dy;
+  const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((px - a.x) * dx + (py - a.y) * dy) / len2));
+  return Math.hypot(px - (a.x + t * dx), py - (a.y + t * dy));
+}
+
+/**
+ * The arc whose line passes closest to (x, y), within `max` px; undefined when none does. Where two lines cross or run
+ * side by side under one pointer, the nearer one is the one meant.
+ */
+export function nearestArc(arcs: readonly LaidArc[], x: number, y: number, max = 12): LaidArc | undefined {
+  let best: LaidArc | undefined;
+  let bestD = max;
+  for (const a of arcs) {
+    for (let i = 1; i < a.points.length; i++) {
+      const d = distToSegment(x, y, a.points[i - 1] as Pt, a.points[i] as Pt);
+      if (d < bestD) {
+        bestD = d;
+        best = a;
+      }
+    }
+  }
+  return best;
 }
