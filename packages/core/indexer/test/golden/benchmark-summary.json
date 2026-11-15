@@ -141,6 +141,11 @@
       "findings": 15
     },
     {
+      "id": "lens-ir-schema",
+      "status": "unavailable",
+      "findings": 0
+    },
+    {
       "id": "lens-lock-order",
       "status": "ok",
       "findings": 0

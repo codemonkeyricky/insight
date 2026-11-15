@@ -5,6 +5,7 @@
   "irVersion": "^1.0",
   "detect": ["**/*.json"],
   "files": ["**/*.json"],
+  "inputListing": ["**/*.json", "packages/**/*.{ts,tsx,js,mjs,cjs}", "apps/**/*.{ts,tsx,js,mjs,cjs}"],
   "provides": ["structure", "x-schema"],
   "kinds": "data/kinds.json",
   "roles": {

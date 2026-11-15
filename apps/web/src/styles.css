@@ -1347,7 +1347,7 @@ a.auth-chip { text-decoration: none; }
 .sm-sites li { padding: 6px 8px; border: 1px solid var(--hair); border-radius: var(--r-sm); background: var(--sheet); }
 @media (max-width: 700px) { .sm-machines > .sm-list { max-width: none; } }
 
-/* Schema diagram (lens "IR schema"): one colour per facet, readable on both themes. */
+/* Schema diagram (lens "Schema"): one colour per facet, readable on both themes. */
 :root {
   --sd-0: #3F73DC; --sd-1: #8A55D1; --sd-2: #139488; --sd-3: #C47F14; --sd-4: #CF4468; --sd-5: #3A9E48; --sd-6: #CB5A28; --sd-7: #2493BC; --sd-x: #7A7A80; --sd-rec: var(--accent);
   --sd-card: var(--sheet);

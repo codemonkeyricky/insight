@@ -36,4 +36,22 @@ describe("frontend-jsonschema freshness", () => {
     const third = await runIndex(options(false));
     expect(third.extracted).toContainEqual({ frontend: "frontend-jsonschema", file: "data/bob.json" });
   }, 120_000);
+
+  it("re-extracts the schema that referred to a not-yet-existing relative file when it appears", async () => {
+    writeFileSync(join(project, "schemas", "refers.schema.json"), JSON.stringify({ $schema: "https://json-schema.org/draft/2020-12/schema", title: "Refers", properties: { g: { $ref: "./later.schema.json" } } }));
+    await runIndex(options(false));
+    const quiet = await runIndex(options(false));
+    expect(quiet.extracted.filter((e) => e.frontend === "frontend-jsonschema")).toEqual([]);
+    writeFileSync(join(project, "schemas", "later.schema.json"), JSON.stringify({ $schema: "https://json-schema.org/draft/2020-12/schema", title: "Later", type: "string" }));
+    const after = await runIndex(options(false));
+    expect(after.extracted).toContainEqual({ frontend: "frontend-jsonschema", file: "schemas/refers.schema.json" });
+  }, 120_000);
+
+  it("re-extracts the plugin's shards when a TypeScript file is added (inputListing)", async () => {
+    await runIndex(options(false));
+    mkdirSync(join(project, "packages", "x"), { recursive: true });
+    writeFileSync(join(project, "packages", "x", "emit.ts"), "export const k = 'sync.thing';\n");
+    const after = await runIndex(options(false));
+    expect(after.extracted).toContainEqual({ frontend: "frontend-jsonschema", file: "data/alice.json" });
+  }, 120_000);
 });

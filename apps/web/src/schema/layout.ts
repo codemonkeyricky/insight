@@ -234,7 +234,7 @@ export function refPath(from: CardBox, rowMidY: number, to: CardBox): LinkPath {
     c2x = c1x;
   }
   const d = `M${sx} ${sy} C${c1x} ${sy} ${c2x} ${ty} ${tx} ${ty}`;
-  const dir = forward ? 1 : backward ? -1 : -1;
+  const dir = forward ? 1 : -1;
   return { d, head: arrowAt(tx, ty, dir, 0, 7) };
 }
 

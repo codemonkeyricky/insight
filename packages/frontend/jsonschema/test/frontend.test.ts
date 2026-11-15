@@ -1,4 +1,5 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -106,4 +107,88 @@ describe("Insight's own repo", () => {
     const kinds = bs.find((b) => b.file === "packages/core/ir/schema/core.kinds.json");
     expect(kinds?.dependsOn).toContain("packages/core/ir/schema/facets/structure.schema.json");
   }, 60_000);
+});
+
+/** Runs the frontend over in-memory files (all JSON/TS text keyed by relative path). */
+async function runMem(mem: Record<string, string>, files?: string[]): Promise<IRBatch[]> {
+  const all = Object.keys(mem).sort();
+  const dir = mkdtempSync(join(tmpdir(), "jsonschema-mem-"));
+  for (const f of all) {
+    mkdirSync(dirname(join(dir, f)), { recursive: true });
+    writeFileSync(join(dir, f), mem[f] ?? "");
+  }
+  const pr: ProjectRoot = { path: dir, name: "m", allowBuildTools: false };
+  const ctx = { root: pr, files: files ?? all.filter((f) => f.endsWith(".json")), listFiles: () => all, readFile: async (rel: string) => mem[rel] ?? "", log: () => undefined };
+  const out: IRBatch[] = [];
+  for await (const b of frontend.extract(ctx)) out.push(b);
+  return out;
+}
+const SCHEMA = "https://json-schema.org/draft/2020-12/schema";
+const kindDecl = (kind: string, extra: object = {}) => ({ kind, facet: "structure", on: "node", ...extra });
+
+describe("dependencies of lookups that fail or cross files", () => {
+  it("depends on an unresolved relative $ref target, and links it once the file exists", async () => {
+    const ref = JSON.stringify({ $schema: SCHEMA, title: "A", $defs: { A: { type: "object", properties: { x: { $ref: "./gone.schema.json#/$defs/X" } } } } });
+    const before = await runMem({ "s/a.schema.json": ref });
+    expect(before.find((b) => b.file === "s/a.schema.json")?.dependsOn).toContain("s/gone.schema.json");
+    expect(edges(before).some((e) => e.kind === "x-schema.ref")).toBe(false);
+    const gone = JSON.stringify({ $schema: SCHEMA, title: "G", $defs: { X: { type: "string" } } });
+    const after = await runMem({ "s/a.schema.json": ref, "s/gone.schema.json": gone });
+    expect(edges(after).find((e) => e.kind === "x-schema.ref")).toMatchObject({ to: "s/gone.schema.json#def:X" });
+  });
+
+  it("accepts a relative $schema ending in #", async () => {
+    const person = JSON.stringify({ $schema: SCHEMA, title: "Person", type: "object" });
+    const inst = JSON.stringify({ $schema: "../schemas/person.schema.json#", name: "x" });
+    const bs = await runMem({ "schemas/person.schema.json": person, "data/p.json": inst });
+    const b = bs.find((x) => x.file === "data/p.json");
+    expect(findings(b)).toHaveLength(0);
+    expect(edges(bs).find((e) => e.kind === "x-schema.validated-by")).toMatchObject({ from: "data/p.json", to: "schemas/person.schema.json#def:$root" });
+  });
+
+  it("depends on the file that declares an extended kind in another kinds file", async () => {
+    const mem = {
+      "a/core.kinds.json": JSON.stringify([kindDecl("sync.parent")]),
+      "b/kinds.json": JSON.stringify([kindDecl("sync.child", { extends: "sync.parent" })]),
+    };
+    const bs = await runMem(mem);
+    expect(bs.find((b) => b.file === "b/kinds.json")?.dependsOn).toContain("a/core.kinds.json");
+  });
+
+  it("depends on every kinds file when an extended kind is not found", async () => {
+    const mem = {
+      "a/core.kinds.json": JSON.stringify([kindDecl("sync.other")]),
+      "b/kinds.json": JSON.stringify([kindDecl("sync.child", { extends: "sync.parent" })]),
+    };
+    const bs = await runMem(mem);
+    expect(bs.find((b) => b.file === "b/kinds.json")?.dependsOn).toContain("a/core.kinds.json");
+  });
+
+  it("depends on all schema files when an absolute $ref, $schema or filename lookup finds no $id", async () => {
+    const other = JSON.stringify({ $schema: SCHEMA, title: "O", type: "object" });
+    const ref = JSON.stringify({ $schema: SCHEMA, title: "R", properties: { x: { $ref: "https://example.com/o.json" } } });
+    const inst = JSON.stringify({ $schema: "https://example.com/o.json" });
+    const bs = await runMem({ "o.schema.json": other, "r.schema.json": ref, "i.json": inst, "insight-plugin.json": "{\"id\":\"x\",\"$schema\":\"https://x/y\"}" });
+    expect(bs.find((b) => b.file === "r.schema.json")?.dependsOn).toContain("o.schema.json");
+    expect(bs.find((b) => b.file === "i.json")?.dependsOn).toContain("o.schema.json");
+    expect(bs.find((b) => b.file === "insight-plugin.json")?.dependsOn).toContain("o.schema.json");
+  });
+
+  it("links duplicate-$id files in both directions", async () => {
+    const mk = (t: string) => JSON.stringify({ $schema: SCHEMA, $id: "https://example.com/d.json", title: t });
+    const bs = await runMem({ "a.schema.json": mk("A"), "b.schema.json": mk("B") });
+    const a = bs.find((b) => b.file === "a.schema.json");
+    const b = bs.find((x) => x.file === "b.schema.json");
+    expect(a?.dependsOn).toContain("b.schema.json");
+    expect(b?.dependsOn).toContain("a.schema.json");
+    expect(findings(b)).toHaveLength(1);
+  });
+
+  it("credits a JavaScript emitter of a kind", async () => {
+    const bs = await runMem({
+      "packages/x/kinds.json": JSON.stringify([kindDecl("packaging.build-target")]),
+      "packages/frontend/cmake/index.js": 'emit({ kind: "packaging.build-target" });',
+    }, ["packages/x/kinds.json"]);
+    expect(edges(bs).find((e) => e.kind === "x-schema.uses-kind")).toMatchObject({ from: "packages/frontend/cmake/index.js", attrs: { how: "emit" } });
+  });
 });

@@ -226,14 +226,14 @@ interface TsScan {
   hits: Map<string, Hit[]>;
 }
 
-const TS_RE = /\.tsx?$/;
+const TS_RE = /\.(?:tsx?|js|mjs|cjs)$/;
 const TS_SKIP = /\/dist\/|\/node_modules\/|\/test\/|\.test\.|\/generated\//;
 const KIND_TOKEN = /["'`]((?:structure|packaging|flow|calls|concurrency|sync|effects|state|x-[a-z0-9-]+)\.[a-z0-9-]+(?:\.[a-z0-9-]+)*)["'`]/g;
 const EMIT_BEFORE = /kind\s*:\s*$/;
 /** A positional emit call on the same line, e.g. emitNode(call, container, "sync", "sync.condvar", ...). */
 const EMIT_CALL_BEFORE = /\bemit\w*\([^)]*$/;
 
-/** Scans the TypeScript files under packages/ and apps/ for quoted kind names. Each file keeps one hit per (kind, how). */
+/** Scans the TypeScript and JavaScript files under packages/ and apps/ for quoted kind names. Each file keeps one hit per (kind, how). */
 async function scanTs(ctx: ExtractContext): Promise<TsScan> {
   const files = ctx
     .listFiles()
@@ -280,11 +280,28 @@ async function scanTs(ctx: ExtractContext): Promise<TsScan> {
   return { files, hits };
 }
 
-function buildBatch(doc: Doc, byId: Map<string, string>, defById: Map<string, Def>, kindIdByName: Map<string, string>, ts: TsScan | undefined, ctx: ExtractContext, dupId?: string): IRBatch {
+/** Cross-file indexes shared by every batch of one run. */
+interface Run {
+  byId: Map<string, string>;
+  defById: Map<string, Def>;
+  kindIdByName: Map<string, string>;
+  /** The file that declares each kind name (first in sorted order). */
+  kindFileByName: Map<string, string>;
+  kindsFiles: string[];
+  /** Every JSON file the run loaded: what a failed $id lookup could be satisfied by if one of them changed. */
+  allDocFiles: string[];
+  /** Files that must be re-extracted together when a duplicate $id appears, changes or goes away. */
+  dupDeps: Map<string, Set<string>>;
+}
+
+function buildBatch(doc: Doc, run: Run, ts: TsScan | undefined, ctx: ExtractContext, dupId?: string): IRBatch {
+  const { byId, defById, kindIdByName } = run;
   const records: IRRecord[] = [];
   const { file, lines } = doc;
   /** Schema files this file points into, including expected paths that do not exist yet. */
   const imported = new Set<string>();
+  /** Set when an $id-based lookup failed: any schema file could satisfy it later. */
+  let dependOnAll = false;
 
   // Unparseable, oversized, ignored or non-schema JSON yields nothing.
   if (doc.error !== undefined || doc.cls === "other") return { file, records };
@@ -313,6 +330,7 @@ function buildBatch(doc: Doc, byId: Map<string, string>, defById: Map<string, De
     if (doc0 === "") targetFile = file;
     else {
       targetFile = byId.get(doc0);
+      if (targetFile === undefined && /^[a-z][a-z0-9+.-]*:/i.test(doc0)) dependOnAll = true;
       if (targetFile === undefined && !/^[a-z][a-z0-9+.-]*:/i.test(doc0)) {
         const rel = posix.normalize(posix.join(posix.dirname(file), doc0));
         if (!rel.startsWith("..")) targetFile = rel;
@@ -371,6 +389,8 @@ function buildBatch(doc: Doc, byId: Map<string, string>, defById: Map<string, De
         }
       }
     }
+    for (const d of run.dupDeps.get(file) ?? []) imported.add(d);
+    if (dependOnAll) for (const f of run.allDocFiles) if (f !== file) imported.add(f);
     return { file, records, ...(imported.size > 0 ? { dependsOn: [...imported].sort() } : {}) };
   }
 
@@ -399,8 +419,15 @@ function buildBatch(doc: Doc, byId: Map<string, string>, defById: Map<string, De
     }
     if (typeof e.extends === "string") {
       const parent = kindIdByName.get(e.extends);
-      if (parent !== undefined) xEdge(k.id, parent, "x-schema.extends");
-      else xEdge(k.id, { unresolved: { scheme: "x-schema.kind", text: e.extends } }, "x-schema.extends");
+      const parentFile = run.kindFileByName.get(e.extends);
+      if (parent !== undefined) {
+        xEdge(k.id, parent, "x-schema.extends");
+        if (parentFile !== undefined && parentFile !== file) imported.add(parentFile);
+      } else {
+        // Unresolved: a rename or addition in any kinds file could resolve it.
+        for (const f of run.kindsFiles) if (f !== file) imported.add(f);
+        xEdge(k.id, { unresolved: { scheme: "x-schema.kind", text: e.extends } }, "x-schema.extends");
+      }
     }
   }
 
@@ -413,7 +440,7 @@ function buildBatch(doc: Doc, byId: Map<string, string>, defById: Map<string, De
       xEdge(tsFile, kid, "x-schema.uses-kind", { how: hit.how }, hit.span);
     }
   }
-  const deps = [...new Set([...(ts?.files ?? []), ...imported])].sort();
+  const deps = [...new Set([...(ts?.files ?? []), ...imported, ...(run.dupDeps.get(file) ?? [])])].sort();
   return { file, records, ...(deps.length > 0 ? { dependsOn: deps } : {}) };
 }
 
@@ -423,7 +450,7 @@ function rootId(file: string): string {
 }
 
 /** The instance's validated-by edge or "unknown $schema" finding. Empty when the file follows no known schema. */
-function buildInstance(doc: Doc, byId: Map<string, string>, schemaFiles: Set<string>): IRBatch {
+function buildInstance(doc: Doc, byId: Map<string, string>, schemaFiles: Set<string>, allDocFiles: string[]): IRBatch {
   const { file, lines } = doc;
   const records: IRRecord[] = [];
   const ds = doc.dollarSchema;
@@ -431,11 +458,13 @@ function buildInstance(doc: Doc, byId: Map<string, string>, schemaFiles: Set<str
   let via: "$schema" | "filename" = "$schema";
   let finding: string | undefined;
   let missing: string | undefined;
+  let dependOnAll = false;
   if (ds !== undefined) {
     const bare = normId(ds);
     target = byId.get(bare) ?? byId.get(ds);
+    if (target === undefined && /^[a-z][a-z0-9+.-]*:/i.test(ds)) dependOnAll = true;
     if (target === undefined && !/^[a-z][a-z0-9+.-]*:/i.test(ds)) {
-      const rel = posix.normalize(posix.join(posix.dirname(file), ds));
+      const rel = posix.normalize(posix.join(posix.dirname(file), bare));
       if (schemaFiles.has(rel)) target = rel;
       else {
         finding = `unknown $schema "${ds}" (no schema file at ${rel})`;
@@ -446,6 +475,7 @@ function buildInstance(doc: Doc, byId: Map<string, string>, schemaFiles: Set<str
   if (target === undefined && finding === undefined) {
     const id = filenameSchemaId(file);
     const f = id !== undefined ? byId.get(id) : undefined;
+    if (id !== undefined && f === undefined) dependOnAll = true;
     if (f !== undefined) {
       target = f;
       via = "filename";
@@ -454,9 +484,14 @@ function buildInstance(doc: Doc, byId: Map<string, string>, schemaFiles: Set<str
   if (finding !== undefined) {
     const line = Math.max(0, lineOf(lines, /"\$schema"\s*:/));
     records.push({ finding: { severity: "info", message: finding, span: spanAt(file, lines, line), provenance: prov("exact") } });
-    return { file, records, ...(missing !== undefined ? { dependsOn: [missing] } : {}) };
+    const fdeps = new Set<string>(dependOnAll ? allDocFiles.filter((f) => f !== file) : []);
+    if (missing !== undefined) fdeps.add(missing);
+    return { file, records, ...(fdeps.size > 0 ? { dependsOn: [...fdeps].sort() } : {}) };
   }
-  if (target === undefined) return { file, records };
+  if (target === undefined) {
+    const nd = dependOnAll ? allDocFiles.filter((f) => f !== file).sort() : [];
+    return { file, records, ...(nd.length > 0 ? { dependsOn: nd } : {}) };
+  }
   const line = via === "$schema" ? Math.max(0, lineOf(lines, /"\$schema"\s*:/)) : 0;
   records.push({
     edge: {
@@ -476,7 +511,7 @@ function buildInstance(doc: Doc, byId: Map<string, string>, schemaFiles: Set<str
  * True when the project has a schema or kinds file. Two bounded passes over one walk: a name-only check that stops at
  * the first hit, then (if the names found nothing) a content check of at most MAX_READ_FILES small JSON files.
  */
-function walkForSchemas(root: string): string | null {
+function walkForSchemas(root: string): { hit: string | null; capped: boolean } {
   let seen = 0;
   const jsonFiles: string[] = [];
   const stack: string[] = [""];
@@ -496,26 +531,26 @@ function walkForSchemas(root: string): string | null {
       } else if (e.isFile() && e.name.endsWith(".json")) {
         seen++;
         if (fixturePath(childRel)) continue;
-        if (SCHEMA_NAME_RE.test(childRel)) return childRel;
+        if (SCHEMA_NAME_RE.test(childRel)) return { hit: childRel, capped: false };
         jsonFiles.push(childRel);
       }
     }
   }
   let read = 0;
   for (const childRel of jsonFiles) {
-    if (read >= MAX_READ_FILES) break;
+    if (read >= MAX_READ_FILES) return { hit: null, capped: true };
     try {
       const abs = join(root, childRel);
       if (statSync(abs).size > MAX_BYTES) continue;
       read++;
       const text = readFileSync(abs, "utf8");
       if (!CANDIDATE_RE.test(text)) continue;
-      if (classifyJson(JSON.parse(text)) !== "other") return childRel;
+      if (classifyJson(JSON.parse(text)) !== "other") return { hit: childRel, capped: false };
     } catch {
       // unreadable or not JSON
     }
   }
-  return null;
+  return { hit: null, capped: false };
 }
 
 export const frontend: Frontend = {
@@ -525,7 +560,8 @@ export const frontend: Frontend = {
 
   async detect(root: ProjectRoot): Promise<Detection | null> {
     if (existsSync(join(root.path, KINDS_FILE))) return { reason: `found ${KINDS_FILE}` };
-    const hit = walkForSchemas(root.path);
+    const { hit, capped } = walkForSchemas(root.path);
+    if (hit === null && capped) process.stderr.write(`${FRONTEND_ID}: no schema file by name; content scan stopped after ${MAX_READ_FILES} JSON files, so a schema further on was not looked for\n`);
     return hit !== null ? { reason: `found JSON Schema or kinds file ${hit}` } : null;
   },
 
@@ -561,16 +597,35 @@ export const frontend: Frontend = {
     const kindIdByName = new Map<string, string>();
     const schemaFiles = new Set<string>();
     const dupIds = new Map<string, string>();
+    const dupDeps = new Map<string, Set<string>>();
+    const kindFileByName = new Map<string, string>();
+    const kindsFiles: string[] = [];
+    const link = (a: string, b: string): void => {
+      if (!dupDeps.has(a)) dupDeps.set(a, new Set());
+      dupDeps.get(a)?.add(b);
+    };
     for (const d of [...docs.values()].sort((x, y) => (x.file < y.file ? -1 : x.file > y.file ? 1 : 0))) {
       if (d.schemaId !== undefined) {
         const first = byId.get(d.schemaId);
         if (first === undefined) byId.set(d.schemaId, d.file);
-        else dupIds.set(d.file, `duplicate $id ${d.schemaId} (also declared in ${first})`);
+        else {
+          dupIds.set(d.file, `duplicate $id ${d.schemaId} (also declared in ${first})`);
+          link(d.file, first);
+          link(first, d.file);
+        }
       }
       if (d.cls === "schema") schemaFiles.add(d.file);
       for (const def of d.defs) defById.set(def.id, def);
-      for (const k of d.kinds) if (!kindIdByName.has(k.name)) kindIdByName.set(k.name, k.id);
+      if (d.kinds.length > 0) kindsFiles.push(d.file);
+      for (const k of d.kinds)
+        if (!kindIdByName.has(k.name)) {
+          kindIdByName.set(k.name, k.id);
+          kindFileByName.set(k.name, d.file);
+        }
     }
+
+    const allDocFiles = [...docs.keys()].sort();
+    const run: Run = { byId, defById, kindIdByName, kindFileByName, kindsFiles, allDocFiles, dupDeps };
 
     // Second pass: exactly one batch per requested file.
     let scan: TsScan | undefined;
@@ -582,11 +637,11 @@ export const frontend: Frontend = {
       }
       // An unparseable file can still follow a schema by name (*.ir.json is newline-delimited JSON).
       if (doc.cls === "other" && (doc.error === undefined || filenameSchemaId(file) !== undefined)) {
-        yield buildInstance(doc, byId, schemaFiles);
+        yield buildInstance(doc, byId, schemaFiles, allDocFiles);
         continue;
       }
       if (doc.kinds.length > 0 && scan === undefined) scan = await scanTs(ctx);
-      yield buildBatch(doc, byId, defById, kindIdByName, doc.kinds.length > 0 ? scan : undefined, ctx, dupIds.get(file));
+      yield buildBatch(doc, run, doc.kinds.length > 0 ? scan : undefined, ctx, dupIds.get(file));
     }
   },
 };

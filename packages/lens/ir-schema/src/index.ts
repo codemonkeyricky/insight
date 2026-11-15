@@ -28,7 +28,7 @@ function unresolvedText(e: IREdge): string {
 
 export const lensIrSchema: Lens = {
   id: LENS_ID,
-  title: "IR schema",
+  title: "Schema",
   requires: ["structure", "x-schema"],
 
   async run(ir: IRView): Promise<LensResult> {
@@ -280,13 +280,14 @@ export const lensIrSchema: Lens = {
 
     const views: LensView[] = [...(kinds.length > 0 ? [kindsDiagram] : []), ...(defs.length > 0 ? [recordsDiagram] : []), ...(kinds.length > 0 ? [table] : []), ...(schemaFiles.length > 0 ? [filesTable] : [])];
     const emitted = kinds.filter((k) => emitBy.has(k.id)).length;
+    const neverEmitted = kinds.filter((k) => !emitBy.has(k.id) && !nameOf(k).startsWith("x-schema.")).length;
     const metrics = {
       kinds: kinds.length,
       facets: new Set(kinds.map((k) => str(k.attrs.facet))).size,
       defs: defs.length,
       properties: props.length,
       emitted,
-      neverEmitted: kinds.length - emitted,
+      neverEmitted,
       readers: kinds.filter((k) => readBy.has(k.id)).length,
       schemaFiles: schemaFiles.length,
       instances: new Set(validatedEdges.map((e) => e.from)).size,

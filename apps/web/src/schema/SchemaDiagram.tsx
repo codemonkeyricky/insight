@@ -189,7 +189,6 @@ export function SchemaDiagram({ view, onPick, solve = solveInWorker }: SchemaDia
       .on("zoom", (ev) => {
         const t = ev.transform;
         g.setAttribute("transform", `translate(${t.x} ${t.y}) scale(${t.k})`);
-        svg.style.setProperty("--sd-k", String(t.k));
       });
     zoomRef.current = z;
     select(svg).call(z).on("dblclick.zoom", null);
@@ -226,29 +225,36 @@ export function SchemaDiagram({ view, onPick, solve = solveInWorker }: SchemaDia
     [onPick],
   );
 
-  const links = layout
-    ? view.links.flatMap((l, i) => {
-        const a = layout.cards.get(l.from);
-        const b = layout.cards.get(l.to);
-        if (!a || !b) return [];
-        let p;
-        if (l.kind === "extends") p = extendsPath(a, b);
-        else {
-          const from = byId.get(l.from);
-          const idx = from ? from.fields.findIndex((f) => f.name === l.field && f.ref === l.to) : -1;
-          const mid = idx >= 0 ? (rowMids.get(l.from)?.[idx] ?? HEADER_H / 2) : HEADER_H / 2;
-          p = refPath(a, mid, b);
-        }
-        const on = hot !== null && (l.from === hot || l.to === hot);
-        const cls = `sd-link ${l.kind}${hot === null ? "" : on ? " on" : " off"}`;
-        return [
-          <g key={i} className={cls}>
-            <path className="sd-curve" d={p.d} />
-            <path className={l.kind === "extends" ? "sd-head-ext" : "sd-head-ref"} d={p.head} />
-          </g>,
-        ];
-      })
-    : [];
+  /** Link geometry depends only on the layout and view, not on hover. */
+  const geometry = useMemo(() => {
+    if (!layout) return [];
+    return view.links.flatMap((l, i) => {
+      const a = layout.cards.get(l.from);
+      const b = layout.cards.get(l.to);
+      if (!a || !b) return [];
+      let p;
+      if (l.kind === "extends") p = extendsPath(a, b);
+      else {
+        const from = byId.get(l.from);
+        const idx = from ? from.fields.findIndex((f) => f.name === l.field && f.ref === l.to) : -1;
+        const mid = idx >= 0 ? (rowMids.get(l.from)?.[idx] ?? HEADER_H / 2) : HEADER_H / 2;
+        p = refPath(a, mid, b);
+      }
+      return [{ i, from: l.from, to: l.to, kind: l.kind, d: p.d, head: p.head }];
+    });
+    // byId and rowMids are derived from view.
+  }, [layout, view]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const links = geometry.map((g) => {
+    const on = hot !== null && (g.from === hot || g.to === hot);
+    const cls = `sd-link ${g.kind}${hot === null ? "" : on ? " on" : " off"}`;
+    return (
+      <g key={g.i} className={cls}>
+        <path className="sd-curve" d={g.d} />
+        <path className={g.kind === "extends" ? "sd-head-ext" : "sd-head-ref"} d={g.head} />
+      </g>
+    );
+  });
 
   return (
     <div className="sd-wrap" ref={wrapRef}>
