@@ -1050,3 +1050,13 @@ describe("extern module prototypes", () => {
     expect(nodesOf(allRecords(await extractDir(dir, ["a.sv"])))).toEqual([]);
   });
 });
+
+describe("bind provenance", () => {
+  it("a bind to one dut and to two chk definitions gives candidates labelled heuristic, not inferred", async () => {
+    const dir = join(fixturesDir, "bind_multi");
+    const edges = edgesOf(allRecords(await extractDir(dir, ["dut.sv", "chk_a.sv", "chk_b.sv", "tb.sv"]))).filter((e) => e.kind === "x-sv.instantiates" && e.from === "dut.sv#dut");
+    expect(edges).toHaveLength(1);
+    expect(edges[0]?.to).toEqual({ candidates: ["chk_a.sv#chk", "chk_b.sv#chk"] });
+    expect(edges[0]?.provenance?.confidence).toBe("heuristic");
+  });
+});

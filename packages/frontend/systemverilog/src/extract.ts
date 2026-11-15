@@ -129,6 +129,11 @@ const LOOP_VARIANT: Record<string, string> = { for: "for", foreach: "for-in", wh
 
 const DPI_FN = "dpi";
 
+/** How sure an edge is, strongest first. */
+const RANK: Record<Provenance["confidence"], number> = { exact: 3, inferred: 2, heuristic: 1 };
+/** The less sure of two provenances. */
+const weaker = (a: Provenance, b: Provenance): Provenance => (RANK[a.confidence] <= RANK[b.confidence] ? a : b);
+
 /** Where the code being walked sits. */
 interface Frame {
   /** Parent for structure nodes and for facts outside any function: the file, a module, a package, a class or a type. */
@@ -603,20 +608,26 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
           });
           const span = spanOf(rel, hi);
           const attrs = { instance: inst };
-          // The instantiates edge to the module's definition. `pinned` sets the provenance, which otherwise follows the target.
+          // The instantiates edge to the module's definition. `pinned` is the confidence of the edge's source, when the
+          // source is not the container. The edge carries the weaker of that and the confidence of the match itself.
           const instantiates = (from: NodeId, pinned?: Provenance): void => {
             const [first, ...rest] = defs.map((d) => d.id) as NodeId[];
+            let to: IREdge["to"];
+            let own: Provenance;
             if (first === undefined) {
-              edge({ from, to: { unresolved: { scheme: "sv.module", text: type } }, facet: "structure", kind: "x-sv.instantiates", attrs, span, provenance: pinned ?? prov });
+              to = { unresolved: { scheme: "sv.module", text: type } };
+              own = prov;
             } else if (rest.length === 0) {
               for (const d of defs) depend(d.file);
+              to = first;
               // A target found by text scan is a heuristic match, whatever the file's own parse.
-              edge({ from, to: first, facet: "structure", kind: "x-sv.instantiates", attrs, span, provenance: pinned ?? (defs[0]?.scanned ? heuristic : prov) });
+              own = defs[0]?.scanned ? heuristic : prov;
             } else {
               for (const d of defs) depend(d.file);
-              const cands = [...defs.map((d) => d.id)].sort().slice(0, MAX_CANDIDATES) as [NodeId, ...NodeId[]];
-              edge({ from, to: { candidates: cands }, facet: "structure", kind: "x-sv.instantiates", attrs, span, provenance: pinned ?? heuristic });
+              to = { candidates: [...defs.map((d) => d.id)].sort().slice(0, MAX_CANDIDATES) as [NodeId, ...NodeId[]] };
+              own = heuristic;
             }
+            edge({ from, to, facet: "structure", kind: "x-sv.instantiates", attrs, span, provenance: pinned === undefined ? own : weaker(pinned, own) });
           };
           if (bindTarget === undefined) {
             instantiates(f.container);
