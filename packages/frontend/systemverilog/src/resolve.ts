@@ -1,5 +1,5 @@
 import type { ResolveAnswer, Resolver } from "@insight/sdk";
-import { matchInclude } from "./include-match.js";
+import { indexIncludes, matchInclude } from "./include-match.js";
 
 /** Past this many matches a bare file name says nothing useful, so the include stays unresolved. */
 const MAX_MATCHES = 8;
@@ -13,7 +13,7 @@ export const resolver: Resolver = {
   scheme: "sv.include",
   priority: 10,
   async resolve(ref, ctx): Promise<ResolveAnswer | null> {
-    const match = matchInclude(ctx.fromFile, ref.text, ctx.listFiles());
+    const match = matchInclude(ctx.fromFile, ref.text, indexIncludes(ctx.listFiles()));
     if (match.exact !== undefined) return { targets: [match.exact], confidence: "inferred", note: "relative to the including file" };
 
     const matches = match.suffix;

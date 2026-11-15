@@ -1,7 +1,7 @@
 import type { NodeId } from "@insight/ir";
 import { createHash } from "node:crypto";
 import { posix } from "node:path";
-import { matchInclude } from "./include-match.js";
+import { indexIncludes, matchInclude, type IncludeIndex } from "./include-match.js";
 import { getParser, type SyntaxNode } from "./parser.js";
 
 export const FRONTEND_ID = "frontend-systemverilog";
@@ -594,12 +594,13 @@ export async function indexProject(texts: Map<string, string>): Promise<Project>
  */
 function linkIncludes(p: Project): void {
   const rels = [...p.units.keys()].sort();
+  const index = indexIncludes(rels);
   // Each include resolved to its project file, per including file, in source order.
   const resolved = new Map<string, Array<{ site: IncludeSite; target: string }>>();
   for (const unit of p.units.values()) {
     const list: Array<{ site: IncludeSite; target: string }> = [];
     for (const site of unit.includes) {
-      const target = includeTarget(rels, unit.rel, site.text);
+      const target = includeTarget(index, unit.rel, site.text);
       if (target !== undefined && target !== unit.rel) list.push({ site, target });
     }
     resolved.set(unit.rel, list);
@@ -664,8 +665,8 @@ function linkIncludes(p: Project): void {
  * The project file an include names, or undefined when none or several match by suffix. The directory-relative
  * file wins; otherwise the one file whose path ends with the include's text (see matchInclude).
  */
-function includeTarget(rels: string[], from: string, text: string): string | undefined {
-  const match = matchInclude(from, text, rels);
+function includeTarget(index: IncludeIndex, from: string, text: string): string | undefined {
+  const match = matchInclude(from, text, index);
   return match.exact ?? (match.suffix.length === 1 ? match.suffix[0] : undefined);
 }
 
