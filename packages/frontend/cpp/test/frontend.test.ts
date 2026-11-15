@@ -194,3 +194,103 @@ describe("frontend-cpp round-4 fixes", () => {
     expect(fn?.attrs.qualifiedName).toBe("benchmark::S::name");
   });
 });
+
+describe("frontend-cpp class export macros and member candidates", () => {
+  const extractFiles = async (sources: Record<string, string>): Promise<IRRecord[]> => {
+    const names = Object.keys(sources);
+    const ctx = { root, files: names, listFiles: () => names, readFile: async (f: string) => sources[f] ?? "", log: () => undefined };
+    const batches: IRBatch[] = [];
+    for await (const batch of frontend.extract(ctx)) batches.push(batch);
+    return allRecords(batches);
+  };
+  const extractOne = (file: string, src: string) => extractFiles({ [file]: src });
+  const fnNodes = (records: IRRecord[]) => records.flatMap((r) => ("node" in r && r.node.kind === "structure.function" ? [r.node] : []));
+  const typeNodes = (records: IRRecord[]) => records.flatMap((r) => ("node" in r && r.node.kind === "structure.type" ? [r.node] : []));
+  const callEdges = (records: IRRecord[]) => records.flatMap((r) => ("edge" in r && r.edge.kind === "calls.call" ? [r.edge] : []));
+
+  it("names a macro class with an attribute macro and a real name as a type and its methods under it", async () => {
+    const file = "macro/state.h";
+    const src = "namespace benchmark { class BENCHMARK_EXPORT BENCHMARK_INTERNAL_CACHELINE_ALIGNED State { public: int range() const { return 0; } }; }\n";
+    const records = await extractOne(file, src);
+    expect(typeNodes(records).some((n) => n.id === `${file}#benchmark::State` && n.attrs.name === "State")).toBe(true);
+    const range = fnNodes(records).find((n) => n.attrs.name === "range");
+    expect(range?.attrs.qualifiedName).toBe("benchmark::State::range");
+    expect(range?.id).toBe(`${file}#benchmark::State::range`);
+  });
+
+  it("keeps the real column of a method declared after a class-head macro", async () => {
+    const file = "macro/span.h";
+    const src = "namespace benchmark { class BENCHMARK_EXPORT BENCHMARK_INTERNAL_CACHELINE_ALIGNED State { public: int range() const { return 0; } }; }\n";
+    const range = fnNodes(await extractOne(file, src)).find((n) => n.attrs.name === "range");
+    expect(range?.span?.start).toEqual([0, src.indexOf("int range")]);
+  });
+
+  it("names a derived class with an export macro and a base clause", async () => {
+    const file = "macro/derived.h";
+    const src = "class EXP Base { public: virtual void f(); };\nclass EXP Derived : public Base { public: void f() override {} };\n";
+    const records = await extractOne(file, src);
+    expect(fnNodes(records).some((n) => n.id === `${file}#Derived::f`)).toBe(true);
+    expect(typeNodes(records).some((n) => n.attrs.name === "Derived")).toBe(true);
+  });
+
+  it("names a method of a class with a final specifier, not the word final", async () => {
+    const file = "macro/final.h";
+    const records = await extractOne(file, "class API Q final { public: void g() {} };\n");
+    expect(fnNodes(records).some((n) => n.id === `${file}#Q::g`)).toBe(true);
+    expect(fnNodes(records).some((n) => n.id.endsWith("#final::g"))).toBe(false);
+  });
+
+  it("names a method of a struct with a macro suffix on its keyword", async () => {
+    const file = "macro/gtest.h";
+    const records = await extractOne(file, "struct GTEST_API_ S { void h() {} };\n");
+    expect(fnNodes(records).some((n) => n.id === `${file}#S::h`)).toBe(true);
+  });
+
+  it("leaves a class whose one all-caps word is its name", async () => {
+    const file = "macro/url.h";
+    const records = await extractOne(file, "class URL { void p() {} };\n");
+    expect(fnNodes(records).some((n) => n.id === `${file}#URL::p`)).toBe(true);
+  });
+
+  it("leaves an enum class alone", async () => {
+    const file = "macro/enum.h";
+    const records = await extractOne(file, "enum class COLOR { RED };\nvoid after() {}\n");
+    expect(fnNodes(records).some((n) => n.id === `${file}#after`)).toBe(true);
+    expect(typeNodes(records).some((n) => n.attrs.name === "COLOR" && n.attrs.typeKind === "enum")).toBe(true);
+  });
+
+  it("leaves a template type parameter alone", async () => {
+    const file = "macro/template.h";
+    const records = await extractOne(file, "template <class T> struct W { void w() {} };\n");
+    expect(fnNodes(records).some((n) => n.id === `${file}#W::w`)).toBe(true);
+  });
+
+  it("resolves a member call to a method, not to the constructor of a class with the same name", async () => {
+    const file = "ctor/member.cc";
+    const src = "struct Arg { Arg(int) {} };\nstruct B { B* Arg(int) { return this; } };\nvoid t(B* b) { b->Arg(1); }\n";
+    const edges = callEdges(await extractOne(file, src));
+    const call = edges.find((e) => e.from === `${file}#t`);
+    expect(call).toBeDefined();
+    const targets = typeof call?.to === "object" && "candidates" in call.to ? call.to.candidates : [call?.to];
+    expect(targets).toEqual([`${file}#B::Arg`]);
+  });
+
+  it("keeps a call to an overload set in one file, with every candidate", async () => {
+    const types = ["int", "long", "short", "char", "bool", "float", "double", "unsigned", "long long", "unsigned char"];
+    const file = "cap/same-file.cc";
+    const overloads = types.map((t) => `void f(${t} x) {}`).join("\n");
+    const edges = callEdges(await extractOne(file, `${overloads}\nvoid caller() { f(1); }\n`));
+    const call = edges.find((e) => e.from === `${file}#caller`);
+    expect(typeof call?.to === "object" && "candidates" in call.to ? call.to.candidates.length : 0).toBe(10);
+  });
+
+  it("caps a same-named function defined in different files, but keeps the same overloads in one file", async () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 10; i++) files[`cap/f${i}.cc`] = `void f(int a, int b${i}) {}\n`;
+    files["cap/caller.cc"] = "void caller() { f(1, 2); }\n";
+    expect(callEdges(await extractFiles(files)).some((e) => e.from === "cap/caller.cc#caller")).toBe(false);
+    // Control: the same ten overloads in one file are kept, so the drop above comes from the cross-file cap.
+    const same: Record<string, string> = { "cap/same.cc": `${Array.from({ length: 10 }, (_, i) => `void f(int a, int b${i}) {}`).join("\n")}\nvoid caller() { f(1, 2); }\n` };
+    expect(callEdges(await extractFiles(same)).some((e) => e.from === "cap/same.cc#caller")).toBe(true);
+  });
+});

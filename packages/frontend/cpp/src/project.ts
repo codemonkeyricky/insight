@@ -13,6 +13,35 @@ export const norm = (s: string): string => s.replace(/\s+/g, "");
  */
 export const normName = (s: string): string =>
   norm(s.replace(/\s+/g, " ").replace(/\boperator (?=[A-Za-z_])/g, "operator")).replace(//g, " ");
+/**
+ * A class, struct or union head, and the run of ALL_CAPS words that an export macro leaves between the keyword and the
+ * real name. Group 3 is the run, and the lookahead is the real name followed by `final`, a base clause, a brace, a
+ * template list or a semicolon. `final` itself is never the name. A macro may take one argument list, not nested.
+ */
+const CLASS_HEAD =
+  /\b(class|struct|union)(\s+)((?:(?:[A-Z][A-Z0-9_]+\s*\([^()\n;{}]*\)|[A-Z][A-Z0-9_]+)\s+)+)(?=(?!final\b)[A-Za-z_]\w*\s*(?:final\b|:(?!:)|\{|<|;))/g;
+/** One macro word, with its argument list when it has one. */
+const MACRO_WORD = /[A-Z][A-Z0-9_]+(?:\s*\([^()\n;{}]*\))?/g;
+
+/** An export macro word: at least two characters, and either containing `_` or at least three characters. */
+const isExportMacro = (word: string): boolean => word.includes("_") || word.length >= 3;
+
+/**
+ * The source with the export macros in class heads blanked. `class BENCHMARK_EXPORT Counter {` reads as
+ * `class                 Counter {`, so tree-sitter sees the real name and body. Every blanked character becomes a
+ * space and newlines are kept, so byte offsets, lines and columns are the same as in the original text.
+ */
+export function blankClassHeadMacros(text: string): string {
+  if (!/\b(?:class|struct|union)\s/.test(text)) return text;
+  return text.replace(CLASS_HEAD, (_match: string, _keyword: string, _gap: string, run: string) => {
+    const blank = run.replace(MACRO_WORD, (token) => {
+      const word = token.split("(")[0]?.trimEnd() ?? token;
+      return isExportMacro(word) ? token.replace(/[^\n]/g, " ") : token;
+    });
+    return _match.slice(0, _match.length - run.length) + blank;
+  });
+}
+
 /** One piece of a name. `top` is false for anything inside a template argument list. */
 interface ScanToken {
   text: string;
@@ -102,24 +131,6 @@ export interface Scope {
   cls?: string;
 }
 
-/** An ALL_CAPS word, as an export macro is written. */
-const MACRO_NAME = /^[A-Z][A-Z0-9_]*$/;
-
-/**
- * The name of a class that an export macro hides. `class MACRO Name { ... }` parses as a function definition whose
- * return type is a class with no body, named by the macro, and whose declarator is the real name. The body is a
- * compound statement, not a field list. Undefined for any other node.
- */
-export function macroClassName(node: SyntaxNode): string | undefined {
-  if (node.type !== "function_definition") return undefined;
-  const type = node.childForFieldName("type");
-  if (!type || (type.type !== "class_specifier" && type.type !== "struct_specifier") || type.childForFieldName("body")) return undefined;
-  const macro = type.childForFieldName("name")?.text ?? "";
-  const name = node.childForFieldName("declarator");
-  if (!MACRO_NAME.test(macro) || name?.type !== "identifier" || node.childForFieldName("body")?.type !== "compound_statement") return undefined;
-  return name.text;
-}
-
 /** The namespaces and classes around a node, found by walking up its parents. */
 export function scopeOf(node: SyntaxNode): Scope {
   const frames: { name: string; isClass: boolean }[] = [];
@@ -129,8 +140,6 @@ export function scopeOf(node: SyntaxNode): Scope {
       const name = p.childForFieldName("name")?.text;
       if (name) frames.unshift({ name, isClass: false });
       else anon = true;
-    } else if (p.type === "function_definition" && macroClassName(p) !== undefined) {
-      frames.unshift({ name: macroClassName(p) as string, isClass: true });
     } else if ((p.type === "class_specifier" || p.type === "struct_specifier") && p.childForFieldName("body")) {
       const name = p.childForFieldName("name")?.text;
       if (name) frames.unshift({ name: stripTemplates(norm(name)), isClass: true });
@@ -265,19 +274,17 @@ function hasNoBody(fn: SyntaxNode): boolean {
 
 function collectMembers(root: SyntaxNode, members: Map<string, Set<string>>): void {
   walk(root, (node) => {
-    const macro = macroClassName(node);
-    if (macro === undefined && node.type !== "class_specifier" && node.type !== "struct_specifier") return;
+    if (node.type !== "class_specifier" && node.type !== "struct_specifier") return;
     const body = node.childForFieldName("body");
-    const name = macro ?? stripTemplates(norm(node.childForFieldName("name")?.text ?? ""));
+    const name = stripTemplates(norm(node.childForFieldName("name")?.text ?? ""));
     if (!body || !name) return;
     const cls = [...scopeOf(node).path, name].join("::");
     const set = members.get(cls) ?? new Set<string>();
     for (const field of body.namedChildren) {
-      // A macro-exported class has a compound body, so its members are declarations rather than field declarations.
-      if (field.type !== "field_declaration" && !(macro !== undefined && field.type === "declaration")) continue;
+      if (field.type !== "field_declaration") continue;
       let d: SyntaxNode | null = field.childForFieldName("declarator");
       let isFunction = false;
-      while (d && d.type !== "field_identifier" && d.type !== "identifier") {
+      while (d && d.type !== "field_identifier") {
         if (d.type === "function_declarator") isFunction = true;
         d = d.childForFieldName("declarator");
       }
@@ -381,26 +388,13 @@ function addLambdas(rel: string, lambdas: SyntaxNode[], fns: Map<string, FnDecl>
   }
 }
 
-/** A `public:`, `private:` or `protected:` label, not a `::`. */
-const ACCESS_LABEL = /\b(public|private|protected)(\s*):(?!:)/g;
-
 /** Parses every C or C++ file and collects the function definitions that calls can target. */
 export async function buildProject(texts: Map<string, string>): Promise<Project> {
   const parser = await getParser();
   const units = new Map<string, Unit>();
   for (const [rel, text] of texts) {
-    let tree = parser.parse(text);
+    const tree = parser.parse(blankClassHeadMacros(text));
     if (!tree) throw new Error(`could not parse ${rel}`);
-    // An access label before an inline member of a macro-exported class makes tree-sitter misread that member. The
-    // labels are blanked (newlines kept, so every position holds) and the file is parsed again.
-    if (tree.rootNode.hasError && tree.rootNode.descendantsOfType("function_definition").some((n) => macroClassName(n) !== undefined)) {
-      const blanked = text.replace(ACCESS_LABEL, (m) => m.replace(/[^\n]/g, " "));
-      if (blanked !== text) {
-        tree.delete();
-        tree = parser.parse(blanked);
-        if (!tree) throw new Error(`could not parse ${rel}`);
-      }
-    }
     const root = tree.rootNode;
     // A file can be wrong without an ERROR node (a MISSING token), so the root stands in for it.
     const found = root.hasError ? root.descendantsOfType("ERROR") : [];

@@ -85,14 +85,22 @@ interface Resolved {
   confidence: Confidence;
 }
 
+/** A constructor is a function named by the last scope segment of its qualified name, `X::X`. */
+const isConstructor = (fn: FnDecl): boolean => {
+  const segments = fn.qname.split("::");
+  return segments.length >= 2 && segments[segments.length - 2] === fn.simple;
+};
+
 /**
- * The candidates, or undefined when there are none or too many to be useful. Overloads share one qualified name and
- * are one function to a caller, so the cap applies only when the candidates name different functions.
+ * The candidates, or undefined when there are none or too many to be useful. Overloads are one function to a caller,
+ * so the cap is bypassed only when every candidate has the same qualified name and is defined in the same file, as a
+ * real overload set is. Candidates spread across files, such as `operator<<`, stay capped.
  * Several candidates are never more than heuristic.
  */
 function candidatesOf(targets: FnDecl[], confidence: Confidence): Resolved | undefined {
   if (targets.length === 0) return undefined;
-  const overloads = targets.every((t) => t.qname === targets[0]?.qname);
+  const first = targets[0];
+  const overloads = targets.every((t) => t.qname === first?.qname && t.rel === first?.rel);
   if (targets.length > MAX_CANDIDATES && !overloads) return undefined;
   return { targets, confidence: targets.length > 1 ? "heuristic" : confidence };
 }
@@ -123,7 +131,8 @@ function resolveCallee(project: Project, fnNode: SyntaxNode): Resolved | undefin
       const field = fnNode.childForFieldName("field")?.text;
       if (!field) return undefined;
       const simple = normName(field);
-      return candidatesOf((project.bySimple.get(simple) ?? []).filter((d) => d.cls !== undefined), "heuristic");
+      // A member call is never a constructor call, so constructors are not candidates.
+      return candidatesOf((project.bySimple.get(simple) ?? []).filter((d) => d.cls !== undefined && !isConstructor(d)), "heuristic");
     }
     default:
       return undefined;
