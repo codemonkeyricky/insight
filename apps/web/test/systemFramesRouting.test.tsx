@@ -219,3 +219,53 @@ describe("edge clearance", () => {
     });
   }
 });
+
+describe("frame borders", () => {
+  const l = layoutSystemFrames(benchmarkSystem as unknown as SystemModel, { viewport: { w: 1600, h: 900 } });
+  const frames = l.frames ?? [];
+  it("the benchmark fixture has the std::thread placeholder with its api in the title and the spawns label", () => {
+    const ph = frames.find((f) => f.unresolved !== undefined) as SysFrame;
+    expect(ph.title).toBe("Thread · std::thread");
+    const a = l.arrows.find((x) => x.edge.verb === "spawns");
+    expect(a?.pill.text).toBe("spawns std::thread");
+  });
+  it("no horizontal or vertical run lies within 4 px of a frame border (its own end points excepted)", () => {
+    const bad: string[] = [];
+    for (const a of l.arrows) {
+      const pts = pathPoints(a.d);
+      for (let i = 0; i + 1 < pts.length; i++) {
+        const [p, q] = [pts[i] as [number, number], pts[i + 1] as [number, number]];
+        const isEnd = (r: [number, number]) => r === pts[0] || r === pts[pts.length - 1];
+        for (const f of frames) {
+          if (p[1] === q[1] && !isEnd(p) && !isEnd(q) && Math.min(p[0], q[0]) < f.x + f.w && Math.max(p[0], q[0]) > f.x) {
+            for (const by of [f.y, f.y + f.h]) if (Math.abs(p[1] - by) < 3.5) bad.push(`${a.id} y=${p[1]} near ${f.id}`);
+          }
+          if (p[0] === q[0] && !isEnd(p) && !isEnd(q) && Math.min(p[1], q[1]) < f.y + f.h && Math.max(p[1], q[1]) > f.y) {
+            for (const bx of [f.x, f.x + f.w]) if (Math.abs(p[0] - bx) < 3.5) bad.push(`${a.id} x=${p[0]} near ${f.id}`);
+          }
+        }
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+  it("no pill sits on a frame border or header", () => {
+    const bad: string[] = [];
+    for (const a of l.arrows) {
+      if (a.pill.text === "") continue;
+      const r = { x: a.pill.x - a.pill.w / 2, y: a.pill.y - a.pill.h / 2, w: a.pill.w, h: a.pill.h };
+      for (const f of frames) {
+        const xo = r.x < f.x + f.w && r.x + r.w > f.x;
+        const yo = r.y < f.y + f.h && r.y + r.h > f.y;
+        if (xo && r.y <= f.y && r.y + r.h >= f.y) bad.push(`${a.id} on top border of ${f.id}`);
+        if (xo && r.y <= f.y + f.h && r.y + r.h >= f.y + f.h) bad.push(`${a.id} on bottom border of ${f.id}`);
+        if (yo && r.x <= f.x && r.x + r.w >= f.x) bad.push(`${a.id} on left border of ${f.id}`);
+        if (yo && r.x <= f.x + f.w && r.x + r.w >= f.x + f.w) bad.push(`${a.id} on right border of ${f.id}`);
+        if (overlapsRect(r, { x: f.x, y: f.y, w: f.w, h: f.hdrH })) bad.push(`${a.id} on header of ${f.id}`);
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+});
+
+const overlapsRect = (a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }): boolean =>
+  a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;

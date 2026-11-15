@@ -12,7 +12,7 @@ export const SLICE_LIMIT = 9;
 
 const CARD_W = 196;
 const COL_GAP = 70;
-const PAD = 10;
+const PAD = 12;
 const HDR_H = 30;
 const SLICE_H = 50;
 const SLICE_GAP = 8;
@@ -811,6 +811,14 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
   const obstacles = new ObstacleGrid();
   for (const b of boxes) obstacles.add(b.id, { x: b.x, y: b.y, w: b.w, h: b.h });
   for (const f of frames) obstacles.add(f.id, { x: f.x, y: f.y, w: f.w, h: f.hdrH });
+  const frameBorders = new ObstacleGrid();
+  for (const f of frames) {
+    frameBorders.add(`${f.id}|t`, { x: f.x, y: f.y, w: f.w, h: 0 });
+    frameBorders.add(`${f.id}|b`, { x: f.x, y: f.y + f.h, w: f.w, h: 0 });
+    frameBorders.add(`${f.id}|l`, { x: f.x, y: f.y, w: 0, h: f.h });
+    frameBorders.add(`${f.id}|r`, { x: f.x + f.w, y: f.y, w: 0, h: f.h });
+  }
+  obstacles.borders = frameBorders;
   const topEntry = new Set<number>();
   const portAt = new Map<number, { x1: number; y1: number; x2: number; y2: number }>();
   // The slot of a port among those on its side, ordered by the other end: sorted once per side.
@@ -978,6 +986,13 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
   const taken = new RectGrid();
   for (const b of boxes) taken.add({ x: b.x - 4, y: b.y - 4, w: b.w + 8, h: b.h + 8 });
   for (const f of frames) taken.add({ x: f.x, y: f.y, w: f.w, h: HDR_H });
+  // A pill sits on no frame border: a strip of ROUTE_CLEAR either side of each border line is taken.
+  for (const f of frames) {
+    taken.add({ x: f.x - ROUTE_CLEAR, y: f.y - ROUTE_CLEAR, w: f.w + 2 * ROUTE_CLEAR, h: 2 * ROUTE_CLEAR });
+    taken.add({ x: f.x - ROUTE_CLEAR, y: f.y + f.h - ROUTE_CLEAR, w: f.w + 2 * ROUTE_CLEAR, h: 2 * ROUTE_CLEAR });
+    taken.add({ x: f.x - ROUTE_CLEAR, y: f.y - ROUTE_CLEAR, w: 2 * ROUTE_CLEAR, h: f.h + 2 * ROUTE_CLEAR });
+    taken.add({ x: f.x + f.w - ROUTE_CLEAR, y: f.y - ROUTE_CLEAR, w: 2 * ROUTE_CLEAR, h: f.h + 2 * ROUTE_CLEAR });
+  }
   const topFrames = frames.filter((f) => f.parent === undefined);
   const placePill = (samples: Array<{ x: number; y: number }>, text: string, order: number[], mustShow = true, constrain = false): { x: number; y: number; w: number; h: number; text: string } => {
     const w = Math.round(text.length * 8.2 + 20);
@@ -1167,6 +1182,8 @@ class RectGrid {
 
 /** The routing obstacles (cards and frame headers) keyed by the id of the box or frame, so an edge can skip its own ends. */
 class ObstacleGrid {
+  /** The border lines of every frame (zero-width or zero-height rectangles): no route runs along one, see routeWithin. */
+  borders?: ObstacleGrid;
   private readonly cells = new Map<string, Array<Rect & { id: string }>>();
   private readonly all: Array<Rect & { id: string }> = [];
   add(id: string, r: Rect): void {
@@ -1256,8 +1273,21 @@ function routeWithin(a: [number, number], b: [number, number], obs: ObstacleGrid
   const minX = Math.min(a[0], b[0]) - M, maxX = Math.max(a[0], b[0]) + M;
   const minY = Math.min(a[1], b[1]) - M, maxY = Math.max(a[1], b[1]) + M;
   const near = obs.within(minX, maxX, minY, maxY, fromId, toId);
-  const xs = [...new Set([a[0], b[0], ...near.flatMap((r) => [r.x - ROUTE_GUTTER, r.x + r.w + ROUTE_GUTTER])])].sort((p, q) => p - q);
-  const ys = [...new Set([a[1], b[1], ...near.flatMap((r) => [r.y - ROUTE_GUTTER, r.y + r.h + ROUTE_GUTTER])])].sort((p, q) => p - q);
+  // No lattice line lies within ROUTE_CLEAR of a frame's border line (a run there would hug the border); the two ends' own
+  // coordinates stay. A route may still cross a border at right angles.
+  // The gutter lines reach past the window (the rectangles that give them may stick out of it), so the borders are looked up there too.
+  let bx0 = minX, bx1 = maxX, by0 = minY, by1 = maxY;
+  for (const r of near) {
+    bx0 = Math.min(bx0, r.x);
+    bx1 = Math.max(bx1, r.x + r.w);
+    by0 = Math.min(by0, r.y);
+    by1 = Math.max(by1, r.y + r.h);
+  }
+  const bl = obs.borders === undefined ? [] : obs.borders.within(bx0 - ROUTE_GUTTER - ROUTE_CLEAR, bx1 + ROUTE_GUTTER + ROUTE_CLEAR, by0 - ROUTE_GUTTER - ROUTE_CLEAR, by1 + ROUTE_GUTTER + ROUTE_CLEAR, "", "");
+  const hugsY = (y: number): boolean => bl.some((r) => r.h === 0 && Math.abs(y - r.y) <= ROUTE_CLEAR);
+  const hugsX = (x: number): boolean => bl.some((r) => r.w === 0 && Math.abs(x - r.x) <= ROUTE_CLEAR);
+  const xs = [...new Set([a[0], b[0], ...near.flatMap((r) => [r.x - ROUTE_GUTTER, r.x + r.w + ROUTE_GUTTER]).filter((x) => !hugsX(x))])].sort((p, q) => p - q);
+  const ys = [...new Set([a[1], b[1], ...near.flatMap((r) => [r.y - ROUTE_GUTTER, r.y + r.h + ROUTE_GUTTER]).filter((y) => !hugsY(y))])].sort((p, q) => p - q);
   const nx = xs.length, ny = ys.length;
   const si = xs.indexOf(a[0]), sj = ys.indexOf(a[1]), ti = xs.indexOf(b[0]), tj = ys.indexOf(b[1]);
   if (si < 0 || sj < 0 || ti < 0 || tj < 0) return undefined;

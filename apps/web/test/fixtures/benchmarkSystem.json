@@ -722,7 +722,7 @@
    "from": "thread:main|src",
    "to": "thread:src/benchmark_runner.cc@spawn:211:17",
    "verb": "spawns",
-   "label": "spawns thread",
+   "label": "spawns std::thread",
    "count": 1,
    "sites": [
     {
@@ -807,13 +807,14 @@
   {
    "id": "thread:src/benchmark_runner.cc@spawn:211:17",
    "kind": "thread",
-   "label": "Thread",
+   "label": "Thread · std::thread",
    "parent": "program:scope:",
    "spawn": {
     "file": "src/benchmark_runner.cc",
     "line": 212,
     "status": "unresolved",
-    "fn": "src/benchmark_runner.cc#benchmark::internal::ThreadRunnerDefault::RunThreads"
+    "fn": "src/benchmark_runner.cc#benchmark::internal::ThreadRunnerDefault::RunThreads",
+    "api": "std::thread"
    },
    "unresolved": true,
    "note": "target unresolved: fn"

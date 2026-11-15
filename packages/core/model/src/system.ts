@@ -483,11 +483,18 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
   for (const [rt, ph] of plan.placeholders) {
     const site: Site = { file: ph.spawn.file, line: ph.spawn.line, ...(ph.spawn.fn !== undefined ? { fn: ph.spawn.fn } : {}) };
     // One edge from each distinct host. The source is a slice that exists and has functions: the spawn site's component on
-    // that host, else any non-empty slice of it, else the host runtime itself.
+    // that host, else its non-empty slice that contains the spawn file (longest path prefix, then first by id), else the host runtime itself.
     const sources = new Set<string>();
     for (const host of ph.hosts) {
       const own = ph.component === undefined ? undefined : plan.slices.get(`${host}|${ph.component}`);
-      const any = [...plan.slices.values()].filter((sl) => sl.runtime === host && sl.functions > 0).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))[0];
+      // Non-empty slices of the host: the one whose component contains the spawn site's file (longest path prefix) first, then by id.
+      const pathLen = (sl: { component: string }): number => {
+        const cp = componentById.get(sl.component)?.path;
+        return cp === undefined ? -1 : cp === "" || cp === "." ? 0 : ph.spawn.file === cp || ph.spawn.file.startsWith(`${cp}/`) ? cp.length : -1;
+      };
+      const any = [...plan.slices.values()]
+        .filter((sl) => sl.runtime === host && sl.functions > 0)
+        .sort((a, b) => pathLen(b) - pathLen(a) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))[0];
       sources.add(own !== undefined && own.functions > 0 ? own.id : any !== undefined ? any.id : host);
     }
     for (const from of [...sources].sort()) addFact(from, rt, "spawns", `spawns ${ph.spawn.api ?? "thread"}`, site, true);

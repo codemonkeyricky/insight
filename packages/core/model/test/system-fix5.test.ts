@@ -251,4 +251,20 @@ describe("System fixes: unresolved thread spawns are placeholders", () => {
       expect(sl !== undefined ? sl.functions > 0 : rts.has(e.from)).toBe(true);
     }
   });
+
+  it("falls back to a non-empty slice (never an empty one) when the spawn site's own component has none on the host", () => {
+    // The spawn node's span names a file outside every component slice of the host (tools/z.ts), while its owner is src/main.ts#dispatch.
+    const doc = placeholderDoc("src/main.ts", "dispatch");
+    const node = doc.nodes.find((n) => n.id === "src/main.ts@spawn:12") as IRNode;
+    node.span = fx.span("tools/z.ts", 12, 2, 12, 30);
+    const { s, threads } = placeholdersOf(doc, false);
+    const slices = new Map((s.slices ?? []).map((sl) => [sl.id, sl] as const));
+    const rts = new Set((s.runtimes ?? []).map((r) => r.id));
+    for (const t of threads) {
+      for (const e of s.edges.filter((x) => x.verb === "spawns" && x.to === t.id)) {
+        const sl = slices.get(e.from);
+        expect(sl !== undefined ? sl.functions > 0 : rts.has(e.from)).toBe(true);
+      }
+    }
+  });
 });
