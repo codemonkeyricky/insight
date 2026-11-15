@@ -4,6 +4,7 @@ import { getParser, type SyntaxNode } from "./parser.js";
 import {
   declId,
   HDL_TEXT_RE,
+  isExternDecl,
   declName,
   errorNodes,
   fnBase,
@@ -437,6 +438,7 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
       case "module_declaration":
       case "interface_declaration":
       case "program_declaration": {
+        if (isExternDecl(n)) break;
         const name = declName(n);
         if (!name) break;
         const id = project.idOf.get(fileNodeKey(rel, n)) ?? ids.take(declId(rel, name));

@@ -207,6 +207,12 @@ const DECL_HDL: Record<string, Hdl> = {
 
 const SUBROUTINE_TYPES = new Set(["function_declaration", "task_declaration", "class_constructor_declaration"]);
 
+/**
+ * True for `extern module`, `extern interface` and `extern program`: a prototype whose definition is elsewhere. It
+ * declares no name of its own in the project, so it is not indexed.
+ */
+export const isExternDecl = (n: SyntaxNode): boolean => /^extern\b/.test(n.text);
+
 /** The name of a module, interface or program (in its header), or of a package or class. */
 export function declName(n: SyntaxNode): string | undefined {
   const header = n.namedChildren.find((c) => c.type.endsWith("_header"));
@@ -306,6 +312,7 @@ function collectDecls(unit: Unit, root: SyntaxNode, p: Project, imports: Map<str
   };
   const visit = (n: SyntaxNode, scope: string | undefined, key: string | undefined, gen: string[], pkg: string | undefined, chain: ScopeRef[]): void => {
     const hdl = DECL_HDL[n.type];
+    if (hdl !== undefined && isExternDecl(n)) return;
     if (hdl !== undefined) {
       const name = declName(n);
       if (name) {

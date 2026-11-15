@@ -1004,3 +1004,14 @@ describe("a .v file that is not Verilog", () => {
     expect(batches).toEqual([{ file: "Foo.v", records: [] }]);
   });
 });
+
+describe("extern module prototypes", () => {
+  const dir = join(fixturesDir, "extern_module");
+
+  it("an extern module prototype is not a definition: the instance resolves to the one real module, not candidates", async () => {
+    const edges = edgesOf(allRecords(await extractDir(dir, ["a.sv", "b.sv", "top.sv"]))).filter((e) => e.kind === "x-sv.instantiates");
+    expect(edges).toHaveLength(1);
+    expect(edges[0]?.to).toBe("b.sv#sub");
+    expect(nodesOf(allRecords(await extractDir(dir, ["a.sv"])))).toEqual([]);
+  });
+});
