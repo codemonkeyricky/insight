@@ -516,6 +516,25 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 .zm-beam-g1 { stop-color: var(--accent); stop-opacity: 0.05; }
 .zm-callout { fill: var(--beam-fill, color-mix(in srgb, var(--accent) 9%, transparent)); stroke: color-mix(in srgb, var(--accent) 28%, transparent); }
 .zm-expansion-accent { fill: var(--accent); pointer-events: none; }
+
+/* The Callers button: the close ×'s hairline and fill tokens, a pill with its label in the muted ink. */
+.zm-callers-btn { cursor: pointer; }
+.zm-callers-bg { fill: var(--sheet); stroke: var(--hair); stroke-width: 1; vector-effect: non-scaling-stroke; transition: fill 120ms ease-out; }
+.zm-callers-btn text { fill: var(--muted); font: 500 max(11px, calc(11px * var(--zinv, 1))) var(--font-ui); pointer-events: none; user-select: none; -webkit-user-select: none; }
+.zm-callers-btn:hover .zm-callers-bg, .zm-callers-btn.is-open .zm-callers-bg { fill: var(--faint); }
+.zm-callers-btn:hover text, .zm-callers-btn.is-open text { fill: var(--accent-text); }
+/* The callers box's rows: a name over a muted file line, the edge kinds at the right, and a ▸ at the row's end. */
+.zm-caller-hit { fill: transparent; }
+.zm-caller-row:hover .zm-caller-hit { fill: var(--row-hover); }
+.zm-caller-row .zm-caller-hit { cursor: pointer; }
+.zm-caller-name { fill: var(--ink); font: 500 12px var(--font-code); user-select: none; -webkit-user-select: none; pointer-events: none; }
+.zm-caller-file { fill: var(--muted); font: 400 10.5px var(--font-code); user-select: none; -webkit-user-select: none; pointer-events: none; }
+.zm-caller-kind { fill: var(--accent-text); font: 500 10.5px var(--font-ui); user-select: none; -webkit-user-select: none; pointer-events: none; }
+.zm-callers-note .zm-caller-name { fill: var(--muted); font-style: italic; }
+.zm-caller-chev { cursor: pointer; }
+.zm-caller-chev-hit { fill: transparent; transition: fill 120ms ease-out; }
+.zm-caller-chev:hover .zm-caller-chev-hit { fill: color-mix(in srgb, var(--accent) 22%, transparent); }
+.zm-caller-chev text { fill: var(--accent-text); font-weight: 600; font-size: 13px; pointer-events: none; }
 .zm-connector-group.is-opening .zm-callout { transform-box: fill-box; transform-origin: 0% 50%; animation: zm-beam-in 280ms cubic-bezier(0.2, 0, 0, 1) both; }
 @keyframes zm-beam-in { from { opacity: 0; transform: scaleX(0.2); } to { opacity: 1; transform: none; } }
 .zm-connector-group.is-closing .zm-callout { animation: zm-fade-out 160ms linear both; }

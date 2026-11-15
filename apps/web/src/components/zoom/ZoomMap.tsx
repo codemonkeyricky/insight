@@ -11,7 +11,10 @@ import { CHART_FIT_MAX_K, CHART_HEAD, MORE_SUFFIX, ZOOM_SIZE, fitCamera, fitChar
 import { nameOfId, runtimeLabel, stepRuntime } from "../../flowTargets";
 import { hrefView } from "../../router";
 import { CHART_MIN_PX } from "../../zoom/chart";
-import { anchoredTo, expandCamera, isInPlace, calloutOf, closeExpansion, footprintOf, isNested, NARROW_VIEW_PX, openExpansion, ownerOf, REVEAL_MIN_K, refresh, revealCamera, rootBoxOf, sameFootprint, sceneCamera, setInline, SLOT_PAD, shiftAt, stepRect, type Expansion, type ExpandAnchor } from "../../zoom/expand";
+import { anchoredTo, callerRowRect, callersAnchoredTo, callersKey, expandCamera, headerAnchor, isInPlace, calloutOf, closeExpansion, footprintOf, isNested, NARROW_VIEW_PX, openExpansion, ownerOf, REVEAL_MIN_K, refresh, resizeCallers, revealCamera, rootBoxOf, sameFootprint, sceneCamera, setInline, SLOT_PAD, shiftAt, stepRect, toggleCallers, type Expansion, type ExpandAnchor } from "../../zoom/expand";
+import type { CallerRow } from "../../zoom/callers";
+import { CallersBox } from "./CallersBox";
+import { CALLERS_BTN_H, CALLERS_BTN_W, CallersButton } from "./CallersControl";
 import { calloutD } from "../../zoom/connector";
 import { popDelay } from "../../zoom/pop";
 import { displayName } from "../../zoom/names";
@@ -655,6 +658,9 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
         if (seq !== seqRef.current) return;
         if (chart !== undefined) {
           list = placeAll(b, expRef.current);
+          // A card's chart and its callers box both hang from the card's right edge, so the callers box gives way.
+          const hung = callersAnchoredTo(list, ref, b.nodeId);
+          if (hung !== undefined) list = closeExpansion(list, hung.fnId);
           list = openExpansion(list, ref, { kind: "box", nodeId: b.nodeId, rect: boxRect, inPlace: b.slotted === true }, chart, placeView(b));
         }
       }
@@ -734,6 +740,56 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     if (opened !== undefined) moveTo(revealOf(cameraRef.current, opened, 0), true);
     // The code pane follows the chain: the callee is the last function clicked.
     if (opened !== undefined) void selectFunction(callee);
+  };
+
+  /**
+   * Opens the callers box of `ref` at `anchor` (a function box's right edge, or a chart's header, or a nested frame), or
+   * closes it when it is open. A new box is revealed as a callee's expansion is. Nothing else moves: the focus stays.
+   */
+  const toggleCallersOf = (ref: string, anchor: ExpandAnchor) => {
+    const b = buildRef.current;
+    if (!b) return;
+    const key = callersKey(ref);
+    const list = placeAll(b, expRef.current);
+    const wasOpen = list.some((e) => e.fnId === key);
+    const next = toggleCallers(list, ref, anchor, nameOfId(ref), placeView(b));
+    if (next === list) return;
+    setExp(next);
+    if (!wasOpen) {
+      const opened = expRef.current.find((e) => e.fnId === key);
+      if (opened !== undefined) moveTo(revealOf(cameraRef.current, opened, 0), true);
+    }
+  };
+
+  /** A callers box learned how many rows it lays out: the box grows or shrinks to hold them. */
+  const sizeCallers = (ref: string, lines: number) => {
+    const b = buildRef.current;
+    if (!b) return;
+    const next = resizeCallers(expRef.current, ref, lines, placeView(b));
+    if (next !== expRef.current) setExp(next);
+  };
+
+  /**
+   * Opens the chart of a caller, from its row in a callers box: to the right of the row, with a beam from it. The other rows'
+   * charts of the box close, as a call step's callees do. Its own Callers button continues the chain.
+   */
+  const openCallerChart = async (ref: string, row: CallerRow, index: number) => {
+    const b = buildRef.current;
+    const key = callersKey(ref);
+    if (!b || !expRef.current.some((e) => e.fnId === key)) return;
+    const chart = await loadChart(row.id);
+    if (chart === undefined) return;
+    let list = placeAll(b, expRef.current);
+    for (const e of list) {
+      if (e.anchor.kind === "step" && e.anchor.fnId === key && e.fnId !== row.id) list = closeExpansion(list, e.fnId);
+    }
+    const anchor: ExpandAnchor = { kind: "step", fnId: key, stepId: row.id, rect: callerRowRect(index) };
+    const next = openExpansion(list, row.id, anchor, chart, placeView(b));
+    if (next === list) return;
+    setExp(next);
+    const opened = expRef.current.find((e) => e.fnId === row.id);
+    if (opened !== undefined) moveTo(revealOf(cameraRef.current, opened, 0), true);
+    void selectFunction(row.id);
   };
 
   /**
@@ -1314,6 +1370,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     view === undefined
       ? []
       : expansions.filter((e) => {
+          if (e.kind === "callers") return false;
           const root = rootBoxOf(expansions, e);
           return root !== undefined && source.asyncOf?.(view, e.fnId, root) === true;
         }).map((e) => e.fnId),
@@ -1428,6 +1485,12 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
                   small={mid}
                   card={flat}
                   rank={cardRank.get(it.id) ?? 0}
+                  {...(node.ref !== undefined && !expandedFns.has(node.ref)
+                    ? {
+                        onCallers: () => toggleCallersOf(node.ref as string, { kind: "box", nodeId: it.id, rect: it.rect }),
+                        callersOpen: expansions.some((x) => x.fnId === callersKey(node.ref as string)),
+                      }
+                    : {})}
                 />
               );
             })}
@@ -1454,18 +1517,39 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
                   {/* The entrance plays on this wrapper, not the group: the group carries the side shift as its transform. */}
                   <g className={isInPlace(e) ? "zm-expansion-motion is-inplace" : "zm-expansion-motion"}>
                     {asyncFns.has(e.fnId) && <AsyncFrame expansion={e} k={labelScale} />}
-                    <ExpansionShape
-                      id={id}
-                      scope={charts?.scope ?? scope}
-                      expansion={e}
-                      k={labelScale}
-                      selectedId={construct !== undefined && construct.ref === e.fnId ? construct.nodeId : undefined}
-                      onNodeClick={(n) => chartStep(e.fnId, n)}
-                      onNodeOpen={(n) => chartOpen(e.fnId, n)}
-                      onSelect={() => void selectFunction(e.fnId)}
-                      onClose={() => setExp(closeExpansion(expRef.current, e.fnId))}
-                      motion={motion}
-                    />
+                    {e.kind === "callers" ? (
+                      <CallersBox
+                        id={id}
+                        scope={charts?.scope ?? scope}
+                        expansion={e}
+                        k={labelScale}
+                        onClose={() => setExp(closeExpansion(expRef.current, e.fnId))}
+                        onOpen={(row, index) => void openCallerChart(e.fnId.slice("callers:".length), row, index)}
+                        onSelect={(row) => {
+                          if (row.isFunction) void selectFunction(row.id);
+                        }}
+                        onLines={(lines) => sizeCallers(e.fnId.slice("callers:".length), lines)}
+                      />
+                    ) : (
+                      <ExpansionShape
+                        id={id}
+                        scope={charts?.scope ?? scope}
+                        expansion={e}
+                        k={labelScale}
+                        selectedId={construct !== undefined && construct.ref === e.fnId ? construct.nodeId : undefined}
+                        onNodeClick={(n) => chartStep(e.fnId, n)}
+                        onNodeOpen={(n) => chartOpen(e.fnId, n)}
+                        onSelect={() => void selectFunction(e.fnId)}
+                        onClose={() => setExp(closeExpansion(expRef.current, e.fnId))}
+                        onCallers={() => toggleCallersOf(e.fnId, headerAnchor(e))}
+                        callersOpen={expansions.some((x) => x.fnId === callersKey(e.fnId))}
+                        onNodeCallers={(n) => {
+                          if (n.target !== undefined) toggleCallersOf(n.target, { kind: "step", fnId: e.fnId, stepId: n.id, rect: { x: n.x, y: n.y, w: n.w, h: n.h } });
+                        }}
+                        callersOpenOf={(n) => n.target !== undefined && expansions.some((x) => x.fnId === callersKey(n.target as string))}
+                        motion={motion}
+                      />
+                    )}
                   </g>
                 </g>
               );
@@ -1620,6 +1704,8 @@ export function BoxShape({
   small = false,
   card = false,
   rank = 0,
+  onCallers,
+  callersOpen = false,
 }: {
   item: PlacedItem;
   node: MapNode;
@@ -1635,6 +1721,9 @@ export function BoxShape({
   card?: boolean;
   /** The card's place in reading order, which sets its pop-in delay (see zoom/pop.ts). */
   rank?: number;
+  /** Opens or closes the callers box of the card's function: a Callers button at its top-right. Absent, no button. */
+  onCallers?: () => void;
+  callersOpen?: boolean;
 }) {
   const { rect } = item;
   // The function's display name on the map (the full name stays in the tooltip).
@@ -1670,7 +1759,9 @@ export function BoxShape({
   if (card && !small && !bare) {
     // A card: its name alone, centred vertically, fitted to the card's width on screen.
     // Two characters of the budget go to the leading function glyph (ƒ), so the name stays inside the card.
-    const name = fitLabel(shown, Math.max(1, labelChars(rect.w * k, 8, 20) - 2));
+    // A card tall enough for it takes a Callers button at its top-right, and its name keeps clear of the button.
+    const showCallers = onCallers !== undefined && rect.h >= CALLERS_BTN_H + 12;
+    const name = fitLabel(shown, Math.max(1, labelChars((rect.w - (showCallers ? CALLERS_BTN_W + 12 : 0)) * k, 8, 20) - 2));
     return (
       <g className={`zm-box zm-${node.kind} zm-card ${lineClass(line)}${holdsChart ? " zm-has-chart" : ""}${chartOpen ? " expanded" : ""}`} data-sx={rect.x} data-fid={item.id} onClick={() => onOpen(item.id)}>
         <title>{node.detail !== undefined ? `${node.label} (${node.detail})` : node.title || node.label}</title>
@@ -1683,6 +1774,9 @@ export function BoxShape({
             </text>
           )}
         </g>
+        {showCallers && (
+          <CallersButton x={rect.x + rect.w - CALLERS_BTN_W - 8} y={rect.y + 6} name={shown} open={callersOpen} onClick={onCallers} />
+        )}
       </g>
     );
   }
