@@ -12,6 +12,7 @@ import { displayName } from "../../zoom/names";
 import { fitLabel, labelChars } from "../../zoom/lod";
 import { FlowChart, type FlowNodeCallers } from "../FlowChart";
 import { CALLERS_BTN_H, CALLERS_BTN_W, CallersButton } from "./CallersControl";
+import { keyActivates } from "./keys";
 
 interface Props {
   /** The project, for the chart's links. */
@@ -104,9 +105,16 @@ export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClic
       <g
         className="zm-expansion-close"
         role="button"
+        tabIndex={0}
         aria-label={`Close the chart of ${chart.name}`}
         onClick={(ev) => {
           ev.stopPropagation();
+          onClose();
+        }}
+        onKeyDown={(ev) => {
+          if (!keyActivates(ev.key)) return;
+          ev.stopPropagation();
+          ev.preventDefault();
           onClose();
         }}
       >

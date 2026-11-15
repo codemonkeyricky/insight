@@ -28,6 +28,9 @@ export type ExpandAnchor =
   | { kind: "box"; nodeId: string; rect: Rect; /** The expansion replaces the card in its own slot (a roots-only card), instead of opening beside it. */ inPlace?: boolean }
   | { kind: "step"; fnId: string; rect: Rect; stepId?: string };
 
+/** An anchor by its identity alone, without its rect: a function box by its node id, or a step by its parent and step id. */
+export type AnchorKey = { kind: "box"; nodeId: string } | { kind: "step"; fnId: string; stepId?: string };
+
 /** The kind of box a thread or process step opens: its header names the runtime ("Worker · print.worker"). */
 export interface ExpansionRuntime {
   kind: "thread" | "process";
@@ -61,9 +64,13 @@ export function callerRowRect(index: number): Rect {
   return { x: 0, y: index * CALLER_ROW_H, w: CALLERS_W - 2 * CHART_PAD, h: CALLER_ROW_H };
 }
 
-/** The rows a callers box lays out for `count` callers: the shown rows, a "+N more" row when some are hidden, and one row for a loading, empty or failed box. */
+/** The rows a callers box lays out while its rows load: three, so the box does not grow when they arrive. */
+export const LOADING_LINES = 3;
+
+/** The rows a callers box lays out for `count` callers: the shown rows, a "+N more" row when some are hidden, and one row for an empty box. */
 export function callersLines(count: number | undefined): number {
-  if (count === undefined || count === 0) return 1;
+  if (count === undefined) return LOADING_LINES;
+  if (count === 0) return 1;
   return Math.min(count, CALLERS_CAP) + (count > CALLERS_CAP ? 1 : 0);
 }
 
@@ -91,7 +98,7 @@ export interface Expansion {
   y: number;
   w: number;
   h: number;
-  /** The detail's letter: its index in open order (0 is A). Unique among the open expansions. */
+  /** The detail's letter: its index in open order (0 is A). Unique among the open charts. A callers box takes no letter: -1. */
   index: number;
   /**
    * The x (world units, before any shift) the columns to the right of this detail slide from: the right edge of the
@@ -221,21 +228,47 @@ export function refresh(list: readonly Expansion[], rectOf: (nodeId: string) => 
 }
 
 /**
- * The list after a callers box of `ref` opens at `anchor`, listing `lines` rows (see callersLines). A callers box is an
- * expansion keyed by callersKey(ref), placed and closed like a chart's. Returns `list` itself when the anchor would cycle.
+ * The list after the callers box of `ref` opens at `anchor`, listing `lines` rows (see callersLines). A callers box is an
+ * expansion keyed by callersKey(ref), placed and closed like a chart's. An open one moves to `anchor`, and the charts hung
+ * from its rows move with it. Returns `list` itself when the anchor would cycle (see openExpansion).
  */
 export function openCallers(list: readonly Expansion[], ref: string, anchor: ExpandAnchor, name: string, lines: number, view: Rect | undefined): Expansion[] {
   const key = callersKey(ref);
-  const next = openExpansion(list, key, anchor, callersChart(ref, name, lines), view);
-  if (next === list) return list as Expansion[];
-  return next.map((e) => (e.fnId === key ? { ...e, kind: "callers" as const } : e));
+  const kept = list.find((e) => e.fnId === key);
+  return openExpansion(list, key, anchor, kept?.chart ?? callersChart(ref, name, lines), view, undefined, "callers");
 }
 
-/** The list with the callers box of `ref` opened at `anchor`, or closed (with what hangs from it) when it is open. */
+/**
+ * The list with the callers box of `ref` toggled at `anchor`: closed (with what hangs from it) when it already hangs from this
+ * anchor, otherwise opened there, or moved there when it is open at another anchor (a move never closes it). Returns `list`
+ * itself when the move would cycle.
+ */
 export function toggleCallers(list: readonly Expansion[], ref: string, anchor: ExpandAnchor, name: string, view: Rect | undefined): Expansion[] {
-  const key = callersKey(ref);
-  if (list.some((e) => e.fnId === key)) return closeExpansion(list, key);
-  return openCallers(list, ref, anchor, name, 1, view);
+  if (callersAt(list, ref, anchor)) return closeExpansion(list, callersKey(ref));
+  return openCallers(list, ref, anchor, name, LOADING_LINES, view);
+}
+
+/**
+ * Whether the callers box of `ref` hangs from exactly this anchor: a function box's, or a step's (a chart's header is the
+ * step HEADER_STEP). Per anchor, so a box open elsewhere does not show as open here.
+ */
+export function callersAt(list: readonly Expansion[], ref: string, anchor: AnchorKey): boolean {
+  const e = list.find((x) => x.fnId === callersKey(ref));
+  if (e === undefined) return false;
+  const a = e.anchor;
+  if (anchor.kind === "box") return a.kind === "box" && a.nodeId === anchor.nodeId;
+  return a.kind === "step" && a.fnId === anchor.fnId && a.stepId === anchor.stepId;
+}
+
+/**
+ * The list with the callers box of `ref`, when it is open, hung from the header of `ref`'s own chart. A card's chart opens in
+ * the card's place, and the box the card had open follows the chart's header; its rows and their charts follow the box.
+ */
+export function hangCallersFrom(list: readonly Expansion[], ref: string, view: Rect | undefined): Expansion[] {
+  const head = list.find((e) => e.fnId === ref);
+  const kept = list.find((e) => e.fnId === callersKey(ref));
+  if (head === undefined || kept === undefined) return list as Expansion[];
+  return openExpansion(list, callersKey(ref), headerAnchor(head), kept.chart, view, undefined, "callers");
 }
 
 /** The list with the callers box of `ref` resized to `lines` rows, placed again. Returns `list` itself when its size is unchanged. */
@@ -250,7 +283,7 @@ export function resizeCallers(list: readonly Expansion[], ref: string, lines: nu
 }
 
 /** True when `target` is `from`, or an expansion `from` is chained from, through step anchors. Opening it would cycle. */
-function chainHas(list: readonly Expansion[], from: string, target: string): boolean {
+export function chainHas(list: readonly Expansion[], from: string, target: string): boolean {
   let cur: string | undefined = from;
   for (let hops = 0; cur !== undefined && hops <= list.length; hops++) {
     if (cur === target) return true;
@@ -261,18 +294,34 @@ function chainHas(list: readonly Expansion[], from: string, target: string): boo
 }
 
 /**
- * The list after `fnId`'s expansion opens at `anchor`, drawing `chart`. An expansion that is already open is reattached:
- * its anchor moves and the chains from it follow, so a function never has two. The new one is last, so Escape closes it
- * first. Returns `list` itself when the anchor is inside `fnId`'s own chain, which would cycle.
+ * The list without the step children of `anchor`'s parent other than `fnId`'s own: one right-hand child per chart, as a call
+ * step's callee opens, so two never sit side by side. Undefined when one of them holds `fnId` (its chain runs through it, so
+ * closing it would close `fnId` too). A box anchor has no step siblings.
  */
-export function openExpansion(list: readonly Expansion[], fnId: string, anchor: ExpandAnchor, chart: FunctionFlow, view: Rect | undefined, runtime?: ExpansionRuntime): Expansion[] {
+function closeSiblings(list: readonly Expansion[], fnId: string, anchor: ExpandAnchor): Expansion[] | undefined {
+  if (anchor.kind !== "step") return list as Expansion[];
+  const siblings = list.filter((e) => e.fnId !== fnId && e.anchor.kind === "step" && e.anchor.fnId === anchor.fnId);
+  if (siblings.some((s) => chainHas(list, fnId, s.fnId))) return undefined;
+  return siblings.reduce((out, s) => closeExpansion(out, s.fnId), list as Expansion[]);
+}
+
+/**
+ * The list after `fnId`'s expansion opens at `anchor`, drawing `chart`. An expansion that is already open is reattached:
+ * its anchor moves and the chains from it follow, so a function never has two. A step's other child closes (see
+ * closeSiblings). The new one is last, so Escape closes it first. Returns `list` itself when the anchor is inside `fnId`'s own
+ * chain, which would cycle. `kind` is "callers" for a callers box (it takes no detail letter).
+ */
+export function openExpansion(list: readonly Expansion[], fnId: string, anchor: ExpandAnchor, chart: FunctionFlow, view: Rect | undefined, runtime?: ExpansionRuntime, kind?: "callers"): Expansion[] {
   if (anchor.kind === "step" && chainHas(list, anchor.fnId, fnId)) return list as Expansion[];
+  const base = closeSiblings(list, fnId, anchor);
+  if (base === undefined) return list as Expansion[];
   const size = expansionSize(chart);
-  const others = list.filter((e) => e.fnId !== fnId);
-  // A reattached expansion keeps its letter; a new one takes the next letter after the highest one open.
-  const kept = list.find((e) => e.fnId === fnId);
-  const index = kept?.index ?? others.reduce((hi, e) => Math.max(hi, e.index + 1), 0);
-  return reflow([...others, { fnId, anchor, chart, ...(runtime !== undefined ? { runtime } : {}), ...size, x: 0, y: 0, index, pivot: 0 }], view);
+  const others = base.filter((e) => e.fnId !== fnId);
+  // A reattached expansion keeps its letter and kind; a new chart takes the next letter after the highest chart open.
+  const kept = base.find((e) => e.fnId === fnId);
+  const keepKind = kind ?? kept?.kind;
+  const index = keepKind === "callers" ? -1 : kept?.index ?? others.reduce((hi, e) => (e.kind === "callers" ? hi : Math.max(hi, e.index + 1)), 0);
+  return reflow([...others, { fnId, anchor, chart, ...(runtime !== undefined ? { runtime } : {}), ...(keepKind !== undefined ? { kind: keepKind } : {}), ...size, x: 0, y: 0, index, pivot: 0 }], view);
 }
 
 /** The node ids of a nested step's path: "n5/n7" is the call n7 inside the frame n5. */
@@ -423,11 +472,6 @@ export function closeExpansion(list: readonly Expansion[], fnId: string): Expans
 /** The chart expansion anchored to a function box, if one is open (a callers box anchored there is not one). */
 export function anchoredTo(list: readonly Expansion[], nodeId: string): Expansion | undefined {
   return list.find((e) => e.kind !== "callers" && e.anchor.kind === "box" && e.anchor.nodeId === nodeId);
-}
-
-/** The callers box of `ref`'s function, anchored to the function box `nodeId`, if one is open. */
-export function callersAnchoredTo(list: readonly Expansion[], ref: string, nodeId: string): Expansion | undefined {
-  return list.find((e) => e.fnId === callersKey(ref) && e.anchor.kind === "box" && e.anchor.nodeId === nodeId);
 }
 
 /** The inset of a callout's expansion-side edge from the expansion's top and bottom: it meets the box inside its rounded corners. */

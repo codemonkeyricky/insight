@@ -523,6 +523,13 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 .zm-callers-btn text { fill: var(--muted); font: 500 max(11px, calc(11px * var(--zinv, 1))) var(--font-ui); pointer-events: none; user-select: none; -webkit-user-select: none; }
 .zm-callers-btn:hover .zm-callers-bg, .zm-callers-btn.is-open .zm-callers-bg { fill: var(--faint); }
 .zm-callers-btn:hover text, .zm-callers-btn.is-open text { fill: var(--accent-text); }
+/* Keyboard focus on the map's controls: a ring on the control's own hairline, shown only for keyboard focus. */
+.zm-callers-btn:focus-visible .zm-callers-bg, .zm-expansion-close:focus-visible .zm-expansion-close-bg { stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.zm-caller-hit:focus-visible { stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.zm-caller-chev:focus-visible .zm-caller-chev-hit { stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.zm-callers-btn:focus, .zm-caller-hit:focus, .zm-caller-chev:focus, .zm-expansion-close:focus { outline: none; }
+.zm-caller-possible { fill: var(--muted); font: 400 10px var(--font-ui); user-select: none; -webkit-user-select: none; pointer-events: none; }
+.zm-caller-chev.is-chained text { fill: var(--muted); }
 /* The callers box's rows: a name over a muted file line, the edge kinds at the right, and a ▸ at the row's end. */
 .zm-caller-hit { fill: transparent; }
 .zm-caller-row:hover .zm-caller-hit { fill: var(--row-hover); }
