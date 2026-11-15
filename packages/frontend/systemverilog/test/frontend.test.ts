@@ -7,7 +7,7 @@ import { type IRRecord, type IREdge, type IRNode, validateIR } from "@insight/ir
 import { createCoreRegistry } from "@insight/ir/node";
 import { runFrontendConformance, type IRBatch, type ProjectRoot } from "@insight/sdk";
 import frontend, { extractFiles, resolver } from "../src/index.js";
-import { buildProject, Ids, indexStats, releaseProject } from "../src/project.js";
+import { buildProject, Ids, indexStats, isHdlText, releaseProject } from "../src/project.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(here, "fixtures");
@@ -1037,6 +1037,23 @@ describe("which .v files are Verilog", () => {
   it("a Coq .v file with `module` at a line start and Require Import is not indexed and emits an empty batch", async () => {
     expect((await buildProject(textsOf(["prose.v"]))).units.has("prose.v")).toBe(false);
     expect(await extractDir(dir, ["prose.v"])).toEqual([{ file: "prose.v", records: [] }]);
+  });
+
+  it("a .v file of only parameters, or only wires and assigns, is HDL: a module includes it into its body", () => {
+    expect(isHdlText("params.v", "parameter W = 8;\nlocalparam D = 4;\n")).toBe(true);
+    expect(isHdlText("wires.v", "wire [7:0] a;\nassign a = 8'h0;\n")).toBe(true);
+    expect(isHdlText("always.v", "always @(*) y = a;\ntypedef logic [3:0] nib_t;\n")).toBe(true);
+  });
+
+  it("a .v file that is a BOM and a one-line `define is HDL, and so is a one-line attributed module", () => {
+    expect(isHdlText("bom.v", "\uFEFF`define WIDTH 8\n")).toBe(true);
+    expect(isHdlText("keep.v", "(* keep *) module m; endmodule\n")).toBe(true);
+    expect(isHdlText("empty.v", "")).toBe(true);
+  });
+
+  it("a Coq .v file is not HDL: a Require line with `module` in prose, or a `function` comment at a line start", () => {
+    expect(isHdlText("coq1.v", "Require Import Coq.Lists.List.\n(* a module of lists *)\nTheorem t : True.\nProof. exact I. Qed.\n")).toBe(false);
+    expect(isHdlText("coq2.v", "From Coq Require Import Arith.\n(*\nfunction notes\n*)\nLemma l : True.\n")).toBe(false);
   });
 });
 

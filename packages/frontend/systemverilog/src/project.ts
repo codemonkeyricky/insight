@@ -7,22 +7,20 @@ import { getParser, type SyntaxNode } from "./parser.js";
 export const FRONTEND_ID = "frontend-systemverilog";
 export const SV_RE = /\.(?:v|sv|svh|vh)$/i;
 
-/** Lines that end a definition or open a compiler directive. Only Verilog has them. */
-const HDL_END_RE = /^[ \t]*(?:endmodule|endfunction|endtask|endprimitive|endpackage|endinterface|endprogram|endclass|endgenerate)\b|^[ \t]*`(?:define|include|timescale|ifdef|ifndef|default_nettype|celldefine)\b/m;
-/** Lines that start a Verilog or SystemVerilog definition. Coq prose can start a line with `module` too. */
-const HDL_START_RE = /^[ \t]*(?:module|macromodule|primitive|function|task|package|interface|program|class|config|library)\b/m;
-/** Lines that start Coq. A file with one is not Verilog, whatever else it says. */
-const COQ_RE = /^[ \t]*(?:(?:Require|From|Definition|Lemma|Theorem|Inductive|Fixpoint|Section)\b|Module [A-Z]|Proof\.|Qed\.)/m;
+/** A whole word that ends a Verilog or SystemVerilog definition. Anywhere in the text, it makes the text HDL. */
+const HDL_END_RE = /\b(?:endmodule|endfunction|endtask|endprimitive|endpackage|endinterface|endprogram|endclass|endgenerate|endconfig|endtable|endspecify|endchecker|endclocking|endcase)\b/;
+/** A Coq marker at a line start. Verilog fragments that are included into a module body have none of these. */
+const COQ_START_RE = /^[ \t]*(?:(?:Require|From\s+\S+\s+Require|Definition|Lemma|Theorem|Inductive|Fixpoint|CoInductive|Section|Instance|Record|Ltac|Notation|Axiom|Hypothesis|Variable|Class|Context|Arguments|Set\s+Implicit)\b|Module [A-Z]|Proof\.|Qed\.|Defined\.)/m;
 
 /**
  * True when a project file is Verilog or SystemVerilog, and so is indexed and emitted. Only `.v` is ambiguous (Coq
- * also uses it), so only `.v` is judged by its text: it is HDL when it has an end keyword or compiler directive at a
- * line start, or a definition keyword at a line start and no Coq line start.
+ * also uses it), so only `.v` is judged by its text. A `.v` file is not HDL only when it has a Coq line start and no
+ * HDL end keyword anywhere. Everything else is HDL, including an empty file and a file of only parameters or wires.
  */
 export function isHdlText(rel: string, text: string): boolean {
   if (!/\.v$/i.test(rel)) return true;
-  if (HDL_END_RE.test(text)) return true;
-  return HDL_START_RE.test(text) && !COQ_RE.test(text);
+  const body = text.replace(/^\uFEFF/, "");
+  return !(COQ_START_RE.test(body) && !HDL_END_RE.test(body));
 }
 
 /** Most candidates an edge names. Past this the set is cut. */
