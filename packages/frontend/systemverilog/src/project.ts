@@ -650,10 +650,12 @@ function adoptIncludedFunctions(p: Project): void {
     const scopes = [...new Map(entries.filter((e) => e.scopeKey !== "").map((e) => [e.scopeKey, e])).values()];
     if (scopes.length === 0) continue;
     const inPackage = scopes.some((e) => e.kind === "package");
+    // The file stays at $unit when a top-level file includes it at file level, so its functions remain there too.
+    const atUnit = entries.some((e) => e.scopeKey === "" && !(p.includedIn.get(e.from) ?? []).some((x) => x.scopeKey !== ""));
     for (const [name, refs] of [...top]) {
       const mine = refs.filter((r) => r.file === file);
       if (mine.length === 0) continue;
-      top.set(name, refs.filter((r) => r.file !== file));
+      if (!atUnit) top.set(name, refs.filter((r) => r.file !== file));
       for (const e of scopes) for (const r of mine) addFn(p, e.scopeKey, r);
       // The package lookup finds a function once, however many packages include the file.
       if (inPackage) for (const r of mine) p.pkgFnsByName.set(name, [...(p.pkgFnsByName.get(name) ?? []), r]);

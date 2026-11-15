@@ -809,6 +809,11 @@ describe("includes in any scope", () => {
     const batches = await extractDir(fx("include_in_class"), ["k.sv", "kbody.svh"]);
     expect(calleeOf(batches, "kf")?.to).toBe("kbody.svh#kf");
   });
+
+  it("a file included in a module and at file level stays visible in $unit", async () => {
+    const batches = await extractDir(fx("unitinc"), ["m.sv", "h.svh", "t.sv"]);
+    expect(calleeOf(batches, "f")?.to).toBe("h.svh#f");
+  });
 });
 
 describe("include matching", () => {
