@@ -58,11 +58,11 @@ const write = (w: W): IRNode => {
 };
 const test = (id: string, holderId: string, fnName: string, values: string[], extra: Record<string, unknown> = {}): IRNode =>
   fx.node(id, "state", "state.test", { parent: `${FILE}#${fnName}`, span: at(40), attrs: { holder: holderId, values, arm: "arm1", ...extra } });
-const call = (from: string, to: string | string[], known?: Record<string, string[]>, confidence?: "exact" | "inferred", entry?: string[], stale?: string[]): IREdge =>
+const call = (from: string, to: string | string[], known?: Record<string, string[]>, confidence?: "exact" | "inferred", entry?: string[], stale?: string[], entryAsList = false): IREdge =>
   fx.edge(`${FILE}#${from}`, Array.isArray(to) ? to.map((t) => `${FILE}#${t}`) : `${FILE}#${to}`, "calls", "calls.call", {
     span: at(60),
     ...(confidence ? { confidence } : {}),
-    ...(known || entry ? { attrs: { ...(known ? { knownState: known } : {}), ...(stale ? { knownStale: stale } : {}), ...(entry ? { knownEntry: Object.fromEntries(entry.map((h) => [h, true])) } : {}) } } : {}),
+    ...(known || entry ? { attrs: { ...(known ? { knownState: known } : {}), ...(stale ? { knownStale: stale } : {}), ...(entry ? { knownEntry: entryAsList ? [...entry].sort() : Object.fromEntries(entry.map((h) => [h, true])) } : {}) } } : {}),
   });
 
 const q = (v: string) => JSON.stringify(v);
@@ -228,6 +228,41 @@ describe("cross-call entry sets", () => {
     const m = stateMachines(fx.view({ nodes, edges })).machines[0] as Machine;
     const arcs2 = m.transitions.filter((t) => t.to === D("Disconnected")).map((t) => `${displayValue(t.from)}>${displayValue(t.to)}:${t.confidence}`);
     expect(arcs2.sort()).toEqual(["Connected>Disconnected:inferred", "Disconnecting>Disconnected:inferred"]);
+  });
+
+  it("reads knownEntry as a sorted list of holder ids (the frontend's encoding)", () => {
+    const D = (v: string) => q(v);
+    const nodes = [
+      fileNode(), fn("ctor", 2), fn("_completeClose", 10), fn("_reconnect", 20), fn("_closing", 30), fn("_conn", 40),
+      holder(G, "Hub.state", [D("Connected"), D("Disconnecting"), D("Disconnected")]),
+      write({ holder: G, fn: "ctor", value: D("Connected"), op: "init" }),
+      write({ holder: G, fn: "_completeClose", value: D("Disconnected"), fromEntry: true }),
+      write({ holder: G, fn: "_closing", value: D("Disconnecting"), from: [D("Connected")] }),
+    ];
+    const edges = [
+      call("_closing", "_completeClose", { [G]: [D("Disconnecting")] }),
+      call("_reconnect", "_completeClose", undefined, undefined, [G], undefined, true),
+      call("_conn", "_reconnect", { [G]: [D("Connected")] }),
+    ];
+    const m = stateMachines(fx.view({ nodes, edges })).machines[0] as Machine;
+    const arcs2 = m.transitions.filter((t) => t.to === D("Disconnected")).map((t) => `${displayValue(t.from)}>${displayValue(t.to)}:${t.confidence}`);
+    expect(arcs2.sort()).toEqual(["Connected>Disconnected:inferred", "Disconnecting>Disconnected:inferred"]);
+  });
+
+  it("each site of a merged arc keeps its own confidence (one stale, one exact)", () => {
+    const nodes = [
+      fileNode(), fn("a", 10), fn("b", 20), fn("c", 30),
+      holder(G, "Conn.state", [q("A"), q("X")]),
+      write({ holder: G, fn: "c", value: q("A"), op: "init" }),
+      write({ holder: G, fn: "a", value: q("X"), from: [q("A")], event: "go", stale: true }),
+      write({ holder: G, fn: "b", value: q("X"), from: [q("A")], event: "go" }),
+    ];
+    const m = stateMachines(fx.view({ nodes, edges: [] })).machines[0] as Machine;
+    const t = m.transitions.filter((x) => x.from === q("A") && x.to === q("X"));
+    expect(t).toHaveLength(1);
+    const bySite = Object.fromEntries(t[0]!.sites.map((s) => [s.fn, s.confidence]));
+    expect(bySite).toEqual({ a: "inferred", b: "exact" });
+    expect(t[0]!.confidence).toBe("exact");
   });
 
   it("fills a stale-entry write from a caller's knownState: inferred arc, no star (E1)", () => {

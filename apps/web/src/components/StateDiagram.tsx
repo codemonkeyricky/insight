@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactElement } from "react";
 import type { Span, StateMachineTransition, StateMachineView } from "../api";
-import { layoutMachine, nearestArc, withTimeout, type LaidArc, type LaidMachine, type LaidState, type Solve } from "../states/layout";
+import { layoutMachine, nearestArc, withTimeout, zoomBox, type LaidArc, type LaidMachine, type LaidState, type Solve } from "../states/layout";
 import { solveInWorker } from "../states/elkClient";
 
 /** What a click on the diagram reports: the first source line of an arc, or the line of a state. */
@@ -221,7 +221,7 @@ export function StateDiagram({ view, onPick, selected = null, solve = solveInWor
     setLaid(null);
     setFailed(null);
     setBox(null);
-    layoutMachine(view, withTimeout(solve)).then(
+    layoutMachine(view, solve === solveInWorker ? solve : withTimeout(solve)).then(
       (l) => {
         if (!cancelled) setLaid({ view, laid: l });
       },
@@ -254,16 +254,8 @@ export function StateDiagram({ view, onPick, selected = null, solve = solveInWor
     const onWheel = (e: WheelEvent) => {
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
-      const r = el.getBoundingClientRect();
-      setBox((b) => {
-        const c = b ?? fit;
-        const k = Math.min(4, Math.max(0.25, e.deltaY > 0 ? 1.12 : 1 / 1.12));
-        const w = Math.min(fit.w * 4, Math.max(fit.w / 6, c.w * k));
-        const h = (w / c.w) * c.h;
-        const px = c.x + ((e.clientX - r.left) / r.width) * c.w;
-        const py = c.y + ((e.clientY - r.top) / r.height) * c.h;
-        return { x: px - ((px - c.x) / c.w) * w, y: py - ((py - c.y) / c.h) * h, w, h };
-      });
+      const r = (el.querySelector("svg") ?? el).getBoundingClientRect();
+      setBox((b) => zoomBox(b ?? fit, fit, r, e.clientX, e.clientY, e.deltaY));
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);

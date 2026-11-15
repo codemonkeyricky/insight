@@ -34,7 +34,7 @@ export interface LaidArc {
   d: string;
   /** The arrowhead polygon (SVG path) at the end of the arc. */
   arrow: string;
-  /** The arc's corner points before rounding (empty for a self-loop). */
+  /** The arc's corner points before rounding; for a self-loop, points sampled along its drawn curve. */
   points: { x: number; y: number }[];
   label?: LaidLabel;
 }
@@ -272,7 +272,7 @@ export async function layoutMachine(view: StateMachineView, solve: Solve): Promi
       const label = t.label
         ? { text: t.label, ...labelSize(t.label), x: x0 + LOOP_W - 4, y: cy - labelSize(t.label).h / 2 }
         : undefined;
-      arcs.push({ id: t.id, from: t.from, to: t.to, selfLoop: true, d, points: [], arrow: arrowHead({ x: x0, y: cy + r }, -1, 0.15), ...(label ? { label } : {}) });
+      arcs.push({ id: t.id, from: t.from, to: t.to, selfLoop: true, d, points: loopPoints(x0, cy, r), arrow: arrowHead({ x: x0, y: cy + r }, -1, 0.15), ...(label ? { label } : {}) });
       if (label) width = Math.max(width, label.x + label.w + MARGIN);
       return;
     }
@@ -322,6 +322,25 @@ export async function layoutMachine(view: StateMachineView, solve: Solve): Promi
   return { width: Math.ceil(width), height: Math.ceil(height), states, arcs };
 }
 
+/** Points sampled along a self-loop's cubic curve, from the same control points its path `d` uses. */
+export function loopPoints(x0: number, cy: number, r: number, n = 16): Pt[] {
+  const p0 = { x: x0, y: cy - r };
+  const p1 = { x: x0 + LOOP_W, y: cy - r - 10 };
+  const p2 = { x: x0 + LOOP_W, y: cy + r + 10 };
+  const p3 = { x: x0 + 1, y: cy + r };
+  const out: Pt[] = [];
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    const u = 1 - t;
+    const b = [u * u * u, 3 * u * u * t, 3 * u * t * t, t * t * t];
+    out.push({
+      x: b[0]! * p0.x + b[1]! * p1.x + b[2]! * p2.x + b[3]! * p3.x,
+      y: b[0]! * p0.y + b[1]! * p1.y + b[2]! * p2.y + b[3]! * p3.y,
+    });
+  }
+  return out;
+}
+
 /** Distance from (px, py) to the segment a-b. */
 function distToSegment(px: number, py: number, a: Pt, b: Pt): number {
   const dx = b.x - a.x;
@@ -368,4 +387,28 @@ export function withTimeout(solve: Solve, ms = LAYOUT_TIMEOUT_MS): Solve {
         done(reject)(e);
       }
     });
+}
+
+export interface ViewBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Where the pointer is on the SVG, as fractions 0..1 of its own rect (not the scrolling wrap's). */
+export function pointerFraction(rect: { left: number; top: number; width: number; height: number }, clientX: number, clientY: number): { fx: number; fy: number } {
+  const clamp = (v: number) => Math.min(1, Math.max(0, v));
+  return { fx: rect.width > 0 ? clamp((clientX - rect.left) / rect.width) : 0.5, fy: rect.height > 0 ? clamp((clientY - rect.top) / rect.height) : 0.5 };
+}
+
+/** The view box after one wheel step, keeping the point under the pointer fixed. `rect` is the SVG's own bounding rect. */
+export function zoomBox(c: ViewBox, fit: ViewBox, rect: { left: number; top: number; width: number; height: number }, clientX: number, clientY: number, deltaY: number): ViewBox {
+  const k = deltaY > 0 ? 1.12 : 1 / 1.12;
+  const w = Math.min(fit.w * 4, Math.max(fit.w / 6, c.w * k));
+  const h = (w / c.w) * c.h;
+  const { fx, fy } = pointerFraction(rect, clientX, clientY);
+  const px = c.x + fx * c.w;
+  const py = c.y + fy * c.h;
+  return { x: px - fx * w, y: py - fy * h, w, h };
 }

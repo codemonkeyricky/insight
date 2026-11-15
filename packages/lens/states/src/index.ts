@@ -172,7 +172,7 @@ export function stateMachines(view: IRView): StateModel {
     star: boolean;
     any: boolean;
   }
-  /** `knownEntry` mirrors `knownState`: a map keyed by holder id (a list of holder ids is read too). */
+  /** `knownEntry` names the holders a call's caller knows the entry state of. Two forms are read: a sorted list of holder ids (what the frontend emits) or a map keyed by holder id. */
   const hasKnownEntry = (e: IREdge, holder: string): boolean => {
     const ke = (e as IREdge & { attrs?: Record<string, unknown> }).attrs?.knownEntry;
     if (Array.isArray(ke)) return ke.includes(holder);

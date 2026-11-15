@@ -116,3 +116,25 @@ describe("nearestArc", () => {
     expect(nearestArc([vertical, diagonal], 500, 500)).toBeUndefined();
   });
 });
+
+describe("self-loop hit testing and zoom anchor", () => {
+  it("loopPoints runs along the drawn curve and nearestArc picks a self-loop over a nearby arc", async () => {
+    const { loopPoints, nearestArc, pointerFraction, zoomBox } = await import("../src/states/layout");
+    const pts = loopPoints(100, 50, 9);
+    expect(pts.length).toBeGreaterThan(4);
+    expect(pts[0]).toEqual({ x: 100, y: 41 });
+    const mid = pts[Math.floor(pts.length / 2)]!;
+    const loop = { id: "loop", from: "a", to: "a", selfLoop: true, d: "", points: pts, arrow: "" };
+    const line = { id: "line", from: "a", to: "b", selfLoop: false, d: "", points: [{ x: mid.x + 10, y: mid.y - 50 }, { x: mid.x + 10, y: mid.y + 50 }], arrow: "" };
+    expect(nearestArc([line, loop], mid.x, mid.y)?.id).toBe("loop");
+    expect(nearestArc([loop, line], mid.x + 8, mid.y)?.id).toBe("line");
+
+    // zoom anchor: a 400 px SVG centred in a 1000 px wrap, pointer at its right edge
+    const rect = { left: 300, top: 0, width: 400, height: 200 };
+    expect(pointerFraction(rect, 700, 100).fx).toBe(1);
+    const fit = { x: 0, y: 0, w: 400, h: 200 };
+    const z = zoomBox(fit, fit, rect, 700, 100, -1);
+    expect(z.x + z.w).toBeCloseTo(400);
+    expect(z.w).toBeLessThan(400);
+  });
+});
