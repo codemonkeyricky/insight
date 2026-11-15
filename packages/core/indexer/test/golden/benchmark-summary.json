@@ -39,12 +39,14 @@
     },
     {
       "facet": "data",
-      "providers": [],
-      "filesScanned": 0,
-      "filesWithRecords": 0,
+      "providers": [
+        "frontend-cpp"
+      ],
+      "filesScanned": 121,
+      "filesWithRecords": 48,
       "filesWithErrors": 0,
-      "nodes": 0,
-      "edges": 0
+      "nodes": 141,
+      "edges": 370
     },
     {
       "facet": "effects",
@@ -179,6 +181,9 @@
     "concurrency.spawn-process": 1,
     "concurrency.spawn-thread": 5,
     "concurrency.spawns": 3,
+    "data.read": 320,
+    "data.variable": 141,
+    "data.write": 50,
     "effects.clock.read": 12,
     "effects.env.read": 7,
     "effects.fs.read": 8,

@@ -175,7 +175,7 @@ The fact rules that turn these kinds into System-view edges are in `docs/system-
 | `sync.lock-acquire`, `sync.lock-release`, `sync.rwlock-acquire` | catalog (`lock-acquire`); `navigator.locks` | `src/extract.ts` |
 | `sync.semaphore` | not emitted | `src/extract.ts` |
 | `sync.condvar`, `sync.atomic-op` | catalog | `src/extract.ts` |
-| `data.variable`, `data.read`, `data.write` | `src/data.ts` | not emitted yet |
+| `data.variable`, `data.read`, `data.write` | `src/data.ts` | `src/data.ts` |
 | `state.holder` | state | node | – | A field, variable or useState slot whose declared type is a finite set of values (enum or literal union). |
 | `state.write` | state | node | – | One site that sets a holder: an assignment, an object-literal property, an initializer, or a call to a setter helper. `from` is the set of values the holder is known to have just before. `fromEntry: true` (only when `from` is absent) says the known set at the write is exactly the enclosing function's entry set, so a consumer may fill it from the callers; a write without `from` and without `fromEntry` is unknown for another reason (dynamic write, join with an unknown side, loop widening, stale after an await). |
 | `state.test` | state | node | – | One comparison of a holder against literal values (`===`, `!==`, `==`, `!=`, or a switch case group), with the branch arms where it holds or doesn't. |

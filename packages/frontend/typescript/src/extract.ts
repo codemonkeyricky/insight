@@ -1913,7 +1913,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
       const edge = callEdges.get(call);
       if (edge) edge.attrs = { ...edge.attrs, ...attrs };
     }
-    const data = emitData({ project, rel, sf, spanOf: (n) => spanOf(rel, sf, n), provenance: PROV, dependOn });
+    const data = emitData({ project, rel, sf, moduleId, spanOf: (n) => spanOf(rel, sf, n), provenance: PROV, dependOn });
     for (const n of data.nodes) push(n);
     for (const e of data.edges) pushEdge(e);
   }

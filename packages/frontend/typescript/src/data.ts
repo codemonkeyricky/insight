@@ -12,6 +12,8 @@ import type { Project } from "./extract.js";
 export interface DataHelpers {
   project: Project;
   rel: string;
+  /** The file's module entry id, `<rel>#(module)`, when its top-level code is executable. Module-level references use it, as calls do. */
+  moduleId?: string;
   sf: ts.SourceFile;
   spanOf(node: ts.Node): Span;
   provenance: Provenance;
@@ -61,6 +63,13 @@ function exportedLocals(sf: ts.SourceFile): Set<string> {
   return names;
 }
 
+/** Whether a const's initializer is a function or class value: `(…)`, `as` or `satisfies` wrappers are looked through. */
+function isFunctionValue(init: ts.Expression | undefined): boolean {
+  let e: ts.Expression | undefined = init;
+  while (e !== undefined && (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isSatisfiesExpression(e))) e = e.expression;
+  return e !== undefined && (ts.isArrowFunction(e) || ts.isFunctionExpression(e) || ts.isClassExpression(e));
+}
+
 /** Whether a const's initializer is a mutable container: a new expression or a literal, not frozen and not `as const`. */
 function constIsMutable(init: ts.Expression | undefined): boolean {
   if (init === undefined) return false;
@@ -83,6 +92,8 @@ function topLevelVar(d: ts.VariableDeclaration): VarInfo | undefined {
   if (hasMod(stmt, ts.SyntaxKind.DeclareKeyword)) return undefined;
   const name = d.name.text;
   const isConst = (list.flags & ts.NodeFlags.Const) !== 0;
+  // A const bound to a function or class is a function, not data.
+  if (isConst && isFunctionValue(d.initializer)) return undefined;
   const exported = hasMod(stmt, ts.SyntaxKind.ExportKeyword) || exportedLocals(d.getSourceFile()).has(name);
   return { name, storage: "module", exported, mutable: isConst ? constIsMutable(d.initializer) : true };
 }
@@ -108,6 +119,7 @@ const globalId = (rel: string, name: string): string => `${rel}#global:${name}`;
 
 export function emitData(h: DataHelpers): DataOutput {
   const { project, rel, sf, provenance } = h;
+  const moduleId = h.moduleId ?? rel;
   const checker = project.checker;
   const nodes: IRNode[] = [];
   const edges: IREdge[] = [];
@@ -118,11 +130,11 @@ export function emitData(h: DataHelpers): DataOutput {
   /** The function a reference sits in, by the same rule the walk uses for calls: the nearest function, else the file. */
   const enclosing = (node: ts.Node): string => {
     for (let n: ts.Node | undefined = node.parent; n !== undefined; n = n.parent) {
-      if (ts.isSourceFile(n)) return rel;
+      if (ts.isSourceFile(n)) return moduleId;
       const d = project.decls.get(n);
       if (d !== undefined && d.entity.type === "function" && d.entity.module !== true) return d.id;
     }
-    return rel;
+    return moduleId;
   };
 
   const pushNode = (node: IRNode) => {

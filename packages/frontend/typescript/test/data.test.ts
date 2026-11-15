@@ -100,8 +100,11 @@ describe("frontend-typescript data facts", () => {
     expect(dataNodes(b).find((n) => n.id === "data/state.ts#var:counter")?.attrs).toMatchObject({ exported: true });
   });
 
-  it("i: top-level code reading a variable has the file as its from", async () => {
+  it("i: top-level code reading a variable has the module entry as its from, as calls do", async () => {
     const b = await extractAll();
-    expect(dataEdges(b)).toContainEqual(expect.objectContaining({ from: "data/counters.ts", to: "data/counters.ts#var:hits", kind: "data.read" }));
+    const moduleEntry = "data/counters.ts#(module)";
+    expect(records(b).some((r) => "node" in r && r.node.id === moduleEntry)).toBe(true);
+    expect(dataEdges(b)).toContainEqual(expect.objectContaining({ from: moduleEntry, to: "data/counters.ts#var:hits", kind: "data.read" }));
+    expect(dataEdges(b).filter((e) => e.from === "data/counters.ts")).toEqual([]);
   });
 });

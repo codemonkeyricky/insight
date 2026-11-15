@@ -16,3 +16,4 @@ export function addTotal(): void {
   total += 1;
 }
 export { snapshot };
+export const initial = show();
