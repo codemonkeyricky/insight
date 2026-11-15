@@ -69,6 +69,15 @@ The Flow tab draws the execution canvas of the scope: program, threads, coroutin
 - For a folder or the project, the table of files sits below the canvas.
 - A focus carries its scope: `execFocus(scope, nodeId)` in `apps/web/src/zoom/execMap.ts`. A node id is unique only
   within one scope's scene. `MapSource.focusOf` turns a clicked node id into a focus.
+- Callers: a `◂ callers` button (`zm-callers-btn`, `components/zoom/CallersControl.tsx`) sits in a chart box's header
+  (left of its ×), in a nested frame's header (left of its ▾), and on a roots-only function card (top-right, when the
+  card has no chart open). It opens a callers box to the right of its source: a box listing one row per caller
+  (`mergeCallers` in `zoom/callers.ts` merges a call and a dispatch of one caller into one row, with its kind as a
+  badge). Each row's ▸ opens that caller's chart to the right of the row, with a beam, and that chart has its own
+  Callers button, so the chain walks up. The box is keyed `callers:<fnRef>` (`kind: "callers"` in `zoom/expand.ts`),
+  placed, reflowed and closed like a chart expansion; closing a box closes what hangs from it. The rows are fetched
+  with `api.getRefs` when the box opens, and the box grows to hold up to 12 rows plus a "+N more" row. Opening a
+  card's chart closes the callers box hung from that card. Not persisted in the URL.
 - Retired: the Hierarchy and Entry points views, and the Execution lens tab. An old `lens-execution` link (under
   `view/` or `lenses/`) redirects to the flow tab for the same scope (`redirectFor` in `router.ts`). The lens itself
   stays for the CLI.
