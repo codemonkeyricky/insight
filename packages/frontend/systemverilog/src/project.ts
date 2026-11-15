@@ -7,11 +7,23 @@ import { getParser, type SyntaxNode } from "./parser.js";
 export const FRONTEND_ID = "frontend-systemverilog";
 export const SV_RE = /\.(?:v|sv|svh|vh)$/i;
 
+/** Lines that end a definition or open a compiler directive. Only Verilog has them. */
+const HDL_END_RE = /^[ \t]*(?:endmodule|endfunction|endtask|endprimitive|endpackage|endinterface|endprogram|endclass|endgenerate)\b|^[ \t]*`(?:define|include|timescale|ifdef|ifndef|default_nettype|celldefine)\b/m;
+/** Lines that start a Verilog or SystemVerilog definition. Coq prose can start a line with `module` too. */
+const HDL_START_RE = /^[ \t]*(?:module|macromodule|primitive|function|task|package|interface|program|class|config|library)\b/m;
+/** Lines that start Coq. A file with one is not Verilog, whatever else it says. */
+const COQ_RE = /^[ \t]*(?:(?:Require|From|Definition|Lemma|Theorem|Inductive|Fixpoint|Section)\b|Module [A-Z]|Proof\.|Qed\.)/m;
+
 /**
- * A word that only Verilog and SystemVerilog sources use at the top level. A `.v` file without one is not Verilog
- * (Coq also uses `.v`), so it is not indexed.
+ * True when a project file is Verilog or SystemVerilog, and so is indexed and emitted. Only `.v` is ambiguous (Coq
+ * also uses it), so only `.v` is judged by its text: it is HDL when it has an end keyword or compiler directive at a
+ * line start, or a definition keyword at a line start and no Coq line start.
  */
-export const HDL_TEXT_RE = /\b(module|macromodule|primitive|package|interface|config|library)\b/;
+export function isHdlText(rel: string, text: string): boolean {
+  if (!/\.v$/i.test(rel)) return true;
+  if (HDL_END_RE.test(text)) return true;
+  return HDL_START_RE.test(text) && !COQ_RE.test(text);
+}
 
 /** Most candidates an edge names. Past this the set is cut. */
 export const MAX_CANDIDATES = 32;
@@ -532,7 +544,8 @@ export const indexStats = { builds: 0 };
  */
 export async function indexProject(texts: Map<string, string>): Promise<Project> {
   indexStats.builds++;
-  const rels = [...texts.keys()].sort();
+  // A file that is not HDL is not indexed at all, so no call can point at a node that is never emitted.
+  const rels = [...texts.keys()].sort().filter((rel) => isHdlText(rel, texts.get(rel) ?? ""));
   const parser = await getParser();
   const p: Project = {
     units: new Map(),

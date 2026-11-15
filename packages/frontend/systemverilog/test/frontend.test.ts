@@ -1012,6 +1012,34 @@ describe("a .v file that is not Verilog", () => {
   });
 });
 
+describe("which .v files are Verilog", () => {
+  const dir = join(fixturesDir, "hdl_text");
+  const textsOf = (rels: string[]): Map<string, string> => new Map(rels.map((r) => [r, readFileSync(join(dir, r), "utf8")]));
+
+  it("a function-only .v file that a module includes is indexed and emits its function, and the call's target is among the emitted ids", async () => {
+    const batches = await extractDir(dir, ["top.v", "funcs.v"]);
+    const records = allRecords(batches);
+    const emitted = new Set(nodesOf(records).map((n) => n.id));
+    expect(batches.find((b) => b.file === "funcs.v")?.records.length).toBeGreaterThan(0);
+    expect(emitted.has("funcs.v#crc8")).toBe(true);
+    const callee = edgesOf(records).find((e) => e.kind === "calls.call" && e.attrs?.callee === "crc8")?.to;
+    expect(callee).toBe("funcs.v#crc8");
+    expect(emitted.has(callee as string)).toBe(true);
+  });
+
+  it("a .v file of only compiler directives is indexed, so it makes its project a Verilog one", async () => {
+    const d = makeTemp("sv-defines-");
+    writeFileSync(join(d, "defines.v"), "`define WIDTH 8\n`define DEPTH 4\n");
+    expect(await frontend.detect({ path: d, name: "defs", allowBuildTools: false })).toEqual({ reason: "found defines.v" });
+    expect((await buildProject(textsOf(["defines.v"]))).units.has("defines.v")).toBe(true);
+  });
+
+  it("a Coq .v file with `module` at a line start and Require Import is not indexed and emits an empty batch", async () => {
+    expect((await buildProject(textsOf(["prose.v"]))).units.has("prose.v")).toBe(false);
+    expect(await extractDir(dir, ["prose.v"])).toEqual([{ file: "prose.v", records: [] }]);
+  });
+});
+
 describe("extern module prototypes", () => {
   const dir = join(fixturesDir, "extern_module");
 

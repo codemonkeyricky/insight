@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtractContext, Frontend, IRBatch, ProjectRoot } from "@insight/sdk";
 import { emitUnit } from "./extract.js";
-import { buildProject, FRONTEND_ID, HDL_TEXT_RE, indexProject, SV_RE, type Project } from "./project.js";
+import { buildProject, FRONTEND_ID, indexProject, isHdlText, SV_RE, type Project } from "./project.js";
 
 export { resolver } from "./resolve.js";
 
@@ -104,13 +104,13 @@ export const frontend: Frontend = {
   provides: ["structure", "packaging", "flow", "calls", "effects"],
 
   async detect(root: ProjectRoot) {
-    // A `.v` file counts only when its text has an HDL keyword. Coq also uses `.v`, so the first few are read.
+    // A `.v` file counts only when its text is HDL (see isHdlText). Coq also uses `.v`, so the first few are read.
     let vReads = 0;
     const accept = (path: string): boolean => {
       if (!/\.v$/i.test(path)) return true;
       if (vReads >= MAX_V_READS) return false;
       vReads++;
-      return HDL_TEXT_RE.test(readFileSync(path, "utf8"));
+      return isHdlText(path, readFileSync(path, "utf8"));
     };
     const hit = findSource(root.path, 6, accept);
     return hit ? { reason: `found ${hit}` } : null;

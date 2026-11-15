@@ -3,8 +3,8 @@ import type { IRBatch } from "@insight/sdk";
 import { getParser, type SyntaxNode } from "./parser.js";
 import {
   declId,
-  HDL_TEXT_RE,
   isExternDecl,
+  isHdlText,
   declName,
   errorNodes,
   fnBase,
@@ -195,8 +195,8 @@ function portsOf(n: SyntaxNode, header: SyntaxNode | undefined): Array<{ name: s
 export async function emitUnit(project: Project, rel: string, text: string): Promise<IRBatch> {
   const unit = project.units.get(rel);
   if (!unit) return { file: rel, records: [] };
-  // A `.v` file with no HDL keyword is another language (Coq), so it yields no facts and no file node.
-  if (/\.v$/i.test(rel) && !HDL_TEXT_RE.test(text)) return { file: rel, records: [] };
+  // Not HDL (Coq): yields no facts and no file node. Such a file is never indexed, so it has no unit either.
+  if (!isHdlText(rel, text)) return { file: rel, records: [] };
   const parser = await getParser();
   const tree = parser.parse(text);
   if (!tree) throw new Error(`could not parse ${rel}`);
