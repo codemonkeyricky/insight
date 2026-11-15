@@ -216,7 +216,37 @@ export interface StateMachineView {
   notes?: string[];
 }
 
-export type LensView = GraphView | TableView | TreeView | StateMachineView;
+export interface SchemaField {
+  name: string;
+  type: string;
+  required: boolean;
+  values?: string[];
+  ref?: string;
+  description?: string;
+}
+
+export interface SchemaEntity {
+  id: string;
+  label: string;
+  group: string;
+  role: "record" | "node-kind" | "edge-kind";
+  extends?: string;
+  description?: string;
+  span?: Span;
+  fields: SchemaField[];
+}
+
+/** An entity-relationship style diagram: cards with fields, grouped in frames, joined by ref and extends links. */
+export interface SchemaDiagramView {
+  type: "schema-diagram";
+  id: string;
+  title: string;
+  groups: { id: string; label: string }[];
+  entities: SchemaEntity[];
+  links: { from: string; field?: string; to: string; kind: "ref" | "extends" }[];
+}
+
+export type LensView = GraphView | TableView | TreeView | StateMachineView | SchemaDiagramView;
 
 export interface LensRecord {
   id: string;

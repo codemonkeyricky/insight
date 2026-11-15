@@ -1,4 +1,4 @@
-import { edgeTargets, type GraphView, type IRView, type Lens, type LensFinding, type LensResult, type LensView, type TableView, type ViewSpan } from "@insight/sdk";
+import { edgeTargets, type IRView, type Lens, type LensFinding, type LensResult, type LensView, type SchemaDiagramView, type SchemaEntity, type SchemaField, type TableView, type ViewSpan } from "@insight/sdk";
 import type { IREdge, IRNode } from "@insight/ir";
 
 const LENS_ID = "lens-ir-schema";
@@ -103,61 +103,104 @@ export const lensIrSchema: Lens = {
     }
     const table: TableView = { type: "table", id: "kinds", title: "Kinds", columns, rows, spans };
 
-    // Graphs: one per facet. Nodes are that facet's kinds and the packages that emit or read them; edges are
-    // package -> kind (emits / reads) and extends between kinds of the facet.
-    const facetOf = new Map<string, string>();
-    for (const k of kinds) facetOf.set(k.id, str(k.attrs.facet));
-    const facets = [...new Set(kinds.map((k) => str(k.attrs.facet)))].sort();
-    const facetGraphs: GraphView[] = facets.map((facet) => {
-      const members = kinds.filter((k) => facetOf.get(k.id) === facet);
-      const memberIds = new Set(members.map((k) => k.id));
-      const nodes = new Map<string, { id: string; label: string; group: string }>();
-      for (const k of members) nodes.set(k.id, { id: k.id, label: nameOf(k), group: "kind" });
-      const edges: GraphView["edges"] = [];
-      const seen = new Set<string>();
-      for (const e of usesEdges) {
-        const t = targetOf(e);
-        if (t === undefined || !memberIds.has(t)) continue;
-        const pkg = pkgOf(e.from);
-        const verb = str(e.attrs?.how) === "emit" ? "emits" : "reads";
-        const pid = `package:${pkg}`;
-        if (!nodes.has(pid)) nodes.set(pid, { id: pid, label: pkg, group: "package" });
-        const key = `${pid}|${t}|${verb}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        edges.push({ from: pid, to: t, kind: verb, label: verb });
-      }
-      for (const e of extendsEdges) {
-        const t = targetOf(e);
-        if (t !== undefined && memberIds.has(t) && memberIds.has(e.from)) edges.push({ from: e.from, to: t, kind: "extends", label: "extends" });
-      }
-      return { type: "graph", id: `facet-${facet}`, title: `${facet} kinds`, nodes: [...nodes.values()], edges };
+    // Diagram 1: every kind as a card, framed by facet; `extends` joins kinds.
+    const propFields = (parentId: string | undefined): SchemaField[] => {
+      if (parentId === undefined) return [];
+      return ir.children(parentId, { kind: PROP }).map((p) => {
+        const values = Array.isArray(p.attrs.enum) ? (p.attrs.enum as unknown[]).map(String) : undefined;
+        const description = str(p.attrs.description);
+        return {
+          name: str(p.attrs.name),
+          type: str(p.attrs.type) || "any",
+          required: p.attrs.required === true,
+          ...(values && values.length > 0 ? { values } : {}),
+          ...(description ? { description } : {}),
+        };
+      });
+    };
+    const facetOrder = ["structure", "packaging", "flow", "calls", "concurrency", "sync", "effects", "state"];
+    const presentFacets = [...new Set(kinds.map((k) => str(k.attrs.facet)))];
+    const facets = [...facetOrder.filter((f) => presentFacets.includes(f)), ...presentFacets.filter((f) => !facetOrder.includes(f)).sort()];
+    const kindEntities: SchemaEntity[] = kinds.map((k) => {
+      const defId = attrsDef.get(k.id);
+      const ext = extendsOf.get(k.id);
+      const description = str(k.attrs.description);
+      return {
+        id: k.id,
+        label: nameOf(k),
+        group: str(k.attrs.facet),
+        role: str(k.attrs.on) === "edge" ? "edge-kind" : "node-kind",
+        ...(ext ? { extends: ext } : {}),
+        ...(description ? { description } : {}),
+        ...(k.span ? { span: k.span } : {}),
+        fields: propFields(defId ?? k.id),
+      };
     });
+    const kindLinks: SchemaDiagramView["links"] = [];
+    for (const e of extendsEdges) {
+      const t = targetOf(e);
+      if (t !== undefined) kindLinks.push({ from: e.from, to: t, kind: "extends" });
+    }
+    const kindsDiagram: SchemaDiagramView = {
+      type: "schema-diagram",
+      id: "kinds-diagram",
+      title: "Kinds",
+      groups: facets.map((f) => ({ id: f, label: f })),
+      entities: kindEntities,
+      links: kindLinks,
+    };
 
-    // Graph: the core schema's definitions and the $refs between them.
+    // Diagram 2: the core schema's definitions and the $refs between them.
     const coreDefs = defs.filter((d) => d.id.startsWith(`${CORE_FILE}#def:`));
     const coreIds = new Set(coreDefs.map((d) => d.id));
-    const rNodes = coreDefs.map((d) => ({ id: d.id, label: nameOf(d), group: d.id.endsWith("#def:$root") ? "root" : "def" }));
-    const rEdges: GraphView["edges"] = [];
-    const seenR = new Set<string>();
-    for (const e of refEdges) {
-      const t = targetOf(e);
-      const from = ir.node(e.from);
-      if (t === undefined || !coreIds.has(t) || !from) continue;
-      let src: string | undefined;
-      let label: string | undefined;
-      if (from.kind === DEF) src = from.id;
-      else if (from.kind === PROP) {
-        src = from.parent;
-        label = nameOf(from);
+    const refTargets = (id: string): string[] => {
+      const out: string[] = [];
+      for (const e of refEdges) {
+        if (e.from !== id) continue;
+        const t = targetOf(e);
+        if (t !== undefined && coreIds.has(t) && !out.includes(t)) out.push(t);
       }
-      if (src === undefined || !coreIds.has(src)) continue;
-      const key = `${src}|${t}|${label ?? ""}`;
-      if (seenR.has(key)) continue;
-      seenR.add(key);
-      rEdges.push({ from: src, to: t, kind: "ref", ...(label ? { label } : {}) });
-    }
-    const recordsGraph: GraphView = { type: "graph", id: "records", title: "Records", nodes: rNodes, edges: rEdges };
+      return out;
+    };
+    const recLinks: SchemaDiagramView["links"] = [];
+    const recEntities: SchemaEntity[] = coreDefs.map((d) => {
+      const props2 = ir.children(d.id, { kind: PROP });
+      let fields: SchemaField[];
+      if (props2.length > 0) {
+        fields = props2.map((p) => {
+          const f = propFields(d.id).find((x) => x.name === nameOf(p)) as SchemaField;
+          const target = refTargets(p.id)[0];
+          if (target !== undefined) {
+            recLinks.push({ from: d.id, field: f.name, to: target, kind: "ref" });
+            return { ...f, ref: target };
+          }
+          return f;
+        });
+      } else {
+        fields = refTargets(d.id).map((t) => {
+          recLinks.push({ from: d.id, field: nameOf(ir.node(t)), to: t, kind: "ref" });
+          return { name: nameOf(ir.node(t)), type: "oneOf", required: false, ref: t };
+        });
+      }
+      const description = str(d.attrs.description);
+      return {
+        id: d.id,
+        label: nameOf(d),
+        group: "records",
+        role: "record",
+        ...(description ? { description } : {}),
+        ...(d.span ? { span: d.span } : {}),
+        fields,
+      };
+    });
+    const recordsDiagram: SchemaDiagramView = {
+      type: "schema-diagram",
+      id: "records-diagram",
+      title: "Records",
+      groups: [{ id: "records", label: "records" }],
+      entities: recEntities,
+      links: recLinks,
+    };
 
     // Findings.
     const findings: LensFinding[] = [];
@@ -193,7 +236,7 @@ export const lensIrSchema: Lens = {
       });
     }
 
-    const views: LensView[] = [table, ...facetGraphs, recordsGraph];
+    const views: LensView[] = [kindsDiagram, recordsDiagram, table];
     const emitted = kinds.filter((k) => emitBy.has(k.id)).length;
     const metrics = {
       kinds: kinds.length,

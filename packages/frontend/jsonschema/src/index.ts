@@ -118,10 +118,23 @@ function typeOf(s: unknown): string {
   if (Array.isArray(s.enum)) return "enum";
   if (typeof s.type === "string") return s.type;
   if (Array.isArray(s.type)) return s.type.join("|");
-  if (s.items !== undefined) return "array";
+  if (s.items !== undefined) {
+    const it = typeOf(s.items);
+    return it === "any" ? "array" : `${it.replace(/^\$ref /, "")}[]`;
+  }
   if (s.oneOf !== undefined) return "oneOf";
   if (s.anyOf !== undefined) return "anyOf";
   return "any";
+}
+
+/** The enum values of a schema, or of the items of an array schema. */
+function enumOf(s: unknown): string[] | undefined {
+  if (!isObj(s)) return undefined;
+  if (Array.isArray(s.enum)) return s.enum.map((x) => String(x));
+  if (isObj(s.items)) return enumOf(s.items);
+  const alt = Array.isArray(s.oneOf) ? s.oneOf : Array.isArray(s.anyOf) ? s.anyOf : [];
+  const consts = alt.filter((x): x is Schema => isObj(x) && x.const !== undefined).map((x) => String(x.const));
+  return consts.length > 0 && consts.length === alt.length ? consts : undefined;
 }
 
 /** Every $ref under a schema node. With skipTopProps, the top level's own `properties` is left out (props carry their own). */
@@ -136,6 +149,7 @@ function collectRefs(node: unknown, skipTopProps: boolean): string[] {
     for (const [k, x] of Object.entries(v)) {
       if (k === "$ref" && typeof x === "string") out.push(x);
       else if (top && k === "properties" && skipTopProps) continue;
+      else if (top && k === "$defs") continue; // the definitions are indexed on their own
       else walk(x, false);
     }
   };
@@ -261,6 +275,8 @@ function buildBatch(doc: Doc, byId: Map<string, string>, defById: Map<string, De
       for (const prop of def.props) {
         const pattrs: Schema = { name: prop.name, type: typeOf(prop.schema), required: prop.required };
         if (isObj(prop.schema) && typeof prop.schema.description === "string") pattrs.description = prop.schema.description;
+        const en = enumOf(prop.schema);
+        if (en) pattrs.enum = en;
         node(prop.id, def.id, "x-schema.property", pattrs, spanAt(file, lines, prop.line));
         const pdedupe = new Set<string>();
         for (const ref of collectRefs(prop.schema, false)) {
@@ -285,6 +301,18 @@ function buildBatch(doc: Doc, byId: Map<string, string>, defById: Map<string, De
     if (isObj(e.attrs) && typeof e.attrs.$ref === "string") {
       const to = resolve(e.attrs.$ref, k.id, `${k.name}.attrs`);
       if (to !== undefined) xEdge(k.id, to, "x-schema.attrs");
+    }
+    if (isObj(e.attrs) && isObj(e.attrs.properties)) {
+      // Inline attrs (plugin kinds): the properties hang directly off the kind.
+      const req = Array.isArray(e.attrs.required) ? e.attrs.required.filter((x): x is string => typeof x === "string") : [];
+      for (const [pn, ps] of Object.entries(e.attrs.properties)) {
+        const pl = lineOf(lines, new RegExp(`"${escapeRe(pn)}"\\s*:`), k.line);
+        const pattrs: Schema = { name: pn, type: typeOf(ps), required: req.includes(pn) };
+        if (isObj(ps) && typeof ps.description === "string") pattrs.description = ps.description;
+        const en = enumOf(ps);
+        if (en) pattrs.enum = en;
+        node(`${k.id}/prop:${pn}`, k.id, "x-schema.property", pattrs, spanAt(file, lines, pl < 0 ? k.line : pl));
+      }
     }
     if (typeof e.extends === "string") {
       const parent = kindIdByName.get(e.extends);
