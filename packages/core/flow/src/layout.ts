@@ -244,7 +244,14 @@ function fork(c: Ctx, mk: Maker, item: Extract<Item, { t: "fork" }>, lane: numbe
   const head =
     item.role === "try"
       ? mk.node("marker", "label", "try", item.span ? { span: item.span } : {})
-      : mk.node(item.role, "decision", clipLabel(item.role === "switch" ? "switch" : item.label, LABEL_MAX), { title: item.title ?? item.label, ...(item.span ? { span: item.span } : {}) });
+      : item.role === "lock"
+        ? // A lock frame's head is the acquire: a conc row that opens the frame's siding.
+          mk.node("sync", "label", clipLabel(item.label, LABEL_MAX), {
+            title: item.title ?? item.label,
+            ...(item.span ? { span: item.span } : {}),
+            ...(item.coupling !== undefined ? { coupling: item.coupling } : {}),
+          })
+        : mk.node(item.role, "decision", clipLabel(item.role === "switch" ? "switch" : item.label, LABEL_MAX), { title: item.title ?? item.label, ...(item.span ? { span: item.span } : {}) });
   row(c, head, lane, labelLane, skip, into);
   const inner = lane + 1 + skip;
   const out: Pend[] = [];
@@ -425,7 +432,7 @@ export function measure(items: Item[]): FlowStats {
         s.loops++;
         walk(i.body, depth + 1);
       } else {
-        if (i.role === "try") s.tries++;
+        if (i.role === "try" || i.role === "lock") s.tries++;
         else s.decisions++;
         for (const a of i.arms) walk(a.body, depth + 1);
       }

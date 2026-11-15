@@ -15,6 +15,7 @@ export type FlowRole =
   | "await"
   | "spawn"
   | "effect"
+  | "sync"
   | "branch"
   | "switch"
   | "loop"

@@ -16,7 +16,7 @@ export function topLevelName(file: string): string {
 
 /** One fact inside a function that takes part in the flow, reduced to what the chart needs. */
 interface Ev {
-  type: "call" | "await" | "spawn" | "effect" | "branch" | "switch" | "arm" | "loop" | "block" | "try" | "return" | "throw" | "break" | "continue";
+  type: "call" | "await" | "spawn" | "effect" | "sync" | "branch" | "switch" | "arm" | "loop" | "block" | "try" | "return" | "throw" | "break" | "continue";
   start: Pos;
   end: Pos;
   /** Breaks ties between events with the same range: smaller sorts outer. */
@@ -31,6 +31,11 @@ interface Ev {
   targets?: string[];
   /** A handler the code installs (`onmessage = …`): its step opens the handler even when it is a folded lambda. */
   handler?: true;
+  /** A synchronisation or channel operation: the lock it names, and whether it takes (`acquire`) or gives (`release`) it. */
+  lock?: string;
+  lockOp?: "acquire" | "release";
+  /** Footprint text of a sync row, without the emoji (`lock queue_mu`, `send jobs`). */
+  text?: string;
   children: Ev[];
 }
 
@@ -55,9 +60,14 @@ export type Item =
       /** Coupling pass: a `⋯ n local` fold row holds the items it stands for. */
       fold?: Item[];
       foldId?: string;
+      /** A sync row: the lock it names and whether it takes or gives it (lock frames are built from these). */
+      lock?: string;
+      lockOp?: "acquire" | "release";
+      /** A sync row: its footprint text, without the emoji. */
+      text?: string;
     }
   | { t: "term"; role: "return" | "throw" | "break" | "continue"; label: string; span?: FlowSpan; coupling?: CouplingClass }
-  | { t: "fork"; role: "branch" | "switch" | "try"; label: string; title?: string; span?: FlowSpan; arms: Arm[]; complete: boolean }
+  | { t: "fork"; role: "branch" | "switch" | "try" | "lock"; label: string; title?: string; span?: FlowSpan; arms: Arm[]; complete: boolean; lock?: string; coupling?: CouplingClass }
   | { t: "loop"; label: string; title?: string; span?: FlowSpan; body: Item[] };
 
 export interface Arm {
@@ -81,6 +91,7 @@ const RANK: Record<Ev["type"], number> = {
   await: 3,
   spawn: 3.1,
   effect: 3.2,
+  sync: 3.2,
   call: 4,
 };
 
@@ -101,6 +112,56 @@ function effectLabel(n: IRNode): string {
     if (typeof v === "string" && v !== "") return `${short} · ${v}`;
   }
   return short;
+}
+
+/** Text for a channel: a `<dynamic>` queue is shown as `⟨dynamic⟩`. */
+const channelName = (v: unknown): string => {
+  const s = typeof v === "string" ? v : "";
+  return s === "" || s === "<dynamic>" ? "⟨dynamic⟩" : s;
+};
+
+/** The chart label, the footprint text (no emoji), and the lock a sync node names, for a synchronisation or channel node. */
+function syncInfo(n: IRNode): { label: string; text: string; lock?: string; lockOp?: "acquire" | "release" } | undefined {
+  const a = n.attrs;
+  const str = (v: unknown) => (typeof v === "string" ? v : "");
+  const trim = (s: string) => s.replace(/\s+/g, " ").trim();
+  switch (n.kind) {
+    case "sync.lock-acquire":
+    case "sync.rwlock-acquire":
+    case "x-cpp.scoped-lock": {
+      const lock = str(a.lock);
+      const shared = a.mode === "shared" ? " (shared)" : "";
+      return { label: `🔒 ${lock}${shared}`, text: `lock ${lock}${shared}`, lock, lockOp: "acquire" };
+    }
+    case "sync.lock-release": {
+      const lock = str(a.lock);
+      return { label: `🔓 ${lock}`, text: `unlock ${lock}`, lock, lockOp: "release" };
+    }
+    case "sync.condvar": {
+      const name = str(a.name) || str(a.api);
+      const lock = str(a.lock);
+      if (a.op === "wait") {
+        const withLock = lock === "" ? "" : ` (${lock})`;
+        return { label: trim(`⏸ wait ${name}${withLock}`), text: trim(`wait ${name}`) };
+      }
+      if (a.op === "notify") return { label: trim(`↻ notify ${name}`), text: trim(`notify ${name}`) };
+      return { label: trim(`${str(a.op)} ${name}`), text: trim(`${str(a.op)} ${name}`) };
+    }
+    case "sync.semaphore": {
+      const name = str(a.name) || str(a.api);
+      return { label: trim(`⇅ ${str(a.op)} ${name}`), text: trim(`${str(a.op)} ${name}`) };
+    }
+    case "sync.atomic-op": {
+      const what = str(a.api) || str(a.op);
+      return { label: `⚛ ${what}`, text: `atomic ${what}` };
+    }
+    case "concurrency.channel-send":
+      return { label: `▶ send ${channelName(a.channel)}`, text: `send ${channelName(a.channel)}` };
+    case "concurrency.channel-recv":
+      return { label: `◀ recv ${channelName(a.channel)}`, text: `recv ${channelName(a.channel)}` };
+    default:
+      return undefined;
+  }
 }
 
 function toEvent(n: IRNode): Ev | undefined {
@@ -132,6 +193,19 @@ function toEvent(n: IRNode): Ev | undefined {
       return { ...base, type: a.variant === "continue" ? "continue" : "break", rank: RANK.break, label: str(a.variant) || "break" };
     case "concurrency.await":
       return { ...base, type: "await", rank: RANK.await, label: "await" };
+    case "sync.lock-acquire":
+    case "sync.rwlock-acquire":
+    case "x-cpp.scoped-lock":
+    case "sync.lock-release":
+    case "sync.condvar":
+    case "sync.semaphore":
+    case "sync.atomic-op":
+    case "concurrency.channel-send":
+    case "concurrency.channel-recv": {
+      const info = syncInfo(n);
+      if (!info) return undefined;
+      return { ...base, type: "sync", rank: RANK.sync, label: info.label, text: info.text, ...(info.lock !== undefined ? { lock: info.lock } : {}), ...(info.lockOp !== undefined ? { lockOp: info.lockOp } : {}) };
+    }
     case "concurrency.spawn-process":
       return { ...base, type: "spawn", rank: RANK.spawn, label: `spawn process · ${str(a.target) || str(a.api)}` };
     case "concurrency.spawn-thread":
@@ -168,7 +242,7 @@ function convertAll(evs: Ev[], sources: boolean): Item[] {
   return evs.flatMap((ev) => convert(ev, sources));
 }
 
-function step(role: FlowRole, ev: Ev, label: string, sources: boolean): Item {
+function step(role: FlowRole, ev: Ev, label: string, sources: boolean): Extract<Item, { t: "step" }> {
   return {
     t: "step",
     role,
@@ -186,6 +260,16 @@ function convert(ev: Ev, sources: boolean): Item[] {
   switch (ev.type) {
     case "call":
       return [...convertAll(ev.children, sources), step("call", ev, ev.label, sources)];
+    case "sync":
+      // One row: a lock, condvar, semaphore, atomic or channel operation. A lock frame is built from the lock it names.
+      return [
+        {
+          ...step("sync", ev, ev.label, sources),
+          ...(ev.lock !== undefined ? { lock: ev.lock } : {}),
+          ...(ev.lockOp !== undefined ? { lockOp: ev.lockOp } : {}),
+          ...(ev.text !== undefined ? { text: ev.text } : {}),
+        },
+      ];
     case "await":
     case "spawn":
     case "effect": {
@@ -266,6 +350,59 @@ function convert(ev: Ev, sources: boolean): Item[] {
   }
 }
 
+/**
+ * Lock frames. In each list, a lock acquire (or a C++ RAII guard) and the items after it, up to and including the next release
+ * of the same lock in that list, become one `lock` fork: its head is the acquire, its body the rows held under the lock. With
+ * no release later in the list, the frame runs to the end of the list. An acquire with nothing after it stays a plain row.
+ * Nested blocks are framed first, so frames nest when locks nest.
+ */
+export function frameLocks(items: Item[]): Item[] {
+  const framed = items.map((item): Item => {
+    if (item.t === "fork") return { ...item, arms: item.arms.map((a) => ({ ...a, body: frameLocks(a.body) })) };
+    if (item.t === "loop") return { ...item, body: frameLocks(item.body) };
+    return item;
+  });
+  return frameList(framed);
+}
+
+function frameList(list: Item[]): Item[] {
+  const out: Item[] = [];
+  for (let i = 0; i < list.length; i++) {
+    const item = list[i] as Item;
+    if (item.t !== "step" || item.role !== "sync" || item.lockOp !== "acquire" || item.lock === undefined) {
+      out.push(item);
+      continue;
+    }
+    const lock = item.lock;
+    let release = -1;
+    for (let j = i + 1; j < list.length; j++) {
+      const x = list[j];
+      if (x !== undefined && x.t === "step" && x.role === "sync" && x.lockOp === "release" && x.lock === lock) {
+        release = j;
+        break;
+      }
+    }
+    const end = release < 0 ? list.length : release + 1;
+    if (end === i + 1) {
+      out.push(item);
+      continue;
+    }
+    const body = frameList(list.slice(i + 1, end));
+    out.push({
+      t: "fork",
+      role: "lock",
+      label: item.label,
+      title: item.title ?? item.label,
+      ...(item.span ? { span: item.span } : {}),
+      lock,
+      arms: [{ label: "", kind: "next", body }],
+      complete: true,
+    });
+    i = end - 1;
+  }
+  return out;
+}
+
 export interface FunctionFacts {
   id: string;
   name: string;
@@ -305,7 +442,7 @@ export function factsForFile(file: string, nodes: Iterable<IRNode>, edges: Itera
   };
   for (const n of allNodes) {
     if (n.span?.file !== file || n.parent === undefined) continue;
-    if (n.facet !== "flow" && n.facet !== "concurrency" && n.facet !== "effects") continue;
+    if (n.facet !== "flow" && n.facet !== "concurrency" && n.facet !== "effects" && n.facet !== "sync") continue;
     const ev = toEvent(n);
     if (ev) add(n.parent, ev);
   }
@@ -332,13 +469,13 @@ export function factsForFile(file: string, nodes: Iterable<IRNode>, edges: Itera
 
   const out: FunctionFacts[] = [];
   for (const fn of functions.values()) {
-    fn.items = convertAll(nest(events.get(fn.id) ?? []), sources);
+    fn.items = frameLocks(convertAll(nest(events.get(fn.id) ?? []), sources));
     out.push(fn);
   }
   // Statements outside every function run when the module loads.
   const top = events.get(file);
   if (top && top.length > 0) {
-    out.push({ id: file, name: topLevelName(file), async: false, items: convertAll(nest(top), sources) });
+    out.push({ id: file, name: topLevelName(file), async: false, items: frameLocks(convertAll(nest(top), sources)) });
   }
   return out.sort((a, b) => (a.span ? a.span.start[0] : 0) - (b.span ? b.span.start[0] : 0) || a.name.localeCompare(b.name));
 }
