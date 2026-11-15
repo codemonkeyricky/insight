@@ -19,6 +19,7 @@ import {
   type CallTarget,
   type Hdl,
   type Project,
+  type ScopeRef,
   type Unit,
 } from "./project.js";
 
@@ -127,10 +128,8 @@ interface Frame {
   container: NodeId;
   /** Name of the nearest enclosing class, package or module, or the class a function is defined out of. Qualifies function ids. */
   scope?: string;
-  /** The key this scope's functions are filed under: the declaration id for a module, interface or program, the name for a class or package, the class for an out-of-class function. */
-  scopeKey?: string;
-  /** Name of the enclosing package, inherited by everything inside it. */
-  pkg?: string;
+  /** The enclosing scopes that can see names, innermost first, file level excluded. Calls look names up through them. */
+  chain: ScopeRef[];
   /** The nearest enclosing module, interface or program. Owns its processes and instances. */
   module?: { name: string; id: NodeId; ords: Map<string, number> };
   /** Generate block labels, outermost first. */
@@ -231,7 +230,7 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
   const emitCall = (f: Frame, at: SyntaxNode, callee: string, name: string, target: CallTarget): void => {
     const from = f.fn ?? f.container;
     const span = spanOf(rel, at);
-    const hit = resolveCallee(project, rel, { scope: f.scope, scopeKey: f.scopeKey, pkg: f.pkg }, name, target, f.gen);
+    const hit = resolveCallee(project, rel, { scope: f.scope, chain: f.chain }, name, target, f.gen);
     if (!hit) {
       const to: UnresolvedRef = { unresolved: { scheme: "sv.call", text: callee } };
       edge({ from, to, facet: "calls", kind: "calls.call", attrs: { callee }, span, provenance: prov });
@@ -448,7 +447,7 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
           span: spanOf(rel, n),
           provenance: prov,
         });
-        visitChildren(n, { container: id, scope: name, scopeKey: id, module: { name, id, ords }, gen: [], pkg: f.pkg });
+        visitChildren(n, { container: id, scope: name, module: { name, id, ords }, gen: [], chain: [{ key: id, kind: "hdl" }, ...f.chain] });
         break;
       }
       case "package_declaration": {
@@ -456,7 +455,7 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
         if (!name) break;
         const id = project.idOf.get(fileNodeKey(rel, n)) ?? ids.take(declId(rel, name));
         node({ id, facet: "structure", kind: "structure.module", parent: f.container, attrs: { name, hdl: "package" }, span: spanOf(rel, n), provenance: prov });
-        visitChildren(n, { container: id, scope: name, scopeKey: name, gen: [], pkg: name });
+        visitChildren(n, { container: id, scope: name, gen: [], chain: [{ key: name, kind: "package" }, ...f.chain] });
         break;
       }
       case "class_declaration": {
@@ -472,7 +471,7 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
           span: spanOf(rel, n),
           provenance: prov,
         });
-        visitChildren(n, { container: id, scope: name, scopeKey: name, gen: [], pkg: f.pkg });
+        visitChildren(n, { container: id, scope: name, gen: [], chain: [{ key: name, kind: "class" }, ...f.chain] });
         break;
       }
       case "function_declaration":
@@ -491,8 +490,8 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
           span: spanOf(rel, n),
           provenance: prov,
         });
-        // An out-of-class definition is filed under the class it qualifies, so its key is that class's name.
-        const inner: Frame = { ...f, fn: id, scope, scopeKey: sub.scope ?? f.scopeKey };
+        // An out-of-class definition sees the class it qualifies, then the scopes around the definition.
+        const inner: Frame = { ...f, fn: id, scope, chain: sub.scope !== undefined ? [{ key: sub.scope, kind: "class" }, ...f.chain] : f.chain };
         if (n.type === "class_constructor_declaration") {
           // `super.new(args)` in a constructor is an argument list on the constructor node. An empty one leaves no node, so only the text shows it.
           // An empty `super.new()` leaves no argument node, but its `super`, `.` and `new` tokens are direct children.
@@ -738,7 +737,7 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
     }
   }
 
-  work.push([root, { container: rel, gen: [] }]);
+  work.push([root, { container: rel, gen: [], chain: [] }]);
   while (work.length > 0) {
     const [n, f] = work.pop() as [SyntaxNode, Frame];
     visit(n, f);

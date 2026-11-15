@@ -747,6 +747,34 @@ describe("confidence labels", () => {
   });
 });
 
+describe("name resolution by scope", () => {
+  const fx = (name: string) => join(fixturesDir, name);
+  const callsNamed = (batches: IRBatch[], callee: string): IREdge[] => edgesOf(allRecords(batches)).filter((e) => e.kind === "calls.call" && e.attrs?.callee === callee);
+
+  it("an explicit import belongs to the module that writes it, so two modules in one file see two different f", async () => {
+    const batches = await extractDir(fx("import_scope"), ["p1.sv", "p2.sv", "two_mods.sv"]);
+    const calls = callsNamed(batches, "f");
+    expect(calls.find((e) => e.from.startsWith("two_mods.sv#a."))?.to).toBe("p1.sv#p1.f");
+    expect(calls.find((e) => e.from.startsWith("two_mods.sv#b."))?.to).toBe("p2.sv#p2.f");
+  });
+
+  it("a module's wildcard import beats a file-level $unit function of the same name", async () => {
+    const batches = await extractDir(fx("import_scope_wild"), ["d.sv", "p3.sv"]);
+    const call = callsNamed(batches, "g")[0];
+    expect(call?.from).toBe("d.sv#d.initial[1]");
+    expect(call?.to).toBe("p3.sv#p3.g");
+    expect(call?.provenance?.confidence).toBe("inferred");
+  });
+
+  it("a class inside a module finds the module's function through the enclosing scope, exactly", async () => {
+    const batches = await extractDir(fx("module_scope_fn"), ["m.sv"]);
+    const call = callsNamed(batches, "h")[0];
+    expect(call?.from).toBe("m.sv#C.run");
+    expect(call?.to).toBe("m.sv#m.h");
+    expect(call?.provenance?.confidence).toBe("exact");
+  });
+});
+
 describe("system task effects", () => {
   it("a $fopen whose mode is a variable is a write, marked as an unknown mode", async () => {
     const batches = await extractDir(join(fixturesDir, "fopen"), ["mode.sv"]);

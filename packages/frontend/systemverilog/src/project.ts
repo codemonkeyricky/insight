@@ -89,6 +89,18 @@ export interface Unit {
   indexError?: string;
 }
 
+/** The imports one scope makes: wildcard packages (sorted), and explicitly named items with their package. */
+export interface ScopeImports {
+  wild: string[];
+  named: Map<string, string>;
+}
+
+/** An enclosing scope of a call. A class is searched along its bases; a module-like or package scope is looked up by key. */
+export interface ScopeRef {
+  key: string;
+  kind: "class" | "package" | "hdl";
+}
+
 export interface Project {
   units: Map<string, Unit>;
   /** Module, interface, program, package and class definitions, by name. The first file in sorted order wins. */
@@ -102,10 +114,11 @@ export interface Project {
   fnsByScope: Map<string, Map<string, FnRef[]>>;
   /** Functions and tasks declared inside a package, by name. */
   pkgFnsByName: Map<string, FnRef[]>;
-  /** Packages a file imports with a wildcard (`pkg::*`), sorted. */
-  wildImportsByFile: Map<string, string[]>;
-  /** Names a file imports explicitly (`pkg::name`), each with its package. */
-  namedImportsByFile: Map<string, Map<string, string>>;
+  /**
+   * The imports each file makes, per scope key ("" at file level). An import belongs to the scope that declares it,
+   * so a name imported in one module is not visible in another file's module.
+   */
+  importsByScope: Map<string, Map<string, ScopeImports>>;
   /** The base class of each class. The first definition wins. */
   bases: Map<string, BaseRef>;
   /** The node id of each declaration and function, keyed by nodeKey. The emitter reads these so the two passes agree. */
@@ -208,14 +221,11 @@ interface FileImports {
   named: Map<string, string>;
 }
 
-/** True for a scope key that is a module, interface or program id. Those ids hold a `#`, which no name does. */
-const isHdlKey = (key: string): boolean => key.includes("#");
-
 /**
  * Indexes the definitions, functions, DPI imports, class bases and per-file ids of one unit.
  * Each walk item carries the scope name (for ids) and the scope key (for lookup), which differ for modules.
  */
-function collectDecls(unit: Unit, root: SyntaxNode, p: Project, imports: FileImports): void {
+function collectDecls(unit: Unit, root: SyntaxNode, p: Project, imports: Map<string, FileImports>): void {
   const rel = unit.rel;
   // The package each item sits in, when it is directly inside a package (not a class or module within one).
   type Item = [SyntaxNode, string | undefined, string | undefined, string[], string | undefined];
@@ -280,8 +290,15 @@ function collectDecls(unit: Unit, root: SyntaxNode, p: Project, imports: FileImp
       const parts = n.text.replace(/\s+/g, "").split("::");
       const item = parts[1];
       if (pkg && item !== undefined) {
-        if (item === "*") imports.wild.add(pkg);
-        else if (!imports.named.has(item)) imports.named.set(item, pkg);
+        // The import belongs to the scope it is written in: the enclosing module, package or class, or "" at file level.
+        const scopeKey = key ?? "";
+        let imp = imports.get(scopeKey);
+        if (!imp) {
+          imp = { wild: new Set<string>(), named: new Map<string, string>() };
+          imports.set(scopeKey, imp);
+        }
+        if (item === "*") imp.wild.add(pkg);
+        else if (!imp.named.has(item)) imp.named.set(item, pkg);
       }
       return;
     }
@@ -443,8 +460,7 @@ export async function indexProject(texts: Map<string, string>): Promise<Project>
     declsByName: new Map(),
     fnsByScope: new Map(),
     pkgFnsByName: new Map(),
-    wildImportsByFile: new Map(),
-    namedImportsByFile: new Map(),
+    importsByScope: new Map(),
     bases: new Map(),
     idOf: new Map(),
     includedIn: new Map(),
@@ -459,11 +475,10 @@ export async function indexProject(texts: Map<string, string>): Promise<Project>
     try {
       // A failure in one file must not fail the project: the error is recorded on its unit and the next file is indexed.
       try {
-        const imports: FileImports = { wild: new Set<string>(), named: new Map<string, string>() };
+        const imports = new Map<string, FileImports>();
         collectDecls(unit, root, p, imports);
         collectVars(unit, root);
-        p.wildImportsByFile.set(rel, [...imports.wild].sort());
-        p.namedImportsByFile.set(rel, imports.named);
+        p.importsByScope.set(rel, new Map([...imports].map(([key, imp]) => [key, { wild: [...imp.wild].sort(), named: imp.named }])));
       } catch (e) {
         unit.indexError = e instanceof Error ? e.message : String(e);
       }
@@ -564,20 +579,13 @@ export interface Callee {
   heuristic?: boolean;
 }
 
-/** Where a call is made: the enclosing scope name, its scope key, and the package the code sits in. */
+/** Where a call is made: the enclosing scope name, and the enclosing scopes that can see names, innermost first, file level excluded. */
 export interface CallSite {
   scope?: string;
-  scopeKey?: string;
-  pkg?: string;
+  chain?: ScopeRef[];
 }
 
 const lookup = (p: Project, key: string, name: string): FnRef[] => p.fnsByScope.get(key)?.get(name) ?? [];
-
-/** The files whose imports a file sees: its own, and those of the file that includes it from a package. */
-const importersOf = (p: Project, rel: string): string[] => {
-  const inc = p.includedIn.get(rel);
-  return inc ? [rel, inc.from] : [rel];
-};
 
 /** The functions named in the first class of the chain that declares the name. */
 function chainLookup(p: Project, start: string, name: string): FnRef[] {
@@ -639,12 +647,40 @@ function leavesProject(p: Project, start: string | undefined): boolean {
 }
 
 /**
+ * What one lookup step decided. A step that returns one stops the search, and `callee` undefined means unresolved.
+ * Undefined as a whole means the step found nothing and the search goes on.
+ */
+interface Step {
+  callee: Callee | undefined;
+}
+
+/**
+ * The imports one scope makes, read from the file that declares them. An explicit import is pinned: it answers
+ * with its package's function, or with nothing. Wildcard packages that define the name answer together.
+ */
+function importStep(p: Project, file: string, key: string, name: string, gen: string[]): Step | undefined {
+  const imp = p.importsByScope.get(file)?.get(key);
+  const named = imp?.named.get(name);
+  if (named !== undefined) return { callee: finish(narrow(lookup(p, named, name), gen), false) };
+  const hits = (imp?.wild ?? []).flatMap((wp) => lookup(p, wp, name));
+  return hits.length > 0 ? { callee: finish(narrow(hits, gen), false) } : undefined;
+}
+
+/** One enclosing scope: its own functions first, then the imports it makes. */
+function scopeStep(p: Project, rel: string, file: string, scope: ScopeRef, name: string, gen: string[]): Step | undefined {
+  const own = scope.kind === "class" ? chainLookup(p, scope.key, name) : lookup(p, scope.key, name);
+  if (own.length > 0) return { callee: pick(own, rel, gen) };
+  return importStep(p, file, scope.key, name, gen);
+}
+
+/**
  * The functions a call names. Matches are looked up in the given target only, so a member call never
  * falls through to an unrelated function of the same name. `gen` is the caller's generate path.
  *
- * A plain call follows SystemVerilog lookup, first hit wins: the caller's own scope, its enclosing package,
- * this file's `$unit` functions, an explicitly imported name, wildcard-imported packages, other files' `$unit`
- * functions, then (heuristically) any package function of that name.
+ * A plain call follows SystemVerilog lookup, first hit wins: each enclosing scope from the innermost out (its own
+ * functions, then its explicit imports, then its wildcard imports), then the package that includes this file, then
+ * this file's `$unit` functions and file-level imports, then other files' `$unit` functions, then (heuristically)
+ * any package function of that name.
  */
 export function resolveCallee(p: Project, rel: string, at: CallSite, name: string, target: CallTarget, gen: string[] = []): Callee | undefined {
   switch (target.kind) {
@@ -655,32 +691,22 @@ export function resolveCallee(p: Project, rel: string, at: CallSite, name: strin
     case "member":
       return pick(scopedLookup(p, name, target.cls), rel, gen);
     case "plain": {
-      // A file a package includes is inside that package, so the package and its importers apply to it too.
-      const pkg = at.pkg ?? p.includedIn.get(rel)?.pkg;
-      // a. The caller's own scope. A module-like scope is keyed by id; a class is searched along its bases.
-      const ownKey = at.scopeKey;
-      const own =
-        ownKey !== undefined && isHdlKey(ownKey) ? lookup(p, ownKey, name) : at.scope !== undefined ? chainLookup(p, at.scope, name) : [];
-      if (own.length > 0) return pick(own, rel, gen);
-      // b. The package the caller sits in, when it is not the caller's own scope.
-      if (pkg !== undefined && pkg !== at.scope) {
-        const inPkg = lookup(p, pkg, name);
-        if (inPkg.length > 0) return pick(inPkg, rel, gen);
+      // The enclosing scopes, innermost first. A file a package includes sits inside that package, so the package
+      // comes just outside the file's own scopes.
+      const steps: Array<{ scope: ScopeRef; file: string }> = (at.chain ?? []).map((scope) => ({ scope, file: rel }));
+      const inc = p.includedIn.get(rel);
+      if (inc) steps.push({ scope: { key: inc.pkg, kind: "package" }, file: inc.from });
+      for (const { scope, file } of steps) {
+        const step = scopeStep(p, rel, file, scope, name, gen);
+        if (step !== undefined) return step.callee;
       }
-      // c. `$unit` functions and DPI imports of this file. A function of this file beats an import of the same name.
+      // File level. `$unit` functions and DPI imports of this file come first: a function of this file beats an import of the same name.
       const unitFns = lookup(p, "", name);
       const here = unitFns.filter((r) => r.file === rel);
       if (here.length > 0) return pick(here, rel, gen);
-      // d. An explicitly imported name. It resolves to that package only, or to nothing, so later steps do not run.
-      const named = importersOf(p, rel)
-        .map((f) => p.namedImportsByFile.get(f)?.get(name))
-        .find((x): x is string => x !== undefined);
-      if (named !== undefined) return finish(narrow(lookup(p, named, name), gen), false);
-      // e. Wildcard-imported packages that define the name. Several matches are candidates.
-      const wildPkgs = [...new Set(importersOf(p, rel).flatMap((f) => p.wildImportsByFile.get(f) ?? []))];
-      const wildHits = wildPkgs.flatMap((wp) => lookup(p, wp, name));
-      if (wildHits.length > 0) return finish(narrow(wildHits, gen), false);
-      // f. `$unit` functions of other files.
+      const fileLevel = importStep(p, rel, "", name, gen);
+      if (fileLevel !== undefined) return fileLevel.callee;
+      // `$unit` functions of other files.
       if (unitFns.length > 0) return finish(narrow(unitFns, gen), false);
       // g. Any package's function of that name. A caller whose class extends a class outside the project skips this,
       // since the call may name something that class inherits.
