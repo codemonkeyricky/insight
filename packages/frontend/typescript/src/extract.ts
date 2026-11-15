@@ -145,6 +145,20 @@ function namedByParent(node: ts.ArrowFunction | ts.FunctionExpression, literals:
   return false;
 }
 
+/**
+ * A named function with no identifier binding of its own: a property or method of an object literal, or a method, accessor
+ * or property arrow of a class. A nested declaration or a function bound to a variable is reached by its own call or value
+ * edge, so it gets no closure edge from its creator. A constructor is reached by `new`.
+ */
+function isUnboundMember(node: ts.Node): boolean {
+  if (ts.isPropertyAssignment(node)) return ts.isObjectLiteralExpression(node.parent);
+  if (ts.isMethodDeclaration(node) || ts.isGetAccessorDeclaration(node) || ts.isSetAccessorDeclaration(node)) {
+    return ts.isObjectLiteralExpression(node.parent) || ts.isClassLike(node.parent);
+  }
+  if (ts.isPropertyDeclaration(node)) return ts.isClassLike(node.parent);
+  return false;
+}
+
 /** Decides whether a node becomes a structure node. Shared by the declaration pass and the emit pass. */
 function classify(node: ts.Node, sf: ts.SourceFile, literals: LiteralNames): Entity | undefined {
   // fnNode carries the async modifier; owner carries the export modifier (for a variable, its statement).
@@ -1376,10 +1390,11 @@ export function emitFile(project: Project, rel: string): IRBatch {
           span,
           provenance: PROV,
         });
-        // A lambda, or a named function made inside a function (a local arrow, a nested declaration, a property of a literal
-        // inside a function). `fn` is the file or its module entry at top level, so top-level declarations get no edge.
+        // A lambda, or a named member made inside a function (a property or method of a literal, a method of a local class).
+        // `fn` is the file or its module entry at top level, so top-level declarations get no edge. A nested declaration or a
+        // function bound to a variable is not a member, so it gets none: its own call or value edge reaches it.
         const madeInFunction = fn !== rel && fn !== moduleId;
-        if (decl.entity.anonymous || madeInFunction) {
+        if (decl.entity.anonymous || (madeInFunction && isUnboundMember(node))) {
           // The function is made here, so its creator reaches whatever it calls: a closure edge from the enclosing function.
           pushEdge({ from: fn, to: decl.id, facet: "calls", kind: "calls.reference", attrs: { how: "closure" }, span, provenance: PROV });
         }

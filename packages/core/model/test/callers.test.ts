@@ -340,4 +340,21 @@ describe("callerGraph: determinism", () => {
   });
 });
 
+describe("callerGraph: a nested function called directly", () => {
+  // outer calls its nested declaration visit directly, and visit calls itself. The frontend makes no closure edge
+  // for a nested declaration, so visit is not passed as a value anywhere.
+  const m = modelOf(["outer", "visit"], [call(fid("outer"), fid("visit"), 1), call(fid("visit"), fid("visit"), 5)]);
+
+  it("does not report a nested function that is only called as passed as a value", () => {
+    const g = callerGraph(scopeView(m, ""), fid("visit"));
+    expect(g.nodes.find((n) => n.id === fid("visit"))?.blind ?? []).not.toContain("value");
+    expect(g.stats.blind).toBe(0);
+  });
+
+  it("lists the nested function once in its creator's calls", () => {
+    const refs = refsOf(scopeView(m, ""), fid("outer"));
+    expect(refs.calls.filter((r) => r.id === fid("visit"))).toHaveLength(1);
+  });
+});
+
 type CallerGraphOut = ReturnType<typeof callerGraph>;
