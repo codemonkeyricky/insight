@@ -189,6 +189,49 @@ describe("dependencies of lookups that fail or cross files", () => {
     expect(bs.find((b) => b.file === "i.json")?.dependsOn ?? []).not.toContain("o.schema.json");
   });
 
+  it("does not fall back to all JSON files for schemastore URIs", async () => {
+    const ref = JSON.stringify({ $schema: SCHEMA, title: "R", properties: { x: { $ref: "https://json.schemastore.org/tsconfig.json" } } });
+    const inst = JSON.stringify({ $schema: "https://www.schemastore.org/package.json" });
+    const inst2 = JSON.stringify({ $schema: "https://json.schemastore.org/prettierrc.json" });
+    const bs = await runMem({ "o.schema.json": JSON.stringify({ $schema: SCHEMA, title: "O" }), "r.schema.json": ref, "i.json": inst, "j.json": inst2 });
+    for (const f of ["r.schema.json", "i.json", "j.json"]) expect(bs.find((b) => b.file === f)?.dependsOn ?? []).not.toContain("o.schema.json");
+  });
+
+  it("keeps the missing schema path as a dependency of a fixture instance (no finding emitted)", async () => {
+    const files = {
+      "s.schema.json": JSON.stringify({ $schema: SCHEMA, title: "S" }),
+      "nope.schema.json": "{ not json",
+      "a/fixtures/i.json": JSON.stringify({ $schema: "../../nope.schema.json" }),
+      "a/real.json": JSON.stringify({ $schema: "../nope.schema.json" }),
+    };
+    const bs = await runMem(files);
+    const fx = bs.find((b) => b.file === "a/fixtures/i.json");
+    expect(findings(fx)).toHaveLength(0);
+    expect(fx?.dependsOn).toEqual(["nope.schema.json"]);
+    expect(bs.find((b) => b.file === "a/real.json")?.dependsOn).toEqual(["nope.schema.json"]);
+  });
+
+  it("classifies a data file as a schema only when $schema's host is json-schema.org", async () => {
+    const bs = await runMem({ "d.json": JSON.stringify({ $schema: "https://example.com/json-schema/app.json", name: "x" }), "i.json": JSON.stringify({ $schema: "./d.json" }) });
+    expect(nodes(bs).some((n) => n.file === "d.json" || String(n.id).startsWith("d.json"))).toBe(false);
+  });
+
+  it("counts both branches of a ternary in a kind position as emits, and lens/SDK files only read", async () => {
+    const bs = await runMem(
+      {
+        "packages/x/kinds.json": JSON.stringify(["lock-acquire", "lock-release", "other"].map((n) => kindDecl(`sync.${n}`))),
+        "packages/frontend/cpp/e.ts": 'node({ kind: m === "lock" ? "sync.lock-acquire" : "sync.lock-release" });',
+        "packages/lens/foo/l.ts": 'node({ kind: "sync.other" });',
+        "packages/core/sdk/s.ts": 'emit({ kind: "sync.other" });',
+      },
+      ["packages/x/kinds.json"],
+    );
+    const uk = edges(bs).filter((e) => e.kind === "x-schema.uses-kind").map((e) => `${e.from}|${e.to.split(":").pop()}|${(e.attrs as { how: string }).how}`);
+    expect(uk.filter((u) => u.includes("cpp/e.ts")).map((u) => u.split("|")[2])).toEqual(["emit", "emit"]);
+    expect(uk.filter((u) => u.includes("lens") || u.includes("sdk")).every((u) => u.endsWith("|read"))).toBe(true);
+    expect(uk.some((u) => u.includes("lens"))).toBe(true);
+  });
+
   it("matches validated-by by filename with inferred confidence, by $schema with exact", async () => {
     const manifest = JSON.stringify({ $schema: SCHEMA, $id: "https://insight.dev/core/plugin-manifest.json", title: "M", type: "object" });
     const bs = await runMem({

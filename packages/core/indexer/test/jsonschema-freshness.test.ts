@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -13,6 +13,12 @@ const project = join(SCRATCH, "generic");
 const fixture = join(repoRoot, "packages", "frontend", "jsonschema", "test", "fixtures", "generic");
 
 const options = (full: boolean) => ({ projectPath: project, builtinRoot: repoRoot, userPluginDir: join(SCRATCH, "no-user-plugins"), full });
+
+/** Concatenated text of every shard in the scratch project's index. */
+const shardText = (): string => {
+  const dir = join(project, ".insight", "shards");
+  return readdirSync(dir).map((f) => readFileSync(join(dir, f), "utf8")).join("\n");
+};
 
 beforeAll(() => {
   rmSync(SCRATCH, { recursive: true, force: true });
@@ -55,14 +61,35 @@ describe("frontend-jsonschema freshness", () => {
     expect(after.extracted).toContainEqual({ frontend: "frontend-jsonschema", file: "data/alice.json" });
   }, 120_000);
 
-  it("re-extracts a kinds shard when a schema gains the $id its absolute attrs $ref named", async () => {
+  it("re-extracts a kinds shard when an existing schema file gains, in place, the $id its absolute attrs $ref named", async () => {
+    const attrs = join(project, "schemas", "later-attrs.schema.json");
+    const body = { $schema: "https://json-schema.org/draft/2020-12/schema", title: "LaterAttrs", type: "object" };
     mkdirSync(join(project, "kinds-ref"), { recursive: true });
     writeFileSync(join(project, "kinds-ref", "kinds.json"), JSON.stringify([{ kind: "sync.later", facet: "structure", on: "node", attrs: { $ref: "https://example.com/later-attrs.json" } }]));
+    writeFileSync(attrs, JSON.stringify(body));
     await runIndex(options(false));
     const quiet = await runIndex(options(false));
     expect(quiet.extracted.filter((e) => e.frontend === "frontend-jsonschema")).toEqual([]);
-    writeFileSync(join(project, "schemas", "later-attrs.schema.json"), JSON.stringify({ $schema: "https://json-schema.org/draft/2020-12/schema", $id: "https://example.com/later-attrs.json", title: "LaterAttrs", type: "object" }));
+    expect(shardText()).not.toContain('"x-schema.attrs"');
+    // Same file listing: only the schema's content changes.
+    writeFileSync(attrs, JSON.stringify({ ...body, $id: "https://example.com/later-attrs.json" }));
     const after = await runIndex(options(false));
     expect(after.extracted).toContainEqual({ frontend: "frontend-jsonschema", file: "kinds-ref/kinds.json" });
+    expect(shardText()).toContain('"x-schema.attrs"');
+  }, 120_000);
+
+  it("re-extracts instances (also under fixtures/) when a broken schema they named is fixed in place", async () => {
+    const broken = join(project, "schemas", "broken.schema.json");
+    writeFileSync(broken, "{ not json");
+    mkdirSync(join(project, "data", "fixtures"), { recursive: true });
+    writeFileSync(join(project, "data", "carol.json"), JSON.stringify({ $schema: "../schemas/broken.schema.json" }));
+    writeFileSync(join(project, "data", "fixtures", "dave.json"), JSON.stringify({ $schema: "../../schemas/broken.schema.json" }));
+    await runIndex(options(false));
+    const quiet = await runIndex(options(false));
+    expect(quiet.extracted.filter((e) => e.frontend === "frontend-jsonschema")).toEqual([]);
+    writeFileSync(broken, JSON.stringify({ $schema: "https://json-schema.org/draft/2020-12/schema", title: "Broken", type: "object" }));
+    const after = await runIndex(options(false));
+    expect(after.extracted).toContainEqual({ frontend: "frontend-jsonschema", file: "data/carol.json" });
+    expect(after.extracted).toContainEqual({ frontend: "frontend-jsonschema", file: "data/fixtures/dave.json" });
   }, 120_000);
 });

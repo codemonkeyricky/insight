@@ -39,12 +39,22 @@ const absoluteMiss = (ref: string): boolean => {
   if (!/^[a-z][a-z0-9+.-]*:/i.test(ref)) return false;
   try {
     const host = new URL(ref).hostname;
-    return !(host === "json-schema.org" || host.endsWith(".json-schema.org"));
+    return !(host === "json-schema.org" || host.endsWith(".json-schema.org") || host === "json.schemastore.org" || host === "www.schemastore.org");
   } catch {
     return true;
   }
 };
 const fixturePath = (file: string): boolean => /(^|\/)(fixtures|samples)\//.test(file);
+
+/** True when the URL's host is json-schema.org (or a subdomain). */
+function isJsonSchemaHost(url: string): boolean {
+  try {
+    const host = new URL(url).hostname;
+    return host === "json-schema.org" || host.endsWith(".json-schema.org");
+  } catch {
+    return false;
+  }
+}
 
 type DocClass = "schema" | "kinds" | "other";
 
@@ -55,7 +65,7 @@ function classifyJson(json: unknown): DocClass {
     return ok ? "kinds" : "other";
   }
   if (!isObj(json)) return "other";
-  if (typeof json.$schema === "string" && json.$schema.includes("json-schema")) return "schema";
+  if (typeof json.$schema === "string" && isJsonSchemaHost(json.$schema)) return "schema";
   for (const key of ["$defs", "definitions"]) {
     const v = json[key];
     if (isObj(v)) {
@@ -239,6 +249,8 @@ interface TsScan {
 const TS_RE = /\.(?:tsx?|js|mjs|cjs)$/;
 const TS_SKIP = /\/dist\/|\/node_modules\/|\/test\/|\.test\.|\/generated\//;
 const KIND_TOKEN = /["'`]((?:structure|packaging|flow|calls|concurrency|sync|effects|state|x-[a-z0-9-]+)\.[a-z0-9-]+(?:\.[a-z0-9-]+)*)["'`]/g;
+/** `kind: cond ? "a" : "b"` — both branches emit. */
+const TERNARY_EMIT = /kind\s*:[^;{}]*\?(?:[^;{}?]*:)?\s*$/;
 const EMIT_BEFORE = /kind\s*:\s*$/;
 /** A positional emit call on the same line, e.g. emitNode(call, container, "sync", "sync.condvar", ...). */
 const EMIT_CALL_BEFORE = /\bemit\w*\([^)]*$/;
@@ -277,6 +289,8 @@ async function scanTs(ctx: ExtractContext): Promise<TsScan> {
     };
     const seen = new Set<string>();
     const out: Hit[] = [];
+    // Lenses and the SDK consume IR; they never produce it.
+    const readOnly = f.startsWith("packages/lens/") || f.startsWith("packages/core/sdk/");
     for (const m of text.matchAll(KIND_TOKEN)) {
       const kind = m[1] ?? "";
       const idx = m.index ?? 0;
@@ -284,9 +298,11 @@ async function scanTs(ctx: ExtractContext): Promise<TsScan> {
       const lineStart = starts[line] as number;
       const linePrefix = text.slice(lineStart, idx);
       const how: "emit" | "read" =
-        EMIT_BEFORE.test(text.slice(Math.max(0, idx - 40), idx)) ||
+        !readOnly &&
+        (EMIT_BEFORE.test(text.slice(Math.max(0, idx - 40), idx)) ||
+          TERNARY_EMIT.test(linePrefix) ||
         EMIT_CALL_BEFORE.test(linePrefix) ||
-        (ANY_CALL_BEFORE.test(linePrefix) && !COMPARE_BEFORE.test(linePrefix) && !READ_CALL_BEFORE.test(linePrefix))
+        (ANY_CALL_BEFORE.test(linePrefix) && !COMPARE_BEFORE.test(linePrefix) && !READ_CALL_BEFORE.test(linePrefix)))
           ? "emit"
           : "read";
       const key = `${kind}|${how}`;
@@ -516,8 +532,9 @@ function buildInstance(doc: Doc, byId: Map<string, string>, schemaFiles: Set<str
     return { file, records, ...(fdeps.size > 0 ? { dependsOn: [...fdeps].sort() } : {}) };
   }
   if (target === undefined) {
-    const nd = dependOnAll ? allDocFiles.filter((f) => f !== file).sort() : [];
-    return { file, records, ...(nd.length > 0 ? { dependsOn: nd } : {}) };
+    const nd = new Set<string>(dependOnAll ? allDocFiles.filter((f) => f !== file) : []);
+    if (missing !== undefined) nd.add(missing);
+    return { file, records, ...(nd.size > 0 ? { dependsOn: [...nd].sort() } : {}) };
   }
   const line = via === "$schema" ? Math.max(0, lineOf(lines, /"\$schema"\s*:/)) : 0;
   records.push({
