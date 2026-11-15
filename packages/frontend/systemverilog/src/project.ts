@@ -21,6 +21,8 @@ export interface DeclRef {
   hdl: Hdl;
   file: string;
   id: NodeId;
+  /** True when the definition was found by scanning the text of a file the grammar could not parse. */
+  scanned?: true;
 }
 
 /** A function, task, constructor or DPI import defined in a project file. Its scope is the enclosing or qualifying class, package or module. */
@@ -417,7 +419,7 @@ function registerScanned(unit: Unit, candidates: ScanCandidate[], p: Project): v
     if (known.has(c.name)) continue;
     known.add(c.name);
     const id = unit.ids.take(declId(unit.rel, c.name));
-    const ref: DeclRef = { name: c.name, hdl: c.hdl, file: unit.rel, id };
+    const ref: DeclRef = { name: c.name, hdl: c.hdl, file: unit.rel, id, scanned: true };
     if (!p.decls.has(c.name)) p.decls.set(c.name, ref);
     p.declsByName.set(c.name, [...(p.declsByName.get(c.name) ?? []), ref]);
     unit.scanned.push({ name: c.name, hdl: c.hdl, line: c.line, length: c.length, id });

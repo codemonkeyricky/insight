@@ -698,3 +698,39 @@ describe("scope keys and lookup order", () => {
     expect(edge?.provenance?.confidence).toBe("exact");
   });
 });
+
+describe("confidence labels", () => {
+  const dir = join(fixturesDir, "confidence");
+  const run = async () => {
+    const records = allRecords(await extractDir(dir, ["clean.sv", "broken.sv", "unparsed_hdr.sv", "user.sv"]));
+    return { nodes: nodesOf(records), edges: edgesOf(records) };
+  };
+  const instantiation = (edges: IREdge[], from: string) => edges.find((e) => e.kind === "x-sv.instantiates" && e.from === from);
+
+  it("an instance of a module from a clean file is inferred when the instantiating file has a parse error", async () => {
+    const { edges } = await run();
+    const e = instantiation(edges, "broken.sv#broken_top");
+    expect(e?.to).toBe("clean.sv#clean_m");
+    expect(e?.provenance?.confidence).toBe("inferred");
+  });
+
+  it("an instance of a module from a clean file is exact when the instantiating file is clean", async () => {
+    const { edges } = await run();
+    const e = edges.find((x) => x.kind === "x-sv.instantiates" && x.from === "user.sv#user_m" && x.to === "clean.sv#clean_m");
+    expect(e?.provenance?.confidence).toBe("exact");
+  });
+
+  it("an instance of a module found only by text scan is heuristic", async () => {
+    const { edges } = await run();
+    const e = edges.find((x) => x.kind === "x-sv.instantiates" && x.to === "unparsed_hdr.sv#prim_alert_sender");
+    expect(e?.provenance?.confidence).toBe("heuristic");
+  });
+
+  it("an always_ff on a clock is an exact process whose clock is a heuristic", async () => {
+    const { nodes } = await run();
+    const proc = nodes.find((n) => n.attrs?.process === "always_ff");
+    expect(proc?.provenance?.confidence).toBe("exact");
+    expect(proc?.attrs?.clock).toBe("clk");
+    expect(proc?.attrs?.clockConfidence).toBe("heuristic");
+  });
+});

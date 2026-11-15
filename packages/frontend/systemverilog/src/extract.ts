@@ -522,10 +522,11 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
             hdl: "process",
             process: keyword,
             ...(list.length > 0 ? { sensitivity: list } : {}),
-            ...(clock !== undefined ? { clock } : {}),
+            // The clock is the first edge signal, which is a guess when the process has more than one edge.
+            ...(clock !== undefined ? { clock, clockConfidence: "heuristic" } : {}),
           },
           span: spanOf(rel, n),
-          provenance: clock !== undefined ? heuristic : prov,
+          provenance: prov,
         });
         visitChildren(n, { ...f, fn: id });
         break;
@@ -583,7 +584,8 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
             edge({ from, to: { unresolved: { scheme: "sv.module", text: type } }, facet: "structure", kind: "x-sv.instantiates", attrs, span, provenance: prov });
           } else if (rest.length === 0) {
             for (const d of defs) depend(d.file);
-            edge({ from, to: first, facet: "structure", kind: "x-sv.instantiates", attrs, span, provenance: { frontend: FRONTEND_ID, confidence: "exact" } });
+            // A target found by text scan is a heuristic match, whatever the file's own parse.
+            edge({ from, to: first, facet: "structure", kind: "x-sv.instantiates", attrs, span, provenance: defs[0]?.scanned ? heuristic : prov });
           } else {
             for (const d of defs) depend(d.file);
             const cands = [...defs.map((d) => d.id)].sort().slice(0, MAX_CANDIDATES) as [NodeId, ...NodeId[]];
@@ -608,7 +610,7 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
             kind: "packaging.import",
             attrs: { specifier: pkg },
             span: spanOf(rel, item),
-            provenance: isPkg ? { frontend: FRONTEND_ID, confidence: "exact" } : prov,
+            provenance: isPkg && decl.scanned ? heuristic : prov,
           });
         }
         break;
