@@ -54,6 +54,7 @@ function sample(): PipelineModel {
     host: H,
     driver: { id: `${H}/src/run.ts#runIndex`, name: "runIndex" },
     points,
+    sequences: [],
     columns: [[BAZEL, CPP, TS], [H, IR, SDK], [LA, LB]],
     components: [BAZEL, CPP, TS, H, IR, SDK, LA, LB].map(comp),
     edges: [
@@ -70,7 +71,7 @@ function sample(): PipelineModel {
   };
 }
 
-const EMPTY: PipelineModel = { scope: "packages/lens", points: [], columns: [], components: [], edges: [], omitted: 0, dropped: 0, reason: "no extension points in this scope" };
+const EMPTY: PipelineModel = { scope: "packages/lens", points: [], sequences: [], columns: [], components: [], edges: [], omitted: 0, dropped: 0, reason: "no extension points in this scope" };
 
 describe("pipeline titles and columns", () => {
   it("names the columns: points by label and count, the host by its package", () => {
