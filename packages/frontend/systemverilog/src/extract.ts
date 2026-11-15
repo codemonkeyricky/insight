@@ -309,6 +309,17 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
       return;
     }
     const primary = n.namedChildren.find((c) => c.type === "primary")?.text.trim();
+    // `pkg::C::m()` and `C#(T)::m()` in statement form parse with a class type and no primary. They are scoped calls, never plain ones.
+    const classType = n.namedChildren.find((c) => c.type === "class_type");
+    if (primary === undefined && classType !== undefined) {
+      const callee = `${n.text.slice(0, body.startIndex - n.startIndex).replace(/\s+/g, "")}${name}`;
+      // A parameterised class is not placed: its name alone does not say which specialisation holds the function.
+      const scope = classType.namedChildren.some((c) => c.type === "parameter_value_assignment")
+        ? undefined
+        : classType.namedChildren.filter((c) => c.type === "simple_identifier").at(-1)?.text;
+      emitCall(f, nameNode, callee, name, scope !== undefined ? { kind: "scoped", scope } : { kind: "none" });
+      return;
+    }
     if (primary === undefined) {
       emitCall(f, nameNode, name, name, { kind: "plain" });
       return;

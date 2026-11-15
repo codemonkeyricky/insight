@@ -928,3 +928,23 @@ describe("node id allocation", () => {
     }
   }, 60000);
 });
+
+describe("class-scoped calls in statement form", () => {
+  const dir = join(fixturesDir, "stmt_class_scope");
+  const calls = async () => edgesOf(allRecords(await extractDir(dir, ["env.sv", "p.sv", "t.sv"]))).filter((e) => e.kind === "calls.call");
+
+  it("a parameterised class call in a class that defines its own set() stays unresolved, with the qualified callee text", async () => {
+    const edge = (await calls()).find((e) => e.attrs?.callee === "uvm_config_db#(int)::set");
+    expect(edge?.to).toEqual({ unresolved: { scheme: "sv.call", text: "uvm_config_db#(int)::set" } });
+  });
+
+  it("the expression form of a parameterised class call is unresolved too, and a scoped call of an unknown class is scoped", async () => {
+    const list = await calls();
+    expect(list.find((e) => e.attrs?.callee === "A#(int)::m")?.to).toEqual({ unresolved: { scheme: "sv.call", text: "A#(int)::m" } });
+    expect(list.find((e) => e.attrs?.callee === "B::m")?.to).toEqual({ unresolved: { scheme: "sv.call", text: "B::m" } });
+  });
+
+  it("pkg::C::m() in statement form resolves to C's m in the package, not to a plain m", async () => {
+    expect((await calls()).find((e) => e.attrs?.callee === "p::C::m")?.to).toBe("p.sv#C.m");
+  });
+});
