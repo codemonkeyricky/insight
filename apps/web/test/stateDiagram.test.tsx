@@ -3,10 +3,10 @@ import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { ElkNode } from "elkjs/lib/elk-api";
-import { Legend, MIN_SCALE, MachineSvg, arcName, arcTitle, fitScale, type MachinePick } from "../src/components/StateDiagram";
+import { startLayout, Legend, MIN_SCALE, MachineSvg, arcName, arcTitle, fitScale, type MachinePick } from "../src/components/StateDiagram";
 import { MachineList, SiteList } from "../src/components/MachineSection";
 import { ViewBlock } from "../src/pages/LensPage";
-import { layoutMachine, withTimeout, type Solve } from "../src/states/layout";
+import { abortError, layoutMachine, withTimeout, type Solve } from "../src/states/layout";
 import { machinesOf, readMachineParam, selectMachine, withMachineParam } from "../src/states/machineParam";
 import type { TableView } from "../src/api";
 import { hubConnectionMachine, twoStateMachine } from "./fixtures/hubConnectionMachine";
@@ -242,5 +242,26 @@ describe("withTimeout (risk 14)", () => {
   it("rejects when the solver errors, and passes a good result through", async () => {
     await expect(layoutMachine(hubConnectionMachine, withTimeout(() => Promise.reject(new Error("worker died"))))).rejects.toThrow("worker died");
     await expect(layoutMachine(hubConnectionMachine, withTimeout(solve))).resolves.toBeTruthy();
+  });
+});
+
+describe("startLayout (d: aborted jobs are not errors)", () => {
+  it("ignores an AbortError: no error message, no result", async () => {
+    const cb = { done: vi.fn(), fail: vi.fn() };
+    startLayout(hubConnectionMachine, () => Promise.reject(abortError()), cb);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(cb.fail).not.toHaveBeenCalled();
+    expect(cb.done).not.toHaveBeenCalled();
+  });
+
+  it("still reports a real failure, and cancelling aborts the solver's signal", async () => {
+    const cb = { done: vi.fn(), fail: vi.fn() };
+    startLayout(hubConnectionMachine, () => Promise.reject(new Error("worker died")), cb);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(cb.fail).toHaveBeenCalledWith("worker died");
+    let sig: AbortSignal | undefined;
+    const cancel = startLayout(hubConnectionMachine, (g, s) => ((sig = s), new Promise<ElkNode>(() => undefined)), cb);
+    cancel();
+    expect(sig?.aborted).toBe(true);
   });
 });

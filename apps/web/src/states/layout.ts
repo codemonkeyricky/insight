@@ -3,7 +3,11 @@
 import type { ElkNode, ElkExtendedEdge, ElkEdgeSection, ElkLabel } from "elkjs/lib/elk-api";
 import type { StateMachineView } from "../api";
 
-export type Solve = (graph: ElkNode) => Promise<ElkNode>;
+export type Solve = (graph: ElkNode, signal?: AbortSignal) => Promise<ElkNode>;
+
+/** The rejection of a job whose signal aborted. */
+export const abortError = (): Error => Object.assign(new Error("layout aborted"), { name: "AbortError" });
+export const isAbort = (e: unknown): boolean => e instanceof Error && e.name === "AbortError";
 
 export interface LaidState {
   id: string;
@@ -224,9 +228,9 @@ export function polylineHitsRect(pts: Pt[], r: Rect, pad = 4): boolean {
 }
 
 /** Lays the machine out. Deterministic for a given view and solver. */
-export async function layoutMachine(view: StateMachineView, solve: Solve): Promise<LaidMachine> {
+export async function layoutMachine(view: StateMachineView, solve: Solve, signal?: AbortSignal): Promise<LaidMachine> {
   const { graph, loops } = buildGraph(view);
-  const solved = await solve(graph);
+  const solved = await solve(graph, signal);
   const nodeById = new Map((solved.children ?? []).map((n) => [n.id, n]));
   const outgoing = new Set(view.transitions.filter((t) => t.from !== t.to).map((t) => t.from));
   // An "any state" arc `* -> X` lets every state except X leave.
@@ -374,7 +378,7 @@ export const LAYOUT_TIMEOUT_MS = 15_000;
 
 /** `solve`, rejecting when it throws, rejects, or does not settle within `ms`. */
 export function withTimeout(solve: Solve, ms = LAYOUT_TIMEOUT_MS): Solve {
-  return (graph) =>
+  return (graph, signal) =>
     new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error(`layout timed out after ${Math.round(ms / 1000)} s`)), ms);
       const done = <T,>(f: (v: T) => void) => (v: T) => {
@@ -382,7 +386,7 @@ export function withTimeout(solve: Solve, ms = LAYOUT_TIMEOUT_MS): Solve {
         f(v);
       };
       try {
-        solve(graph).then(done(resolve), done(reject));
+        solve(graph, signal).then(done(resolve), done(reject));
       } catch (e) {
         done(reject)(e);
       }

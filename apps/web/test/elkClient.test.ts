@@ -88,4 +88,56 @@ describe("createWorkerSolver", () => {
     void solve(g);
     expect(workers).toHaveLength(2);
   });
+
+  it("(a) a timeout of A resubmits queued B to a fresh worker, which resolves", async () => {
+    vi.useFakeTimers();
+    const { workers, solve } = setup(1000);
+    const pa = solve(g);
+    const pb = solve({ id: "b" });
+    const ea = expect(pa).rejects.toThrow(/timed out/);
+    await vi.advanceTimersByTimeAsync(1001);
+    await ea;
+    expect(workers[0]!.terminated).toBe(true);
+    expect(workers).toHaveLength(2);
+    workers[1]!.answer({ id: "b", width: 3 });
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pb).resolves.toMatchObject({ width: 3 });
+  });
+
+  it("B's timeout starts when it is sent, not when queued", async () => {
+    vi.useFakeTimers();
+    const { workers, solve } = setup(1000);
+    const pa = solve(g);
+    const pb = solve({ id: "b" });
+    await vi.advanceTimersByTimeAsync(900);
+    workers[0]!.answer({ id: "root", width: 1 });
+    await vi.advanceTimersByTimeAsync(1);
+    await pa;
+    await vi.advanceTimersByTimeAsync(900);
+    workers[0]!.answer({ id: "b", width: 2 });
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pb).resolves.toMatchObject({ width: 2 });
+  });
+
+  it("(b) aborting a queued job removes it and it never runs", async () => {
+    const { workers, solve } = setup();
+    const ctl = new AbortController();
+    const pa = solve(g);
+    const pb = solve({ id: "b" }, ctl.signal);
+    ctl.abort();
+    await expect(pb).rejects.toMatchObject({ name: "AbortError" });
+    workers[0]!.answer({ id: "root", width: 1 });
+    await pa;
+    expect(workers).toHaveLength(1);
+    expect(workers[0]!.posted.filter((m) => (m as { cmd?: string }).cmd === "layout")).toHaveLength(1);
+  });
+
+  it("(c) aborting the only running job terminates the worker", async () => {
+    const { workers, solve } = setup();
+    const ctl = new AbortController();
+    const p = solve(g, ctl.signal);
+    ctl.abort();
+    await expect(p).rejects.toMatchObject({ name: "AbortError" });
+    expect(workers[0]!.terminated).toBe(true);
+  });
 });
