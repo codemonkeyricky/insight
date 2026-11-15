@@ -1161,6 +1161,52 @@ button.add-submit:disabled { background: var(--faint); color: var(--graphite); b
 .sysv-verb.v-writes { color: var(--accent-text); font-weight: 600; }
 .sysv-verb.v-produces { color: var(--accent-text); font-weight: 600; }
 .sysv-open { padding: 4px 14px; }
+/* Grounded frames: process > thread > coroutine, the in-process strips, the kernel band and its chips. */
+.sysv-frame { cursor: pointer; outline: none; }
+.sysv-frame-body { fill: var(--sheet); stroke: var(--hair); stroke-width: 1; }
+.sysv-frame.process > .sysv-frame-body { fill: var(--box); }
+.sysv-frame.coroutine > .sysv-frame-body { stroke-dasharray: 4 4; }
+.sysv-frame.unresolved > .sysv-frame-body { stroke-dasharray: 5 4; fill: transparent; }
+.sysv-frame.unresolved > .sysv-frame-hdr { fill: transparent; stroke-dasharray: 5 4; }
+.sysv-frame.unresolved .sysv-frame-title, .sysv-frame-note { fill: var(--muted); }
+.sysv-frame-note { font: italic 13px var(--font-ui); pointer-events: none; }
+.sysv-frame-hdr { fill: var(--faint); stroke: var(--hair); stroke-width: 1; }
+.sysv-frame.process > .sysv-frame-hdr { fill: var(--chip-solid); }
+.sysv-frame-title { fill: var(--fg); font: 600 15px var(--font-ui); pointer-events: none; }
+.sysv-frame-sub { fill: var(--muted); font: 13px var(--font-ui); pointer-events: none; }
+.sysv-frame:hover .sysv-frame-hdr, .sysv-frame:focus-visible .sysv-frame-hdr, .sysv-frame.picked .sysv-frame-hdr { stroke: var(--accent); stroke-width: 2; }
+.sysv-frame.dim { opacity: 0.35; }
+.sysv-strip rect { fill: var(--faint); stroke: var(--hair); stroke-width: 1; }
+.sysv-strip text { fill: var(--muted); font: 600 12px var(--font-ui); text-transform: uppercase; pointer-events: none; }
+.sysv-band rect { fill: var(--faint); stroke: var(--accent); stroke-width: 1; stroke-dasharray: 2 4; opacity: 0.9; }
+.sysv-band text { fill: var(--accent-text); font: 600 13px var(--font-ui); pointer-events: none; }
+.sysv-node.chip .sysv-card { fill: var(--chip-solid); }
+.sysv-chipname { fill: var(--fg); font: 13px var(--font-code); pointer-events: none; }
+.sysv-node.os .sysv-card { fill: var(--box); }
+.sysv-node.os .sysv-tab { fill: var(--graphite); }
+.sysv-node.resource .sysv-tab { fill: var(--thread); }
+.sysv-glyph { fill: none; stroke: var(--fg); stroke-linecap: round; pointer-events: none; }
+.sysv-glyph-text { fill: var(--fg); font: 14px var(--font-ui); pointer-events: none; }
+.sysv-await rect { fill: var(--faint); }
+.sysv-await text { fill: var(--fg); font: 11px var(--font-code); pointer-events: none; }
+.sysv-edge.band-in .sysv-line, .sysv-edge.band-out .sysv-line { stroke-width: 1.6; }
+/* The segment from a slice to its frame's port: faint until its edge is hovered or selected. */
+.sysv-edge.bundled .sysv-line { stroke-width: 1.2; opacity: 0.28; }
+.sysv-edge.bundled.lit .sysv-line, .sysv-edge.bundled.picked .sysv-line { opacity: 1; }
+.sysv-trunk .sysv-line { fill: none; stroke: var(--muted); stroke-width: 2; }
+.sysv-trunk.v-writes .sysv-line { stroke: var(--accent); }
+.sysv-trunk.lit .sysv-line { stroke: var(--accent); stroke-width: 2.6; }
+.sysv-trunk.dim { opacity: 0.15; }
+.sysv-port { fill: var(--sheet); stroke: var(--muted); stroke-width: 2; pointer-events: none; }
+.sysv-trunk.lit .sysv-port, .sysv-trunk.v-writes .sysv-port { stroke: var(--accent); }
+.sysv-trunk .sysv-pill rect { fill: var(--chip-solid); stroke: var(--hair); stroke-width: 1; }
+.sysv-trunk .sysv-pill text { fill: var(--fg); font: 600 15px var(--font-ui); pointer-events: none; }
+.sysv-legend .lv { display: inline-block; width: 10px; height: 10px; vertical-align: middle; margin-right: 6px; border: 1px solid var(--muted); }
+.sysv-legend .lv.syscall { background: var(--muted); }
+.sysv-legend .lv.unknown { border-style: dotted; background: transparent; }
+.sysv-evidence { width: 100%; border-collapse: collapse; margin: 6px 0; }
+.sysv-evidence th, .sysv-evidence td { text-align: left; padding: 2px 6px 2px 0; vertical-align: top; }
+.sysv-evidence th { color: var(--muted); font-weight: 600; }
 .sysv-legend { position: absolute; left: 10px; bottom: 8px; list-style: none; margin: 0; padding: 4px 10px; display: flex; flex-wrap: wrap; gap: 4px 14px; border-radius: 8px; background: var(--chip-solid); box-shadow: 0 0 0 0.5px var(--hair); pointer-events: none; }
 .sysv-legend .sw { display: inline-block; width: 26px; height: 0; border-top: 2px solid var(--muted); vertical-align: middle; margin-right: 6px; }
 .sysv-legend .sw.w { border-top-color: var(--accent); }
@@ -1204,3 +1250,56 @@ a.auth-chip { text-decoration: none; }
 .repo-list a:hover { border-color: var(--accent); }
 .repo-name { min-width: 0; overflow-wrap: anywhere; }
 .repo-lock { color: var(--muted); flex: none; }
+
+/* State diagram (states lens): one machine drawn as SVG, in the app tokens so both themes read. */
+.state-diagram { display: grid; gap: 8px; min-width: 0; }
+.state-diagram .sm-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; }
+.state-diagram .sm-tool { font: inherit; font-size: var(--t-sm); padding: 2px 10px; border: 1px solid var(--hair); border-radius: var(--r-pill); background: var(--sheet); color: var(--ink); cursor: pointer; }
+.state-diagram .sm-tool:disabled { opacity: .45; cursor: default; }
+.state-diagram .sm-wrap { width: 100%; margin: 0 auto; background: var(--sheet); border: 1px solid var(--hair); border-radius: var(--r-md); overflow: auto; touch-action: pan-y; cursor: grab; }
+.state-diagram .sm-wrap > .sm-svg { margin: 0 auto; }
+.state-diagram .sm-svg { display: block; width: 100%; height: auto; max-height: 82vh; font-family: var(--font-ui); user-select: none; }
+.state-diagram .sm-box { fill: var(--box); stroke: color-mix(in srgb, var(--ink) 45%, transparent); stroke-width: 1.5; }
+.state-diagram .sm-box--inner { fill: none; }
+.state-diagram .sm-name { fill: var(--ink); font-size: 13px; font-weight: 500; pointer-events: none; }
+.state-diagram .sm-start { fill: var(--ink); }
+.state-diagram .sm-state--any .sm-box { fill: none; stroke-dasharray: 5 4; stroke: var(--graphite); }
+.state-diagram .sm-state--any .sm-name { fill: var(--graphite); font-weight: 400; }
+.state-diagram .sm-state--unentered .sm-box { fill: none; stroke: var(--graphite); stroke-width: 1; stroke-dasharray: 3 3; }
+.state-diagram .sm-state--unentered .sm-name { fill: var(--graphite); }
+.state-diagram .sm-state { cursor: pointer; outline: none; }
+.state-diagram .sm-state:hover .sm-box, .state-diagram .sm-state:focus-visible .sm-box, .state-diagram .sm-state--hot .sm-box { stroke: var(--accent); stroke-width: 2; }
+.state-diagram .sm-state:focus-visible .sm-start, .state-diagram .sm-state--hot .sm-start { fill: var(--accent); }
+.state-diagram .sm-arc { cursor: pointer; outline: none; color: var(--graphite); }
+.state-diagram .sm-hit { fill: none; stroke: transparent; stroke-width: 14; }
+.state-diagram .sm-line { fill: none; stroke: currentColor; stroke-width: 1.5; }
+.state-diagram .sm-head { fill: currentColor; stroke: none; }
+.state-diagram .sm-arc--inferred .sm-line { stroke-dasharray: 6 4; }
+.state-diagram .sm-arc--heuristic .sm-line { stroke-dasharray: 1.5 4; stroke-linecap: round; stroke-width: 2; }
+.state-diagram .sm-label rect { fill: var(--sheet); stroke: var(--hair); stroke-width: 1; }
+.state-diagram .sm-label text { fill: var(--ink); font-size: 12px; pointer-events: none; }
+.state-diagram .sm-svg--hot .sm-arc:not(.sm-arc--hot) { opacity: .28; }
+.state-diagram .sm-arc--hot, .state-diagram .sm-arc--selected, .state-diagram .sm-arc:focus-visible { color: var(--accent); }
+.state-diagram .sm-arc--hot .sm-line, .state-diagram .sm-arc--selected .sm-line, .state-diagram .sm-arc:focus-visible .sm-line { stroke-width: 2.25; }
+.state-diagram .sm-arc--hot .sm-label rect, .state-diagram .sm-arc--selected .sm-label rect { stroke: var(--accent); }
+.state-diagram .sm-legend { list-style: none; display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0; padding: 0; font-size: var(--t-xs); color: var(--muted); }
+.state-diagram .sm-legend li { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; }
+.state-diagram .sm-legend li svg, .state-diagram .sm-legend li .sm-swatch { flex: none; }
+.state-diagram .sm-key { stroke: var(--graphite); stroke-width: 1.5; }
+.state-diagram .sm-key--inferred { stroke-dasharray: 6 4; }
+.state-diagram .sm-key--heuristic { stroke-dasharray: 1.5 4; stroke-linecap: round; stroke-width: 2; }
+.state-diagram .sm-swatch { display: inline-block; width: 22px; height: 13px; border-radius: 4px; border: 1px solid var(--graphite); }
+.state-diagram .sm-swatch--unentered { border-style: dashed; border-width: 1px; opacity: .8; }
+.state-diagram .sm-swatch--terminal { box-shadow: inset 0 0 0 2px var(--sheet), inset 0 0 0 3px var(--graphite); }
+.sm-machines { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
+/* The list sits beside the diagram when there is room, above it when the pane is narrow. */
+.sm-machines > .sm-list { flex: 1 1 150px; max-width: 220px; min-width: 0; }
+.sm-machines > div:empty { display: none; }
+.sm-machines > .state-diagram { flex: 999 1 360px; min-width: 0; }
+.sm-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.sm-list button { display: grid; gap: 1px; width: 100%; text-align: left; font: inherit; padding: 7px 10px; border: 1px solid var(--hair); border-radius: var(--r-md); background: var(--sheet); color: var(--ink); cursor: pointer; }
+.sm-list button[aria-current="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.sm-list .sm-holder { font-weight: 600; overflow-wrap: anywhere; }
+.sm-sites { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.sm-sites li { padding: 6px 8px; border: 1px solid var(--hair); border-radius: var(--r-sm); background: var(--sheet); }
+@media (max-width: 700px) { .sm-machines > .sm-list { max-width: none; } }

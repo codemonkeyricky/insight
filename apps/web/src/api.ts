@@ -169,6 +169,8 @@ export interface TableView {
   title: string;
   columns: string[];
   rows: (string | number | boolean | null)[][];
+  /** One source range per row, or null for a row with none. */
+  spans?: (Span | null)[];
 }
 
 export interface TreeNode {
@@ -187,7 +189,34 @@ export interface TreeView {
   root: TreeNode;
 }
 
-export type LensView = GraphView | TableView | TreeView;
+export interface StateMachineState {
+  id: string;
+  label: string;
+  kind: "initial" | "any" | "state" | "unentered";
+  span?: Span;
+}
+
+export interface StateMachineTransition {
+  id: string;
+  from: string;
+  to: string;
+  label?: string;
+  confidence: "exact" | "inferred" | "heuristic";
+  sites: { span?: Span; fn?: string; guard?: string; confidence?: "exact" | "inferred" | "heuristic" }[];
+}
+
+/** A finite state holder drawn as a state diagram: states are its values, transitions are its writes. */
+export interface StateMachineView {
+  type: "state-machine";
+  id: string;
+  title: string;
+  holder: { id: string; name: string; file?: string; domainKind: "enum" | "union" | "open"; span?: Span };
+  states: StateMachineState[];
+  transitions: StateMachineTransition[];
+  notes?: string[];
+}
+
+export type LensView = GraphView | TableView | TreeView | StateMachineView;
 
 export interface LensRecord {
   id: string;

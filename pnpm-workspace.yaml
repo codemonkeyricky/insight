@@ -9,6 +9,7 @@ minimumReleaseAgeExclude:
 allowBuilds:
   tree-sitter-c: false
   tree-sitter-cpp: false
+  tree-sitter-systemverilog: false
 # Transitive d3 packages whose latest releases are less than two weeks old. Pinned to the
 # last releases before that window; drop these once the d3 dependency tree settles.
 overrides:

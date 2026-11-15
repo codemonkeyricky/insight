@@ -4,13 +4,13 @@
   "title": "ConcurrencyFacet",
   "description": "Things that run alongside other things.",
   "$defs": {
-    "ConcurrencySpawnThread": { "type": "object", "properties": { "target": { "type": "string" } } },
-    "ConcurrencySpawnProcess": { "type": "object", "properties": { "target": { "type": "string" } } },
+    "ConcurrencySpawnThread": { "type": "object", "properties": { "target": { "type": "string" }, "api": { "type": "string" } } },
+    "ConcurrencySpawnProcess": { "type": "object", "properties": { "target": { "type": "string" }, "api": { "type": "string" } } },
     "ConcurrencyCoroutine": { "type": "object", "properties": { "name": { "type": "string" } } },
     "ConcurrencyAsyncTask": { "type": "object", "properties": { "name": { "type": "string" } } },
     "ConcurrencyAwait": { "type": "object" },
-    "ConcurrencyChannelSend": { "type": "object", "properties": { "channel": { "type": "string" } } },
-    "ConcurrencyChannelRecv": { "type": "object", "properties": { "channel": { "type": "string" } } },
+    "ConcurrencyChannelSend": { "type": "object", "required": ["channel"], "properties": { "channel": { "type": "string", "minLength": 1, "description": "queue or channel identity: literal name, \"Class::member\", or \"<dynamic>\"" }, "api": { "type": "string" }, "guardedBy": { "type": "string", "description": "lock name, for a queue inferred to be guarded by that lock" } } },
+    "ConcurrencyChannelRecv": { "type": "object", "required": ["channel"], "properties": { "channel": { "type": "string", "minLength": 1, "description": "queue or channel identity: literal name, \"Class::member\", or \"<dynamic>\"" }, "api": { "type": "string" }, "guardedBy": { "type": "string", "description": "lock name, for a queue inferred to be guarded by that lock" } } },
     "ConcurrencySpawns": { "type": "object", "properties": { "how": { "enum": ["thread", "process", "async"] } } },
     "ConcurrencyDispatches": { "type": "object", "properties": { "how": { "enum": ["await", "start", "callback", "timer", "microtask", "message"] } } }
   }

@@ -23,8 +23,8 @@ function findSource(dir: string, depth: number): string | undefined {
 
 export const frontend: Frontend = {
   id: FRONTEND_ID,
-  version: "0.2.1",
-  provides: ["structure", "packaging", "flow", "calls", "effects", "concurrency"],
+  version: "0.2.3",
+  provides: ["structure", "packaging", "flow", "calls", "effects", "concurrency", "sync", "state"],
 
   async detect(root: ProjectRoot) {
     for (const name of ["tsconfig.json", "jsconfig.json", "package.json"]) {

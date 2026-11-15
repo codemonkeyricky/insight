@@ -13,10 +13,17 @@ const tabs = (tab: string, noServer: boolean, content: Parameters<typeof layerLi
   layerLinks({ id: "p1", tab, scope: "src", content, noServer, lenses });
 
 describe("the tab list", () => {
-  it("is Overview, Flow, Arch, then one tab per lens, in the order given", () => {
+  it("is Overview, Flow, System, Arch, then one tab per lens, in the order given", () => {
     const links = tabs("overview", true, "flow");
-    expect(links.map((l) => l.title)).toEqual(["Overview", "Flow", "Arch", "Dependencies", "Lock order"]);
-    expect(links.map((l) => l.group)).toEqual(["page", "page", "page", "lens", "lens"]);
+    expect(links.map((l) => l.title)).toEqual(["Overview", "Flow", "System", "Arch", "Dependencies", "Lock order"]);
+    expect(links.map((l) => l.group)).toEqual(["page", "page", "page", "page", "lens", "lens"]);
+  });
+
+  it("marks System current on the system content and links it to the view, keeping the scope", () => {
+    const links = layerLinks({ id: "p1", tab: "system", scope: "src", content: "system", noServer: true, lenses });
+    const system = links.find((l) => l.id === "system");
+    expect(system).toMatchObject({ current: true, href: "#/projects/p1/view/system?scope=src" });
+    expect(links.find((l) => l.id === "arch")?.current).toBe(false);
   });
 
   it("has no Source or Findings tab, in any build", () => {
@@ -31,6 +38,7 @@ describe("the tab list", () => {
     expect(tabs("overview", false, "flow").map((l) => l.title)).toEqual([
       "Overview",
       "Flow",
+      "System",
       "Arch",
       "Compare",
       "Triage",

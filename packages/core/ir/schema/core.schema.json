@@ -44,11 +44,11 @@
   "$defs": {
     "FacetId": {
       "type": "string",
-      "pattern": "^(structure|packaging|flow|calls|concurrency|sync|effects|x-[a-z0-9-]+)$"
+      "pattern": "^(structure|packaging|flow|calls|concurrency|sync|effects|state|x-[a-z0-9-]+)$"
     },
     "KindName": {
       "type": "string",
-      "pattern": "^(structure|packaging|flow|calls|concurrency|sync|effects|x-[a-z0-9-]+)\\.[a-z0-9][a-z0-9-]*(\\.[a-z0-9][a-z0-9-]*)*$"
+      "pattern": "^(structure|packaging|flow|calls|concurrency|sync|effects|state|x-[a-z0-9-]+)\\.[a-z0-9][a-z0-9-]*(\\.[a-z0-9][a-z0-9-]*)*$"
     },
     "NodeId": {
       "type": "string",

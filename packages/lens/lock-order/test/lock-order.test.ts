@@ -75,6 +75,22 @@ describe("lockOrderEdges", () => {
   });
 });
 
+describe("shared_mutex guards", () => {
+  it("records no rw -> rw self edge for a shared guard held while B is taken, since the guard is one rwlock acquire", () => {
+    const file = "src/cache.cc";
+    const view = fx.view({
+      nodes: [
+        fx.node(`${file}#refresh`, "structure", "structure.function", { parent: file, attrs: { name: "refresh" } }),
+        fx.node(`${file}@rw`, "sync", "sync.rwlock-acquire", { parent: `${file}#refresh`, attrs: { lock: "Cache::rw_", mode: "shared", api: "std::shared_lock" }, span: at(file, 1) }),
+        fx.node(`${file}@b`, "sync", "sync.lock-acquire", { parent: `${file}#refresh`, attrs: { lock: "Cache::b_", api: "std::lock_guard" }, span: at(file, 2) }),
+      ],
+    });
+    const pairs = lockOrderEdges(view).edges.map((e) => `${e.from}>${e.to}`);
+    expect(pairs).toEqual(["Cache::rw_>Cache::b_"]);
+    expect(pairs).not.toContain("Cache::rw_>Cache::rw_");
+  });
+});
+
 describe("lensLockOrder", () => {
   it("reports an opposite-order pair as an error with both observing functions", async () => {
     const result = await lensLockOrder.run(fixture(), ctx());

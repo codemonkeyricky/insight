@@ -25,10 +25,20 @@ import type { TitleFacts } from "./sheet/TitleBlock";
 import { shortCommit } from "./sheet/TitleBlock";
 import { ArchTab } from "./views/ArchTab";
 import { FlowView } from "./views/FlowView";
+import { SystemView } from "./views/SystemView";
 import { ZoomStore } from "../zoom/scene";
 
 /** Tabs that cover the whole project. The explorer scope does not narrow them. */
 const PROJECT_WIDE = new Set(["overview", "compare", "review"]);
+
+/** The System tab. It asks the workspace to collapse the code pane while it is shown and no code is open, and restores it on leaving. */
+function SystemTab({ id, scope, onSystemActive }: { id: string; scope: string; onSystemActive: (on: boolean) => void }) {
+  useEffect(() => {
+    onSystemActive(true);
+    return () => onSystemActive(false);
+  }, [onSystemActive]);
+  return <SystemView id={id} scope={scope} />;
+}
 
 /** The default widths of the file tree and the code pane, in px, until the reader resizes them. */
 const TREE_DEFAULT = 280;
@@ -236,11 +246,11 @@ export function Workspace({ id, tab, scope, line, fn, trace, roots = true, base,
   const explorerTab = content === "flow" || (PROJECT_WIDE.has(tab) && tab !== "arch") ? "flow" : tab;
   // Views remount when the snapshot, view or scope changes, so no state from the last one carries over. The flow map
   // follows the scope and function in place, so a scope change animates the camera rather than remounting the map.
-  const viewKey = `${overview.snapshot?.id ?? "none"}|${content}|${content === "flow" || tab === "arch" ? "" : scope}|${base ?? ""}|${head ?? ""}|${full}`;
+  const viewKey = `${overview.snapshot?.id ?? "none"}|${content}|${content === "flow" || tab === "arch" || tab === "system" ? "" : scope}|${base ?? ""}|${head ?? ""}|${full}`;
 
   const parts = scope ? scope.split("/") : [];
   // A crumb keeps the tab the reader is on (Arch, a lens) and otherwise goes to Flow, so a folder crumb always has a view.
-  const crumbTab = content === "flow" ? "flow" : content === "arch" || content === "lens" ? tab : "flow";
+  const crumbTab = content === "flow" ? "flow" : content === "system" || content === "arch" || content === "lens" ? tab : "flow";
   const crumbs: Crumb[] = [
     { label: p.name, href: hrefView(id, "overview"), current: parts.length === 0 },
     ...parts.map((seg, i): Crumb => {
@@ -296,6 +306,8 @@ export function Workspace({ id, tab, scope, line, fn, trace, roots = true, base,
     switch (content) {
       case "overview":
         return <ProjectOverview id={id} />;
+      case "system":
+        return <SystemTab id={id} scope={scope} onSystemActive={onSystemActive} />;
       case "arch":
         return <ArchTab id={id} scope={scope} onSystemActive={onSystemActive} />;
       case "compare":
@@ -377,7 +389,7 @@ export function Workspace({ id, tab, scope, line, fn, trace, roots = true, base,
                   Lenses unavailable
                 </p>
               )}
-              {tab === "arch" ? null : PROJECT_WIDE.has(tab) ? (
+              {tab === "arch" || tab === "system" ? null : PROJECT_WIDE.has(tab) ? (
                 <p className="muted small scope-note">
                   This page covers the whole project, so the scope does not narrow it. Pick a file in the tree to see its flow and code.
                 </p>

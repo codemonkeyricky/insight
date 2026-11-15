@@ -224,6 +224,8 @@ export interface ExecResourceSite {
   file: string;
   /** 1-based line. 0 when the node has no span. */
   line: number;
+  /** The API call that made the site (the node's `api` attribute), when it has one. */
+  api?: string;
 }
 
 /** Counts over the listed model. */
@@ -306,7 +308,6 @@ interface Fn {
   name: string;
   file: string | undefined;
   line: number;
-  inScope: boolean;
   noise: boolean;
   anonymous: boolean;
   parent: string | undefined;
@@ -421,9 +422,93 @@ function isProgramTarget(attrs: IRNode["attrs"], targetKind: string): boolean {
   return targetKind === "add_executable" || targetKind.endsWith("_binary");
 }
 
-export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], scope: string, opts: ExecModelOptions = {}): ExecModel {
-  const max = opts.maxFunctions ?? MAX_EXEC_FUNCTIONS;
+/** A plan's body, which no scope changes: the functions the thread reaches, and its coroutines. */
+interface PlanBody {
+  reach: Set<string>;
+  plain: Set<string>;
+  coroutines: ExecCoroutine[];
+}
+
+/** One edge in content order, with its folded source and targets. */
+interface Keyed {
+  e: IREdge;
+  from: string;
+  ids: string[];
+  candidates: boolean;
+}
+
+/** A program of the project. A build target is listed only in a scope that holds one of its files; an entry always. */
+interface ProgramRecord {
+  prog: ExecProgram;
+  target: boolean;
+}
+
+/** A lock or channel site whose function is known. The scope decides whether the function is listed. */
+interface SiteRecord {
+  id: string;
+  kind: ExecResource["kind"];
+  name: string;
+  fn: string;
+  op: ExecResourceSite["op"];
+  file: string;
+  line: number;
+  api?: string;
+}
+
+/**
+ * The project-wide part of an execution model: adjacency, programs and entries, thread plans and coroutines. None of it
+ * depends on the scope, so `execPlans` computes it once per IR. `execModel` reads it for each scope.
+ */
+export interface ExecPlans {
+  readonly fold: boolean;
+  readonly fns: ReadonlyMap<string, Fn>;
+  readonly fileOf: (id: string) => string | undefined;
+  readonly noiseId: (id: string) => boolean;
+  readonly foldId: (id: string) => string;
+  readonly keyed: readonly Keyed[];
+  readonly dispatchSites: ReadonlyArray<Dispatch & { from: string }>;
+  readonly spawnNodes: readonly IRNode[];
+  readonly spawnsOf: ReadonlyMap<string, Spawns>;
+  readonly callsOf: (id: string) => string[];
+  readonly programs: readonly ProgramRecord[];
+  readonly entryMode: boolean;
+  readonly scriptFiles: ReadonlySet<string>;
+  readonly importedFiles: ReadonlySet<string>;
+  readonly sites: readonly SiteRecord[];
+  readonly bodyOf: (id: string, roots: readonly string[], script: string | undefined) => PlanBody;
+  readonly chartOf: (file: string, id: string) => [number, number] | undefined;
+}
+
+/** The plans of each IR, by its nodes array, then its edges array, then the lambda option. See execPlans. */
+const PLANS_CACHE = new WeakMap<object, WeakMap<object, Map<string, ExecPlans>>>();
+
+/**
+ * The project-wide part of the execution model of an IR: everything that does not depend on the scope. Memoized: the
+ * same `nodes` and `edges` arrays give the same object, so a second scope on one model costs only its own view. The cache
+ * is keyed by array identity, so an array that is mutated after a call must be copied first.
+ */
+export function execPlans(nodes: readonly IRNode[], edges: readonly IREdge[], opts: { lambdas?: boolean } = {}): ExecPlans {
   const fold = opts.lambdas !== true;
+  let byEdges = PLANS_CACHE.get(nodes);
+  if (byEdges === undefined) {
+    byEdges = new WeakMap();
+    PLANS_CACHE.set(nodes, byEdges);
+  }
+  let byFold = byEdges.get(edges);
+  if (byFold === undefined) {
+    byFold = new Map();
+    byEdges.set(edges, byFold);
+  }
+  const key = fold ? "fold" : "lambdas";
+  let plans = byFold.get(key);
+  if (plans === undefined) {
+    plans = buildPlans(nodes, edges, fold);
+    byFold.set(key, plans);
+  }
+  return plans;
+}
+
+function buildPlans(nodes: readonly IRNode[], edges: readonly IREdge[], fold: boolean): ExecPlans {
   // The parent of each anonymous function, so a lambda folds to its owner: a function, or the file for module-level code.
   const lambdaParent = new Map<string, string>();
   if (fold) {
@@ -439,9 +524,6 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     }
     return cur;
   };
-  // A scope inside a test, fixture or sample folder shows its test code as roots. isNoisePath reads folders
-  // from a path's parents, so a folder needs a trailing slash to count its own name, and a file needs its base name.
-  const scopeNoise = isNoisePath(scope) || isNoisePath(`${scope}/`);
 
   const byId = new Map<string, IRNode>();
   const fns = new Map<string, Fn>();
@@ -457,7 +539,8 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       name: n.attrs?.module === true && file !== undefined ? basenameOf(file) : (strAttr(n.attrs, "name") ?? (n.id.split("#")[1] ?? n.id)),
       file,
       line: n.span ? n.span.start[0] + 1 : 0,
-      inScope: file !== undefined && insideScope(file, scope),
+      // A scope inside a test, fixture or sample folder shows its test code as roots. isNoisePath reads folders
+      // from a path's parents, so a file's noise is its own path's.
       noise: file !== undefined && isNoisePath(file),
       anonymous,
       parent: anonymous ? n.parent : undefined,
@@ -482,22 +565,18 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     const ownerFn = fns.get(owner);
     return ownerFn ? ownerFn.file : owner;
   };
-  const inScopeId = (id: string): boolean => {
-    const file = fileOf(id);
-    return file !== undefined && insideScope(file, scope);
-  };
   const noiseId = (id: string): boolean => {
     const file = fileOf(id);
     return file !== undefined && isNoisePath(file);
   };
 
   // Each edge with its targets, in content order.
-  const keyed = edges
+  const keyed: Keyed[] = edges
     .map((e) => ({ e, k: edgeKey(e) }))
     .sort((a, b) => byText(a.k, b.k))
     .map(({ e }) => {
       const t = edgeTargets(e);
-      return { e, ids: [...t.nodes, ...t.candidates].map(foldId), candidates: t.candidates.length > 0 };
+      return { e, from: foldId(e.from), ids: [...t.nodes, ...t.candidates].map(foldId), candidates: t.candidates.length > 0 };
     });
 
   // Adjacency covers the whole IR, so a thread's reach does not depend on the scope it is seen from.
@@ -513,28 +592,14 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
   const dispatchOut = new Map<string, Dispatch[]>();
   const spawnsOf = new Map<string, Spawns>();
   const dispatchSites: Array<Dispatch & { from: string }> = [];
-  // A function is referenced when a caller in the scope names it. A reference from outside the scope does not
-  // count, so a function the scope's own code never calls is a root of the scope even when another folder calls it.
-  // Test, fixture and sample code counts only in a noise scope, as its functions are roots only there.
-  const referenced = new Set<string>();
-  // A function some out-of-scope caller calls, references or dispatches. An in-scope function that only such code reaches
-  // is a root of the scope's view of its thread, since the caller that starts it lies outside the scope.
-  const calledOutside = new Set<string>();
 
-  for (const { e, ids, candidates } of keyed) {
-    const from = foldId(e.from);
-    const local = inScopeId(from);
-    const counted = local && (scopeNoise || !noiseId(from));
-    if (!local && (e.kind === "calls.call" || e.kind === "calls.reference" || e.kind === "concurrency.dispatches")) {
-      for (const to of ids) calledOutside.add(to);
-    }
+  for (const { e, from, ids, candidates } of keyed) {
     if (e.kind === "calls.call" || e.kind === "calls.reference") {
       const closure = e.kind === "calls.reference" && strAttr(e.attrs, "how") === "closure";
       const out = closure ? closureOut : callOut;
       const callees = out.get(from) ?? new Set<string>();
       for (const to of ids) if (fns.has(to)) callees.add(to);
       out.set(from, callees);
-      if (counted) for (const to of ids) if (to !== from) referenced.add(to);
     } else if (e.kind === "concurrency.dispatches") {
       const d: Dispatch = {
         how: pick(e.attrs?.how, DISPATCH_HOWS) ?? "callback",
@@ -544,15 +609,13 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
         line: e.span ? e.span.start[0] + 1 : 0,
       };
       push(dispatchOut, from, d);
-      if (local) dispatchSites.push({ from, ...d });
-      if (counted) for (const to of ids) if (to !== from) referenced.add(to);
+      dispatchSites.push({ from, ...d });
     } else if (e.kind === "concurrency.spawns") {
       const s = spawnsOf.get(from) ?? { targets: new Set<string>(), candidates: false, how: undefined };
       for (const to of ids) s.targets.add(to);
       s.candidates = s.candidates || candidates;
       s.how = s.how ?? pick(e.attrs?.how, SPAWN_HOWS);
       spawnsOf.set(from, s);
-      if (counted) for (const to of ids) referenced.add(to);
     }
   }
 
@@ -627,7 +690,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
   };
 
   // Programs: the build targets that link an executable, with the files they contain. Their `main` is the root of
-  // the program's own main thread, so it is taken out of the general main thread's roots below.
+  // the program's own main thread. A build target is listed by the scope, which the caller checks.
   const contains = new Map<string, Set<string>>();
   for (const e of edges) {
     if (e.kind !== "packaging.target-contains") continue;
@@ -635,29 +698,29 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     for (const file of edgeTargets(e).nodes) files.add(file);
     contains.set(e.from, files);
   }
-  const programs: ExecProgram[] = [];
+  const mainFns = [...fns.values()].filter((f) => f.name === "main" && f.file !== undefined);
+  const programRecords: ProgramRecord[] = [];
   const targetLabel = new Map<string, string>();
   for (const n of nodes) {
     if (n.kind !== "packaging.build-target") continue;
     const targetKind = strAttr(n.attrs, "targetKind");
     if (targetKind === undefined || !isProgramTarget(n.attrs, targetKind)) continue;
     const files = [...(contains.get(n.id) ?? [])].sort(byText);
-    if (!files.some((f) => insideScope(f, scope))) continue;
-    // A program built only from test, fixture or sample files is left out unless the scope is one of those, as their
-    // functions are left out of the main roots: at a project's root, every test binary and fixture would crowd it.
-    if (!scopeNoise && files.every((f) => isNoisePath(f))) continue;
     const inFiles = new Set(files);
-    const main = [...fns.values()]
-      .filter((f) => f.name === "main" && f.file !== undefined && inFiles.has(f.file))
+    const main = mainFns
+      .filter((f) => f.file !== undefined && inFiles.has(f.file))
       .map((f) => f.id)
       .sort(byText)[0];
-    programs.push({
-      id: n.id,
-      name: strAttr(n.attrs, "name") ?? n.id,
-      targetKind,
-      files,
-      ...(main !== undefined ? { main } : {}),
-      threads: [],
+    programRecords.push({
+      target: true,
+      prog: {
+        id: n.id,
+        name: strAttr(n.attrs, "name") ?? n.id,
+        targetKind,
+        files,
+        ...(main !== undefined ? { main } : {}),
+        threads: [],
+      },
     });
     targetLabel.set(n.id, strAttr(n.attrs, "label") ?? n.id);
   }
@@ -665,7 +728,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
   // a page script of ONE browser program, and each Node script that no project file imports is a program of its own. A
   // program's files are what its entries import, transitively. Test, fixture and sample files are never entries.
   // Entries are found over the whole project, whatever the scope: a program whose code lies outside the scope still
-  // starts the threads that run in-scope functions (see `shownPrograms` below).
+  // starts the threads that run in-scope functions (see `shownPrograms` in execModel).
   const scriptFiles = new Set<string>();
   for (const { e, ids } of keyed) {
     if (e.kind === "concurrency.spawns") for (const id of ids) scriptFiles.add(fileOf(id) ?? id);
@@ -698,72 +761,49 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
   const entryMode = browserFns.length > 0 || nodeFns.length > 0;
   const closureOf = (start: readonly string[]): string[] => [...reachBy(start, (f) => importsOf.get(f) ?? [])].sort(byText);
   if (browserFns.length > 0) {
-    programs.push({
-      id: "entry:browser",
-      name: "index.html",
-      targetKind: "html-entry",
-      files: closureOf(browserFns.map((f) => f.file ?? "")),
-      kind: "browser",
-      entries: browserFns.map((f) => f.id).sort(byText),
-      threads: [],
+    programRecords.push({
+      target: false,
+      prog: {
+        id: "entry:browser",
+        name: "index.html",
+        targetKind: "html-entry",
+        files: closureOf(browserFns.map((f) => f.file ?? "")),
+        kind: "browser",
+        entries: browserFns.map((f) => f.id).sort(byText),
+        threads: [],
+      },
     });
   }
   for (const f of nodeFns) {
     const file = f.file ?? "";
     const entry = f.programEntry;
-    programs.push({
-      id: `entry:node:${file}`,
-      name: file,
-      targetKind: "node-entry",
-      files: closureOf([file]),
-      kind: "node",
-      entries: [f.id],
-      threads: [],
-      ...(entry !== undefined ? { entry } : {}),
+    programRecords.push({
+      target: false,
+      prog: {
+        id: `entry:node:${file}`,
+        name: file,
+        targetKind: "node-entry",
+        files: closureOf([file]),
+        kind: "node",
+        entries: [f.id],
+        threads: [],
+        ...(entry !== undefined ? { entry } : {}),
+      },
     });
   }
   // Two build targets can share a name ("//tools/a:main" and "//tools/b:main"). Such a program is named by its label, which is unique.
   const nameCount = new Map<string, number>();
-  for (const p of programs) nameCount.set(p.name, (nameCount.get(p.name) ?? 0) + 1);
-  for (const p of programs) {
-    const label = targetLabel.get(p.id);
-    if (label !== undefined && (nameCount.get(p.name) ?? 0) > 1) p.name = label;
+  for (const r of programRecords) nameCount.set(r.prog.name, (nameCount.get(r.prog.name) ?? 0) + 1);
+  for (const r of programRecords) {
+    const label = targetLabel.get(r.prog.id);
+    if (label !== undefined && (nameCount.get(r.prog.name) ?? 0) > 1) r.prog.name = label;
   }
-  programs.sort((a, b) => byText(a.id, b.id));
-  const programMains = new Set(programs.flatMap((p) => (p.main !== undefined ? [p.main] : [])));
+  programRecords.sort((a, b) => byText(a.prog.id, b.prog.id));
 
-  // Without any entry, the fallback roots stand: every unreferenced function, and a module entry that no project file
-  // imports (or an HTML page loads). With entries, only the entries are roots: an unreferenced function runs on no thread.
-  const fallbackEntryModules = entryMode
-    ? []
-    : [...fns.values()]
-        .filter(
-          (f) =>
-            f.module &&
-            f.inScope &&
-            (scopeNoise || !f.noise) &&
-            f.file !== undefined &&
-            !f.file.endsWith(".d.ts") &&
-            !scriptFiles.has(f.file) &&
-            (f.htmlEntry || !importedFiles.has(f.file)),
-        )
-        .map((f) => f.id);
-
-  // An anonymous function is never a main root: whatever runs it is its creator, a spawn or a dispatch.
-  const mainRoots = entryMode
-    ? []
-    : [
-        ...[...fns.values()]
-          .filter((f) => f.inScope && !f.anonymous && !f.module && !referenced.has(f.id) && (scopeNoise || !f.noise) && !programMains.has(f.id))
-          .map((f) => f.id),
-        ...fallbackEntryModules,
-      ].sort(byText);
-  /**
-   * The module entries a thread runs when it loads: the module of each file its roots lie in, and of each file those files
-   * import at runtime, transitively. A module's top-level code runs on every thread whose files import it, so these are
-   * seeds of the thread, like its roots. The spawn's script file is a seed too, when it has no function. Visited files
-   * are kept in a set, so an import cycle ends and the cost stays linear in the files reached.
-   */
+  // A file's module entry, and the module entries a thread runs when it loads: the module of each file its roots lie in,
+  // and of each file those files import at runtime, transitively. A module's top-level code runs on every thread whose
+  // files import it, so these are seeds of the thread, like its roots. The spawn's script file is a seed too, when it has
+  // no function. Visited files are kept in a set, so an import cycle ends and the cost stays linear in the files reached.
   const threadModules = (roots: readonly string[], script: string | undefined): string[] => {
     const seeds = new Set<string>();
     if (script !== undefined && script !== "") seeds.add(script);
@@ -781,21 +821,181 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     }
     return out.sort(byText);
   };
-  // A thread's seeds are its roots and those module entries. The roots stay as they are for grounding and naming.
-  const planOf = (kind: ExecThreadKind, id: string, roots: string[], spawn?: ExecSpawn): Plan => {
-    const seeds = [...new Set([...roots, ...threadModules(roots, spawn?.script)])];
-    return {
-      kind,
-      id,
-      ...(spawn !== undefined ? { spawn } : {}),
-      roots,
-      reach: reachBy(seeds, neighbours),
-      plain: reachBy(seeds, plainNeighbours),
-      coroutines: coroutinesOf(seeds),
-    };
+  // A thread's body, cached by its id, roots and script: the same plan in any scope gives the same body.
+  const bodies = new Map<string, PlanBody>();
+  const bodyOf = (id: string, roots: readonly string[], script: string | undefined): PlanBody => {
+    const key = `${id}\0${script ?? ""}\0${roots.join("\0")}`;
+    const known = bodies.get(key);
+    if (known !== undefined) return known;
+    const seeds = [...new Set([...roots, ...threadModules(roots, script)])];
+    const body: PlanBody = { reach: reachBy(seeds, neighbours), plain: reachBy(seeds, plainNeighbours), coroutines: coroutinesOf(seeds) };
+    bodies.set(key, body);
+    return body;
   };
+
+  // Spawn nodes, sorted by id. Whether a spawn lies in the scope is the caller's question.
+  const spawnNodes = nodes.filter((n) => SPAWN_KINDS.has(n.kind)).sort((a, b) => byText(a.id, b.id));
+
+  // Lock and channel sites: an acquire, send or receive whose parent is a function. Module-level code (a file parent) runs
+  // on no thread, so it is not a site, and the caller also requires the function to be listed.
+  const sites: SiteRecord[] = [];
+  for (const n of nodes) {
+    const spec = RESOURCE_SITES[n.kind];
+    if (spec === undefined) continue;
+    const fn = n.parent === undefined ? undefined : foldId(n.parent);
+    if (fn === undefined || !fns.has(fn)) continue;
+    const name = strAttr(n.attrs, spec.attr);
+    if (name === undefined || name === "") continue;
+    const api = strAttr(n.attrs, "api");
+    sites.push({
+      id: `${spec.kind}:${name}`,
+      kind: spec.kind,
+      name,
+      fn,
+      op: spec.op,
+      file: n.span?.file ?? "",
+      line: n.span ? n.span.start[0] + 1 : 0,
+      ...(api !== undefined ? { api } : {}),
+    });
+  }
+
+  // Chart sizes by file, computed on first use: the chart layout is cheap, but only files with a listed function need it.
+  const chartSizes = new Map<string, Map<string, [number, number]>>();
+  const chartOf = (file: string, id: string): [number, number] | undefined => {
+    if (file === "") return undefined;
+    let sizes = chartSizes.get(file);
+    if (sizes === undefined) {
+      sizes = new Map();
+      for (const f of factsForFile(file, nodes, edges).map((f) => layoutFunction(f))) {
+        if (!f.tooLarge && f.nodes.length > 0) sizes.set(f.id, [f.width, f.height]);
+      }
+      chartSizes.set(file, sizes);
+    }
+    return sizes.get(id);
+  };
+
+  return {
+    fold,
+    fns,
+    fileOf,
+    noiseId,
+    foldId,
+    keyed,
+    dispatchSites,
+    spawnNodes,
+    spawnsOf,
+    callsOf,
+    programs: programRecords,
+    entryMode,
+    scriptFiles,
+    importedFiles,
+    sites,
+    bodyOf,
+    chartOf,
+  };
+}
+
+export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], scope: string, opts: ExecModelOptions = {}): ExecModel {
+  return execModelOf(execPlans(nodes, edges, { lambdas: opts.lambdas }), scope, opts);
+}
+
+/** The scope's view of the project-wide plans. See execModel. */
+function execModelOf(P: ExecPlans, scope: string, opts: ExecModelOptions): ExecModel {
+  const max = opts.maxFunctions ?? MAX_EXEC_FUNCTIONS;
+  const fns = P.fns;
+  // A scope inside a test, fixture or sample folder shows its test code as roots. isNoisePath reads folders
+  // from a path's parents, so a folder needs a trailing slash to count its own name, and a file needs its base name.
+  const scopeNoise = isNoisePath(scope) || isNoisePath(`${scope}/`);
+
+  const insideFile = (() => {
+    const memo = new Map<string, boolean>();
+    return (file: string): boolean => {
+      let v = memo.get(file);
+      if (v === undefined) {
+        v = insideScope(file, scope);
+        memo.set(file, v);
+      }
+      return v;
+    };
+  })();
+  const inScopeId = (id: string): boolean => {
+    const file = P.fileOf(id);
+    return file !== undefined && insideFile(file);
+  };
+  // The functions whose file lies in the scope.
+  const inScopeFns = new Set<string>();
+  for (const f of fns.values()) if (f.file !== undefined && insideFile(f.file)) inScopeFns.add(f.id);
+  const inScopeFn = (id: string): boolean => inScopeFns.has(id);
+
+  // A function is referenced when a caller in the scope names it. A reference from outside the scope does not
+  // count, so a function the scope's own code never calls is a root of the scope even when another folder calls it.
+  // Test, fixture and sample code counts only in a noise scope, as its functions are roots only there.
+  const referenced = new Set<string>();
+  // A function some out-of-scope caller calls, references or dispatches. An in-scope function that only such code reaches
+  // is a root of the scope's view of its thread, since the caller that starts it lies outside the scope.
+  const calledOutside = new Set<string>();
+  for (const { e, from, ids } of P.keyed) {
+    const local = inScopeId(from);
+    const counted = local && (scopeNoise || !P.noiseId(from));
+    if (!local && (e.kind === "calls.call" || e.kind === "calls.reference" || e.kind === "concurrency.dispatches")) {
+      for (const to of ids) calledOutside.add(to);
+    }
+    if (e.kind === "calls.call" || e.kind === "calls.reference" || e.kind === "concurrency.dispatches") {
+      if (counted) for (const to of ids) if (to !== from) referenced.add(to);
+    } else if (e.kind === "concurrency.spawns") {
+      if (counted) for (const to of ids) referenced.add(to);
+    }
+  }
+
+  // Programs of the scope: a build target with a file in the scope (and not a test-only one, outside a noise scope),
+  // and every entry. Each is a fresh object, since its threads are the scope's.
+  const programs: ExecProgram[] = [];
+  for (const rec of P.programs) {
+    if (rec.target) {
+      const files = rec.prog.files;
+      if (!files.some((f) => insideFile(f))) continue;
+      // A program built only from test, fixture or sample files is left out unless the scope is one of those, as their
+      // functions are left out of the main roots: at a project's root, every test binary and fixture would crowd it.
+      if (!scopeNoise && files.every((f) => isNoisePath(f))) continue;
+    }
+    programs.push({ ...rec.prog, threads: [] });
+  }
+  const programMains = new Set(programs.flatMap((p) => (p.main !== undefined ? [p.main] : [])));
+
+  // Without any entry, the fallback roots stand: every unreferenced function, and a module entry that no project file
+  // imports (or an HTML page loads). With entries, only the entries are roots: an unreferenced function runs on no thread.
+  const entryMode = P.entryMode;
+  const fallbackEntryModules = entryMode
+    ? []
+    : [...fns.values()]
+        .filter(
+          (f) =>
+            f.module &&
+            inScopeFn(f.id) &&
+            (scopeNoise || !f.noise) &&
+            f.file !== undefined &&
+            !f.file.endsWith(".d.ts") &&
+            !P.scriptFiles.has(f.file) &&
+            (f.htmlEntry || !P.importedFiles.has(f.file)),
+        )
+        .map((f) => f.id);
+
+  // An anonymous function is never a main root: whatever runs it is its creator, a spawn or a dispatch.
+  const mainRoots = entryMode
+    ? []
+    : [
+        ...[...fns.values()]
+          .filter((f) => inScopeFn(f.id) && !f.anonymous && !f.module && !referenced.has(f.id) && (scopeNoise || !f.noise) && !programMains.has(f.id))
+          .map((f) => f.id),
+        ...fallbackEntryModules,
+      ].sort(byText);
+
   // The general main thread exists only without entries. Each program has its own main thread: from its `main` function,
-  // or from its entry modules.
+  // or from its entry modules. A plan is its body (shared across scopes) and its kind, id and spawn (this scope's).
+  const planOf = (kind: ExecThreadKind, id: string, roots: string[], spawn?: ExecSpawn): Plan => {
+    const body = P.bodyOf(id, roots, spawn?.script);
+    return { kind, id, ...(spawn !== undefined ? { spawn } : {}), roots, reach: body.reach, plain: body.plain, coroutines: body.coroutines };
+  };
   const plans: Plan[] = entryMode ? [] : [planOf("main", "main", mainRoots)];
   const programPlans = new Map<string, Plan>();
   for (const p of programs) {
@@ -808,11 +1008,9 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
 
   // Spawn threads are not filtered by noise. A spawn in a test file is still a fact of the code, and filtering it
   // would make a scope's threads depend on whether the scope is noise, which breaks monotonicity across scopes.
-  const spawnNodes = nodes
-    .filter((n) => SPAWN_KINDS.has(n.kind) && inScopeId(n.id))
-    .sort((a, b) => byText(a.id, b.id));
-  for (const n of spawnNodes) {
-    const s = spawnsOf.get(n.id);
+  for (const n of P.spawnNodes) {
+    if (!inScopeId(n.id)) continue;
+    const s = P.spawnsOf.get(n.id);
     const targets = s ? [...s.targets].sort(byText) : [];
     // A target that is not a function is a script file. Its top-level code runs the thread, so its callees are the roots.
     const roots = new Set<string>();
@@ -823,20 +1021,19 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
         continue;
       }
       script = t;
-      for (const c of callsOf(t)) roots.add(c);
+      for (const c of P.callsOf(t)) roots.add(c);
     }
     const rootList = [...roots].sort(byText);
-    const status: ExecSpawnStatus =
-      rootList.length === 0 ? "unresolved" : rootList.some((r) => fns.get(r)?.inScope === true) ? "resolved" : "outside";
+    const status: ExecSpawnStatus = rootList.length === 0 ? "unresolved" : rootList.some((r) => inScopeFn(r)) ? "resolved" : "outside";
     const how: ExecSpawnHow = s?.how ?? (n.kind === "concurrency.spawn-process" ? "process" : "thread");
     const spawn: ExecSpawn = {
       node: n.id,
-      file: fileOf(n.id) ?? "",
+      file: P.fileOf(n.id) ?? "",
       line: n.span ? n.span.start[0] + 1 : 0,
       how,
       status,
       candidates: s?.candidates ?? false,
-      ...(n.parent !== undefined ? { owner: foldId(n.parent) } : {}),
+      ...(n.parent !== undefined ? { owner: P.foldId(n.parent) } : {}),
       ...(script !== undefined ? { script } : {}),
       ...(strAttr(n.attrs, "api") !== undefined ? { api: strAttr(n.attrs, "api") } : {}),
       ...(strAttr(n.attrs, "target") !== undefined ? { command: strAttr(n.attrs, "target") } : {}),
@@ -848,7 +1045,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
   // outside the scope that starts an in-scope function is shown, so the function is on its thread. Thread membership is
   // computed over the whole project (every plan below), and only the shown programs and threads are listed.
   const shownPrograms = programs.filter(
-    (p) => p.files.some((f) => insideScope(f, scope)) || [...(programPlans.get(p.id)?.reach ?? [])].some((id) => fns.get(id)?.inScope === true),
+    (p) => p.files.some((f) => insideFile(f)) || [...(programPlans.get(p.id)?.reach ?? [])].some((id) => inScopeFn(id)),
   );
   const shownPlanIds = new Set<string>(entryMode ? [] : ["main"]);
   for (const p of shownPrograms) {
@@ -882,20 +1079,6 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
   // The function table. Threads are cut in order, so the first threads keep their full lists when the cap is hit.
   const table = new Map<string, ExecFunctionRef>();
   let truncated = false;
-  // Chart sizes by file, computed on first use: the chart layout is cheap, but only files with a listed function need it.
-  const chartSizes = new Map<string, Map<string, [number, number]>>();
-  const chartOf = (file: string, id: string): [number, number] | undefined => {
-    if (file === "") return undefined;
-    let sizes = chartSizes.get(file);
-    if (sizes === undefined) {
-      sizes = new Map();
-      for (const f of factsForFile(file, nodes, edges).map((f) => layoutFunction(f))) {
-        if (!f.tooLarge && f.nodes.length > 0) sizes.set(f.id, [f.width, f.height]);
-      }
-      chartSizes.set(file, sizes);
-    }
-    return sizes.get(id);
-  };
   const take = (id: string): boolean => {
     if (table.has(id)) return true;
     const fn = fns.get(id);
@@ -904,13 +1087,13 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       truncated = true;
       return false;
     }
-    const chart = chartOf(fn.file ?? "", id);
+    const chart = P.chartOf(fn.file ?? "", id);
     table.set(id, {
       id,
       name: fn.name,
       file: fn.file ?? "",
       line: fn.line,
-      inScope: fn.inScope,
+      inScope: inScopeFn(id),
       ...(fn.noise ? { noise: true as const } : {}),
       ...(fn.anonymous ? { anonymous: true as const, ...(fn.parent !== undefined ? { parent: fn.parent } : {}) } : {}),
       ...(fn.module ? { module: true as const } : {}),
@@ -923,13 +1106,12 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
   // The scope's view of each shown thread. Membership and grounding are the whole project's (the plans above); what is
   // listed is only the in-scope functions the thread runs. Its roots are its in-scope roots, plus the in-scope functions
   // it runs that only out-of-scope code starts, so no out-of-scope function is a card or counted in a frame.
-  const inScopeFn = (id: string): boolean => fns.get(id)?.inScope === true;
   const threads: ExecThread[] = plans
     .filter((p) => p.spawn !== undefined || shownPlanIds.has(p.id))
     .map((p) => {
     const extraRoots = [...p.reach].filter((id) => inScopeFn(id) && calledOutside.has(id) && !referenced.has(id) && !p.roots.includes(id));
-    const roots = [...p.roots.filter(inScopeFn), ...extraRoots.sort(byText)].filter(take);
-    const reachIn = [...p.reach].filter(inScopeFn).sort(byText);
+    const roots = [...p.roots.filter((id) => inScopeFn(id)), ...extraRoots.sort(byText)].filter(take);
+    const reachIn = [...p.reach].filter((id) => inScopeFn(id)).sort(byText);
     const reached = reachIn.filter(take);
     // A subset of `reached`, so every id was already offered to the table: filter by it instead of taking again.
     const coroutineOnly = [...p.reach]
@@ -956,19 +1138,20 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     };
   });
 
-  const dispatches: ExecDispatch[] = dispatchSites.map((d) => ({
-    from: d.from,
-    how: d.how,
-    targets: d.targets.filter((id) => inScopeFn(id) && take(id)),
-    candidates: d.candidates,
-    file: d.file,
-    line: d.line,
-  }));
+  const dispatches: ExecDispatch[] = P.dispatchSites
+    .filter((d) => inScopeId(d.from))
+    .map((d) => ({
+      from: d.from,
+      how: d.how,
+      targets: d.targets.filter((id) => inScopeFn(id) && take(id)),
+      candidates: d.candidates,
+      file: d.file,
+      line: d.line,
+    }));
 
   // Taken after the threads and dispatches, so the cap cuts these first.
-  const unthreaded = [...fns.values()]
-    .filter((f) => f.inScope && (scopeNoise || !f.noise) && runtimeOf(f.id) === "none")
-    .map((f) => f.id)
+  const unthreaded = [...inScopeFns]
+    .filter((id) => (scopeNoise || !fns.get(id)?.noise) && runtimeOf(id) === "none")
     .sort(byText)
     .filter(take);
 
@@ -978,7 +1161,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
   const pairs = new Set<string>();
   const calls: [number, number][] = [];
   listed.forEach((a, i) => {
-    for (const b of callsOf(a)) {
+    for (const b of P.callsOf(a)) {
       const j = indexOf.get(b);
       if (j === undefined || b === a) continue;
       const key = `${i}:${j}`;
@@ -989,20 +1172,13 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
   });
   calls.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
 
-  // Locks and channels. A site is an acquire, send or receive whose parent is a listed function: module-level code
-  // (a file parent) runs on no thread, so it is not a site. The resource's threads are the threads that reach a site.
+  // Locks and channels. The resource's threads are the threads that reach a site.
   const sitesOf = new Map<string, { kind: ExecResource["kind"]; name: string; sites: ExecResourceSite[] }>();
-  for (const n of nodes) {
-    const spec = RESOURCE_SITES[n.kind];
-    if (spec === undefined) continue;
-    const fn = n.parent === undefined ? undefined : foldId(n.parent);
-    if (fn === undefined || !fns.has(fn) || !table.has(fn)) continue;
-    const name = strAttr(n.attrs, spec.attr);
-    if (name === undefined || name === "") continue;
-    const id = `${spec.kind}:${name}`;
-    const r = sitesOf.get(id) ?? { kind: spec.kind, name, sites: [] };
-    r.sites.push({ fn, op: spec.op, file: n.span?.file ?? "", line: n.span ? n.span.start[0] + 1 : 0 });
-    sitesOf.set(id, r);
+  for (const s of P.sites) {
+    if (!table.has(s.fn)) continue;
+    const r = sitesOf.get(s.id) ?? { kind: s.kind, name: s.name, sites: [] };
+    r.sites.push({ fn: s.fn, op: s.op, file: s.file, line: s.line, ...(s.api !== undefined ? { api: s.api } : {}) });
+    sitesOf.set(s.id, r);
   }
   const reachSets = threads.map((t) => ({ id: t.id, reached: new Set(t.reached) }));
   const resources: ExecResource[] = [...sitesOf]
@@ -1018,9 +1194,9 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     })
     .sort((a, b) => byText(a.id, b.id));
 
-  const inScopeFns = [...fns.values()].filter((f) => f.inScope);
-  const functionsThreaded = inScopeFns.filter((f) => reachedAll.has(f.id)).length;
-  const functionsCoroutineOnly = inScopeFns.filter((f) => runtimeOf(f.id) === "coroutine").length;
+  const functionsInScope = inScopeFns.size;
+  const functionsThreaded = [...inScopeFns].filter((id) => reachedAll.has(id)).length;
+  const functionsCoroutineOnly = [...inScopeFns].filter((id) => runtimeOf(id) === "coroutine").length;
   const spawned = plans.flatMap((p) => (p.spawn !== undefined ? [p.spawn] : []));
   const countStatus = (s: ExecSpawnStatus) => spawned.filter((x) => x.status === s).length;
 
@@ -1046,10 +1222,10 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       dispatches: dispatches.length,
       locks: resources.filter((r) => r.kind === "lock").length,
       channels: resources.filter((r) => r.kind === "channel").length,
-      functionsInScope: inScopeFns.length,
+      functionsInScope,
       functionsThreaded,
       functionsCoroutineOnly,
-      functionsUnthreaded: inScopeFns.length - functionsThreaded,
+      functionsUnthreaded: functionsInScope - functionsThreaded,
       functionsListed: table.size,
     },
   };

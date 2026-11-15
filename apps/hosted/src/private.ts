@@ -2,7 +2,7 @@
 // file (GitHub's contents API), the latest index of a repo, and the repos the app can see for the signed-in user. Every
 // read checks the user's access with GitHub first; the signature is what the storage Worker checks.
 import { createHmac } from "node:crypto";
-import { authConfigFromEnv, installUrlOf, requireAccess, requireSession, type Env } from "./auth.js";
+import { authConfigFromEnv, installUrlOf, requireAccess, requireSession, type Clock, type Env } from "./auth.js";
 import { parseRepoInput } from "./github.js";
 import { errorResponse, json, withCookies } from "./http.js";
 import { parseKey } from "./session.js";
@@ -75,7 +75,7 @@ export function sourcePathError(path: string): string | undefined {
 export interface PrivateDeps {
   env: Env;
   fetch: FetchLike;
-  now: () => number;
+  now: Clock;
   /** The index store; read only by GET /api/private/latest. Defaults to the environment's store. */
   storage?: Storage;
 }
@@ -95,7 +95,7 @@ export async function handleGrant(request: Request, deps: PrivateDeps): Promise<
   const key = signingKeyOf(deps.env);
   const base = storageBaseOf(deps.env);
   if (key === undefined || base === undefined) return errorResponse(404, "not_found", "private reads are not configured");
-  const session = await requireAccess(request, deps.env, deps.fetch, target.owner, target.repo);
+  const session = await requireAccess(request, deps.env, deps.fetch, target.owner, target.repo, deps.now);
   if (session instanceof Response) return session;
 
   const exp = Math.floor(deps.now() / 1000) + GRANT_LIFETIME_S;
@@ -120,7 +120,7 @@ export async function handleSource(request: Request, deps: PrivateDeps): Promise
   const path = url.searchParams.get("path") ?? "";
   const problem = sourcePathError(path);
   if (problem !== undefined) return errorResponse(400, "bad_request", problem);
-  const session = await requireSession(request, deps.env, deps.fetch);
+  const session = await requireSession(request, deps.env, deps.fetch, deps.now);
   if (session instanceof Response) return session;
 
   const encoded = path.split("/").map(encodeURIComponent).join("/");
@@ -151,7 +151,7 @@ export async function handleLatest(request: Request, deps: PrivateDeps): Promise
   if (!authConfigFromEnv(deps.env)) return errorResponse(404, "not_found", "sign-in is not configured");
   const target = readTarget(new URL(request.url), false);
   if (target instanceof Response) return target;
-  const session = await requireAccess(request, deps.env, deps.fetch, target.owner, target.repo);
+  const session = await requireAccess(request, deps.env, deps.fetch, target.owner, target.repo, deps.now);
   if (session instanceof Response) return session;
   const storage = deps.storage ?? storageFromEnv(deps.env);
   // ?ref=<branch> (or @default) reads that ref's pointer instead of latest.json.
@@ -170,7 +170,7 @@ export async function handleRepos(request: Request, deps: PrivateDeps): Promise<
   if (request.method !== "GET") return errorResponse(405, "method_not_allowed", "use GET");
   const config = authConfigFromEnv(deps.env);
   if (!config) return errorResponse(404, "not_found", "sign-in is not configured");
-  const session = await requireSession(request, deps.env, deps.fetch);
+  const session = await requireSession(request, deps.env, deps.fetch, deps.now);
   if (session instanceof Response) return session;
   const withSession = (out: Response): Response => withCookies(out, session.setCookie);
 

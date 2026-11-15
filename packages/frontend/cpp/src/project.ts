@@ -264,6 +264,10 @@ export interface Project {
   bySimple: Map<string, FnDecl[]>;
   /** Field names declared in each class, keyed by qualified class name. */
   members: Map<string, Set<string>>;
+  /** Declared base type of each data member, by class then member name. Template arguments are removed. */
+  fieldTypes: Map<string, Map<string, string>>;
+  /** Declared base type of each namespace-scope variable, by qualified name. */
+  globals: Map<string, string>;
   /** Functions whose body suspends. A call to one creates a coroutine rather than running it. */
   coroutines: Set<NodeId>;
   /** Lambdas bound to a variable, by the variable's name. Lambdas are kept out of byQName and bySimple, so a call never reaches one. */
@@ -333,7 +337,21 @@ function hasNoBody(fn: SyntaxNode): boolean {
   return fn.childForFieldName("declarator")?.type === "reference_declarator" && fn.namedChildren.some((c) => c.type === "default_method_clause");
 }
 
-function collectMembers(root: SyntaxNode, members: Map<string, Set<string>>): void {
+/** The name a declarator declares: the identifier at the bottom of its declarator chain. */
+export function declaredVariable(decl: SyntaxNode): string | undefined {
+  let n: SyntaxNode | null = decl.childForFieldName("declarator");
+  while (n && n.type !== "identifier" && n.type !== "field_identifier") n = n.childForFieldName("declarator");
+  return n?.text;
+}
+
+/** The base type of a declaration: its type with template arguments removed, whitespace dropped. */
+export const baseTypeOf = (decl: SyntaxNode): string => stripTemplates(norm(decl.childForFieldName("type")?.text ?? ""));
+
+function collectMembers(
+  root: SyntaxNode,
+  members: Map<string, Set<string>>,
+  fieldTypes: Map<string, Map<string, string>>,
+): void {
   walk(root, (node) => {
     if (node.type !== "class_specifier" && node.type !== "struct_specifier") return;
     const body = node.childForFieldName("body");
@@ -341,6 +359,7 @@ function collectMembers(root: SyntaxNode, members: Map<string, Set<string>>): vo
     if (!body || !name) return;
     const cls = [...scopeOf(node).path, name].join("::");
     const set = members.get(cls) ?? new Set<string>();
+    const types = fieldTypes.get(cls) ?? new Map<string, string>();
     for (const field of body.namedChildren) {
       if (field.type !== "field_declaration") continue;
       let d: SyntaxNode | null = field.childForFieldName("declarator");
@@ -349,11 +368,22 @@ function collectMembers(root: SyntaxNode, members: Map<string, Set<string>>): vo
         if (d.type === "function_declarator") isFunction = true;
         d = d.childForFieldName("declarator");
       }
-      if (d && !isFunction) set.add(d.text);
+      if (d && !isFunction) {
+        set.add(d.text);
+        types.set(d.text, baseTypeOf(field));
+      }
     }
     members.set(cls, set);
+    fieldTypes.set(cls, types);
   });
 }
+
+/** A declaration at namespace or file scope, not inside a class or function. */
+const isNamespaceScope = (decl: SyntaxNode): boolean => {
+  const p = decl.parent;
+  if (p?.type === "translation_unit") return true;
+  return p?.type === "declaration_list" && (p.parent?.type === "namespace_definition" || p.parent?.type === "linkage_specification");
+};
 
 /** Nodes that make the function around them a coroutine. */
 const SUSPENDING = ["co_await_expression", "co_yield_statement", "co_return_statement"];
@@ -362,7 +392,7 @@ const SUSPENDING = ["co_await_expression", "co_yield_statement", "co_return_stat
  * The function a node belongs to: its nearest enclosing definition or lambda that the project records.
  * This is the same rule the emitter uses to find the caller, so both agree on which functions suspend.
  */
-function ownerOf(node: SyntaxNode, fns: Map<string, FnDecl>, rel: string): FnDecl | undefined {
+export function ownerOf(node: SyntaxNode, fns: Map<string, FnDecl>, rel: string): FnDecl | undefined {
   for (let p = node.parent; p; p = p.parent) {
     if (p.type !== "function_definition" && p.type !== "lambda_expression") continue;
     const decl = fns.get(`${rel}|${nodeKey(p)}`);
@@ -474,6 +504,8 @@ export async function buildProject(texts: Map<string, string>): Promise<Project>
   const byQName = new Map<string, FnDecl[]>();
   const bySimple = new Map<string, FnDecl[]>();
   const members = new Map<string, Set<string>>();
+  const fieldTypes = new Map<string, Map<string, string>>();
+  const globals = new Map<string, string>();
   const lambdaBindings = new Map<string, FnDecl[]>();
 
   for (const unit of units.values()) {
@@ -519,7 +551,12 @@ export async function buildProject(texts: Map<string, string>): Promise<Project>
     });
     addLambdas(unit.rel, lambdas, fns, list, lambdaBindings);
     fnsByFile.set(unit.rel, list);
-    collectMembers(unit.root, members);
+    collectMembers(unit.root, members, fieldTypes);
+    walk(unit.root, (node) => {
+      if (node.type !== "declaration" || !isNamespaceScope(node)) return;
+      const name = declaredVariable(node);
+      if (name) globals.set([...scopeOf(node).path, name].join("::"), baseTypeOf(node));
+    });
   }
 
   // A call to a coroutine only creates one, and the callee may sit in a file the emitter has not
@@ -532,7 +569,7 @@ export async function buildProject(texts: Map<string, string>): Promise<Project>
     }
   }
 
-  return { units, fns, fnsByFile, byQName, bySimple, members, coroutines, lambdaBindings, macroDeps };
+  return { units, fns, fnsByFile, byQName, bySimple, members, fieldTypes, globals, coroutines, lambdaBindings, macroDeps };
 }
 
 /** A lock name for a mutex expression. Members of the enclosing class are qualified by that class. */
@@ -542,16 +579,31 @@ export function lockIdentity(expr: string, cls: string | undefined, members: Map
   return e;
 }
 
+/**
+ * One catalog row. `api` defaults to the callee. `op` is required for effects.os.call. `attr` names the
+ * attribute to fill from argument `arg` (`path` and `target` on an fd are string literals; other targets
+ * are macro or signal names). With `attr` and no `arg`, the attribute is "<dynamic>".
+ */
 export interface EffectEntry {
+  callee: string;
   kind: string;
+  api?: string;
+  syscall?: string;
+  op?: string;
+  attr?: string;
+  arg?: number;
 }
 
 const CATALOG_FILE = fileURLToPath(new URL("../data/effects.json", import.meta.url));
 
-/** Known system calls, by callee name. The list is data, so a project can read it and extend it. */
-export const effectCatalog: Map<string, EffectEntry> = new Map(
-  (JSON.parse(readFileSync(CATALOG_FILE, "utf8")) as { callee: string; kind: string }[]).map((e) => [e.callee, { kind: e.kind }]),
-);
+/** Known system calls, by callee name. One name can have several rows (fork is a spawn and an OS call). The list is data. */
+export const effectCatalog: Map<string, EffectEntry[]> = (() => {
+  const map = new Map<string, EffectEntry[]>();
+  for (const row of JSON.parse(readFileSync(CATALOG_FILE, "utf8")) as EffectEntry[]) {
+    map.set(row.callee, [...(map.get(row.callee) ?? []), row]);
+  }
+  return map;
+})();
 
 /** Frees the parse trees. The WASM heap is not garbage collected with the JavaScript objects. */
 export function disposeProject(project: Project): void {

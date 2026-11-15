@@ -6,6 +6,7 @@ import type { SyntaxNode } from "./parser.js";
 import {
   blockOf,
   effectCatalog,
+  type EffectEntry,
   FRONTEND_ID,
   lockIdentity,
   nodeKey,
@@ -16,16 +17,26 @@ import {
   type FnDecl,
   type Project,
 } from "./project.js";
-
-/** Guard types and whether they hold the lock shared. */
-const GUARDS: Record<string, "exclusive" | "shared"> = {
-  "std::lock_guard": "exclusive",
-  "std::unique_lock": "exclusive",
-  "std::scoped_lock": "exclusive",
-  "std::shared_lock": "shared",
-};
-/** Arguments of a guard that do not take the lock. */
-const NO_LOCK_ARGS = new Set(["std::defer_lock", "std::try_to_lock", "std::adopt_lock"]);
+import { analyze, atomOf, caseGroups, decompose, enumerator, holderRef, shadowNames, stateIndexOf, testId, writeOf, type Atom, type Holder, type RefCtx, type WriteInfo } from "./state.js";
+import {
+  CONDVAR_OP,
+  classAt,
+  declArgs,
+  DYNAMIC,
+  GUARDS,
+  guardedQueues,
+  isAtomicMethod,
+  LOCKFREE_SEND_RECV,
+  NO_LOCK_ARGS,
+  nameText,
+  POSIX_COND_OPS,
+  POSIX_SEM_OPS,
+  refOf,
+  resolveVar,
+  SEMAPHORE_OP,
+  stdQueueCall,
+  waitLock,
+} from "./sync.js";
 const THREAD_TYPES = new Set(["std::thread", "std::jthread"]);
 type SpawnHow = "thread" | "async";
 /** Calls that start a thread or task. `arg` is the argument holding the function, or -1 for the first argument that is not a launch policy. */
@@ -58,6 +69,46 @@ class Ids {
     this.seen.add(id);
     return id;
   }
+}
+
+/** The modes a stream type opens its file in. */
+const STREAM_MODES: Record<string, ("read" | "write")[]> = {
+  "std::ifstream": ["read"],
+  "std::ofstream": ["write"],
+  "std::fstream": ["read", "write"],
+};
+
+/** A string literal's contents, without the quotes. Other expressions are not literal paths. */
+const stringLiteral = (n: SyntaxNode): string | undefined => {
+  const m = /^"((?:[^"\\]|\\.)*)"$/s.exec(n.text);
+  return n.type === "string_literal" && m ? (m[1] as string) : undefined;
+};
+
+/** A macro or signal name written as a literal: an upper-case identifier, or a number. A lower-case name is a variable. */
+const nameLiteral = (n: SyntaxNode): string | undefined => {
+  if (n.type === "number_literal") return n.text;
+  return n.type === "identifier" && /^[A-Z][A-Z0-9_]*$/.test(n.text) ? n.text : undefined;
+};
+
+/** The attribute value a catalog row takes from its argument, or <dynamic> when the argument is not a literal. */
+function catalogValue(row: EffectEntry, args: SyntaxNode[]): string {
+  if (row.arg === undefined) return DYNAMIC;
+  const a = args[row.arg];
+  if (!a) return DYNAMIC;
+  const literal = row.attr === "path" || row.op === "fd" ? stringLiteral(a) : nameLiteral(a);
+  return literal ?? DYNAMIC;
+}
+
+/**
+ * True when the project defines a function this call could reach: a qualified name that matches, or an
+ * unqualified name that is a method of the enclosing class, or a free function visible here (same file, or not static).
+ */
+function definesCallee(project: Project, rel: string, callee: string, cls: string | undefined): boolean {
+  if (callee.includes("::")) {
+    const simple = callee.split("::").pop() ?? callee;
+    return (project.bySimple.get(simple) ?? []).some((d) => d.qname === callee || d.qname.endsWith(`::${callee}`));
+  }
+  return (project.bySimple.get(callee) ?? []).some((d) => (d.cls === undefined ? d.exported || d.rel === rel : d.cls === cls));
 }
 
 /** The first argument in a parenthesised or braced argument list, as written. */
@@ -240,7 +291,15 @@ export function emitUnit(project: Project, rel: string): IRBatch {
 
   const prov: Provenance = { frontend: FRONTEND_ID, confidence: unit.errors.length > 0 ? "inferred" : "exact" };
   const syncProv: Provenance = { frontend: FRONTEND_ID, confidence: "inferred" };
-  const ids = new Ids((project.fnsByFile.get(rel) ?? []).map((d) => d.id));
+  const stateIndex = stateIndexOf(project);
+  const ids = new Ids([...(project.fnsByFile.get(rel) ?? []).map((d) => d.id), ...(stateIndex.byRel.get(rel) ?? []).map((h) => h.id)]);
+  /** State facts are syntactic guesses by design (D12). */
+  const heur: Provenance = { frontend: FRONTEND_ID, confidence: "heuristic" };
+  const writeInfo = new Map<string, WriteInfo>();
+  const exitTests = new Set<string>();
+  const emittedTests = new Set<string>();
+  const armIds = new Map<string, string>();
+  const shadowCache = new Map<string, Set<string>>();
   const records: IRRecord[] = [];
   const deps = new Set<string>(project.macroDeps.get(rel) ?? []);
   const node = (n: IRNode) => records.push({ node: n });
@@ -276,14 +335,14 @@ export function emitUnit(project: Project, rel: string): IRBatch {
    * A thread or task start. The spawn node is always recorded with the target text. The spawns edge
    * is added only when the target argument names a function the project defines.
    */
-  const spawn = (n: SyntaxNode, container: NodeId, how: SpawnHow, target: string | undefined, targetArg: SyntaxNode | undefined) => {
+  const spawn = (n: SyntaxNode, container: NodeId, how: SpawnHow, api: string, target: string | undefined, targetArg: SyntaxNode | undefined) => {
     const id = ids.take(`${rel}@spawn:${n.startPosition.row}:${n.startPosition.column}`);
     node({
       id,
       facet: "concurrency",
       kind: "concurrency.spawn-thread",
       parent: container,
-      attrs: target !== undefined ? { target: target.slice(0, 120) } : {},
+      attrs: { api, ...(target !== undefined ? { target: target.slice(0, 120) } : {}) },
       span: spanOf(rel, n),
       provenance: prov,
     });
@@ -317,47 +376,135 @@ export function emitUnit(project: Project, rel: string): IRBatch {
     });
   };
 
+  /** A node at a site: the kind, the facet, and an id built from the tag and the site's position. */
+  const emitNode = (n: SyntaxNode, container: NodeId, facet: string, kind: string, tag: string, attrs: Record<string, unknown>, provenance: Provenance) =>
+    node({
+      id: ids.take(`${rel}@${tag}:${n.startPosition.row}:${n.startPosition.column}`),
+      facet,
+      kind,
+      parent: container,
+      attrs,
+      span: spanOf(rel, n),
+      provenance,
+    });
+
+  /** A send to or receive from a queue or channel. `guardedBy` is set only for an inferred guarded std queue. */
+  const channelOp = (call: SyntaxNode, container: NodeId, side: "send" | "recv", channel: string, api: string, provenance: Provenance, guardedBy?: string) =>
+    emitNode(call, container, "concurrency", side === "send" ? "concurrency.channel-send" : "concurrency.channel-recv", side, {
+      channel,
+      api,
+      ...(guardedBy !== undefined ? { guardedBy } : {}),
+    }, provenance);
+
+  /** A call of a method on a variable whose declared type is a queue, semaphore, condition variable or atomic. */
+  const memberCall = (call: SyntaxNode, fnNode: SyntaxNode, args: SyntaxNode[], container: NodeId, cls: string | undefined) => {
+    const method = fnNode.childForFieldName("field")?.text;
+    const ref = refOf(fnNode.childForFieldName("argument"));
+    if (!method || !ref) return;
+    const v = resolveVar(project, ref.name, call, cls, ref.viaThis);
+    if (!v) return;
+    const api = `${v.type}::${method}`;
+    const lockFree = LOCKFREE_SEND_RECV[v.type];
+    if (lockFree) {
+      if (lockFree.send.includes(method)) channelOp(call, container, "send", v.channel, api, prov);
+      else if (lockFree.recv.includes(method)) channelOp(call, container, "recv", v.channel, api, prov);
+      return;
+    }
+    const queue = stdQueueCall(project, rel, call);
+    if (queue) {
+      // Only a queue inferred to be guarded emits. Its locks and the channel are the same on both sides.
+      const guard = guardedQueues(project).get(queue.channel);
+      if (guard !== undefined) channelOp(call, container, queue.side, queue.channel, api, syncProv, guard);
+      return;
+    }
+    const sem = SEMAPHORE_OP(v.type, method);
+    if (sem !== undefined) {
+      emitNode(call, container, "sync", "sync.semaphore", "sem", { op: sem, name: v.channel, api }, prov);
+      return;
+    }
+    const cv = CONDVAR_OP(v.type, method);
+    if (cv !== undefined) {
+      const attrs: Record<string, unknown> = { op: cv, name: v.channel, api };
+      const lock = cv === "wait" ? waitLock(project, call, args[0], cls) : undefined;
+      if (lock !== undefined) attrs.lock = lock;
+      emitNode(call, container, "sync", "sync.condvar", "cv", attrs, prov);
+      return;
+    }
+    if (isAtomicMethod(v.type, method)) emitNode(call, container, "sync", "sync.atomic-op", "atomic", { op: "op", api }, prov);
+  };
+
+  /** The POSIX semaphore and condition variable calls. A name that is not a plain name is <dynamic>. */
+  const posixSync = (call: SyntaxNode, callee: string, args: SyntaxNode[], container: NodeId, cls: string | undefined) => {
+    const named = (n: SyntaxNode | undefined) => {
+      const text = nameText(n);
+      return text === DYNAMIC ? text : lockIdentity(text, cls, project.members);
+    };
+    const sem = POSIX_SEM_OPS[callee];
+    if (sem !== undefined) {
+      emitNode(call, container, "sync", "sync.semaphore", "sem", { op: sem, name: named(args[0]), api: callee }, prov);
+      return;
+    }
+    const cond = POSIX_COND_OPS[callee];
+    if (cond !== undefined) {
+      const attrs: Record<string, unknown> = { op: cond.op, name: named(args[0]), api: callee };
+      if (cond.lock) {
+        const lock = nameText(args[1]);
+        if (lock !== DYNAMIC) attrs.lock = lockIdentity(lock, cls, project.members);
+      }
+      emitNode(call, container, "sync", "sync.condvar", "cv", attrs, prov);
+    }
+  };
+
+  /** One row of the catalog: a spawn, or an effect with the attributes its row sets. */
+  const catalogRow = (row: EffectEntry, call: SyntaxNode, callee: string, args: SyntaxNode[], container: NodeId) => {
+    if (row.kind === "concurrency.spawn-process") {
+      emitNode(call, container, "concurrency", row.kind, "procspawn", { api: row.api ?? callee }, prov);
+      return;
+    }
+    const attrs: Record<string, unknown> = { api: row.api ?? callee };
+    if (row.op !== undefined) attrs.op = row.op;
+    if (row.syscall !== undefined) attrs.syscall = row.syscall;
+    if (row.attr !== undefined) attrs[row.attr] = catalogValue(row, args);
+    emitNode(call, container, "effects", row.kind, "effect", attrs, prov);
+  };
+
   const handleCall = (call: SyntaxNode, container: NodeId, fn: FnDecl | undefined) => {
     const fnNode = call.childForFieldName("function");
     if (!fnNode) return;
     const callee = stripTemplates(normName(fnNode.text)).replace(/^::/, "");
     const args = argsOf(call);
+    const cls = classAt(project, rel, call);
 
     const spawnCall = SPAWN_CALLS.get(callee);
     if (spawnCall) {
       const targetArg =
         spawnCall.arg === -1 ? args.find((a) => !norm(a.text).startsWith("std::launch")) : args[spawnCall.arg];
-      spawn(call, container, spawnCall.how, targetArg?.text, targetArg);
+      spawn(call, container, spawnCall.how, callee, targetArg?.text, targetArg);
     }
 
-    const effect = effectCatalog.get(callee);
-    if (effect) {
-      node({
-        id: ids.take(`${rel}@effect:${call.startPosition.row}:${call.startPosition.column}`),
-        facet: "effects",
-        kind: effect.kind,
-        parent: container,
-        attrs: { api: callee },
-        span: spanOf(rel, call),
-        provenance: prov,
-      });
-    }
-
-    if (fnNode.type === "field_expression" && args.length === 0) {
-      const method = fnNode.childForFieldName("field")?.text;
-      const recv = fnNode.childForFieldName("argument")?.text;
-      if (recv !== undefined && (method === "lock" || method === "unlock")) {
-        const lock = lockIdentity(recv, scopeOf(call).cls ?? fn?.cls, project.members);
-        node({
-          id: ids.take(`${rel}@${method}:${call.startPosition.row}:${call.startPosition.column}`),
-          facet: "sync",
-          kind: method === "lock" ? "sync.lock-acquire" : "sync.lock-release",
-          parent: container,
-          attrs: method === "lock" ? { lock, mode: "exclusive", api: "lock" } : { lock, api: "unlock" },
-          span: spanOf(rel, call),
-          provenance: syncProv,
-        });
+    if (fnNode.type === "field_expression") {
+      // Member calls only: a name matched in the catalog is never a member, so `f.read()` emits nothing.
+      if (args.length === 0) {
+        const method = fnNode.childForFieldName("field")?.text;
+        const recv = fnNode.childForFieldName("argument")?.text;
+        if (recv !== undefined && (method === "lock" || method === "unlock")) {
+          const lock = lockIdentity(recv, cls, project.members);
+          node({
+            id: ids.take(`${rel}@${method}:${call.startPosition.row}:${call.startPosition.column}`),
+            facet: "sync",
+            kind: method === "lock" ? "sync.lock-acquire" : "sync.lock-release",
+            parent: container,
+            attrs: method === "lock" ? { lock, mode: "exclusive", api: "lock" } : { lock, api: "unlock" },
+            span: spanOf(rel, call),
+            provenance: syncProv,
+          });
+        }
       }
+      memberCall(call, fnNode, args, container, cls);
+    } else if (!definesCallee(project, rel, callee, cls)) {
+      // A function the project defines is never a system call: a local `kill` shadows ::kill.
+      for (const row of effectCatalog.get(callee) ?? []) catalogRow(row, call, callee, args, container);
+      posixSync(call, callee, args, container, cls);
     }
 
     if (fn) {
@@ -384,6 +531,16 @@ export function emitUnit(project: Project, rel: string): IRBatch {
     }
   };
 
+  /** `++x` and `x--` on a std::atomic variable: an atomic read-modify-write. */
+  const atomicUpdate = (n: SyntaxNode, container: NodeId) => {
+    const ref = refOf(n.childForFieldName("argument"));
+    if (!ref) return;
+    const v = resolveVar(project, ref.name, n, classAt(project, rel, n), ref.viaThis);
+    if (v?.type !== "std::atomic") return;
+    const op = n.childForFieldName("operator")?.text === "--" ? "operator--" : "operator++";
+    emitNode(n, container, "sync", "sync.atomic-op", "atomic", { op: "op", api: `std::atomic::${op}` }, prov);
+  };
+
   const handleDeclaration = (decl: SyntaxNode, container: NodeId, fn: FnDecl | undefined) => {
     const typeNode = decl.childForFieldName("type");
     const base = stripTemplates(norm(typeNode?.text ?? ""));
@@ -400,34 +557,60 @@ export function emitUnit(project: Project, rel: string): IRBatch {
         const only = params?.namedChildren[0];
         const nameArg =
           only?.type === "parameter_declaration" && !only.childForFieldName("declarator") ? only.childForFieldName("type") : null;
-        spawn(decl, container, "thread", firstArgument(params?.text), nameArg ?? undefined);
+        spawn(decl, container, "thread", base, firstArgument(params?.text), nameArg ?? undefined);
       } else if (declarator?.type === "init_declarator") {
         // `std::thread t{f, x}` holds its arguments in an initializer list. `std::thread t{}` starts nothing.
         const value = declarator.childForFieldName("value");
         if (value?.type === "argument_list" || (value?.type === "initializer_list" && namedArgs(value).length > 0)) {
-          spawn(decl, container, "thread", firstArgument(value.text), namedArgs(value)[0]);
+          spawn(decl, container, "thread", base, firstArgument(value.text), namedArgs(value)[0]);
+        }
+      }
+    }
+
+    // `std::ifstream in("file")` opens a file for reading, `std::ofstream` for writing, `std::fstream` for both.
+    const streams = STREAM_MODES[base];
+    if (streams !== undefined && declarator !== null) {
+      const [first] = declArgs(decl);
+      if (first !== undefined) {
+        for (const mode of streams) {
+          emitNode(decl, container, "effects", mode === "read" ? "effects.fs.read" : "effects.fs.write", `stream-${mode}`, { api: base, path: stringLiteral(first) ?? DYNAMIC }, prov);
         }
       }
     }
 
     const mode = GUARDS[base];
     if (mode === undefined || declarator?.type !== "function_declarator") return;
-    const params = (declarator.childForFieldName("parameters")?.namedChildren ?? []).filter((p) => p.type !== "comment");
-    const locks = params.map((p) => p.text).filter((t) => !NO_LOCK_ARGS.has(norm(t)));
     const block = blockOf(decl);
     // An out-of-line definition (void Store::put) has no class in its scope; its name carries it.
     const cls = scopeOf(decl).cls ?? fn?.cls;
+    const locks = declArgs(decl).filter((p) => !NO_LOCK_ARGS.has(norm(p.text)));
     locks.forEach((arg, i) => {
-      const lock = lockIdentity(arg, cls, project.members);
-      node({
-        id: ids.take(`${rel}@guard:${decl.startPosition.row}:${decl.startPosition.column}:${i}`),
-        facet: "sync",
-        kind: "x-cpp.scoped-lock",
-        parent: container,
-        attrs: { lock, mode, api: base },
-        span: spanOf(rel, decl),
-        provenance: syncProv,
-      });
+      const lock = lockIdentity(arg.text, cls, project.members);
+      // A shared_mutex taken by any guard is a read-write lock: shared for shared_lock, exclusive otherwise. It is
+      // emitted as sync.rwlock-acquire alone, which extends sync.lock-acquire, so each guard is one acquire node.
+      const ref = refOf(arg);
+      const mutexType = ref ? resolveVar(project, ref.name, decl, cls, ref.viaThis)?.type : undefined;
+      if (mutexType === "std::shared_mutex") {
+        node({
+          id: ids.take(`${rel}@rwlock:${decl.startPosition.row}:${decl.startPosition.column}:${i}`),
+          facet: "sync",
+          kind: "sync.rwlock-acquire",
+          parent: container,
+          attrs: { lock, mode, api: base },
+          span: spanOf(rel, decl),
+          provenance: syncProv,
+        });
+      } else {
+        node({
+          id: ids.take(`${rel}@guard:${decl.startPosition.row}:${decl.startPosition.column}:${i}`),
+          facet: "sync",
+          kind: "x-cpp.scoped-lock",
+          parent: container,
+          attrs: { lock, mode, api: base },
+          span: spanOf(rel, decl),
+          provenance: syncProv,
+        });
+      }
       if (block) {
         node({
           id: ids.take(`${rel}@release:${block.endPosition.row}:${block.endPosition.column}:${i}`),
@@ -440,6 +623,164 @@ export function emitUnit(project: Project, rel: string): IRBatch {
         });
       }
     });
+  };
+
+
+  /** The names, class and index an expression in `n` is read against. */
+  const refCtx = (n: SyntaxNode): RefCtx => {
+    let fnNode: SyntaxNode | undefined;
+    let cls: string | undefined;
+    for (let p: SyntaxNode | null = n; p; p = p.parent) {
+      if (p.type !== "function_definition" && p.type !== "lambda_expression") continue;
+      fnNode ??= p;
+      const decl = project.fns.get(`${rel}|${nodeKey(p)}`);
+      if (decl?.cls !== undefined) {
+        cls = decl.cls;
+        break;
+      }
+    }
+    cls ??= scopeOf(n).cls;
+    let shadow = new Set<string>();
+    if (fnNode) {
+      const key = nodeKey(fnNode);
+      shadow = shadowCache.get(key) ?? shadowNames(fnNode);
+      shadowCache.set(key, shadow);
+    }
+    return { index: stateIndex, ...(cls !== undefined ? { cls } : {}), shadow };
+  };
+
+  const analyzeBody = (fnNode: SyntaxNode) => {
+    const body = fnNode.childForFieldName("body");
+    if (!body || body.type !== "compound_statement") return;
+    const a = analyze(body, rel, refCtx(body));
+    for (const [k, v] of a.writes) writeInfo.set(k, v);
+    for (const k of a.exits) exitTests.add(k);
+  };
+
+  const emitHolder = (h: Holder, container: NodeId, at: SyntaxNode) =>
+    node({
+      id: h.id,
+      facet: "state",
+      kind: "state.holder",
+      parent: container,
+      attrs: { name: h.name, domainKind: "enum", values: h.values, declaredType: h.declaredType },
+      span: spanOf(rel, at),
+      provenance: heur,
+    });
+
+  const emitWrite = (h: Holder, container: NodeId, at: SyntaxNode, op: "init" | "set", value: string | undefined, info?: WriteInfo) =>
+    node({
+      id: ids.take(`${rel}@write:${at.startPosition.row}:${at.startPosition.column}`),
+      facet: "state",
+      kind: "state.write",
+      parent: container,
+      attrs: {
+        holder: h.id,
+        op,
+        ...(value !== undefined ? { value } : { dynamic: true }),
+        receiver: "",
+        ...(info?.from ? { from: info.from } : {}),
+        ...(info && info.guards.length > 0 ? { guards: info.guards, guardMatch: "receiver" } : {}),
+      },
+      span: spanOf(rel, at),
+      provenance: heur,
+    });
+
+  const emitTest = (container: NodeId, at: SyntaxNode, id: string, h: Holder, values: string[], extra: Record<string, unknown>) =>
+    node({
+      id,
+      facet: "state",
+      kind: "state.test",
+      parent: container,
+      attrs: { holder: h.id, values, receiver: "", ...extra },
+      span: spanOf(rel, at),
+      provenance: heur,
+    });
+
+  /** A comparison as a test. `thenArm` and `elseArm` are the arms of the `if` it is the condition of, when it is. */
+  const emitAtomTest = (container: NodeId, a: Atom, whole: boolean, thenArm: string | undefined, elseArm: string | undefined) => {
+    const key = nodeKey(a.node);
+    if (emittedTests.has(key)) return;
+    emittedTests.add(key);
+    // `arm` is where the holder is in `values`; `elseArm` where it is not.
+    const holds = a.negated ? (whole ? elseArm : undefined) : thenArm;
+    const fails = a.negated ? thenArm : whole ? elseArm : undefined;
+    emitTest(container, a.node, testId(rel, a.node), a.holder, [a.value], {
+      ...(a.negated ? { negated: true } : {}),
+      ...(holds ? { arm: holds } : {}),
+      ...(fails ? { elseArm: fails } : {}),
+      ...(exitTests.has(key) ? { exitGuard: true } : {}),
+    });
+  };
+
+  const emitArm = (label: string, at: SyntaxNode, container: NodeId): string => {
+    const id = ids.take(`${rel}@arm:${at.startPosition.row}:${at.startPosition.column}`);
+    armIds.set(nodeKey(at), id);
+    node({ id, facet: "flow", kind: "flow.branch-arm", parent: container, attrs: { label }, span: spanOf(rel, at), provenance: prov });
+    return id;
+  };
+
+  const handleIf = (n: SyntaxNode, container: NodeId) => {
+    const cons = n.childForFieldName("consequence");
+    const alt = n.childForFieldName("alternative");
+    const altStmt = alt?.type === "else_clause" ? alt.namedChild(0) : alt;
+    const thenArm = cons ? emitArm("then", cons, container) : undefined;
+    const elseArm = altStmt ? emitArm("else", altStmt, container) : undefined;
+    const cond = decompose(n.childForFieldName("condition"), refCtx(n));
+    for (const a of cond.atoms) emitAtomTest(container, a, cond.whole, thenArm, elseArm);
+  };
+
+  const handleSwitch = (n: SyntaxNode, container: NodeId) => {
+    const cond = n.childForFieldName("condition");
+    const ctx = refCtx(n);
+    const disc = holderRef(cond?.type === "condition_clause" ? cond.childForFieldName("value") ?? cond.namedChildren[cond.namedChildren.length - 1] : cond, ctx);
+    const arms = new Map<string, string>();
+    for (const cs of (n.childForFieldName("body")?.namedChildren ?? []).filter((c) => c.type === "case_statement")) {
+      const value = cs.childForFieldName("value");
+      arms.set(nodeKey(cs), emitArm(value ? `case ${value.text.slice(0, 60)}` : "default", cs, container));
+    }
+    if (!disc) return;
+    for (const g of caseGroups(n, disc, ctx)) {
+      if (g.values.length === 0) continue;
+      const first = g.cases[0] as SyntaxNode;
+      const arm = arms.get(nodeKey(g.last));
+      emitTest(container, first, testId(rel, first), disc, g.values, arm ? { arm } : {});
+    }
+  };
+
+  /** A default member initialiser, a constructor initialiser, or a global's initialiser. */
+  const handleInit = (h: Holder, container: NodeId, at: SyntaxNode, valueExpr: SyntaxNode | null | undefined) => {
+    let v: SyntaxNode | null | undefined = valueExpr;
+    if (v && (v.type === "initializer_list" || v.type === "argument_list")) v = v.namedChildren.find((c) => c.type !== "comment");
+    if (!v) return;
+    emitWrite(h, container, at, "init", enumerator(v, h, refCtx(at)));
+  };
+
+  const handleStateDecl = (n: SyntaxNode, container: NodeId) => {
+    for (const d of n.childrenForFieldName("declarator")) {
+      let nameNode: SyntaxNode = d;
+      if (d.type === "init_declarator") nameNode = d.childForFieldName("declarator") ?? d;
+      const h = stateIndex.byDecl.get(`${rel}|${nodeKey(d)}`);
+      if (!h) continue;
+      emitHolder(h, container, nameNode);
+      const value = n.type === "field_declaration" ? n.childForFieldName("default_value") : d.type === "init_declarator" ? d.childForFieldName("value") : null;
+      handleInit(h, container, value ?? nameNode, value);
+    }
+  };
+
+  const handleAssignment = (n: SyntaxNode, container: NodeId) => {
+    const w = writeOf(n, refCtx(n));
+    if (!w) return;
+    emitWrite(w.holder, container, n, "set", w.value, writeInfo.get(nodeKey(n)));
+  };
+
+  const handleFieldInitializer = (n: SyntaxNode, container: NodeId) => {
+    if (n.parent?.type !== "field_initializer_list") return;
+    const name = n.namedChild(0);
+    if (name?.type !== "field_identifier") return;
+    const ctx = refCtx(n);
+    const h = ctx.cls !== undefined ? ctx.index.byClass.get(ctx.cls)?.get(name.text) : undefined;
+    if (h) handleInit(h, container, n, n.namedChild(1));
   };
 
   const visit = (n: SyntaxNode, container: NodeId, fn: FnDecl | undefined): void => {
@@ -508,6 +849,7 @@ export function emitUnit(project: Project, rel: string): IRBatch {
         break;
       }
       case "function_definition": {
+        analyzeBody(n);
         const decl = project.fns.get(`${rel}|${nodeKey(n)}`);
         if (decl) {
           node({
@@ -525,6 +867,7 @@ export function emitUnit(project: Project, rel: string): IRBatch {
         break;
       }
       case "lambda_expression": {
+        analyzeBody(n);
         const decl = project.fns.get(`${rel}|${nodeKey(n)}`);
         if (decl) {
           const span = spanOf(rel, n);
@@ -548,11 +891,30 @@ export function emitUnit(project: Project, rel: string): IRBatch {
       case "call_expression":
         handleCall(n, container, fn);
         break;
+      case "update_expression":
+        atomicUpdate(n, container);
+        break;
       case "declaration":
         handleDeclaration(n, container, fn);
+        handleStateDecl(n, container);
         break;
+      case "field_declaration":
+        handleStateDecl(n, container);
+        break;
+      case "field_initializer":
+        handleFieldInitializer(n, container);
+        break;
+      case "assignment_expression":
+        handleAssignment(n, container);
+        break;
+      case "binary_expression": {
+        const a = atomOf(n, refCtx(n));
+        if (a) emitAtomTest(container, a, false, undefined, undefined);
+        break;
+      }
       case "if_statement":
         flow(n, "if", "flow.branch", container, { condition: (n.childForFieldName("condition")?.text ?? "").slice(0, 200) });
+        handleIf(n, container);
         break;
       case "conditional_expression":
         flow(n, "cond", "flow.branch", container, { condition: (n.childForFieldName("condition")?.text ?? "").slice(0, 200) });
@@ -561,6 +923,7 @@ export function emitUnit(project: Project, rel: string): IRBatch {
         const body = n.childForFieldName("body");
         const hasDefault = body?.namedChildren.some((c) => c.type === "case_statement" && !c.childForFieldName("value")) ?? false;
         flow(n, "switch", "flow.switch", container, { hasDefault });
+        handleSwitch(n, container);
         break;
       }
       case "for_statement":
@@ -615,6 +978,22 @@ export function emitUnit(project: Project, rel: string): IRBatch {
       provenance: { frontend: FRONTEND_ID, confidence: "exact" },
     };
     records.push({ finding });
+  }
+
+  // A guard id must name a state.test node that was emitted; drop the rest (the narrowing is still used for `from`).
+  const testIds = new Set<string>();
+  for (const r of records) if ("node" in r && r.node.kind === "state.test") testIds.add(r.node.id);
+  for (const r of records) {
+    if (!("node" in r) || r.node.kind !== "state.write") continue;
+    const attrs = r.node.attrs as Record<string, unknown>;
+    if (!Array.isArray(attrs.guards)) continue;
+    const kept = (attrs.guards as string[]).filter((g) => testIds.has(g));
+    if (kept.length === attrs.guards.length) continue;
+    if (kept.length > 0) attrs.guards = kept;
+    else {
+      delete attrs.guards;
+      delete attrs.guardMatch;
+    }
   }
 
   return { file: rel, records, dependsOn: [...deps].sort() };

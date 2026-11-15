@@ -4,7 +4,9 @@ import ts from "typescript";
 import type { IREdge, IRFinding, IRNode, IRRecord, NodeId, Provenance, Span, UnresolvedRef } from "@insight/ir";
 import type { IRBatch } from "@insight/sdk";
 import { importBindings, matchCall, matchEnvRead, matchExportRoute, matchFetch, matchSchedule, matchServe, matchWorker, nodeScriptArgument, scriptPath, urlText, type ImportBinding, type ScriptPath, type UrlText, type WorkerEnv } from "./effects.js";
+import { channelIndex, matchChannelRecv, matchChannelSend } from "./channels.js";
 import { scriptKind } from "./digest.js";
+import { emitState } from "./state.js";
 import { dispatchFor, MAX_DISPATCH_TARGETS, propName } from "./dispatch.js";
 import { workspaceManifestPaths, workspacePackages, workspaceProgramEntries, workspaceSource, type ProgramEntry, type WorkspacePackage } from "./packages.js";
 
@@ -1184,6 +1186,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
   // A spawn runs a script's module entry when the script has one, and the file otherwise.
   const spawnTarget = (to: string): string => project.moduleOf(to) ?? to;
   const workerEnv = workerEnvFor(project, sf);
+  const chans = channelIndex(project.checker, sf, rel);
   const usedIds = new Set<string>();
   const uniqueId = (base: string): string => {
     let id = `${rel}@${base}`;
@@ -1193,6 +1196,10 @@ export function emitFile(project: Project, rel: string): IRBatch {
   };
   const push = (node: IRNode) => records.push({ node });
   const pushEdge = (edge: IREdge) => records.push({ edge });
+  /** The flow.branch-arm id emitted for each arm node, so state tests can name their arms. */
+  const armIds = new Map<ts.Node, string>();
+  /** The calls.call edge emitted for each call to a project function, so state facts can annotate it. */
+  const callEdges = new Map<ts.CallExpression, IREdge>();
 
   const dependOn = (target: string) => {
     if (target !== rel) deps.add(target);
@@ -1441,7 +1448,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
       const sym = project.checker.getSymbolAtLocation(nameOf(callee));
       const target = declOf(project, sym);
       if (target?.entity.type === "function") {
-        pushEdge({
+        const callEdge: IREdge = {
           from: fn,
           to: target.id,
           facet: "calls",
@@ -1449,7 +1456,9 @@ export function emitFile(project: Project, rel: string): IRBatch {
           attrs: { callee: callee.getText(sf).slice(0, 200) },
           span: spanOf(rel, sf, callee),
           provenance: PROV,
-        });
+        };
+        callEdges.set(call, callEdge);
+        pushEdge(callEdge);
         dependOn(target.rel);
       } else {
         // A call through an interface or abstract member: every implementation the project declares is a candidate.
@@ -1474,6 +1483,19 @@ export function emitFile(project: Project, rel: string): IRBatch {
       }
       // A call to a function the project declares is that function, not a network request, so a fetch-named one is not matched.
       const effect = matchCall(call, imports) ?? (target?.entity.type === "function" ? undefined : matchFetch(call, imports, workerEnv));
+      // A message on a BroadcastChannel or MessagePort is a send on that channel, not a message to a Worker's inbox.
+      const send = matchChannelSend(call, project.checker, chans);
+      if (send) {
+        push({
+          id: uniqueId(`chan:${pos(sf, call.getStart(sf)).join(":")}`),
+          facet: "concurrency",
+          kind: "concurrency.channel-send",
+          parent: owner,
+          attrs: { channel: send.channel, api: send.api },
+          span: spanOf(rel, sf, call),
+          provenance: PROV,
+        });
+      }
       // An HTTP route the call registers on a server object: the path it serves, owned by the code that registers it.
       const serve = matchServe(call, imports);
       if (serve) {
@@ -1488,7 +1510,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
         });
       }
       // A message a worker or page posts to its peer: a step of its own, since the runtime has no call the project declares.
-      if (!effect && target === undefined && ts.isPropertyAccessExpression(callee) && callee.name.text === "postMessage") {
+      if (!effect && !send && target === undefined && ts.isPropertyAccessExpression(callee) && callee.name.text === "postMessage") {
         push({
           id: uniqueId(`effect:${pos(sf, call.getStart(sf)).join(":")}`),
           facet: "effects",
@@ -1553,7 +1575,8 @@ export function emitFile(project: Project, rel: string): IRBatch {
       if (effect) {
         push({
           id: uniqueId(`effect:${pos(sf, call.getStart(sf)).join(":")}`),
-          facet: "effects",
+          // The facet is the kind's first segment: effects for OS and I/O, sync for locks and atomics.
+          facet: effect.kind.slice(0, effect.kind.indexOf(".")),
           kind: effect.kind,
           parent: owner,
           attrs: effect.attrs,
@@ -1584,17 +1607,14 @@ export function emitFile(project: Project, rel: string): IRBatch {
       }
     };
 
-    const flow = (tag: string, kind: string, attrs: Record<string, unknown>, at: ts.Node = node) =>
-      push({
-        id: uniqueId(`${tag}:${pos(sf, at.getStart(sf)).join(":")}`),
-        facet: "flow",
-        kind,
-        parent: owner,
-        attrs,
-        span: spanOf(rel, sf, at),
-        provenance: PROV,
-      });
-    const arm = (label: string, at: ts.Node) => flow("arm", "flow.branch-arm", { label }, at);
+    const flow = (tag: string, kind: string, attrs: Record<string, unknown>, at: ts.Node = node): string => {
+      const id = uniqueId(`${tag}:${pos(sf, at.getStart(sf)).join(":")}`);
+      push({ id, facet: "flow", kind, parent: owner, attrs, span: spanOf(rel, sf, at), provenance: PROV });
+      return id;
+    };
+    const arm = (label: string, at: ts.Node) => {
+      armIds.set(at, flow("arm", "flow.branch-arm", { label }, at));
+    };
     const block = (label: string, at: ts.Node) => flow("block", "flow.block", { label }, at);
 
     if (ts.isIfStatement(node)) {
@@ -1689,6 +1709,19 @@ export function emitFile(project: Project, rel: string): IRBatch {
     }
 
     emitHandler(node);
+    // A receive on a BroadcastChannel or MessagePort: an onmessage assignment or a "message" listener on one.
+    const recv = matchChannelRecv(node, project.checker, chans);
+    if (recv) {
+      push({
+        id: uniqueId(`chanrecv:${pos(sf, node.getStart(sf)).join(":")}`),
+        facet: "concurrency",
+        kind: "concurrency.channel-recv",
+        parent: owner,
+        attrs: { channel: recv.channel, api: recv.api },
+        span: spanOf(rel, sf, node),
+        provenance: PROV,
+      });
+    }
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
       emitModule(rel, node.moduleSpecifier.text, node.moduleSpecifier, node.importClause?.isTypeOnly ?? false, false, "packaging.import");
     } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
@@ -1735,6 +1768,27 @@ export function emitFile(project: Project, rel: string): IRBatch {
     });
   };
   visit(sf, rel, rel);
+
+  // State facts need the arm ids and call edges the walk above produced, so they run after it.
+  if (!sf.isDeclarationFile) {
+    const state = emitState({
+      project,
+      rel,
+      sf,
+      moduleId,
+      pos: (offset) => pos(sf, offset),
+      spanOf: (n) => spanOf(rel, sf, n),
+      declOf: (sym) => declOf(project, sym),
+      uniqueId,
+      armId: (n) => armIds.get(n),
+      provenance: PROV,
+    });
+    for (const n of state.nodes) push(n);
+    for (const [call, attrs] of state.callAttrs) {
+      const edge = callEdges.get(call);
+      if (edge) edge.attrs = { ...edge.attrs, ...attrs };
+    }
+  }
 
   for (const d of project.program.getSyntacticDiagnostics(sf)) {
     const start = d.start ?? 0;

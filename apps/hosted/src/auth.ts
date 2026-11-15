@@ -19,6 +19,9 @@ import type { FetchLike } from "./storage.js";
 
 export type Env = Record<string, string | undefined>;
 
+/** The clock the session and OAuth expiry checks read. Defaults to the real one; the callers inject their own (deps.now). */
+export type Clock = () => number;
+
 const GITHUB = "https://github.com";
 const API = "https://api.github.com";
 const USER_AGENT = "insight-indexer";
@@ -193,7 +196,7 @@ async function fetchUser(token: string, fetchFn: FetchLike): Promise<{ id: numbe
  * refreshed, or sign-in off). When the access token has expired and the refresh token is still valid, the token is
  * refreshed and the result carries the new insight_session cookie.
  */
-export async function sessionFrom(request: Request, env: Env, fetchFn: FetchLike): Promise<Session | undefined> {
+export async function sessionFrom(request: Request, env: Env, fetchFn: FetchLike, clock: Clock = Date.now): Promise<Session | undefined> {
   const config = authConfigFromEnv(env);
   if (!config) return undefined;
   const sealed = readCookie(request.headers.get("cookie"), SESSION_COOKIE);
@@ -201,7 +204,7 @@ export async function sessionFrom(request: Request, env: Env, fetchFn: FetchLike
   const payload = openValue<SessionPayload>(sealed, config.key);
   if (!isSessionPayload(payload)) return undefined;
 
-  const now = Date.now();
+  const now = clock();
   if (payload.e === undefined || now < payload.e) return sessionOf(payload);
   if (payload.r === undefined || (payload.re !== undefined && now >= payload.re)) return undefined;
   const tokens = await tokenRequest(config, fetchFn, { grant_type: "refresh_token", refresh_token: payload.r }, now);
@@ -230,7 +233,7 @@ function returnPath(raw: string | null): string {
 }
 
 /** GET /api/auth/login?return=<hash>: sets the OAuth state cookie and redirects to GitHub's authorize page. */
-export async function handleLogin(request: Request, env: Env): Promise<Response> {
+export async function handleLogin(request: Request, env: Env, clock: Clock = Date.now): Promise<Response> {
   if (request.method !== "GET") return errorResponse(405, "method_not_allowed", "use GET");
   const config = authConfigFromEnv(env);
   if (!config) return disabled();
@@ -243,7 +246,7 @@ export async function handleLogin(request: Request, env: Env): Promise<Response>
   const pending: OAuthState = {
     state,
     ret: returnPath(new URL(request.url).searchParams.get("return")),
-    exp: Date.now() + OAUTH_LIFE_MS,
+    exp: clock() + OAUTH_LIFE_MS,
   };
   const cookie = serializeCookie(OAUTH_COOKIE, sealValue(pending, config.key), {
     maxAge: OAUTH_LIFE_MS / 1000,
@@ -257,7 +260,7 @@ export async function handleLogin(request: Request, env: Env): Promise<Response>
  * reads the user, sets insight_session and returns to the page the sign-in began on. Any failure returns to the home
  * page with ?auth_error=<code>.
  */
-export async function handleCallback(request: Request, env: Env, fetchFn: FetchLike): Promise<Response> {
+export async function handleCallback(request: Request, env: Env, fetchFn: FetchLike, clock: Clock = Date.now): Promise<Response> {
   if (request.method !== "GET") return errorResponse(405, "method_not_allowed", "use GET");
   const config = authConfigFromEnv(env);
   if (!config) return disabled();
@@ -266,7 +269,7 @@ export async function handleCallback(request: Request, env: Env, fetchFn: FetchL
 
   const pending = openValue<OAuthState>(readCookie(request.headers.get("cookie"), OAUTH_COOKIE) ?? "", config.key);
   if (!isOAuthState(pending)) return fail("state");
-  if (Date.now() > pending.exp) return fail("expired");
+  if (clock() > pending.exp) return fail("expired");
   const url = new URL(request.url);
   if (!timingEqual(url.searchParams.get("state") ?? "", pending.state)) return fail("state");
   const githubError = url.searchParams.get("error");
@@ -274,7 +277,7 @@ export async function handleCallback(request: Request, env: Env, fetchFn: FetchL
   const code = url.searchParams.get("code");
   if (!code) return fail("github");
 
-  const now = Date.now();
+  const now = clock();
   const tokens = await tokenRequest(config, fetchFn, { code, redirect_uri: `${origin}/api/auth/callback` }, now);
   if (tokens === undefined) return fail("github");
   const user = await fetchUser(tokens.access, fetchFn);
@@ -292,11 +295,11 @@ export async function handleCallback(request: Request, env: Env, fetchFn: FetchL
 }
 
 /** POST /api/auth/logout: clears the session cookie (204). A signed-in request must come from an allowed origin. */
-export async function handleLogout(request: Request, env: Env, fetchFn: FetchLike): Promise<Response> {
+export async function handleLogout(request: Request, env: Env, fetchFn: FetchLike, clock: Clock = Date.now): Promise<Response> {
   if (request.method !== "POST") return errorResponse(405, "method_not_allowed", "use POST");
   const config = authConfigFromEnv(env);
   if (!config) return disabled();
-  const session = await sessionFrom(request, env, fetchFn);
+  const session = await sessionFrom(request, env, fetchFn, clock);
   if (session !== undefined && !originAllowed(request, config)) {
     return errorResponse(403, "forbidden", "this request must come from the Insight site");
   }
@@ -304,11 +307,11 @@ export async function handleLogout(request: Request, env: Env, fetchFn: FetchLik
 }
 
 /** GET /api/auth/me: whether sign-in is on for this request and who is signed in. Never cached. */
-export async function handleMe(request: Request, env: Env, fetchFn: FetchLike): Promise<Response> {
+export async function handleMe(request: Request, env: Env, fetchFn: FetchLike, clock: Clock = Date.now): Promise<Response> {
   if (request.method !== "GET") return errorResponse(405, "method_not_allowed", "use GET");
   const config = authConfigFromEnv(env);
   if (!config) return disabled();
-  const session = await sessionFrom(request, env, fetchFn);
+  const session = await sessionFrom(request, env, fetchFn, clock);
   const installUrl = installUrlOf(config);
   const body = session
     ? { enabled: true, signedIn: true, login: session.user.login, avatarUrl: session.user.avatarUrl, installUrl }
@@ -317,9 +320,9 @@ export async function handleMe(request: Request, env: Env, fetchFn: FetchLike): 
 }
 
 /** The session the request needs: 404 when sign-in is off, 401 auth_required when signed out. */
-export async function requireSession(request: Request, env: Env, fetchFn: FetchLike): Promise<Session | Response> {
+export async function requireSession(request: Request, env: Env, fetchFn: FetchLike, clock: Clock = Date.now): Promise<Session | Response> {
   if (!authConfigFromEnv(env)) return disabled();
-  const session = await sessionFrom(request, env, fetchFn);
+  const session = await sessionFrom(request, env, fetchFn, clock);
   if (session === undefined) return errorResponse(401, "auth_required", "sign in with GitHub first");
   return session;
 }
@@ -334,8 +337,9 @@ export async function requireAccess(
   fetchFn: FetchLike,
   owner: string,
   repo: string,
+  clock: Clock = Date.now,
 ): Promise<Session | Response> {
-  const session = await requireSession(request, env, fetchFn);
+  const session = await requireSession(request, env, fetchFn, clock);
   if (session instanceof Response) return session;
   const config = authConfigFromEnv(env);
   const withSession = (res: Response): Response => withCookies(res, session.setCookie);

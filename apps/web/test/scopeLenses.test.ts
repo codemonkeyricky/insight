@@ -16,6 +16,11 @@ describe("tabbedLenses", () => {
     expect(tabbedLenses(rows).map((r) => r.id)).toEqual(["lens-calls", "lens-effects", "lens-flow-complexity"]);
   });
 
+  it("gives no tab to a lens whose id is a built-in tab id", () => {
+    const rows = [row({ id: "system" }), row({ id: "flow" }), row({ id: "lens-system" })];
+    expect(tabbedLenses(rows).map((r) => r.id)).toEqual(["lens-system"]);
+  });
+
   it("keeps every lens without the hidden flag, and does not change the list it is given", () => {
     const rows = [row({ id: "b" }), row({ id: "lens-execution", hidden: true }), row({ id: "a", hidden: false })];
     expect(tabbedLenses(rows).map((r) => r.id)).toEqual(["b", "a"]);
@@ -152,5 +157,14 @@ describe("nodeText", () => {
     expect(nodeText("parse")).toBe("parse");
     expect(nodeText("api.ts")).toBe("api.ts");
     expect(nodeText("src/a.ts:12 load")).toBe("src/a.ts:12 load");
+  });
+});
+
+describe("a state-machine view", () => {
+  it("is content only when it has a transition", async () => {
+    const { viewHasContent } = await import("../src/scopeLenses");
+    const base = { type: "state-machine" as const, id: "m", title: "m", holder: { id: "h", name: "h", domainKind: "enum" as const }, states: [] };
+    expect(viewHasContent({ ...base, transitions: [] })).toBe(false);
+    expect(viewHasContent({ ...base, transitions: [{ id: "t", from: "a", to: "b", confidence: "exact", sites: [] }] })).toBe(true);
   });
 });

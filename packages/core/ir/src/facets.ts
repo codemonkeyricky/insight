@@ -7,11 +7,12 @@ export const CORE_FACETS = [
   "concurrency",
   "sync",
   "effects",
+  "state",
 ] as const;
 
 export type CoreFacet = (typeof CORE_FACETS)[number];
 
-const FACET_PATTERN = /^(structure|packaging|flow|calls|concurrency|sync|effects|x-[a-z0-9-]+)$/;
+const FACET_PATTERN = /^(structure|packaging|flow|calls|concurrency|sync|effects|state|x-[a-z0-9-]+)$/;
 
 export function isFacetId(value: string): boolean {
   return FACET_PATTERN.test(value);

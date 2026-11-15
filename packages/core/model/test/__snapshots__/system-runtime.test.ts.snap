@@ -1,0 +1,802 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`runtime model: C++ fixture > matches the committed snapshot of the grounded C++ runtime 1`] = `
+{
+  "edges": [
+    {
+      "confidence": "exact",
+      "count": 1,
+      "from": "queue:prog:cpp:app:q",
+      "id": "queue:prog:cpp:app:q>dequeues>thread:cpp/main.cpp@concurrency.spawn-thread:6|cpp/work.cpp",
+      "label": "recv",
+      "sites": [
+        {
+          "file": "cpp/work.cpp",
+          "fn": "cpp/work.cpp#consume",
+          "line": 15,
+        },
+      ],
+      "to": "thread:cpp/main.cpp@concurrency.spawn-thread:6|cpp/work.cpp",
+      "verb": "dequeues",
+    },
+    {
+      "confidence": "exact",
+      "count": 1,
+      "from": "thread:cpp/main.cpp@concurrency.spawn-thread:5|cpp/work.cpp",
+      "id": "thread:cpp/main.cpp@concurrency.spawn-thread:5|cpp/work.cpp>notifies>condvar:prog:cpp:app:cv",
+      "label": "notify",
+      "sites": [
+        {
+          "file": "cpp/work.cpp",
+          "fn": "cpp/work.cpp#produce",
+          "line": 6,
+        },
+      ],
+      "to": "condvar:prog:cpp:app:cv",
+      "verb": "notifies",
+    },
+    {
+      "confidence": "exact",
+      "count": 1,
+      "from": "thread:cpp/main.cpp@concurrency.spawn-thread:5|cpp/work.cpp",
+      "id": "thread:cpp/main.cpp@concurrency.spawn-thread:5|cpp/work.cpp>locks>lock:prog:cpp:app:m",
+      "label": "acquire",
+      "sites": [
+        {
+          "file": "cpp/work.cpp",
+          "fn": "cpp/work.cpp#produce",
+          "line": 4,
+        },
+      ],
+      "to": "lock:prog:cpp:app:m",
+      "verb": "locks",
+    },
+    {
+      "confidence": "exact",
+      "count": 1,
+      "from": "thread:cpp/main.cpp@concurrency.spawn-thread:5|cpp/work.cpp",
+      "id": "thread:cpp/main.cpp@concurrency.spawn-thread:5|cpp/work.cpp>enqueues>queue:prog:cpp:app:q",
+      "label": "send",
+      "sites": [
+        {
+          "file": "cpp/work.cpp",
+          "fn": "cpp/work.cpp#produce",
+          "line": 5,
+        },
+      ],
+      "to": "queue:prog:cpp:app:q",
+      "verb": "enqueues",
+    },
+    {
+      "confidence": "exact",
+      "count": 1,
+      "from": "thread:cpp/main.cpp@concurrency.spawn-thread:5|cpp/work.cpp",
+      "id": "thread:cpp/main.cpp@concurrency.spawn-thread:5|cpp/work.cpp>calls>thread:cpp/main.cpp@concurrency.spawn-thread:5|cpp/queue.cpp",
+      "label": "calls",
+      "sites": [
+        {
+          "file": "cpp/work.cpp",
+          "fn": "cpp/work.cpp#produce",
+          "line": 9,
+        },
+      ],
+      "to": "thread:cpp/main.cpp@concurrency.spawn-thread:5|cpp/queue.cpp",
+      "verb": "calls",
+    },
+    {
+      "confidence": "exact",
+      "count": 1,
+      "from": "thread:cpp/main.cpp@concurrency.spawn-thread:6|cpp/work.cpp",
+      "id": "thread:cpp/main.cpp@concurrency.spawn-thread:6|cpp/work.cpp>waits>condvar:prog:cpp:app:cv",
+      "label": "wait",
+      "sites": [
+        {
+          "file": "cpp/work.cpp",
+          "fn": "cpp/work.cpp#consume",
+          "line": 16,
+        },
+      ],
+      "to": "condvar:prog:cpp:app:cv",
+      "verb": "waits",
+    },
+    {
+      "confidence": "exact",
+      "count": 1,
+      "from": "thread:cpp/main.cpp@concurrency.spawn-thread:6|cpp/work.cpp",
+      "id": "thread:cpp/main.cpp@concurrency.spawn-thread:6|cpp/work.cpp>locks>lock:prog:cpp:app:m",
+      "label": "acquire",
+      "sites": [
+        {
+          "file": "cpp/work.cpp",
+          "fn": "cpp/work.cpp#consume",
+          "line": 14,
+        },
+      ],
+      "to": "lock:prog:cpp:app:m",
+      "verb": "locks",
+    },
+    {
+      "confidence": "exact",
+      "count": 1,
+      "from": "thread:cpp/main.cpp@concurrency.spawn-thread:6|cpp/work.cpp",
+      "id": "thread:cpp/main.cpp@concurrency.spawn-thread:6|cpp/work.cpp>waits>semaphore:prog:cpp:app:slots",
+      "label": "acquire",
+      "sites": [
+        {
+          "file": "cpp/work.cpp",
+          "fn": "cpp/work.cpp#consume",
+          "line": 17,
+        },
+      ],
+      "to": "semaphore:prog:cpp:app:slots",
+      "verb": "waits",
+    },
+    {
+      "confidence": "exact",
+      "count": 1,
+      "from": "thread:cpp/main.cpp@concurrency.spawn-thread:6|cpp/work.cpp",
+      "id": "thread:cpp/main.cpp@concurrency.spawn-thread:6|cpp/work.cpp>calls>thread:cpp/main.cpp@concurrency.spawn-thread:6|cpp/queue.cpp",
+      "label": "calls",
+      "sites": [
+        {
+          "file": "cpp/work.cpp",
+          "fn": "cpp/work.cpp#consume",
+          "line": 10,
+        },
+      ],
+      "to": "thread:cpp/main.cpp@concurrency.spawn-thread:6|cpp/queue.cpp",
+      "verb": "calls",
+    },
+    {
+      "confidence": "exact",
+      "count": 1,
+      "from": "thread:main:cpp:app|cpp/main.cpp",
+      "id": "thread:main:cpp:app|cpp/main.cpp>spawns>thread:cpp/main.cpp@concurrency.spawn-thread:5|cpp/work.cpp",
+      "label": "spawns std::thread",
+      "sites": [
+        {
+          "file": "cpp/main.cpp",
+          "fn": "cpp/main.cpp#main",
+          "line": 6,
+        },
+      ],
+      "to": "thread:cpp/main.cpp@concurrency.spawn-thread:5|cpp/work.cpp",
+      "verb": "spawns",
+    },
+    {
+      "confidence": "exact",
+      "count": 1,
+      "from": "thread:main:cpp:app|cpp/main.cpp",
+      "id": "thread:main:cpp:app|cpp/main.cpp>spawns>thread:cpp/main.cpp@concurrency.spawn-thread:6|cpp/work.cpp",
+      "label": "spawns std::thread",
+      "sites": [
+        {
+          "file": "cpp/main.cpp",
+          "fn": "cpp/main.cpp#main",
+          "line": 7,
+        },
+      ],
+      "to": "thread:cpp/main.cpp@concurrency.spawn-thread:6|cpp/work.cpp",
+      "verb": "spawns",
+    },
+  ],
+  "resources": [
+    {
+      "id": "condvar:prog:cpp:app:cv",
+      "kind": "condvar",
+      "label": "cv",
+      "program": "prog:cpp:app",
+      "source": "sync",
+    },
+    {
+      "id": "lock:prog:cpp:app:m",
+      "kind": "lock",
+      "label": "m",
+      "program": "prog:cpp:app",
+      "source": "sync",
+    },
+    {
+      "id": "queue:prog:cpp:app:q",
+      "kind": "queue",
+      "label": "q",
+      "program": "prog:cpp:app",
+      "source": "channel",
+    },
+    {
+      "id": "semaphore:prog:cpp:app:slots",
+      "kind": "semaphore",
+      "label": "slots",
+      "program": "prog:cpp:app",
+      "source": "sync",
+    },
+  ],
+  "runtimes": [
+    {
+      "id": "prog:cpp:app",
+      "kind": "program",
+      "label": "app",
+      "programKind": "native",
+      "resources": [
+        "condvar:prog:cpp:app:cv",
+        "lock:prog:cpp:app:m",
+        "queue:prog:cpp:app:q",
+        "semaphore:prog:cpp:app:slots",
+      ],
+    },
+    {
+      "id": "thread:cpp/main.cpp@concurrency.spawn-thread:5",
+      "kind": "thread",
+      "label": "Thread · std::thread",
+      "parent": "prog:cpp:app",
+      "roots": [
+        "cpp/work.cpp#produce",
+      ],
+      "spawn": {
+        "api": "std::thread",
+        "file": "cpp/main.cpp",
+        "fn": "cpp/main.cpp#main",
+        "line": 6,
+        "status": "resolved",
+      },
+    },
+    {
+      "id": "thread:cpp/main.cpp@concurrency.spawn-thread:6",
+      "kind": "thread",
+      "label": "Thread · std::thread",
+      "parent": "prog:cpp:app",
+      "roots": [
+        "cpp/work.cpp#consume",
+      ],
+      "spawn": {
+        "api": "std::thread",
+        "file": "cpp/main.cpp",
+        "fn": "cpp/main.cpp#main",
+        "line": 7,
+        "status": "resolved",
+      },
+    },
+    {
+      "id": "thread:main:cpp:app",
+      "kind": "thread",
+      "label": "Main thread",
+      "parent": "prog:cpp:app",
+      "roots": [
+        "cpp/main.cpp#main",
+      ],
+    },
+  ],
+  "slices": [
+    {
+      "component": "cpp/queue.cpp",
+      "functions": 1,
+      "id": "thread:cpp/main.cpp@concurrency.spawn-thread:5|cpp/queue.cpp",
+      "root": false,
+      "runtime": "thread:cpp/main.cpp@concurrency.spawn-thread:5",
+    },
+    {
+      "component": "cpp/work.cpp",
+      "functions": 1,
+      "id": "thread:cpp/main.cpp@concurrency.spawn-thread:5|cpp/work.cpp",
+      "root": true,
+      "runtime": "thread:cpp/main.cpp@concurrency.spawn-thread:5",
+    },
+    {
+      "component": "cpp/queue.cpp",
+      "functions": 1,
+      "id": "thread:cpp/main.cpp@concurrency.spawn-thread:6|cpp/queue.cpp",
+      "root": false,
+      "runtime": "thread:cpp/main.cpp@concurrency.spawn-thread:6",
+    },
+    {
+      "component": "cpp/work.cpp",
+      "functions": 1,
+      "id": "thread:cpp/main.cpp@concurrency.spawn-thread:6|cpp/work.cpp",
+      "root": true,
+      "runtime": "thread:cpp/main.cpp@concurrency.spawn-thread:6",
+    },
+    {
+      "component": "cpp/main.cpp",
+      "functions": 1,
+      "id": "thread:main:cpp:app|cpp/main.cpp",
+      "root": true,
+      "runtime": "thread:main:cpp:app",
+    },
+  ],
+}
+`;
+
+exports[`runtime model: TypeScript fixture > matches the committed snapshot of the grounded TypeScript runtime 1`] = `
+{
+  "edges": [
+    {
+      "confidence": "exact",
+      "count": 1,
+      "from": "queue:thread:main:entry:node:src/main.ts:inbox",
+      "id": "queue:thread:main:entry:node:src/main.ts:inbox>dequeues>thread:main:entry:node:src/main.ts|src",
+      "label": "message",
+      "sites": [
+        {
+          "file": "src/worker.ts",
+          "fn": "src/worker.ts#handle",
+          "line": 7,
+        },
+      ],
+      "to": "thread:main:entry:node:src/main.ts|src",
+      "verb": "dequeues",
+    },
+    {
+      "confidence": "exact",
+      "count": 1,
+      "from": "queue:thread:src/main.ts@spawn:10:inbox",
+      "id": "queue:thread:src/main.ts@spawn:10:inbox>dequeues>thread:src/main.ts@spawn:10|src",
+      "label": "message",
+      "sites": [
+        {
+          "file": "src/main.ts",
+          "fn": "src/main.ts#main",
+          "line": 17,
+        },
+      ],
+      "to": "thread:src/main.ts@spawn:10|src",
+      "verb": "dequeues",
+    },
+    {
+      "confidence": "exact",
+      "count": 1,
+      "from": "thread:main:entry:node:src/main.ts|src",
+      "id": "thread:main:entry:node:src/main.ts|src>reads>env:prog:entry:node:src/main.ts",
+      "label": "1 var",
+      "sites": [
+        {
+          "file": "src/config.ts",
+          "fn": "src/config.ts#loadEnv",
+          "line": 4,
+        },
+      ],
+      "to": "env:prog:entry:node:src/main.ts",
+      "verb": "reads",
+    },
+    {
+      "confidence": "exact",
+      "count": 1,
+      "evidence": [
+        {
+          "api": "fs.readFileSync",
+          "count": 1,
+          "level": "api",
+        },
+      ],
+      "from": "thread:main:entry:node:src/main.ts|src",
+      "id": "thread:main:entry:node:src/main.ts|src>reads>fs",
+      "label": "fs.readFileSync",
+      "sites": [
+        {
+          "file": "src/io.ts",
+          "fn": "src/io.ts#readConfig",
+          "line": 5,
+        },
+      ],
+      "to": "fs",
+      "verb": "reads",
+    },
+    {
+      "confidence": "exact",
+      "count": 1,
+      "evidence": [
+        {
+          "api": "fs.writeFile",
+          "count": 1,
+          "level": "api",
+        },
+      ],
+      "from": "thread:main:entry:node:src/main.ts|src",
+      "id": "thread:main:entry:node:src/main.ts|src>writes>fs",
+      "label": "fs.writeFile",
+      "sites": [
+        {
+          "file": "src/io.ts",
+          "fn": "src/io.ts#writeReport",
+          "line": 6,
+        },
+      ],
+      "to": "fs",
+      "verb": "writes",
+    },
+    {
+      "confidence": "exact",
+      "count": 1,
+      "evidence": [
+        {
+          "api": "fetch",
+          "count": 1,
+          "level": "api",
+        },
+      ],
+      "from": "thread:main:entry:node:src/main.ts|src",
+      "id": "thread:main:entry:node:src/main.ts|src>reads>host:api.example.com",
+      "label": "GET",
+      "sites": [
+        {
+          "file": "src/net.ts",
+          "fn": "src/net.ts#fetchJobs",
+          "line": 5,
+        },
+      ],
+      "to": "host:api.example.com",
+      "verb": "reads",
+    },
+    {
+      "confidence": "exact",
+      "count": 1,
+      "from": "thread:main:entry:node:src/main.ts|src",
+      "id": "thread:main:entry:node:src/main.ts|src>listens>listen:8080",
+      "label": "listen",
+      "sites": [
+        {
+          "file": "src/server.ts",
+          "fn": "src/server.ts#listen",
+          "line": 4,
+        },
+      ],
+      "to": "listen:8080",
+      "verb": "listens",
+    },
+    {
+      "confidence": "exact",
+      "count": 2,
+      "evidence": [
+        {
+          "api": "process.kill",
+          "count": 1,
+          "level": "syscall",
+          "syscall": "kill",
+        },
+        {
+          "api": "process.on",
+          "count": 1,
+          "level": "unknown",
+        },
+      ],
+      "from": "thread:main:entry:node:src/main.ts|src",
+      "id": "thread:main:entry:node:src/main.ts|src>signals>os:signal",
+      "label": "process.kill, process.on",
+      "sites": [
+        {
+          "file": "src/main.ts",
+          "fn": "src/main.ts#stop",
+          "line": 41,
+        },
+        {
+          "file": "src/main.ts",
+          "fn": "src/main.ts#stop",
+          "line": 42,
+        },
+      ],
+      "to": "os:signal",
+      "verb": "signals",
+    },
+    {
+      "confidence": "exact",
+      "count": 1,
+      "evidence": [
+        {
+          "api": "child_process.execFile",
+          "count": 1,
+          "level": "api",
+        },
+      ],
+      "from": "thread:main:entry:node:src/main.ts|src",
+      "id": "thread:main:entry:node:src/main.ts|src>runs>proc:git",
+      "label": "git",
+      "sites": [
+        {
+          "file": "src/main.ts",
+          "fn": "src/main.ts#main",
+          "line": 15,
+        },
+      ],
+      "to": "proc:git",
+      "verb": "runs",
+    },
+    {
+      "confidence": "exact",
+      "count": 1,
+      "from": "thread:main:entry:node:src/main.ts|src",
+      "id": "thread:main:entry:node:src/main.ts|src>spawns>program:src/main.ts@spawn:11",
+      "label": "spawns fork",
+      "sites": [
+        {
+          "file": "src/main.ts",
+          "fn": "src/main.ts#main",
+          "line": 12,
+        },
+      ],
+      "to": "program:src/main.ts@spawn:11",
+      "verb": "spawns",
+    },
+    {
+      "confidence": "exact",
+      "count": 1,
+      "from": "thread:main:entry:node:src/main.ts|src",
+      "id": "thread:main:entry:node:src/main.ts|src>enqueues>queue:prog:entry:node:src/main.ts:Timers",
+      "label": "timer",
+      "sites": [
+        {
+          "file": "src/main.ts",
+          "fn": "src/main.ts#main",
+          "line": 14,
+        },
+      ],
+      "to": "queue:prog:entry:node:src/main.ts:Timers",
+      "verb": "enqueues",
+    },
+    {
+      "confidence": "exact",
+      "count": 1,
+      "from": "thread:main:entry:node:src/main.ts|src",
+      "id": "thread:main:entry:node:src/main.ts|src>enqueues>queue:prog:entry:node:src/main.ts:peer",
+      "label": "postMessage",
+      "sites": [
+        {
+          "file": "src/main.ts",
+          "fn": "src/main.ts#onReply",
+          "line": 10,
+        },
+      ],
+      "to": "queue:prog:entry:node:src/main.ts:peer",
+      "verb": "enqueues",
+    },
+    {
+      "confidence": "exact",
+      "count": 1,
+      "from": "thread:main:entry:node:src/main.ts|src",
+      "id": "thread:main:entry:node:src/main.ts|src>enqueues>queue:thread:src/main.ts@spawn:10:inbox",
+      "label": "message",
+      "sites": [
+        {
+          "file": "src/main.ts",
+          "fn": "src/main.ts#main",
+          "line": 17,
+        },
+      ],
+      "to": "queue:thread:src/main.ts@spawn:10:inbox",
+      "verb": "enqueues",
+    },
+    {
+      "confidence": "exact",
+      "count": 1,
+      "from": "thread:main:entry:node:src/main.ts|src",
+      "id": "thread:main:entry:node:src/main.ts|src>spawns>thread:src/main.ts@spawn:20",
+      "label": "spawns Worker",
+      "sites": [
+        {
+          "file": "src/main.ts",
+          "fn": "src/main.ts#serve",
+          "line": 21,
+        },
+      ],
+      "to": "thread:src/main.ts@spawn:20",
+      "verb": "spawns",
+    },
+    {
+      "confidence": "exact",
+      "count": 1,
+      "from": "thread:src/main.ts@spawn:10|src",
+      "id": "thread:src/main.ts@spawn:10|src>enqueues>queue:thread:main:entry:node:src/main.ts:inbox",
+      "label": "message",
+      "sites": [
+        {
+          "file": "src/worker.ts",
+          "fn": "src/worker.ts#handle",
+          "line": 7,
+        },
+      ],
+      "to": "queue:thread:main:entry:node:src/main.ts:inbox",
+      "verb": "enqueues",
+    },
+  ],
+  "resources": [
+    {
+      "id": "env:prog:entry:node:src/main.ts",
+      "kind": "env",
+      "label": "Environment",
+      "names": [
+        "API_KEY",
+      ],
+      "program": "prog:entry:node:src/main.ts",
+      "source": "env",
+    },
+    {
+      "id": "os:signal",
+      "kind": "os",
+      "label": "Signals",
+      "names": [
+        "SIGTERM",
+      ],
+      "source": "os",
+    },
+    {
+      "id": "queue:prog:entry:node:src/main.ts:Timers",
+      "kind": "queue",
+      "label": "Timers",
+      "program": "prog:entry:node:src/main.ts",
+      "source": "event-loop",
+    },
+    {
+      "id": "queue:prog:entry:node:src/main.ts:peer",
+      "kind": "queue",
+      "label": "inbox (unknown peer)",
+      "program": "prog:entry:node:src/main.ts",
+      "source": "message",
+    },
+    {
+      "id": "queue:thread:main:entry:node:src/main.ts:inbox",
+      "kind": "queue",
+      "label": "Main thread inbox",
+      "program": "prog:entry:node:src/main.ts",
+      "source": "message",
+    },
+    {
+      "id": "queue:thread:src/main.ts@spawn:10:inbox",
+      "kind": "queue",
+      "label": "Thread · Worker inbox",
+      "program": "prog:entry:node:src/main.ts",
+      "source": "message",
+    },
+  ],
+  "runtimes": [
+    {
+      "id": "co:main:entry:node:src/main.ts:src/main.ts#refresh",
+      "kind": "coroutine",
+      "label": "refresh",
+      "parent": "thread:main:entry:node:src/main.ts",
+      "roots": [
+        "src/main.ts#refresh",
+      ],
+    },
+    {
+      "id": "prog:entry:node:scripts/build.ts",
+      "kind": "program",
+      "label": "scripts/build.ts",
+      "programKind": "node",
+    },
+    {
+      "id": "prog:entry:node:src/main.ts",
+      "kind": "program",
+      "label": "src/main.ts",
+      "programKind": "node",
+      "resources": [
+        "env:prog:entry:node:src/main.ts",
+        "queue:prog:entry:node:src/main.ts:Timers",
+        "queue:prog:entry:node:src/main.ts:peer",
+        "queue:thread:main:entry:node:src/main.ts:inbox",
+        "queue:thread:src/main.ts@spawn:10:inbox",
+      ],
+    },
+    {
+      "id": "program:src/main.ts@spawn:11",
+      "kind": "program",
+      "label": "tools/child.ts",
+      "programKind": "node",
+      "spawn": {
+        "api": "fork",
+        "file": "src/main.ts",
+        "fn": "src/main.ts#main",
+        "line": 12,
+        "status": "resolved",
+      },
+    },
+    {
+      "id": "thread:main:entry:node:scripts/build.ts",
+      "implicit": true,
+      "kind": "thread",
+      "label": "Main thread",
+      "parent": "prog:entry:node:scripts/build.ts",
+      "roots": [
+        "scripts/build.ts#(module)",
+      ],
+    },
+    {
+      "coroutines": 1,
+      "id": "thread:main:entry:node:src/main.ts",
+      "kind": "thread",
+      "label": "Main thread",
+      "parent": "prog:entry:node:src/main.ts",
+      "roots": [
+        "src/main.ts#(module)",
+      ],
+    },
+    {
+      "id": "thread:src/main.ts@spawn:10",
+      "kind": "thread",
+      "label": "Thread · Worker",
+      "parent": "prog:entry:node:src/main.ts",
+      "roots": [
+        "src/worker.ts#(module)",
+      ],
+      "spawn": {
+        "api": "Worker",
+        "file": "src/main.ts",
+        "fn": "src/main.ts#main",
+        "line": 11,
+        "status": "resolved",
+      },
+    },
+    {
+      "id": "thread:src/main.ts@spawn:11",
+      "implicit": true,
+      "kind": "thread",
+      "label": "Main thread",
+      "parent": "program:src/main.ts@spawn:11",
+      "roots": [
+        "tools/child.ts#run",
+      ],
+    },
+    {
+      "id": "thread:src/main.ts@spawn:20",
+      "kind": "thread",
+      "label": "Thread · Worker",
+      "note": "target unresolved",
+      "parent": "prog:entry:node:src/main.ts",
+      "spawn": {
+        "api": "Worker",
+        "file": "src/main.ts",
+        "fn": "src/main.ts#serve",
+        "line": 21,
+        "status": "unresolved",
+      },
+      "unresolved": true,
+    },
+    {
+      "id": "unthreaded",
+      "kind": "unthreaded",
+      "label": "Not on a thread",
+    },
+  ],
+  "slices": [
+    {
+      "component": "src",
+      "functions": 3,
+      "id": "co:main:entry:node:src/main.ts:src/main.ts#refresh|src",
+      "root": true,
+      "runtime": "co:main:entry:node:src/main.ts:src/main.ts#refresh",
+    },
+    {
+      "component": "scripts",
+      "functions": 2,
+      "id": "thread:main:entry:node:scripts/build.ts|scripts",
+      "root": true,
+      "runtime": "thread:main:entry:node:scripts/build.ts",
+    },
+    {
+      "awaits": 1,
+      "component": "src",
+      "functions": 13,
+      "id": "thread:main:entry:node:src/main.ts|src",
+      "root": true,
+      "runtime": "thread:main:entry:node:src/main.ts",
+    },
+    {
+      "component": "src",
+      "functions": 3,
+      "id": "thread:src/main.ts@spawn:10|src",
+      "root": true,
+      "runtime": "thread:src/main.ts@spawn:10",
+    },
+    {
+      "component": "tools",
+      "functions": 2,
+      "id": "thread:src/main.ts@spawn:11|tools",
+      "root": true,
+      "runtime": "thread:src/main.ts@spawn:11",
+    },
+    {
+      "component": "src",
+      "functions": 2,
+      "id": "unthreaded|src",
+      "root": false,
+      "runtime": "unthreaded",
+    },
+  ],
+}
+`;
