@@ -382,7 +382,7 @@ export async function runIndex(opts: IndexOptions): Promise<IndexReport> {
     root: projectRoot,
     files: allFiles,
     shards,
-    resolvers: plugins.resolvers.map((r) => ({ id: r.manifest.id, resolver: r.resolver })),
+    resolvers: plugins.resolvers.map((r) => ({ id: r.manifest.id, resolver: r.resolver, fallback: r.fallback })),
   });
   const text = serializeDocument(linked.doc);
   const validation = validateIR(text, plugins.registry, { closed: true });

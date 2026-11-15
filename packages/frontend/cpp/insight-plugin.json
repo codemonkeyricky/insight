@@ -39,7 +39,8 @@
     "resolver": {
       "scheme": "cpp.include",
       "entry": "dist/resolve.js",
-      "priority": 10
+      "priority": 10,
+      "fallback": true
     }
   }
 }

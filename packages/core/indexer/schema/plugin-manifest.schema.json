@@ -36,7 +36,8 @@
           "properties": {
             "scheme": { "type": "string", "pattern": "^[a-z][a-z0-9.-]*$" },
             "entry": { "type": "string", "minLength": 1 },
-            "priority": { "type": "integer" }
+            "priority": { "type": "integer" },
+            "fallback": { "type": "boolean" }
           }
         }
       }

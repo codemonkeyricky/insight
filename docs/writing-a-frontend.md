@@ -57,7 +57,7 @@ A plugin that fails any check (bad JSON, missing entry, wrong export, mismatched
   }
   ```
 
-  `priority` decides which resolver runs first when several match.
+  `priority` decides which resolver runs first when several match. Set `"fallback": true` on a resolver that only makes syntactic guesses: its answers are used only when no resolver without the flag answered the same reference.
 
 ## detect and extract
 

@@ -5,6 +5,11 @@ export interface ResolverRole {
   scheme: string;
   entry: string;
   priority: number;
+  /**
+   * A syntactic guess (no build system behind it). Its answers count only when no non-fallback resolver
+   * of the same scheme answered the reference.
+   */
+  fallback?: boolean;
 }
 
 export interface PluginManifest {

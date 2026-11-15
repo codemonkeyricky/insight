@@ -12,6 +12,8 @@ export interface LinkResolver {
   /** The plugin id, recorded in provenance.resolvedBy. */
   id: string;
   resolver: Resolver;
+  /** A syntactic guesser. Its answers are used only when no non-fallback resolver answered. */
+  fallback?: boolean;
 }
 
 export interface LinkInput {
@@ -102,8 +104,8 @@ export async function link(input: LinkInput): Promise<LinkResult> {
       hasNode: (n) => nodes.has(n),
       listFiles: () => input.files,
     };
-    const answers: { id: string; answer: ResolveAnswer }[] = [];
-    for (const { id, resolver } of byScheme.get(ref.scheme) ?? []) {
+    const answers: { id: string; answer: ResolveAnswer; fallback: boolean }[] = [];
+    for (const { id, resolver, fallback } of byScheme.get(ref.scheme) ?? []) {
       let answer: ResolveAnswer | null;
       try {
         answer = await resolver.resolve(ref, ctx);
@@ -113,13 +115,18 @@ export async function link(input: LinkInput): Promise<LinkResult> {
       }
       if (!answer || answer.targets.length === 0) continue;
       if (!answer.targets.every((t) => nodes.has(t))) continue;
-      answers.push({ id, answer });
+      answers.push({ id, answer, fallback: fallback === true });
     }
+
+    // A fallback resolver (syntactic guesses) only answers when no build-system resolver did, so its
+    // answers are dropped whenever a non-fallback resolver answered.
+    const buildAnswers = answers.filter((a) => !a.fallback);
+    const settled = buildAnswers.length > 0 ? buildAnswers : answers;
 
     // A heuristic answer only counts when no strong answer exists. Strong answers that agree are
     // adopted together. Strong answers that disagree keep every target, each on its own edge.
-    const strong = answers.filter((a) => a.answer.confidence !== "heuristic");
-    const pool = strong.length > 0 ? strong : answers;
+    const strong = settled.filter((a) => a.answer.confidence !== "heuristic");
+    const pool = strong.length > 0 ? strong : settled;
     if (pool.length === 0) {
       unresolved++;
       continue;

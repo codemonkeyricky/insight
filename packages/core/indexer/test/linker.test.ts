@@ -97,3 +97,48 @@ describe("linker agreement", () => {
     expect(result.unresolved).toBe(1);
   });
 });
+
+describe("fallback resolvers", () => {
+  const fallbackTable = (id: string, priority: number, answers: Record<string, ResolveAnswer>): LinkResolver => ({
+    ...table(id, priority, answers),
+    fallback: true,
+  });
+
+  it("lets a non-fallback heuristic answer beat a fallback inferred answer", async () => {
+    const result = await run(
+      [
+        fallbackTable("syntactic", 10, { "b.h": { targets: ["b.h"], confidence: "inferred" } }),
+        table("build", 90, { "b.h": { targets: ["c.h"], confidence: "heuristic" } }),
+      ],
+      [refEdge("a.cc", "b.h")],
+    );
+    expect(result.doc.edges).toHaveLength(1);
+    expect(result.doc.edges[0]?.to).toBe("c.h");
+    expect(result.doc.edges[0]?.provenance.resolvedBy).toBe("build");
+    expect(result.doc.findings).toHaveLength(0);
+  });
+
+  it("uses a fallback answer when it is the only answer", async () => {
+    const result = await run(
+      [fallbackTable("syntactic", 10, { "b.h": { targets: ["b.h"], confidence: "inferred" } })],
+      [refEdge("a.cc", "b.h")],
+    );
+    expect(result.doc.edges[0]?.to).toBe("b.h");
+    expect(result.doc.edges[0]?.provenance.resolvedBy).toBe("syntactic");
+    expect(result.resolved).toBe(1);
+  });
+
+  it("keeps both targets when two non-fallback answers disagree, and drops the fallback's own answer", async () => {
+    const result = await run(
+      [
+        table("bazel", 90, { "b.h": { targets: ["b.h"], confidence: "exact" } }),
+        table("cmake", 80, { "b.h": { targets: ["c.h"], confidence: "exact" } }),
+        fallbackTable("syntactic", 10, { "b.h": { targets: ["a.cc"], confidence: "inferred" } }),
+      ],
+      [refEdge("a.cc", "b.h")],
+    );
+    expect(result.doc.edges.map((e) => e.to)).toEqual(["b.h", "c.h"]);
+    expect(result.doc.edges.map((e) => e.provenance.resolvedBy)).toEqual(["bazel", "cmake"]);
+    expect(result.doc.findings).toHaveLength(1);
+  });
+});
