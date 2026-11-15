@@ -6,6 +6,7 @@ import {
   handleMe,
   handleRepos,
   OAUTH_COOKIE,
+  openValue,
   sealValue,
   SESSION_COOKIE,
   type Env,
@@ -33,7 +34,7 @@ function post(path: string, headers: Record<string, string> = {}): Request {
 
 /** Starts a sign-in and returns the OAuth cookie value and the state GitHub would echo back. */
 async function beginSignIn(env: Env, ret = "#/gh/acme/widget"): Promise<{ oauth: string; state: string }> {
-  const res = await handleLogin(get(`/api/auth/login?return=${encodeURIComponent(ret)}`), env);
+  const res = await handleLogin(get(`/api/auth/login?return=${encodeURIComponent(ret)}`), env, () => NOW);
   const location = new URL(res.headers.get("location") ?? "");
   return {
     oauth: setCookieValue(res.headers.getSetCookie(), OAUTH_COOKIE) ?? "",
@@ -68,6 +69,7 @@ describe("sign-in: login", () => {
       get(`/api/auth/callback?code=code-alice&state=${state}`, { cookie: `${OAUTH_COOKIE}=${oauth}` }),
       AUTH_ENV,
       fakeApp({}, TARBALL).fetch,
+      () => NOW,
     );
     expect(res.headers.get("location")).toBe(`${ORIGIN}/#/`);
   });
@@ -87,6 +89,7 @@ describe("sign-in: callback", () => {
       get(`/api/auth/callback?code=code-alice&state=${state}`, { cookie: `${OAUTH_COOKIE}=${oauth}` }),
       AUTH_ENV,
       fake.fetch,
+      () => NOW,
     );
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe(`${ORIGIN}/#/gh/acme/widget`);
@@ -107,9 +110,10 @@ describe("sign-in: callback", () => {
       get(`/api/auth/callback?code=code-alice&state=${state}`, { cookie: `${OAUTH_COOKIE}=${oauth}` }),
       AUTH_ENV,
       fakeApp({}, TARBALL).fetch,
+      () => NOW,
     );
     const session = setCookieValue(res.headers.getSetCookie(), SESSION_COOKIE) ?? "";
-    const me = await handleMe(get("/api/auth/me", { cookie: `${SESSION_COOKIE}=${session}` }), AUTH_ENV, fakeApp({}, TARBALL).fetch);
+    const me = await handleMe(get("/api/auth/me", { cookie: `${SESSION_COOKIE}=${session}` }), AUTH_ENV, fakeApp({}, TARBALL).fetch, () => NOW);
     expect(await me.json()).toMatchObject({ enabled: true, signedIn: true, login: "alice" });
   });
 
@@ -119,6 +123,7 @@ describe("sign-in: callback", () => {
       get("/api/auth/callback?code=code-alice&state=" + "0".repeat(64), { cookie: `${OAUTH_COOKIE}=${oauth}` }),
       AUTH_ENV,
       fakeApp({}, TARBALL).fetch,
+      () => NOW,
     );
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe(`${ORIGIN}/#/?auth_error=state`);
@@ -131,12 +136,24 @@ describe("sign-in: callback", () => {
       get(`/api/auth/callback?code=code-alice&state=${"a".repeat(64)}`, { cookie: `${OAUTH_COOKIE}=${pending}` }),
       AUTH_ENV,
       fakeApp({}, TARBALL).fetch,
+      () => NOW,
     );
     expect(res.headers.get("location")).toBe(`${ORIGIN}/#/?auth_error=expired`);
   });
 
+  it("accepts an OAuth state whose expiry is exactly now (the check is strictly after)", async () => {
+    const pending = sealValue({ state: "b".repeat(64), ret: "#/", exp: NOW }, SESSION_KEY);
+    const res = await handleCallback(
+      get(`/api/auth/callback?code=code-alice&state=${"b".repeat(64)}`, { cookie: `${OAUTH_COOKIE}=${pending}` }),
+      AUTH_ENV,
+      fakeApp({}, TARBALL).fetch,
+      () => NOW,
+    );
+    expect(res.headers.get("location")).toBe(`${ORIGIN}/#/`);
+  });
+
   it("refuses a callback with no OAuth cookie", async () => {
-    const res = await handleCallback(get("/api/auth/callback?code=code-alice&state=x"), AUTH_ENV, fakeApp({}, TARBALL).fetch);
+    const res = await handleCallback(get("/api/auth/callback?code=code-alice&state=x"), AUTH_ENV, fakeApp({}, TARBALL).fetch, () => NOW);
     expect(res.headers.get("location")).toBe(`${ORIGIN}/#/?auth_error=state`);
   });
 
@@ -151,6 +168,7 @@ describe("sign-in: callback", () => {
       get(`/api/auth/callback?code=code-alice&state=${state}`, { cookie: `${OAUTH_COOKIE}=${oauth}` }),
       AUTH_ENV,
       fetchFn,
+      () => NOW,
     );
     expect(res.headers.get("location")).toBe(`${ORIGIN}/#/?auth_error=user`);
   });
@@ -182,19 +200,25 @@ describe("sign-in: the session of a request", () => {
     const cookie = setCookieValue(res.headers.getSetCookie(), SESSION_COOKIE);
     expect(cookie).toBeDefined();
     expect(cookie).not.toBe(expired.slice(SESSION_COOKIE.length + 1));
+    const line = res.headers.getSetCookie().find((c) => c.startsWith(`${SESSION_COOKIE}=`)) ?? "";
+    const refreshedRe = NOW + 15_552_000_000;
+    expect(line).toContain(`Max-Age=${(refreshedRe - NOW) / 1000}`);
+    const sealed = openValue<{ t: string; e: number; re: number }>(cookie ?? "", SESSION_KEY);
+    expect(sealed).toMatchObject({ t: "tok-alice-refreshed", e: NOW + 28_800_000, re: refreshedRe });
   });
 
   it("signs out when the refresh token is no longer valid", async () => {
     const fake = fakeApp({}, TARBALL);
     const stale = sessionCookie({ t: "tok-alice-old", r: "rejected-token", e: NOW - 1000, re: NOW + 86_400_000 });
-    const res = await handleMe(get("/api/auth/me", { cookie: stale }), AUTH_ENV, fake.fetch);
+    const res = await handleMe(get("/api/auth/me", { cookie: stale }), AUTH_ENV, fake.fetch, () => NOW);
+    expect(fake.calls.find((c) => c.url === "https://github.com/login/oauth/access_token")).toBeDefined();
     expect(await res.json()).toMatchObject({ signedIn: false });
   });
 
   it("signs out when the refresh token has expired too, without calling GitHub", async () => {
     const fake = fakeApp({}, TARBALL);
     const dead = sessionCookie({ t: "tok-alice-old", r: "ref-alice", e: NOW - 1000, re: NOW - 1 });
-    const res = await handleMe(get("/api/auth/me", { cookie: dead }), AUTH_ENV, fake.fetch);
+    const res = await handleMe(get("/api/auth/me", { cookie: dead }), AUTH_ENV, fake.fetch, () => NOW);
     expect(await res.json()).toMatchObject({ signedIn: false });
     expect(fake.calls).toHaveLength(0);
   });
