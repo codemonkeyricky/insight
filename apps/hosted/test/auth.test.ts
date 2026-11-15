@@ -113,7 +113,7 @@ describe("sign-in: callback", () => {
       () => NOW,
     );
     const session = setCookieValue(res.headers.getSetCookie(), SESSION_COOKIE) ?? "";
-    const me = await handleMe(get("/api/auth/me", { cookie: `${SESSION_COOKIE}=${session}` }), AUTH_ENV, fakeApp({}, TARBALL).fetch);
+    const me = await handleMe(get("/api/auth/me", { cookie: `${SESSION_COOKIE}=${session}` }), AUTH_ENV, fakeApp({}, TARBALL).fetch, () => NOW);
     expect(await me.json()).toMatchObject({ enabled: true, signedIn: true, login: "alice" });
   });
 

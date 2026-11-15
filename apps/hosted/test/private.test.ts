@@ -67,7 +67,7 @@ async function harness(over: Partial<IndexDeps> = {}, env: Record<string, string
 }
 
 function sessionFor(login: string, id: number): string {
-  return `${SESSION_COOKIE}=${sealValue({ t: `tok-${login}`, id, login, av: "x", e: Date.now() + 3_600_000, r: `ref-${login}`, re: Date.now() + 86_400_000 }, SESSION_KEY)}`;
+  return `${SESSION_COOKIE}=${sealValue({ t: `tok-${login}`, id, login, av: "x", e: NOW + 3_600_000, r: `ref-${login}`, re: NOW + 86_400_000 }, SESSION_KEY)}`;
 }
 
 const ALICE = sessionFor("alice", 1);
@@ -195,14 +195,14 @@ describe("GET /api/status for a private index", () => {
     await handleIndex(submit("acme/secret", ALICE), h.deps);
     await Promise.all(h.jobs);
     const path = `/api/status?repo=acme/secret&sha=${SHA}&visibility=private`;
-    const ok = await handleStatus(getReq(path, ALICE), { storage: h.storage, env: AUTH_ENV, fetch: h.fake.fetch });
+    const ok = await handleStatus(getReq(path, ALICE), { storage: h.storage, env: AUTH_ENV, fetch: h.fake.fetch, now: () => NOW });
     expect(ok.status).toBe(200);
     expect((await json(ok)).state).toBe("done");
     expect(ok.headers.get("cache-control")).toBe("no-store");
 
     const anon = await handleStatus(getReq(path), { storage: h.storage, env: AUTH_ENV, fetch: h.fake.fetch });
     expect(anon.status).toBe(401);
-    const bob = await handleStatus(getReq(path, BOB), { storage: h.storage, env: AUTH_ENV, fetch: h.fake.fetch });
+    const bob = await handleStatus(getReq(path, BOB), { storage: h.storage, env: AUTH_ENV, fetch: h.fake.fetch, now: () => NOW });
     expect(bob.status).toBe(404);
 
     // The public status path never reads a private run.
