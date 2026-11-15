@@ -232,4 +232,23 @@ describe("System fixes: unresolved thread spawns are placeholders", () => {
     expect(placeholdersOf(doc, false).threads).toHaveLength(0);
     expect(placeholdersOf(doc, true).threads).toHaveLength(1);
   });
+
+  it("emits one spawns edge from each host thread that reaches the spawn, from existing non-empty slices", () => {
+    // main starts a worker thread on src/work.ts#work, which also calls dispatch: two threads reach the unresolved spawn.
+    const doc = placeholderDoc("src/main.ts", "dispatch");
+    const sp = spawn("src/main.ts", "main", 20, "src/work.ts#work");
+    doc.nodes.push(sp.node);
+    doc.edges.push(sp.edge, fx.edge("src/work.ts#work", "src/main.ts#dispatch", "calls", "calls.call", { span: fx.span("src/work.ts", 3, 2, 3, 12) }));
+    const { s, threads } = placeholdersOf(doc, false);
+    expect(threads).toHaveLength(1);
+    const edges = s.edges.filter((e) => e.verb === "spawns" && e.to === threads[0]?.id);
+    expect(edges).toHaveLength(2);
+    expect(new Set(edges.map((e) => e.from)).size).toBe(2);
+    const slices = new Map((s.slices ?? []).map((sl) => [sl.id, sl] as const));
+    const rts = new Set((s.runtimes ?? []).map((r) => r.id));
+    for (const e of s.edges.filter((x) => x.verb === "spawns" && threads.some((t) => t.id === x.to))) {
+      const sl = slices.get(e.from);
+      expect(sl !== undefined ? sl.functions > 0 : rts.has(e.from)).toBe(true);
+    }
+  });
 });

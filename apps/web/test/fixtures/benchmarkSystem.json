@@ -1,0 +1,909 @@
+{
+ "scope": "",
+ "components": [
+  {
+   "id": "bindings",
+   "label": "bindings",
+   "path": "bindings",
+   "kind": "folder",
+   "files": 12,
+   "functions": 13,
+   "entry": false
+  },
+  {
+   "id": "cmake",
+   "label": "cmake",
+   "path": "cmake",
+   "kind": "folder",
+   "files": 20,
+   "functions": 8,
+   "entry": true
+  },
+  {
+   "id": "include",
+   "label": "include",
+   "path": "include",
+   "kind": "folder",
+   "files": 13,
+   "functions": 91,
+   "entry": false
+  },
+  {
+   "id": "src",
+   "label": "src",
+   "path": "src",
+   "kind": "folder",
+   "files": 41,
+   "functions": 360,
+   "entry": false
+  }
+ ],
+ "routes": [],
+ "externals": [
+  {
+   "id": "fs",
+   "label": "Filesystem",
+   "category": "filesystem",
+   "ops": [
+    {
+     "api": "read",
+     "syscall": "read",
+     "level": "syscall",
+     "count": 3
+    },
+    {
+     "api": "std::ifstream",
+     "level": "api",
+     "count": 1
+    },
+    {
+     "api": "std::ifstream",
+     "level": "unknown",
+     "count": 2
+    },
+    {
+     "api": "write",
+     "syscall": "write",
+     "level": "syscall",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "id": "proc:dynamic command",
+   "label": "dynamic command",
+   "category": "process",
+   "command": "dynamic command",
+   "ops": [
+    {
+     "api": "execv",
+     "level": "unknown",
+     "count": 2
+    }
+   ]
+  }
+ ],
+ "edges": [
+  {
+   "id": "thread:main|bindings>calls>thread:main|include",
+   "from": "thread:main|bindings",
+   "to": "thread:main|include",
+   "verb": "calls",
+   "label": "calls ×34",
+   "count": 34,
+   "sites": [
+    {
+     "file": "bindings/python/google_benchmark/benchmark.cc",
+     "line": 41,
+     "fn": "bindings/python/google_benchmark/benchmark.cc#RegisterBenchmark"
+    },
+    {
+     "file": "bindings/python/google_benchmark/benchmark.cc",
+     "line": 47,
+     "fn": "bindings/python/google_benchmark/benchmark.cc#NB_MODULE"
+    },
+    {
+     "file": "bindings/python/google_benchmark/benchmark.cc",
+     "line": 55,
+     "fn": "bindings/python/google_benchmark/benchmark.cc#NB_MODULE"
+    },
+    {
+     "file": "bindings/python/google_benchmark/benchmark.cc",
+     "line": 114,
+     "fn": "bindings/python/google_benchmark/benchmark.cc#NB_MODULE"
+    },
+    {
+     "file": "bindings/python/google_benchmark/benchmark.cc",
+     "line": 129,
+     "fn": "bindings/python/google_benchmark/benchmark.cc#NB_MODULE"
+    },
+    {
+     "file": "bindings/python/google_benchmark/benchmark.cc",
+     "line": 163,
+     "fn": "bindings/python/google_benchmark/benchmark.cc#NB_MODULE"
+    },
+    {
+     "file": "bindings/python/google_benchmark/benchmark.cc",
+     "line": 166,
+     "fn": "bindings/python/google_benchmark/benchmark.cc#NB_MODULE"
+    },
+    {
+     "file": "bindings/python/google_benchmark/benchmark.cc",
+     "line": 169,
+     "fn": "bindings/python/google_benchmark/benchmark.cc#NB_MODULE"
+    },
+    {
+     "file": "bindings/rust/src/rust_api.cc",
+     "line": 13,
+     "fn": "bindings/rust/src/rust_api.cc#benchmark::rust_api::RegisterBenchmark"
+    }
+   ],
+   "confidence": "exact"
+  },
+  {
+   "id": "thread:main|bindings>calls>thread:main|src",
+   "from": "thread:main|bindings",
+   "to": "thread:main|src",
+   "verb": "calls",
+   "label": "calls ×11",
+   "count": 11,
+   "sites": [
+    {
+     "file": "bindings/python/google_benchmark/benchmark.cc",
+     "line": 30,
+     "fn": "bindings/python/google_benchmark/benchmark.cc#Initialize"
+    },
+    {
+     "file": "bindings/python/google_benchmark/benchmark.cc",
+     "line": 195,
+     "fn": "bindings/python/google_benchmark/benchmark.cc#NB_MODULE"
+    },
+    {
+     "file": "bindings/rust/src/rust_api.cc",
+     "line": 23,
+     "fn": "bindings/rust/src/rust_api.cc#benchmark::rust_api::Initialize"
+    },
+    {
+     "file": "bindings/rust/src/rust_api.cc",
+     "line": 25,
+     "fn": "bindings/rust/src/rust_api.cc#benchmark::rust_api::Initialize"
+    },
+    {
+     "file": "bindings/rust/src/rust_api.cc",
+     "line": 29,
+     "fn": "bindings/rust/src/rust_api.cc#benchmark::rust_api::SkipWithError"
+    }
+   ],
+   "confidence": "exact"
+  },
+  {
+   "id": "thread:main|cmake>locks>lock:program:scope::m",
+   "from": "thread:main|cmake",
+   "to": "lock:program:scope::m",
+   "verb": "locks",
+   "label": "acquire",
+   "count": 1,
+   "sites": [
+    {
+     "file": "cmake/thread_safety_attributes.cpp",
+     "line": 22,
+     "fn": "cmake/thread_safety_attributes.cpp#main"
+    }
+   ],
+   "confidence": "exact"
+  },
+  {
+   "id": "thread:main|include>calls>thread:main|src",
+   "from": "thread:main|include",
+   "to": "thread:main|src",
+   "verb": "calls",
+   "label": "calls ×15",
+   "count": 15,
+   "sites": [
+    {
+     "file": "include/benchmark/benchmark_api.h",
+     "line": 108,
+     "fn": "include/benchmark/benchmark_api.h#benchmark::ArgPair"
+    },
+    {
+     "file": "include/benchmark/benchmark_api.h",
+     "line": 118,
+     "fn": "include/benchmark/benchmark_api.h#benchmark::RangePair"
+    },
+    {
+     "file": "include/benchmark/benchmark_api.h",
+     "line": 243,
+     "fn": "include/benchmark/benchmark_api.h#benchmark::RegisterBenchmark@241"
+    },
+    {
+     "file": "include/benchmark/benchmark_api.h",
+     "line": 252,
+     "fn": "include/benchmark/benchmark_api.h#benchmark::RegisterBenchmark@249"
+    },
+    {
+     "file": "include/benchmark/state.h",
+     "line": 63,
+     "fn": "include/benchmark/state.h#benchmark::PauseTiming"
+    },
+    {
+     "file": "include/benchmark/state.h",
+     "line": 71,
+     "fn": "include/benchmark/state.h#benchmark::ResumeTiming"
+    },
+    {
+     "file": "include/benchmark/state.h",
+     "line": 219,
+     "fn": "include/benchmark/state.h#benchmark::State::KeepRunningInternal"
+    },
+    {
+     "file": "include/benchmark/state.h",
+     "line": 230,
+     "fn": "include/benchmark/state.h#benchmark::State::KeepRunningInternal"
+    },
+    {
+     "file": "include/benchmark/state.h",
+     "line": 265,
+     "fn": "include/benchmark/state.h#benchmark::State::StateIterator::operator!="
+    },
+    {
+     "file": "include/benchmark/state.h",
+     "line": 278,
+     "fn": "include/benchmark/state.h#benchmark::State::StateIteratorState::end"
+    },
+    {
+     "file": "include/benchmark/types.h",
+     "line": 32,
+     "fn": "include/benchmark/types.h#benchmark::internal::make_unique"
+    },
+    {
+     "file": "include/benchmark/utils.h",
+     "line": 168,
+     "fn": "include/benchmark/utils.h#benchmark::DoNotOptimize@167"
+    },
+    {
+     "file": "include/benchmark/utils.h",
+     "line": 174,
+     "fn": "include/benchmark/utils.h#benchmark::DoNotOptimize@173"
+    },
+    {
+     "file": "include/benchmark/utils.h",
+     "line": 180,
+     "fn": "include/benchmark/utils.h#benchmark::DoNotOptimize@179"
+    },
+    {
+     "file": "include/benchmark/utils.h",
+     "line": 186,
+     "fn": "include/benchmark/utils.h#benchmark::DoNotOptimize@185"
+    }
+   ],
+   "confidence": "inferred"
+  },
+  {
+   "id": "thread:main|src>reads>env:program:scope:",
+   "from": "thread:main|src",
+   "to": "env:program:scope:",
+   "verb": "reads",
+   "label": "0 vars",
+   "count": 6,
+   "sites": [
+    {
+     "file": "src/colorprint.cc",
+     "line": 197,
+     "fn": "src/colorprint.cc#benchmark::IsColorTerminal"
+    },
+    {
+     "file": "src/commandlineflags.cc",
+     "line": 128,
+     "fn": "src/commandlineflags.cc#benchmark::BoolFromEnv"
+    },
+    {
+     "file": "src/commandlineflags.cc",
+     "line": 135,
+     "fn": "src/commandlineflags.cc#benchmark::int32_tInt32FromEnv"
+    },
+    {
+     "file": "src/commandlineflags.cc",
+     "line": 148,
+     "fn": "src/commandlineflags.cc#benchmark::doubleDoubleFromEnv"
+    },
+    {
+     "file": "src/commandlineflags.cc",
+     "line": 161,
+     "fn": "src/commandlineflags.cc#benchmark::StringFromEnv"
+    },
+    {
+     "file": "src/commandlineflags.cc",
+     "line": 169,
+     "fn": "src/commandlineflags.cc#benchmark::std::map"
+    }
+   ],
+   "confidence": "exact"
+  },
+  {
+   "id": "thread:main|src>reads>fs",
+   "from": "thread:main|src",
+   "to": "fs",
+   "verb": "reads",
+   "label": "read ×3, std::ifstream ×3",
+   "count": 6,
+   "sites": [
+    {
+     "file": "src/benchmark.cc",
+     "line": 851,
+     "fn": "src/benchmark.cc#benchmark::ValidateNoASLRPersonalitySticks"
+    },
+    {
+     "file": "src/perf_counters.cc",
+     "line": 43,
+     "fn": "src/perf_counters.cc#benchmark::internal::PerfCounterValues::Read@37"
+    },
+    {
+     "file": "src/perf_counters.cc",
+     "line": 109,
+     "fn": "src/perf_counters.cc#benchmark::internal::QueryCPUPMUTypes"
+    },
+    {
+     "file": "src/sysinfo.cc",
+     "line": 225,
+     "fn": "src/sysinfo.cc#benchmark::ReadFromFile"
+    },
+    {
+     "file": "src/sysinfo.cc",
+     "line": 285,
+     "fn": "src/sysinfo.cc#benchmark::std::vector"
+    },
+    {
+     "file": "src/sysinfo.cc",
+     "line": 697,
+     "fn": "src/sysinfo.cc#benchmark::GetCPUCyclesPerSecond"
+    }
+   ],
+   "confidence": "inferred",
+   "evidence": [
+    {
+     "api": "read",
+     "syscall": "read",
+     "level": "syscall",
+     "count": 3
+    },
+    {
+     "api": "std::ifstream",
+     "level": "api",
+     "count": 1
+    },
+    {
+     "api": "std::ifstream",
+     "level": "unknown",
+     "count": 2
+    }
+   ]
+  },
+  {
+   "id": "thread:main|src>writes>fs",
+   "from": "thread:main|src",
+   "to": "fs",
+   "verb": "writes",
+   "label": "write",
+   "count": 1,
+   "sites": [
+    {
+     "file": "src/benchmark.cc",
+     "line": 883,
+     "fn": "src/benchmark.cc#benchmark::MaybeReenterWithoutASLR"
+    }
+   ],
+   "confidence": "inferred",
+   "evidence": [
+    {
+     "api": "write",
+     "syscall": "write",
+     "level": "syscall",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "id": "thread:main|src>locks>lock:program:scope::mut_",
+   "from": "thread:main|src",
+   "to": "lock:program:scope::mut_",
+   "verb": "locks",
+   "label": "acquire",
+   "count": 1,
+   "sites": [
+    {
+     "file": "src/mutex.h",
+     "line": 94,
+     "fn": "src/mutex.h#benchmark::ACQUIRE"
+    }
+   ],
+   "confidence": "exact"
+  },
+  {
+   "id": "thread:main|src>maps>os:device",
+   "from": "thread:main|src",
+   "to": "os:device",
+   "verb": "maps",
+   "label": "ioctl ×2",
+   "count": 2,
+   "sites": [
+    {
+     "file": "src/perf_counters.cc",
+     "line": 272,
+     "fn": "src/perf_counters.cc#benchmark::internal::PerfCounters::Create@137"
+    },
+    {
+     "file": "src/perf_counters.cc",
+     "line": 298,
+     "fn": "src/perf_counters.cc#benchmark::internal::PerfCounters::CloseCounters@293"
+    }
+   ],
+   "confidence": "inferred",
+   "evidence": [
+    {
+     "api": "ioctl",
+     "syscall": "ioctl",
+     "level": "syscall",
+     "count": 2
+    }
+   ]
+  },
+  {
+   "id": "thread:main|src>calls>os:fd",
+   "from": "thread:main|src",
+   "to": "os:fd",
+   "verb": "calls",
+   "label": "close ×9, open, pipe",
+   "count": 11,
+   "sites": [
+    {
+     "file": "src/benchmark.cc",
+     "line": 819,
+     "fn": "src/benchmark.cc#benchmark::ValidateNoASLRPersonalitySticks"
+    },
+    {
+     "file": "src/benchmark.cc",
+     "line": 823,
+     "fn": "src/benchmark.cc#benchmark::ValidateNoASLRPersonalitySticks"
+    },
+    {
+     "file": "src/benchmark.cc",
+     "line": 824,
+     "fn": "src/benchmark.cc#benchmark::ValidateNoASLRPersonalitySticks"
+    },
+    {
+     "file": "src/benchmark.cc",
+     "line": 830,
+     "fn": "src/benchmark.cc#benchmark::ValidateNoASLRPersonalitySticks"
+    },
+    {
+     "file": "src/benchmark.cc",
+     "line": 848,
+     "fn": "src/benchmark.cc#benchmark::ValidateNoASLRPersonalitySticks"
+    },
+    {
+     "file": "src/benchmark.cc",
+     "line": 852,
+     "fn": "src/benchmark.cc#benchmark::ValidateNoASLRPersonalitySticks"
+    },
+    {
+     "file": "src/benchmark.cc",
+     "line": 884,
+     "fn": "src/benchmark.cc#benchmark::MaybeReenterWithoutASLR"
+    },
+    {
+     "file": "src/perf_counters.cc",
+     "line": 103,
+     "fn": "src/perf_counters.cc#benchmark::internal::QueryCPUPMUTypes"
+    },
+    {
+     "file": "src/perf_counters.cc",
+     "line": 110,
+     "fn": "src/perf_counters.cc#benchmark::internal::QueryCPUPMUTypes"
+    },
+    {
+     "file": "src/perf_counters.cc",
+     "line": 280,
+     "fn": "src/perf_counters.cc#benchmark::internal::PerfCounters::Create@137"
+    },
+    {
+     "file": "src/perf_counters.cc",
+     "line": 301,
+     "fn": "src/perf_counters.cc#benchmark::internal::PerfCounters::CloseCounters@293"
+    }
+   ],
+   "confidence": "inferred",
+   "evidence": [
+    {
+     "api": "close",
+     "syscall": "close",
+     "level": "syscall",
+     "count": 9
+    },
+    {
+     "api": "open",
+     "syscall": "open",
+     "level": "syscall",
+     "count": 1
+    },
+    {
+     "api": "pipe",
+     "syscall": "pipe",
+     "level": "syscall",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "id": "thread:main|src>controls>os:process-control",
+   "from": "thread:main|src",
+   "to": "os:process-control",
+   "verb": "controls",
+   "label": "fork",
+   "count": 1,
+   "sites": [
+    {
+     "file": "src/benchmark.cc",
+     "line": 821,
+     "fn": "src/benchmark.cc#benchmark::ValidateNoASLRPersonalitySticks"
+    }
+   ],
+   "confidence": "inferred",
+   "evidence": [
+    {
+     "api": "fork",
+     "syscall": "fork",
+     "level": "syscall",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "id": "thread:main|src>runs>proc:dynamic command",
+   "from": "thread:main|src",
+   "to": "proc:dynamic command",
+   "verb": "runs",
+   "label": "dynamic command ×2",
+   "count": 2,
+   "sites": [
+    {
+     "file": "src/benchmark.cc",
+     "line": 842,
+     "fn": "src/benchmark.cc#benchmark::ValidateNoASLRPersonalitySticks"
+    },
+    {
+     "file": "src/benchmark.cc",
+     "line": 916,
+     "fn": "src/benchmark.cc#benchmark::MaybeReenterWithoutASLR"
+    }
+   ],
+   "confidence": "inferred",
+   "evidence": [
+    {
+     "api": "execv",
+     "level": "unknown",
+     "count": 2
+    }
+   ]
+  },
+  {
+   "id": "thread:main|src>calls>thread:main|bindings",
+   "from": "thread:main|src",
+   "to": "thread:main|bindings",
+   "verb": "calls",
+   "label": "calls ×4",
+   "count": 4,
+   "sites": [
+    {
+     "file": "src/perf_counters.cc",
+     "line": 76,
+     "fn": "src/perf_counters.cc#benchmark::internal::PerfCounters::IsCounterSupported@75"
+    },
+    {
+     "file": "src/perf_counters.cc",
+     "line": 140,
+     "fn": "src/perf_counters.cc#benchmark::internal::PerfCounters::Create@137"
+    }
+   ],
+   "confidence": "inferred"
+  },
+  {
+   "id": "thread:main|src>calls>thread:main|include",
+   "from": "thread:main|src",
+   "to": "thread:main|include",
+   "verb": "calls",
+   "label": "calls ×83",
+   "count": 83,
+   "sites": [
+    {
+     "file": "src/benchmark.cc",
+     "line": 253,
+     "fn": "src/benchmark.cc#benchmark::State::PauseTimingImpl"
+    },
+    {
+     "file": "src/benchmark.cc",
+     "line": 308,
+     "fn": "src/benchmark.cc#benchmark::State::StartKeepRunning"
+    },
+    {
+     "file": "src/benchmark.cc",
+     "line": 310,
+     "fn": "src/benchmark.cc#benchmark::State::StartKeepRunning"
+    },
+    {
+     "file": "src/benchmark.cc",
+     "line": 313,
+     "fn": "src/benchmark.cc#benchmark::State::StartKeepRunning"
+    },
+    {
+     "file": "src/benchmark.cc",
+     "line": 314,
+     "fn": "src/benchmark.cc#benchmark::State::StartKeepRunning"
+    },
+    {
+     "file": "src/benchmark.cc",
+     "line": 319,
+     "fn": "src/benchmark.cc#benchmark::State::FinishKeepRunning"
+    },
+    {
+     "file": "src/benchmark.cc",
+     "line": 320,
+     "fn": "src/benchmark.cc#benchmark::State::FinishKeepRunning"
+    },
+    {
+     "file": "src/benchmark.cc",
+     "line": 321,
+     "fn": "src/benchmark.cc#benchmark::State::FinishKeepRunning"
+    },
+    {
+     "file": "src/benchmark.cc",
+     "line": 328,
+     "fn": "src/benchmark.cc#benchmark::State::FinishKeepRunning"
+    },
+    {
+     "file": "src/benchmark.cc",
+     "line": 465,
+     "fn": "src/benchmark.cc#benchmark::internal::RunBenchmarks"
+    },
+    {
+     "file": "src/benchmark.cc",
+     "line": 490,
+     "fn": "src/benchmark.cc#benchmark::internal::RunBenchmarks"
+    },
+    {
+     "file": "src/benchmark.cc",
+     "line": 491,
+     "fn": "src/benchmark.cc#benchmark::internal::RunBenchmarks"
+    },
+    {
+     "file": "src/benchmark.cc",
+     "line": 492,
+     "fn": "src/benchmark.cc#benchmark::internal::RunBenchmarks"
+    },
+    {
+     "file": "src/benchmark_api_internal.cc",
+     "line": 99,
+     "fn": "src/benchmark_api_internal.cc#benchmark::internal::BenchmarkInstance::Run"
+    },
+    {
+     "file": "src/benchmark_register.h",
+     "line": 37,
+     "fn": "src/benchmark_register.h#benchmark::internal::AddPowers"
+    },
+    {
+     "file": "src/benchmark_register.h",
+     "line": 56,
+     "fn": "src/benchmark_register.h#benchmark::internal::AddNegatedPowers"
+    },
+    {
+     "file": "src/benchmark_register.h",
+     "line": 57,
+     "fn": "src/benchmark_register.h#benchmark::internal::AddNegatedPowers"
+    },
+    {
+     "file": "src/benchmark_runner.cc",
+     "line": 150,
+     "fn": "src/benchmark_runner.cc#benchmark::internal::RunInThread"
+    },
+    {
+     "file": "src/benchmark_runner.cc",
+     "line": 165,
+     "fn": "src/benchmark_runner.cc#benchmark::internal::RunInThread"
+    },
+    {
+     "file": "src/benchmark_runner.cc",
+     "line": 167,
+     "fn": "src/benchmark_runner.cc#benchmark::internal::RunInThread"
+    }
+   ],
+   "confidence": "inferred"
+  },
+  {
+   "id": "thread:main|src>spawns>thread:src/benchmark_runner.cc@spawn:211:17",
+   "from": "thread:main|src",
+   "to": "thread:src/benchmark_runner.cc@spawn:211:17",
+   "verb": "spawns",
+   "label": "spawns thread",
+   "count": 1,
+   "sites": [
+    {
+     "file": "src/benchmark_runner.cc",
+     "line": 212,
+     "fn": "src/benchmark_runner.cc#benchmark::internal::ThreadRunnerDefault::RunThreads"
+    }
+   ],
+   "confidence": "exact"
+  },
+  {
+   "id": "unthreaded|src>calls>thread:main|include",
+   "from": "unthreaded|src",
+   "to": "thread:main|include",
+   "verb": "calls",
+   "label": "calls ×5",
+   "count": 5,
+   "sites": [
+    {
+     "file": "src/statistics.cc",
+     "line": 32
+    },
+    {
+     "file": "src/statistics.cc",
+     "line": 65
+    }
+   ],
+   "confidence": "inferred"
+  }
+ ],
+ "stages": [
+  [
+   "cmake"
+  ],
+  [
+   "bindings",
+   "include",
+   "src"
+  ]
+ ],
+ "runtime": "grounded",
+ "runtimes": [
+  {
+   "id": "program:scope:",
+   "kind": "program",
+   "label": "project",
+   "programKind": "native",
+   "resources": [
+    "env:program:scope:",
+    "lock:program:scope::m",
+    "lock:program:scope::mut_"
+   ]
+  },
+  {
+   "id": "thread:main",
+   "kind": "thread",
+   "label": "Main thread",
+   "parent": "program:scope:",
+   "roots": [
+    "bindings/python/google_benchmark/benchmark.cc#NB_MODULE",
+    "bindings/python/google_benchmark/benchmark.cc#RegisterBenchmark",
+    "bindings/rust/src/rust_api.cc#benchmark::rust_api::RegisterBenchmark",
+    "bindings/rust/src/rust_api.cc#benchmark::rust_api::SkipWithError",
+    "cmake/gnu_posix_regex.cpp#main",
+    "cmake/posix_regex.cpp#main",
+    "cmake/pthread_affinity.cpp#main",
+    "cmake/std_regex.cpp#main",
+    "cmake/steady_clock.cpp#main",
+    "cmake/thread_safety_attributes.cpp#ACQUIRE",
+    "cmake/thread_safety_attributes.cpp#RELEASE",
+    "cmake/thread_safety_attributes.cpp#main",
+    "include/benchmark/benchmark_api.h#benchmark::ArgPair",
+    "include/benchmark/benchmark_api.h#benchmark::Fixture::Fixture",
+    "include/benchmark/benchmark_api.h#benchmark::Fixture::SetUp@272",
+    "include/benchmark/benchmark_api.h#benchmark::Fixture::SetUp@274",
+    "include/benchmark/benchmark_api.h#benchmark::RangePair",
+    "include/benchmark/benchmark_api.h#benchmark::ThreadRunnerBase::~ThreadRunnerBase",
+    "include/benchmark/benchmark_api.h#benchmark::internal::LambdaBenchmark::LambdaBenchmark@232",
+    "include/benchmark/benchmark_api.h#benchmark::internal::LambdaBenchmark::LambdaBenchmark@236"
+   ]
+  },
+  {
+   "id": "thread:src/benchmark_runner.cc@spawn:211:17",
+   "kind": "thread",
+   "label": "Thread",
+   "parent": "program:scope:",
+   "spawn": {
+    "file": "src/benchmark_runner.cc",
+    "line": 212,
+    "status": "unresolved",
+    "fn": "src/benchmark_runner.cc#benchmark::internal::ThreadRunnerDefault::RunThreads"
+   },
+   "unresolved": true,
+   "note": "target unresolved: fn"
+  },
+  {
+   "id": "unthreaded",
+   "kind": "unthreaded",
+   "label": "Not on a thread"
+  }
+ ],
+ "slices": [
+  {
+   "id": "thread:main|bindings",
+   "runtime": "thread:main",
+   "component": "bindings",
+   "functions": 6,
+   "root": true
+  },
+  {
+   "id": "thread:main|cmake",
+   "runtime": "thread:main",
+   "component": "cmake",
+   "functions": 8,
+   "root": true
+  },
+  {
+   "id": "thread:main|include",
+   "runtime": "thread:main",
+   "component": "include",
+   "functions": 90,
+   "root": true
+  },
+  {
+   "id": "thread:main|src",
+   "runtime": "thread:main",
+   "component": "src",
+   "functions": 333,
+   "root": true
+  },
+  {
+   "id": "unthreaded|src",
+   "runtime": "unthreaded",
+   "component": "src",
+   "functions": 0,
+   "root": false
+  }
+ ],
+ "resources": [
+  {
+   "id": "env:program:scope:",
+   "kind": "env",
+   "label": "Environment",
+   "program": "program:scope:",
+   "source": "env"
+  },
+  {
+   "id": "lock:program:scope::m",
+   "kind": "lock",
+   "label": "m",
+   "program": "program:scope:",
+   "source": "sync"
+  },
+  {
+   "id": "lock:program:scope::mut_",
+   "kind": "lock",
+   "label": "mut_",
+   "program": "program:scope:",
+   "source": "sync"
+  },
+  {
+   "id": "os:device",
+   "kind": "os",
+   "label": "Devices",
+   "source": "os",
+   "names": [
+    "PERF_EVENT_IOC_DISABLE",
+    "PERF_EVENT_IOC_ENABLE"
+   ]
+  },
+  {
+   "id": "os:fd",
+   "kind": "os",
+   "label": "File descriptors",
+   "source": "os"
+  },
+  {
+   "id": "os:process-control",
+   "kind": "os",
+   "label": "Process control",
+   "source": "os"
+  }
+ ]
+}

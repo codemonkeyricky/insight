@@ -11,18 +11,18 @@ const time = <T,>(f: () => T): { ms: number; out: T } => {
 
 // The hashes were taken from the layout before it was optimised (lookups by id, an obstacle grid, a precomputed lattice): the
 // output must stay byte for byte the same. They were retaken when trunks were routed around other process frames (fix 5), when
-// coroutines stopped being folded by default and when the process subtitle started counting recursively.
+// coroutines stopped being folded by default when the process subtitle started counting recursively, and when edges got 4 px clearance with end stubs and the band hugged its content.
 describe("layout output is unchanged by the optimisation", () => {
   it("matches the hashes of the original layout for synthetic models and the fixture", () => {
-    for (const [c, e, plain, collapsed] of [[50, 200, "04116eb7d100", "18b5ff8d84ac"], [200, 800, "bb0e07deeefa", "db2b6f513b20"]] as const) {
+    for (const [c, e, plain, collapsed] of [[50, 200, "782c9e60eead", "f4f4cc6d075b"], [200, 800, "09c655cd2391", "11fdc6df3f4c"]] as const) {
       const m = synthModel(c, e);
       const l = layoutSystemFrames(m);
       expect(hashOf(l)).toBe(plain);
       const ids = (l.frames ?? []).map((f) => f.id);
       expect(hashOf(layoutSystemFrames(m, { collapsed: new Set(ids.slice(0, 3)), widened: new Set(ids.slice(3, 6)) }))).toBe(collapsed);
     }
-    expect(hashOf(layoutSystemFrames(model()))).toBe("df330f251302");
-    expect(hashOf(layoutSystemFrames(model(), { collapsed: new Set(["thread:worker"]) }))).toBe("a35970aabab9");
+    expect(hashOf(layoutSystemFrames(model()))).toBe("e28fb615b5ae");
+    expect(hashOf(layoutSystemFrames(model(), { collapsed: new Set(["thread:worker"]) }))).toBe("a9b48571a773");
   });
 });
 

@@ -482,7 +482,15 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
   // Placeholder threads of unresolved spawns: started from the spawning slice (the spawn site's component on its thread).
   for (const [rt, ph] of plan.placeholders) {
     const site: Site = { file: ph.spawn.file, line: ph.spawn.line, ...(ph.spawn.fn !== undefined ? { fn: ph.spawn.fn } : {}) };
-    addFact(ph.from, rt, "spawns", `spawns ${ph.spawn.api ?? "thread"}`, site, true);
+    // One edge from each distinct host. The source is a slice that exists and has functions: the spawn site's component on
+    // that host, else any non-empty slice of it, else the host runtime itself.
+    const sources = new Set<string>();
+    for (const host of ph.hosts) {
+      const own = ph.component === undefined ? undefined : plan.slices.get(`${host}|${ph.component}`);
+      const any = [...plan.slices.values()].filter((sl) => sl.runtime === host && sl.functions > 0).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))[0];
+      sources.add(own !== undefined && own.functions > 0 ? own.id : any !== undefined ? any.id : host);
+    }
+    for (const from of [...sources].sort()) addFact(from, rt, "spawns", `spawns ${ph.spawn.api ?? "thread"}`, site, true);
   }
 
   // Message handoffs and event-loop queues, per the runtime's dispatches. Flat: one inbox per receiving component.

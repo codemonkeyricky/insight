@@ -76,8 +76,8 @@ describe("grounded frames", () => {
     const band = layout.band as NonNullable<typeof layout.band>;
     const items = layout.boxes.filter((b) => b.frame === "band" || b.kind === "chip");
     const bottom = Math.max(...items.map((b) => b.y + b.h));
-    expect(band.h).toBeGreaterThanOrEqual(bottom);
-    expect(band.h).toBeLessThanOrEqual(bottom + 40);
+    expect(band.y + band.h).toBeGreaterThanOrEqual(bottom);
+    expect(band.y + band.h).toBeLessThanOrEqual(bottom + 40);
     for (const f of frames.filter((x) => x.parent === undefined && x.kind !== "unthreaded")) expect(f.x + f.w).toBeLessThan(band.x);
     expect(box("fs").x).toBeGreaterThan(band.x + band.w);
     expect(box("github").x).toBeGreaterThan(band.x + band.w);

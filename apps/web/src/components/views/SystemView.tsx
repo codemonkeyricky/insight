@@ -410,7 +410,7 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
                 {layout.frames?.map((f) => {
                   const dim = lit !== null && !lit.nodes.has(f.id);
                   const picked = sel?.kind === "node" && sel.id === f.id;
-                  const hdr = frameHeaderText(f.title, f.sub, f.w, f.collapsed);
+                  const hdr = frameHeaderText(f.title, f.sub, f.w, f.collapsed, f.unresolved === undefined);
                   const cls = ["sysv-frame", f.kind, f.collapsed && "collapsed", f.unresolved !== undefined && "unresolved", dim && "dim", picked && "picked", lit?.nodes.has(f.id) && "lit"].filter(Boolean).join(" ");
                   return (
                     <g

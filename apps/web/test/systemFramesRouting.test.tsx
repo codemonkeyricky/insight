@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import benchmarkSystem from "./fixtures/benchmarkSystem.json";
 import type { SystemModel, SystemRuntime } from "@insight/model";
 import { clipEnd, frameHeaderText, layoutSystemFrames } from "../src/arch/system-frames";
 import type { SysFrame } from "../src/arch/system-layout";
@@ -144,12 +145,77 @@ describe("placeholder thread frames (unresolved spawns)", () => {
     expect(a?.dashed).toBe(true);
     const pts = pathPoints(a?.d ?? "");
     const end = pts[pts.length - 1] as [number, number];
-    expect(end[0] === ph.x || end[0] === ph.x + ph.w || (end[1] >= ph.y && end[1] <= ph.y + ph.hdrH)).toBe(true);
+    // It enters from the left, at mid-height of the header, or lands on the top edge when the source is above.
+    const left = end[0] === ph.x && Math.abs(end[1] - (ph.y + ph.hdrH / 2)) < 0.01;
+    const top = end[1] === ph.y && end[0] > ph.x && end[0] < ph.x + ph.w;
+    expect(left || top).toBe(true);
+    if (left) expect((pts[pts.length - 2] as [number, number])[0]).toBeLessThan(ph.x);
+    if (top) expect((pts[pts.length - 2] as [number, number])[1]).toBeLessThan(ph.y);
+    expect(end[0] === ph.x + ph.w).toBe(false);
     expect(crossings(l)).toEqual([]);
+  });
+  it("shows plain 'unresolved' in the header, with no fold arrow", () => {
+    expect(ph.sub).toBe("unresolved");
+    const t = frameHeaderText(ph.title, ph.sub, ph.w, ph.collapsed, false);
+    expect(t.sub).toBe("unresolved");
+    expect(t.sub).not.toMatch(/[▾▸]/);
+    expect(frameHeaderText("Process", "2 slices", 300, false).sub).toContain("▾");
   });
   it("has no undefined in any label", () => {
     const text = JSON.stringify([(l.frames ?? []).map((f) => [f.title, f.sub, f.unresolved]), l.arrows.map((x) => [x.pill.text, x.edge.label]), l.boxes.map((b) => [b.title, b.sub])]);
     expect(text).not.toContain("undefined");
     expect(JSON.stringify(l.frames)).not.toContain("undefined");
   });
+});
+
+describe("kernel band top", () => {
+  it("hugs its content: its top is within the title height + 16 px of the first card or chip", () => {
+    const l = layoutSystemFrames(synthModel(30, 60));
+    const band = l.band as NonNullable<typeof l.band>;
+    expect(band).toBeDefined();
+    const inBand = l.boxes.filter((b) => b.x >= band.x && b.x + b.w <= band.x + band.w);
+    expect(inBand.length).toBeGreaterThan(0);
+    const first = Math.min(...inBand.map((b) => b.y));
+    expect(first - band.y).toBeGreaterThanOrEqual(0);
+    expect(first - band.y).toBeLessThanOrEqual(40 + 16);
+  });
+});
+
+describe("edge clearance", () => {
+  const CLEAR = 4;
+  // Distance-aware variant of the crossing test: no segment of an edge may come within CLEAR px of a card or header it does not belong to.
+  const near = (l: ReturnType<typeof layoutSystemFrames>): string[] => {
+    const rects = [
+      ...(l.frames ?? []).map((f) => ({ id: f.id, x: f.x, y: f.y, w: f.w, h: f.hdrH })),
+      ...l.boxes.map((b) => ({ id: b.id, x: b.x, y: b.y, w: b.w, h: b.h })),
+    ];
+    const hits: string[] = [];
+    const check = (label: string, d: string, own: string[]) => {
+      const pts = pathPoints(d);
+      for (const r of rects) {
+        if (own.includes(r.id)) continue;
+        const grown = { x: r.x - CLEAR, y: r.y - CLEAR, w: r.w + 2 * CLEAR, h: r.h + 2 * CLEAR };
+        for (let i = 0; i + 1 < pts.length; i++) {
+          if (segmentHitsRect(pts[i] as [number, number], pts[i + 1] as [number, number], grown)) {
+            hits.push(`${label} within ${CLEAR}px of ${r.id}`);
+            break;
+          }
+        }
+      }
+    };
+    for (const a of l.arrows) check(`arrow ${a.id}`, a.d, [a.from, a.to]);
+    for (const t of l.trunks ?? []) check(`trunk ${t.id}`, t.d, [t.process, t.to]);
+    return hits;
+  };
+  it("keeps the benchmark root's lock edges (cmake -> m) off the bindings card border", () => {
+    const l = layoutSystemFrames(benchmarkSystem as unknown as SystemModel, { viewport: { w: 1600, h: 900 } });
+    expect(l.arrows.some((a) => a.id.includes("lock:"))).toBe(true);
+    expect(near(l)).toEqual([]);
+    expect(crossings(l)).toEqual([]);
+  });
+  for (const [c, e] of [[100, 400], [200, 800]] as const) {
+    it(`keeps ${CLEAR} px clear of non-endpoint cards (${c} components / ${e} edges)`, () => {
+      expect(near(layoutSystemFrames(synthModel(c, e), { viewport: { w: 100000, h: 400 } }))).toEqual([]);
+    });
+  }
 });

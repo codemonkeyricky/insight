@@ -227,6 +227,9 @@ describe("placeholder thread frame", () => {
     const f = document.querySelector('[data-frame="thread:ph"]') as HTMLElement;
     expect(f.getAttribute("aria-label")).toContain("unresolved thread");
     expect(f.getAttribute("aria-label")).not.toContain("undefined");
+    // It cannot fold, so its header shows plain "unresolved" with no arrow.
+    expect(f.textContent).toContain("unresolved");
+    expect(f.textContent).not.toMatch(/[▾▸]/);
     fireEvent.click(f);
     expect(screen.getAllByText(/target unresolved: fn/).length).toBeGreaterThan(1);
   });

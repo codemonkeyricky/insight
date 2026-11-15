@@ -42,10 +42,16 @@ const CHIP_GAP = 4;
 const CHIP_ROW = 20;
 const COMP_H = 64;
 const TOP = 74;
+/** The kernel band hugs its content: its top sits just above the title, which sits right above the first card or chip. */
+const BAND_TOP = TOP - 8;
 const MARGIN = 28;
 const MAX_CHIPS = 4;
 const PILL_H = 24;
 const ROUTE_GUTTER = 7;
+/** An edge keeps at least this far from every card and frame header it does not start or end at. */
+const ROUTE_CLEAR = 4;
+/** An edge leaves and enters a card with a straight run of this length, so it never runs along the card's border. */
+const ROUTE_STUB = 11;
 /** The body line of a placeholder thread frame ("target unresolved"). */
 const UNRES_BODY_H = 26;
 
@@ -118,8 +124,15 @@ const HDR_GAP = 14;
  * clipped (with an ellipsis, at the end) to the room right of the title, so the two never overlap or leave the frame.
  * `subFull` is the whole subtitle, for a tooltip. The sub is "" when no useful part of it fits. `sub` includes the fold arrow.
  */
-export function frameHeaderText(title: string, sub: string, w: number, collapsed: boolean): { title: string; sub: string; subFull: string; titleFull: string } {
+export function frameHeaderText(title: string, sub: string, w: number, collapsed: boolean, foldable = true): { title: string; sub: string; subFull: string; titleFull: string } {
   const arrow = collapsed ? "▸" : "▾";
+  // A frame that cannot fold (a placeholder thread) shows its subtitle with no arrow.
+  if (!foldable) {
+    const roomPlain = w - 2 * HDR_SIDE;
+    const t0 = clipEnd(title, Math.max(4, Math.floor((roomPlain - HDR_GAP - 10 * HDR_SUB_CH) / HDR_TITLE_CH)));
+    const chars0 = Math.floor((roomPlain - t0.length * HDR_TITLE_CH - HDR_GAP) / HDR_SUB_CH);
+    return { title: t0, sub: chars0 < 4 ? "" : clipEnd(sub, chars0), subFull: sub, titleFull: title };
+  }
   const room = w - 2 * HDR_SIDE;
   const MIN_SUB = 10; // characters worth showing
   const maxTitle = Math.max(4, Math.floor((room - HDR_GAP - MIN_SUB * HDR_SUB_CH) / HDR_TITLE_CH));
@@ -721,7 +734,7 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
   const bandBottom = Math.max(H, outBottom, ...boxes.map((b) => b.y + b.h), prevBottom) + MARGIN;
   const bandContent = Math.max(prevBottom, ...boxes.filter((b) => b.frame === "band").map((b) => b.y + b.h));
   // A scope with no kernel op and no chip draws no band (nothing to put in it).
-  const band: SysBand | undefined = !hasBand ? undefined : { x: bandX, y: 0, w: bandW, h: Math.min(bandBottom, bandContent + 24) };
+  const band: SysBand | undefined = !hasBand ? undefined : { x: bandX, y: BAND_TOP, w: bandW, h: Math.min(bandBottom, bandContent + 24) - BAND_TOP };
   const outRight = ext.length > 0 ? outX + OUT_W : bandX + bandW;
   const width = outRight + MARGIN;
   const height = bandBottom;
@@ -736,10 +749,12 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
   // Ports per node side, sorted by the other end, spread evenly along the side.
   const sidePorts = new Map<string, Array<{ idx: number; other: number }>>();
   const planned: Array<{ idx: number; from: SysBox | SysFrame; to: SysBox | SysFrame; edge: SystemEdge; band?: "in" | "out"; toNode: string; fromNode: string; text: string; sides: [("l" | "r"), ("l" | "r")] }> = [];
+  const isPlaceholder = (n: SysBox | SysFrame): n is SysFrame => "hdrH" in n && n.unresolved !== undefined;
   const addPlanned = (idx: number, from: SysBox | SysFrame, to: SysBox | SysFrame, edge: SystemEdge, band: "in" | "out" | undefined, text: string) => {
     const mode = sideOf(from, to);
     const sa: "l" | "r" = mode === "back" ? "l" : "r";
-    const sb: "l" | "r" = mode === "fwd" ? "l" : "r";
+    // An edge into a placeholder thread frame enters from the left (or the top), never at its right end.
+    const sb: "l" | "r" = mode === "fwd" || isPlaceholder(to) ? "l" : "r";
     planned.push({ idx, from, to, edge, ...(band !== undefined ? { band } : {}), toNode: to.id, fromNode: from.id, text, sides: [sa, sb] });
     const ka = portKey(from, sa);
     const kb = portKey(to, sb);
@@ -796,6 +811,7 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
   const obstacles = new ObstacleGrid();
   for (const b of boxes) obstacles.add(b.id, { x: b.x, y: b.y, w: b.w, h: b.h });
   for (const f of frames) obstacles.add(f.id, { x: f.x, y: f.y, w: f.w, h: f.hdrH });
+  const topEntry = new Set<number>();
   const portAt = new Map<number, { x1: number; y1: number; x2: number; y2: number }>();
   // The slot of a port among those on its side, ordered by the other end: sorted once per side.
   const slotOf = new Map<string, Map<number, number>>();
@@ -815,7 +831,15 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
     const sb = p.sides[1];
     const ya = endY(a, slot(a, sa, p.idx), (sidePorts.get(portKey(a, sa)) ?? []).length);
     const yb = endY(b, slot(b, sb, p.idx), (sidePorts.get(portKey(b, sb)) ?? []).length);
-    portAt.set(p.idx, { x1: sa === "r" ? a.x + a.w : a.x, y1: ya, x2: sb === "r" ? b.x + b.w : b.x, y2: yb });
+    // A placeholder thread frame is entered on its left edge at mid-height of its header; from above, on its top edge.
+    const ph = isPlaceholder(b);
+    const above = ph && "hdrH" in b && a.y + a.h <= b.y && a.x < b.x + b.w && a.x + a.w > b.x;
+    portAt.set(p.idx, ph && "hdrH" in b
+      ? above
+        ? { x1: a.x + a.w / 2, y1: a.y + a.h, x2: b.x + Math.min(28, b.w / 2), y2: b.y }
+        : { x1: sa === "r" ? a.x + a.w : a.x, y1: ya, x2: b.x, y2: b.y + b.hdrH / 2 }
+      : { x1: sa === "r" ? a.x + a.w : a.x, y1: ya, x2: sb === "r" ? b.x + b.w : b.x, y2: yb });
+    if (above) topEntry.add(p.idx);
   }
   for (const p of planned) {
     const pt = portAt.get(p.idx) as { x1: number; y1: number; x2: number; y2: number };
@@ -832,8 +856,15 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
     // A curve that crosses a card or a frame header it does not end at is redrawn as an orthogonal route around them,
     // in the gutters, entering each end from its side. Headers are obstacles, so no edge runs through a frame's title band.
     // Checked on a dense sampling (a header is 30 px tall; the curve may be thousands of px long).
-    if (bezierSamples(segs, 10).slice(1, -1).some((q) => obstacles.contains(q, p.fromNode, p.toNode, 3))) {
-      const pts = routeAround([x1, y1], [x2, y2], obstacles, p.fromNode, p.toNode);
+    if (isPlaceholder(p.to)) {
+      // Orthogonal, ending with a short run into the left edge (or down onto the top edge).
+      const lead: [number, number] = topEntry.has(p.idx) ? [x2, y2 - ROUTE_GUTTER] : [x2 - ROUTE_GUTTER - 4, y2];
+      const mid = routeStubbed([x1, y1], p.sides[0] === "r" ? 1 : -1, lead, 0, obstacles, p.fromNode, p.toNode);
+      const pts: Array<[number, number]> = mid === undefined ? [[x1, y1], [lead[0], y1], lead, [x2, y2]] : [...mid, [x2, y2]];
+      d = `M${pts.map((q) => `${num(q[0])} ${num(q[1])}`).join(" L")}`;
+      samples = polyline(pts);
+    } else if (bezierSamples(segs, 10).slice(1, -1).some((q) => obstacles.contains(q, p.fromNode, p.toNode, 6))) {
+      const pts = routeStubbed([x1, y1], p.sides[0] === "r" ? 1 : -1, [x2, y2], p.sides[1] === "r" ? 1 : -1, obstacles, p.fromNode, p.toNode);
       if (pts !== undefined) {
         d = `M${pts.map((q) => `${num(q[0])} ${num(q[1])}`).join(" L")}`;
         samples = polyline(pts);
@@ -908,7 +939,7 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
         let inner: Array<[number, number]> = [[sx, sy], [port.x, port.y]];
         if (from.id === top.id) inner = [[port.x, port.y], [port.x, port.y]];
         else {
-          const routed = routeAround([sx, sy], [port.x, port.y], obstacles, from.id, target.id);
+          const routed = routeStubbed([sx, sy], 1, [port.x, port.y], -1, obstacles, from.id, target.id);
           inner = routed ?? [[sx, sy], [sx + 20, sy], [sx + 20, port.y], [port.x, port.y]];
         }
         arrows.push({
@@ -1154,8 +1185,13 @@ class ObstacleGrid {
   }
   /** True when the point is inside (or on the border of) an obstacle other than the two ends. */
   contains(q: { x: number; y: number }, a: string, b: string, m = 0): boolean {
-    const l = this.cells.get(cellKey(Math.floor(q.x / GRID_CELL), Math.floor(q.y / GRID_CELL)));
-    return l !== undefined && l.some((r) => r.id !== a && r.id !== b && q.x >= r.x - m && q.x <= r.x + r.w + m && q.y >= r.y - m && q.y <= r.y + r.h + m);
+    for (let cx = Math.floor((q.x - m) / GRID_CELL); cx <= Math.floor((q.x + m) / GRID_CELL); cx++) {
+      for (let cy = Math.floor((q.y - m) / GRID_CELL); cy <= Math.floor((q.y + m) / GRID_CELL); cy++) {
+        const l = this.cells.get(cellKey(cx, cy));
+        if (l !== undefined && l.some((r) => r.id !== a && r.id !== b && q.x >= r.x - m && q.x <= r.x + r.w + m && q.y >= r.y - m && q.y <= r.y + r.h + m)) return true;
+      }
+    }
+    return false;
   }
   /** The obstacles other than the two ends that reach into the window. */
   within(minX: number, maxX: number, minY: number, maxY: number, a: string, b: string): Rect[] {
@@ -1177,6 +1213,24 @@ class ObstacleGrid {
 }
 
 /**
+ * A route from a to b that leaves a horizontally (direction `da`, -1 left, 1 right, 0 none) and enters b the same way (`db`),
+ * with a short straight stub at each end, and treats the two ends' own rectangles as obstacles too. That keeps an edge off the
+ * border of the cards it joins. Falls back to the plain route when the stubs leave no way through.
+ */
+function routeStubbed(a: [number, number], da: number, b: [number, number], db: number, obs: ObstacleGrid, fromId: string, toId: string): Array<[number, number]> | undefined {
+  const la: [number, number] = da === 0 ? a : [a[0] + da * ROUTE_STUB, a[1]];
+  const lb: [number, number] = db === 0 ? b : [b[0] + db * ROUTE_STUB, b[1]];
+  const mid = routeAround(la, lb, obs, "", "");
+  if (mid === undefined) return routeAround(a, b, obs, fromId, toId);
+  const out: Array<[number, number]> = [];
+  for (const q of [a, ...mid, b]) {
+    const last = out[out.length - 1];
+    if (last === undefined || last[0] !== q[0] || last[1] !== q[1]) out.push(q);
+  }
+  return out;
+}
+
+/**
  * Orthogonal route from a to b that keeps off every rectangle. Candidate lines sit ROUTE_GUTTER outside each
  * rectangle's edges, and a Dijkstra search over those lines charges a fixed cost per bend. Undefined when none exists.
  */
@@ -1191,7 +1245,7 @@ function routeAround(a: [number, number], b: [number, number], obs: ObstacleGrid
     let clean = true;
     for (let i = 0; clean && i + 1 < r.length; i++) {
       const p = r[i] as [number, number], q = r[i + 1] as [number, number];
-      clean = obs.within(Math.min(p[0], q[0]), Math.max(p[0], q[0]), Math.min(p[1], q[1]), Math.max(p[1], q[1]), fromId, toId).length === 0;
+      clean = obs.within(Math.min(p[0], q[0]) - ROUTE_CLEAR, Math.max(p[0], q[0]) + ROUTE_CLEAR, Math.min(p[1], q[1]) - ROUTE_CLEAR, Math.max(p[1], q[1]) + ROUTE_CLEAR, fromId, toId).length === 0;
     }
     if (clean) return r;
   }
@@ -1220,8 +1274,10 @@ function routeWithin(a: [number, number], b: [number, number], obs: ObstacleGrid
     }
     return lo;
   };
-  for (const r of near) {
-    const right = r.x + r.w, bottom = r.y + r.h;
+  for (const o of near) {
+    // Each rectangle blocks a margin of ROUTE_CLEAR around it (smaller than the gutter, so the gutter lines stay open).
+    const r = { x: o.x - ROUTE_CLEAR, y: o.y - ROUTE_CLEAR };
+    const right = o.x + o.w + ROUTE_CLEAR, bottom = o.y + o.h + ROUTE_CLEAR;
     const i0 = firstGt(xs, r.x), j0 = firstGt(ys, r.y);
     for (let j = j0; j < ny && (ys[j] as number) < bottom; j++) {
       for (let i = Math.max(0, i0 - 1); i < nx - 1 && (xs[i] as number) < right; i++) blockedH[j * nx + i] = 1;

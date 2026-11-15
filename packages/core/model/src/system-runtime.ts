@@ -95,8 +95,8 @@ export interface RuntimePlan {
   label(runtime: string): string;
   /** The thread a thread spawn node starts, when the spawn is grounded. */
   threadOfSpawn(node: NodeId): string | undefined;
-  /** Placeholder threads (unresolved spawns): the spawning slice and the spawn, by the placeholder's runtime id. */
-  placeholders: Map<string, { from: string; spawn: SystemSpawn }>;
+  /** Placeholder threads (unresolved spawns): the host runtimes that reach the spawn site, the spawn site's component and the spawn, by the placeholder's runtime id. */
+  placeholders: Map<string, { hosts: string[]; component?: string; spawn: SystemSpawn }>;
   /** The program runtime a process spawn starts, when its target is a project program. */
   programOfSpawn(node: NodeId): string | undefined;
   /** The program runtime a command runs, when exactly one project program has that name. Records the spawn that ran it. */
@@ -181,7 +181,7 @@ export function buildRuntimePlan(model: ProjectModel, scope: string, compOfFile:
   const coroutinesOfFn = new Map<string, Set<string>>();
   const rootKeys = new Set<string>();
   const spawnOfProgram = new Map<string, SystemSpawn>();
-  const placeholderOf = new Map<string, { from: string; spawn: SystemSpawn }>();
+  const placeholderOf = new Map<string, { hosts: string[]; component?: string; spawn: SystemSpawn }>();
 
   const sliceId = (runtime: string, component: string): string => {
     const id = `${runtime}|${component}`;
@@ -307,16 +307,17 @@ export function buildRuntimePlan(model: ProjectModel, scope: string, compOfFile:
       if (!threadIds.has(t.id) || t.spawn === undefined || t.spawn.status !== "unresolved") continue;
       const owner = t.spawn.owner;
       if (owner === undefined) continue;
-      // The thread that reaches the spawn site (a thread that is not a process, with a program of its own).
-      const host = exec.threads
+      // Every thread that reaches the spawn site (a thread that is not a process, with a program of its own).
+      const hosts = exec.threads
         .filter((h) => threadIds.has(h.id) && programOfThread.has(h.id) && h.kind !== "process" && reachedBy(h).has(owner))
-        .sort((a, b) => cmp(a.id, b.id))[0];
+        .sort((a, b) => cmp(a.id, b.id));
+      const host = hosts[0];
       if (host === undefined) continue;
       if (!programOfThread.has(t.id)) programOfThread.set(t.id, programOfThread.get(host.id) as string);
       const target = model.byId.get(t.spawn.node)?.attrs.target;
       placeholderNote.set(execThreadId(t.id), target === undefined || target === "" ? "target unresolved" : `target unresolved: ${String(target)}`);
       const comp = compOfFile(t.spawn.file);
-      if (comp !== undefined) placeholderOf.set(execThreadId(t.id), { from: sliceId(execThreadId(host.id), comp), spawn: spawnOf(t.spawn) });
+      placeholderOf.set(execThreadId(t.id), { hosts: hosts.map((h) => execThreadId(h.id)), ...(comp !== undefined ? { component: comp } : {}), spawn: spawnOf(t.spawn) });
     }
     const groupSize = new Map<string, number>();
     for (const t of exec.threads) {
