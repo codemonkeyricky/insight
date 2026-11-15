@@ -636,3 +636,59 @@ describe("corpus guard", () => {
     for (const v of [IBEX, CVA6]) if (v !== undefined) expect(existsSync(v)).toBe(true);
   });
 });
+
+describe("scope keys and lookup order", () => {
+  const scopes = join(fixturesDir, "scopes");
+  const calls = (batches: IRBatch[], callee: string): IREdge[] => edgesOf(allRecords(batches)).filter((e) => e.kind === "calls.call" && e.attrs?.callee === callee);
+
+  it("three files that each define `module tb` keep their own task scope", async () => {
+    const batches = await extractDir(scopes, ["a/tb.sv", "b/tb.sv", "c/tb.sv"]);
+    const all = calls(batches, "runSeq");
+    expect(all).toHaveLength(3);
+    for (const dir of ["a", "b", "c"]) {
+      const edge = all.find((e) => e.from.startsWith(`${dir}/tb.sv#`));
+      expect(edge?.to).toBe(`${dir}/tb.sv#tb.runSeq`);
+      expect(edge?.provenance?.confidence).toBe("exact");
+    }
+  });
+
+  it("a plain call from a module takes a package function of an imported package, inferred", async () => {
+    const batches = await extractDir(scopes, ["m1.sv", "util_pkg.sv", "m2.sv"]);
+    const edge = calls(batches, "clog").find((e) => e.from.startsWith("m2.sv#"));
+    expect(edge?.to).toBe("util_pkg.sv#util_pkg.clog");
+    expect(edge?.provenance?.confidence).toBe("inferred");
+  });
+
+  it("a class's call to f() takes the enclosing package's f over a wildcard-imported f", async () => {
+    const batches = await extractDir(scopes, ["q.sv", "r.sv"]);
+    const edge = calls(batches, "f").find((e) => e.from.startsWith("r.sv#"));
+    expect(edge?.to).toBe("r.sv#r.f");
+  });
+
+  it("two wildcard-imported packages that define h() give candidates containing both", async () => {
+    const batches = await extractDir(scopes, ["w1.sv", "w2.sv", "wm.sv"]);
+    const edge = calls(batches, "h").find((e) => e.from.startsWith("wm.sv#"));
+    const to = edge?.to as { candidates: string[] } | undefined;
+    expect(typeof to).toBe("object");
+    expect(to?.candidates).toEqual(expect.arrayContaining(["w1.sv#w1.h", "w2.sv#w2.h"]));
+  });
+
+  it("an explicitly imported name with no such package in the project stays unresolved", async () => {
+    const batches = await extractDir(scopes, ["h2_pkg.sv", "missing_imp.sv"]);
+    const edge = calls(batches, "h2")[0];
+    expect(edge?.to).toEqual({ unresolved: { scheme: "sv.call", text: "h2" } });
+  });
+
+  it("a class extending a class outside the project does not take another package's function", async () => {
+    const batches = await extractDir(scopes, ["util2.sv", "my_env.sv"]);
+    const edge = calls(batches, "print")[0];
+    expect(edge?.to).toEqual({ unresolved: { scheme: "sv.call", text: "print" } });
+  });
+
+  it("a call through an interface-typed handle resolves to the interface's task", async () => {
+    const batches = await extractDir(scopes, ["bus.sv"]);
+    const edge = calls(batches, "vif.drive")[0];
+    expect(edge?.to).toBe("bus.sv#bus_if.drive");
+    expect(edge?.provenance?.confidence).toBe("exact");
+  });
+});

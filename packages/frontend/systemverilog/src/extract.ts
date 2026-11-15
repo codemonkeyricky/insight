@@ -127,6 +127,10 @@ interface Frame {
   container: NodeId;
   /** Name of the nearest enclosing class, package or module, or the class a function is defined out of. Qualifies function ids. */
   scope?: string;
+  /** The key this scope's functions are filed under: the declaration id for a module, interface or program, the name for a class or package, the class for an out-of-class function. */
+  scopeKey?: string;
+  /** Name of the enclosing package, inherited by everything inside it. */
+  pkg?: string;
   /** The nearest enclosing module, interface or program. Owns its processes and instances. */
   module?: { name: string; id: NodeId; ords: Map<string, number> };
   /** Generate block labels, outermost first. */
@@ -227,7 +231,7 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
   const emitCall = (f: Frame, at: SyntaxNode, callee: string, name: string, target: CallTarget): void => {
     const from = f.fn ?? f.container;
     const span = spanOf(rel, at);
-    const hit = resolveCallee(project, rel, f.scope, name, target, f.gen);
+    const hit = resolveCallee(project, rel, { scope: f.scope, scopeKey: f.scopeKey, pkg: f.pkg }, name, target, f.gen);
     if (!hit) {
       const to: UnresolvedRef = { unresolved: { scheme: "sv.call", text: callee } };
       edge({ from, to, facet: "calls", kind: "calls.call", attrs: { callee }, span, provenance: prov });
@@ -236,7 +240,8 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
     for (const r of hit.refs) depend(r.file);
     const [first, ...rest] = hit.refs.map((r) => r.id) as [NodeId, ...NodeId[]];
     if (rest.length === 0) {
-      const provenance: Provenance = { frontend: FRONTEND_ID, confidence: hit.exact ? prov.confidence : "inferred" };
+      const confidence = hit.heuristic ? "heuristic" : hit.exact ? prov.confidence : "inferred";
+      const provenance: Provenance = { frontend: FRONTEND_ID, confidence };
       edge({ from, to: first, facet: "calls", kind: "calls.call", attrs: { callee }, span, provenance });
     } else {
       const to = { candidates: [first, ...rest] as [NodeId, ...NodeId[]] };
@@ -441,7 +446,7 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
           span: spanOf(rel, n),
           provenance: prov,
         });
-        visitChildren(n, { container: id, scope: name, module: { name, id, ords }, gen: [] });
+        visitChildren(n, { container: id, scope: name, scopeKey: id, module: { name, id, ords }, gen: [], pkg: f.pkg });
         break;
       }
       case "package_declaration": {
@@ -449,7 +454,7 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
         if (!name) break;
         const id = project.idOf.get(fileNodeKey(rel, n)) ?? ids.take(declId(rel, name));
         node({ id, facet: "structure", kind: "structure.module", parent: f.container, attrs: { name, hdl: "package" }, span: spanOf(rel, n), provenance: prov });
-        visitChildren(n, { container: id, scope: name, gen: [] });
+        visitChildren(n, { container: id, scope: name, scopeKey: name, gen: [], pkg: name });
         break;
       }
       case "class_declaration": {
@@ -465,7 +470,7 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
           span: spanOf(rel, n),
           provenance: prov,
         });
-        visitChildren(n, { container: id, scope: name, gen: [] });
+        visitChildren(n, { container: id, scope: name, scopeKey: name, gen: [], pkg: f.pkg });
         break;
       }
       case "function_declaration":
@@ -484,7 +489,8 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
           span: spanOf(rel, n),
           provenance: prov,
         });
-        const inner: Frame = { ...f, fn: id, scope };
+        // An out-of-class definition is filed under the class it qualifies, so its key is that class's name.
+        const inner: Frame = { ...f, fn: id, scope, scopeKey: sub.scope ?? f.scopeKey };
         if (n.type === "class_constructor_declaration") {
           // `super.new(args)` in a constructor is an argument list on the constructor node. An empty one leaves no node, so only the text shows it.
           // An empty `super.new()` leaves no argument node, but its `super`, `.` and `new` tokens are direct children.

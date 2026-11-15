@@ -91,12 +91,17 @@ export interface Project {
   decls: Map<string, DeclRef>;
   /** Every definition with a name, in sorted file order. Several can share one name. */
   declsByName: Map<string, DeclRef[]>;
-  /** Functions and tasks by enclosing scope name ("" at file level), then by name. */
+  /**
+   * Functions and tasks by scope key, then by name. The key is the declaration id for a module, interface or program
+   * (so two files that define `module tb` do not share a scope), the name for a class or package, and "" at file level.
+   */
   fnsByScope: Map<string, Map<string, FnRef[]>>;
   /** Functions and tasks declared inside a package, by name. */
   pkgFnsByName: Map<string, FnRef[]>;
-  /** Packages a file imports, sorted. */
-  importsByFile: Map<string, string[]>;
+  /** Packages a file imports with a wildcard (`pkg::*`), sorted. */
+  wildImportsByFile: Map<string, string[]>;
+  /** Names a file imports explicitly (`pkg::name`), each with its package. */
+  namedImportsByFile: Map<string, Map<string, string>>;
   /** The base class of each class. The first definition wins. */
   bases: Map<string, BaseRef>;
   /** The node id of each declaration and function, keyed by nodeKey. The emitter reads these so the two passes agree. */
@@ -181,21 +186,34 @@ export function errorNodes(root: SyntaxNode): SyntaxNode[] {
   return out;
 }
 
-const addFn = (p: Project, scope: string, ref: FnRef): void => {
-  const byName = p.fnsByScope.get(scope) ?? new Map<string, FnRef[]>();
+const addFn = (p: Project, key: string, ref: FnRef): void => {
+  const byName = p.fnsByScope.get(key) ?? new Map<string, FnRef[]>();
   byName.set(ref.name, [...(byName.get(ref.name) ?? []), ref]);
-  p.fnsByScope.set(scope, byName);
+  p.fnsByScope.set(key, byName);
 };
 
-/** Indexes the definitions, functions, DPI imports, class bases and per-file ids of one unit. */
-function collectDecls(unit: Unit, root: SyntaxNode, p: Project, imports: Set<string>): void {
+/** The imports one file makes: wildcard packages, and explicitly named items with their package. */
+interface FileImports {
+  wild: Set<string>;
+  named: Map<string, string>;
+}
+
+/** True for a scope key that is a module, interface or program id. Those ids hold a `#`, which no name does. */
+const isHdlKey = (key: string): boolean => key.includes("#");
+
+/**
+ * Indexes the definitions, functions, DPI imports, class bases and per-file ids of one unit.
+ * Each walk item carries the scope name (for ids) and the scope key (for lookup), which differ for modules.
+ */
+function collectDecls(unit: Unit, root: SyntaxNode, p: Project, imports: FileImports): void {
   const rel = unit.rel;
+  type Item = [SyntaxNode, string | undefined, string | undefined, string[], boolean];
   // Explicit stack in place of recursion. Children are queued in reverse, so they run in source order, each before its later siblings.
-  const work: Array<[SyntaxNode, string | undefined, string[], boolean]> = [];
-  const children = (kids: SyntaxNode[], scope: string | undefined, gen: string[], inPackage: boolean): void => {
-    for (let i = kids.length - 1; i >= 0; i--) work.push([kids[i] as SyntaxNode, scope, gen, inPackage]);
+  const work: Item[] = [];
+  const children = (kids: SyntaxNode[], scope: string | undefined, key: string | undefined, gen: string[], inPackage: boolean): void => {
+    for (let i = kids.length - 1; i >= 0; i--) work.push([kids[i] as SyntaxNode, scope, key, gen, inPackage]);
   };
-  const visit = (n: SyntaxNode, scope: string | undefined, gen: string[], inPackage: boolean): void => {
+  const visit = (n: SyntaxNode, scope: string | undefined, key: string | undefined, gen: string[], inPackage: boolean): void => {
     const hdl = DECL_HDL[n.type];
     if (hdl !== undefined) {
       const name = declName(n);
@@ -209,7 +227,9 @@ function collectDecls(unit: Unit, root: SyntaxNode, p: Project, imports: Set<str
           const base = baseOf(n);
           if (base && !p.bases.has(name)) p.bases.set(name, base);
         }
-        children(n.namedChildren, name, [], hdl === "package");
+        // Modules, interfaces and programs key their functions by declaration id. Classes and packages key by name.
+        const childKey = hdl === "class" || hdl === "package" ? name : id;
+        children(n.namedChildren, name, childKey, [], hdl === "package");
         return;
       }
     }
@@ -217,10 +237,12 @@ function collectDecls(unit: Unit, root: SyntaxNode, p: Project, imports: Set<str
       const sub = subroutineOf(n);
       if (sub) {
         const s = sub.scope ?? scope;
+        // An out-of-class definition is filed under the class it qualifies.
+        const k = sub.scope ?? key;
         const id = unit.ids.take(fnBase(rel, s, gen, sub.name));
         p.idOf.set(fileNodeKey(rel, n), id);
         const ref: FnRef = { name: sub.name, hdl: sub.hdl, file: rel, id, gen, ...(s !== undefined ? { scope: s } : {}) };
-        addFn(p, s ?? "", ref);
+        addFn(p, k ?? "", ref);
         if (inPackage && sub.scope === undefined) p.pkgFnsByName.set(sub.name, [...(p.pkgFnsByName.get(sub.name) ?? []), ref]);
       }
       return;
@@ -235,28 +257,34 @@ function collectDecls(unit: Unit, root: SyntaxNode, p: Project, imports: Set<str
           const id = unit.ids.take(fnBase(rel, scope, gen, name));
           p.idOf.set(fileNodeKey(rel, n), id);
           const ref: FnRef = { name, hdl: hdlKind, file: rel, id, gen, ...(scope !== undefined ? { scope } : {}) };
-          addFn(p, scope ?? "", ref);
+          addFn(p, key ?? "", ref);
           if (inPackage) p.pkgFnsByName.set(name, [...(p.pkgFnsByName.get(name) ?? []), ref]);
         }
       }
       return;
     }
     if (n.type === "package_import_item") {
+      // The item text is `pkg::*` for a wildcard or `pkg::name` for one named item.
       const pkg = n.namedChildren.find((c) => c.type === "simple_identifier")?.text;
-      if (pkg) imports.add(pkg);
+      const parts = n.text.replace(/\s+/g, "").split("::");
+      const item = parts[1];
+      if (pkg && item !== undefined) {
+        if (item === "*") imports.wild.add(pkg);
+        else if (!imports.named.has(item)) imports.named.set(item, pkg);
+      }
       return;
     }
     if (n.type === "generate_block") {
       const g = genNameOf(n);
-      children(n.namedChildren, scope, g ? [...gen, g] : gen, inPackage);
+      children(n.namedChildren, scope, key, g ? [...gen, g] : gen, inPackage);
       return;
     }
-    children(n.namedChildren, scope, gen, inPackage);
+    children(n.namedChildren, scope, key, gen, inPackage);
   };
-  work.push([root, undefined, [], false]);
+  work.push([root, undefined, undefined, [], false]);
   while (work.length > 0) {
-    const [n, scope, gen, inPackage] = work.pop() as [SyntaxNode, string | undefined, string[], boolean];
-    visit(n, scope, gen, inPackage);
+    const [n, scope, key, gen, inPackage] = work.pop() as Item;
+    visit(n, scope, key, gen, inPackage);
   }
 }
 
@@ -399,7 +427,8 @@ export async function indexProject(texts: Map<string, string>): Promise<Project>
     declsByName: new Map(),
     fnsByScope: new Map(),
     pkgFnsByName: new Map(),
-    importsByFile: new Map(),
+    wildImportsByFile: new Map(),
+    namedImportsByFile: new Map(),
     bases: new Map(),
     idOf: new Map(),
   };
@@ -413,10 +442,11 @@ export async function indexProject(texts: Map<string, string>): Promise<Project>
     try {
       // A failure in one file must not fail the project: the error is recorded on its unit and the next file is indexed.
       try {
-        const imports = new Set<string>();
+        const imports: FileImports = { wild: new Set<string>(), named: new Map<string, string>() };
         collectDecls(unit, root, p, imports);
         collectVars(unit, root);
-        p.importsByFile.set(rel, [...imports].sort());
+        p.wildImportsByFile.set(rel, [...imports.wild].sort());
+        p.namedImportsByFile.set(rel, imports.named);
       } catch (e) {
         unit.indexError = e instanceof Error ? e.message : String(e);
       }
@@ -491,9 +521,18 @@ export interface Callee {
   exact: boolean;
   /** True when more than MAX_CANDIDATES functions matched and the list was cut. */
   truncated: boolean;
+  /** True when the match is the any-package guess: no visible scope, import or unit function named it. */
+  heuristic?: boolean;
 }
 
-const lookup = (p: Project, scope: string, name: string): FnRef[] => p.fnsByScope.get(scope)?.get(name) ?? [];
+/** Where a call is made: the enclosing scope name, its scope key, and the package the code sits in. */
+export interface CallSite {
+  scope?: string;
+  scopeKey?: string;
+  pkg?: string;
+}
+
+const lookup = (p: Project, key: string, name: string): FnRef[] => p.fnsByScope.get(key)?.get(name) ?? [];
 
 /** The functions named in the first class of the chain that declares the name. */
 function chainLookup(p: Project, start: string, name: string): FnRef[] {
@@ -537,32 +576,67 @@ function pick(refs: FnRef[], rel: string, gen: string[]): Callee | undefined {
 }
 
 /**
+ * The functions named in a class, package, or module-like definition. A module, interface or program holds its
+ * functions under its declaration id, so a name that is not a class or package is looked up through its definitions.
+ */
+function scopedLookup(p: Project, name: string, scope: string): FnRef[] {
+  const inChain = chainLookup(p, scope, name);
+  if (inChain.length > 0) return inChain;
+  return moduleDefs(p, scope).flatMap((d) => lookup(p, d.id, name));
+}
+
+/** True when a class's base chain leaves the project: the chain has a base that is not a class defined in the project. */
+function leavesProject(p: Project, start: string | undefined): boolean {
+  if (start === undefined) return false;
+  const chain = classChain(p, start);
+  const last = chain[chain.length - 1] ?? start;
+  return chain.length > 1 && p.decls.get(last)?.hdl !== "class";
+}
+
+/**
  * The functions a call names. Matches are looked up in the given target only, so a member call never
  * falls through to an unrelated function of the same name. `gen` is the caller's generate path.
+ *
+ * A plain call follows SystemVerilog lookup, first hit wins: the caller's own scope, its enclosing package,
+ * this file's `$unit` functions, an explicitly imported name, wildcard-imported packages, other files' `$unit`
+ * functions, then (heuristically) any package function of that name.
  */
-export function resolveCallee(p: Project, rel: string, scope: string | undefined, name: string, target: CallTarget, gen: string[] = []): Callee | undefined {
+export function resolveCallee(p: Project, rel: string, at: CallSite, name: string, target: CallTarget, gen: string[] = []): Callee | undefined {
   switch (target.kind) {
     case "none":
       return undefined;
     case "scoped":
-      return pick(chainLookup(p, target.scope, name), rel, gen);
+      return pick(scopedLookup(p, name, target.scope), rel, gen);
     case "member":
-      return pick(chainLookup(p, target.cls, name), rel, gen);
+      return pick(scopedLookup(p, name, target.cls), rel, gen);
     case "plain": {
-      if (scope !== undefined) {
-        const own = chainLookup(p, scope, name);
-        if (own.length > 0) return pick(own, rel, gen);
+      // a. The caller's own scope. A module-like scope is keyed by id; a class is searched along its bases.
+      const ownKey = at.scopeKey;
+      const own =
+        ownKey !== undefined && isHdlKey(ownKey) ? lookup(p, ownKey, name) : at.scope !== undefined ? chainLookup(p, at.scope, name) : [];
+      if (own.length > 0) return pick(own, rel, gen);
+      // b. The package the caller sits in, when it is not the caller's own scope.
+      if (at.pkg !== undefined && at.pkg !== at.scope) {
+        const inPkg = lookup(p, at.pkg, name);
+        if (inPkg.length > 0) return pick(inPkg, rel, gen);
       }
-      // File scope: `$unit` functions and DPI imports outside any package. A function of this file beats an import of the same name.
+      // c. `$unit` functions and DPI imports of this file. A function of this file beats an import of the same name.
       const unitFns = lookup(p, "", name);
       const here = unitFns.filter((r) => r.file === rel);
       if (here.length > 0) return pick(here, rel, gen);
-      for (const pkg of p.importsByFile.get(rel) ?? []) {
-        const refs = lookup(p, pkg, name);
-        if (refs.length > 0) return finish(narrow(refs, gen), false);
-      }
+      // d. An explicitly imported name. It resolves to that package only, or to nothing, so later steps do not run.
+      const named = p.namedImportsByFile.get(rel)?.get(name);
+      if (named !== undefined) return finish(narrow(lookup(p, named, name), gen), false);
+      // e. Wildcard-imported packages that define the name. Several matches are candidates.
+      const wildHits = (p.wildImportsByFile.get(rel) ?? []).flatMap((pkg) => lookup(p, pkg, name));
+      if (wildHits.length > 0) return finish(narrow(wildHits, gen), false);
+      // f. `$unit` functions of other files.
       if (unitFns.length > 0) return finish(narrow(unitFns, gen), false);
-      return finish(p.pkgFnsByName.get(name) ?? [], false);
+      // g. Any package's function of that name. A caller whose class extends a class outside the project skips this,
+      // since the call may name something that class inherits.
+      if (leavesProject(p, at.scope)) return undefined;
+      const anyPkg = finish(p.pkgFnsByName.get(name) ?? [], false);
+      return anyPkg && { ...anyPkg, heuristic: true };
     }
   }
 }
