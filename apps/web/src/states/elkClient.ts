@@ -1,32 +1,43 @@
 // The browser's solver for state diagrams: elkjs in its own worker, like zoom/elk.ts but with its own instance, so a
 // state diagram never queues behind the zoom map. Tests use the bundled solver instead (jsdom has no worker).
-// A worker that fails to load, crashes or times out is terminated and rejects its pending layouts; the next layout
-// starts a fresh worker. Each client owns its worker and its pending layouts, so a late event from an old worker
-// cannot touch the current client.
+// Jobs run one at a time and each one's timeout starts when it is sent to the worker. A timeout or a worker failure
+// terminates the worker, rejects only the job that was running, and resubmits the still-wanted queued jobs to a fresh
+// worker. An aborted job rejects with an AbortError; if nothing wanted is left the worker is terminated.
 import ELK from "elkjs/lib/elk-api.js";
 import elkWorkerUrl from "elkjs/lib/elk-worker.min.js?url";
 import type { ElkNode } from "elkjs/lib/elk-api";
-import { LAYOUT_TIMEOUT_MS, type Solve } from "./layout";
+import { LAYOUT_TIMEOUT_MS, abortError, type Solve } from "./layout";
 
 interface Client {
   elk: InstanceType<typeof ELK>;
   worker?: Worker;
-  failures: Set<(e: Error) => void>;
+}
+
+interface Job {
+  graph: ElkNode;
+  signal: AbortSignal | undefined;
+  resolve: (g: ElkNode) => void;
+  reject: (e: Error) => void;
+  onAbort?: () => void;
 }
 
 /** A solver over workers from `newWorker`; one worker at a time, replaced after any failure. */
 export function createWorkerSolver(newWorker: () => Worker, ms = LAYOUT_TIMEOUT_MS): Solve {
   let current: Client | undefined;
+  let running: Job | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const queue: Job[] = [];
 
   const makeClient = (): Client => {
-    const self: Client = { failures: new Set(), elk: undefined as unknown as Client["elk"] };
+    const self: Client = { elk: undefined as unknown as Client["elk"] };
     self.elk = new ELK({
       workerFactory: () => {
         const worker = newWorker();
         self.worker = worker;
         const fail = (ev: ErrorEvent | MessageEvent) => {
+          if (current !== self) return; // a late event from an old worker
           const msg = "message" in ev && typeof ev.message === "string" && ev.message ? `: ${ev.message}` : "";
-          kill(self, new Error(`the layout worker failed${msg}`));
+          failRunning(new Error(`the layout worker failed${msg}`));
         };
         worker.addEventListener("error", fail);
         worker.addEventListener("messageerror", fail);
@@ -36,38 +47,85 @@ export function createWorkerSolver(newWorker: () => Worker, ms = LAYOUT_TIMEOUT_
     return self;
   };
 
-  /** Terminate this client's worker, reject its pending layouts, and forget it if it is still the current one. */
-  const kill = (self: Client, err: Error) => {
+  const dropClient = () => {
+    const c = current;
+    current = undefined;
     try {
-      self.worker?.terminate();
+      c?.worker?.terminate();
     } catch {
       // already gone
     }
-    if (current === self) current = undefined;
-    for (const f of [...self.failures]) f(err);
-    self.failures.clear();
   };
 
-  return (graph: ElkNode) =>
+  const finish = (job: Job) => {
+    if (job.onAbort) job.signal?.removeEventListener("abort", job.onAbort);
+  };
+
+  /** Terminate the worker, reject the running job (if any), and carry on with the queue on a fresh worker. */
+  const failRunning = (err: Error) => {
+    const job = running;
+    running = undefined;
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
+    dropClient();
+    if (job) {
+      finish(job);
+      job.reject(err);
+    }
+    pump();
+  };
+
+  const pump = () => {
+    if (running) return;
+    const job = queue.shift();
+    if (!job) return;
+    const self = (current ??= makeClient());
+    running = job;
+    timer = setTimeout(() => {
+      if (running === job) failRunning(new Error(`layout timed out after ${Math.round(ms / 1000)} s`));
+    }, ms);
+    self.elk.layout(job.graph).then(
+      (g) => {
+        if (running !== job || current !== self) return;
+        running = undefined;
+        clearTimeout(timer);
+        finish(job);
+        job.resolve(g);
+        pump();
+      },
+      (e) => {
+        if (running !== job || current !== self) return;
+        failRunning(e instanceof Error ? e : new Error(String(e)));
+      },
+    );
+  };
+
+  return (graph, signal) =>
     new Promise<ElkNode>((resolve, reject) => {
-      const self = (current ??= makeClient());
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const settle = () => {
-        if (timer !== undefined) clearTimeout(timer);
-        self.failures.delete(reject);
-      };
-      self.failures.add(reject);
-      timer = setTimeout(() => kill(self, new Error(`layout timed out after ${Math.round(ms / 1000)} s`)), ms);
-      self.elk.layout(graph).then(
-        (g) => {
-          settle();
-          resolve(g);
-        },
-        (e) => {
-          settle();
-          reject(e);
-        },
-      );
+      if (signal?.aborted) return reject(abortError());
+      const job: Job = { graph, signal, resolve, reject };
+      if (signal) {
+        job.onAbort = () => {
+          if (running === job) {
+            // The worker is busy with a job nobody wants: replace it, so the queue does not wait behind it.
+            running = undefined;
+            if (timer !== undefined) clearTimeout(timer);
+            timer = undefined;
+            dropClient();
+            finish(job);
+            reject(abortError());
+            pump();
+            return;
+          }
+          const i = queue.indexOf(job);
+          if (i >= 0) queue.splice(i, 1);
+          finish(job);
+          reject(abortError());
+        };
+        signal.addEventListener("abort", job.onAbort);
+      }
+      queue.push(job);
+      pump();
     });
 }
 

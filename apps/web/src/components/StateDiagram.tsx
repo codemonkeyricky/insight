@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactElement } from "react";
 import type { Span, StateMachineTransition, StateMachineView } from "../api";
-import { layoutMachine, nearestArc, withTimeout, zoomBox, type LaidArc, type LaidMachine, type LaidState, type Solve } from "../states/layout";
+import { isAbort, layoutMachine, nearestArc, withTimeout, zoomBox, type LaidArc, type LaidMachine, type LaidState, type Solve } from "../states/layout";
 import { solveInWorker } from "../states/elkClient";
 
 /** What a click on the diagram reports: the first source line of an arc, or the line of a state. */
@@ -204,6 +204,27 @@ interface Box {
   h: number;
 }
 
+/**
+ * Starts laying `view` out. The returned function cancels it: the solver's job is aborted and neither callback fires.
+ * An AbortError (a job given up on) is never reported as a failure.
+ */
+export function startLayout(view: StateMachineView, solve: Solve, cb: { done: (l: LaidMachine) => void; fail: (message: string) => void }): () => void {
+  let cancelled = false;
+  const ctl = new AbortController();
+  layoutMachine(view, solve === solveInWorker ? solve : withTimeout(solve), ctl.signal).then(
+    (l) => {
+      if (!cancelled) cb.done(l);
+    },
+    (e: Error) => {
+      if (!cancelled && !isAbort(e)) cb.fail(e.message);
+    },
+  );
+  return () => {
+    cancelled = true;
+    ctl.abort();
+  };
+}
+
 /** One machine, laid out with elkjs and drawn as SVG. Zoom-to-fit by default; drag to pan, ctrl+wheel to zoom. */
 export function StateDiagram({ view, onPick, selected = null, solve = solveInWorker }: StateDiagramProps): ReactElement {
   // The layout is kept with the view it was made for: for one render after `view` changes it still belongs to the old view.
@@ -217,21 +238,13 @@ export function StateDiagram({ view, onPick, selected = null, solve = solveInWor
   const drag = useRef<{ x: number; y: number; box: Box | null; left: number; top: number } | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
     setLaid(null);
     setFailed(null);
     setBox(null);
-    layoutMachine(view, solve === solveInWorker ? solve : withTimeout(solve)).then(
-      (l) => {
-        if (!cancelled) setLaid({ view, laid: l });
-      },
-      (e: Error) => {
-        if (!cancelled) setFailed(e.message);
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
+    return startLayout(view, solve, {
+      done: (l) => setLaid({ view, laid: l }),
+      fail: (m) => setFailed(m),
+    });
   }, [view, solve]);
 
   useEffect(() => {
