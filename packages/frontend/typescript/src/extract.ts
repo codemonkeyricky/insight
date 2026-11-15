@@ -1376,7 +1376,10 @@ export function emitFile(project: Project, rel: string): IRBatch {
           span,
           provenance: PROV,
         });
-        if (decl.entity.anonymous) {
+        // A lambda, or a named function made inside a function (a local arrow, a nested declaration, a property of a literal
+        // inside a function). `fn` is the file or its module entry at top level, so top-level declarations get no edge.
+        const madeInFunction = fn !== rel && fn !== moduleId;
+        if (decl.entity.anonymous || madeInFunction) {
           // The function is made here, so its creator reaches whatever it calls: a closure edge from the enclosing function.
           pushEdge({ from: fn, to: decl.id, facet: "calls", kind: "calls.reference", attrs: { how: "closure" }, span, provenance: PROV });
         }

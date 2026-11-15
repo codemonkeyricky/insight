@@ -11,6 +11,8 @@ import type { Item } from "../../flow/src/build.js";
 import type { ModuleMap } from "../../flow/src/modules.js";
 import { layoutFunction } from "../../flow/src/layout.js";
 import type { FlowNode } from "../../flow/src/types.js";
+import { execModel } from "../../flow/src/exec-model.js";
+import { summarizeScope } from "../../flow/src/scope.js";
 
 // Coupling reduction on two indexes: samples/benchmark (C++) and packages/core of this worktree (TypeScript).
 // Each index gets (a) a no-loss check: every row that reaches outside its function stays in the coupling chart,
@@ -219,5 +221,25 @@ describe("coupling pass on packages/core (self index, TypeScript)", () => {
     expect(m.checked).toBeGreaterThan(0);
     expect(m.lossFailures.slice(0, 20)).toEqual([]);
     expect(m.functions).toBeGreaterThan(0);
+  });
+});
+
+// Flow roots on the same self index. The index is of a copy of packages/core, so its file paths start at `indexer/`.
+// The Flow view names a function by its qualified name (`link.ctx.hasFile`), so a root is matched on its last segment.
+describe("flow roots on packages/core (self index, TypeScript)", () => {
+  it("lists no closure defined inside a function as a root of the indexer scope", (ctx) => {
+    if (selfSkipped || self === undefined) {
+      ctx.skip(`self index took ${(selfElapsedMs / 1000).toFixed(1)} s, over the ${SELF_BUDGET_MS / 1000} s budget`);
+    }
+    const files = [...new Set(self.nodes.flatMap((n) => (n.span?.file.startsWith("indexer/") ? [n.span.file] : [])))];
+    const scope = summarizeScope(self.nodes, self.edges, files);
+    const last = (name: string) => name.split(".").pop() ?? name;
+    const unreferencedNames = scope.unreferenced.map((f) => f.name);
+    const model = execModel(self.nodes, self.edges, "indexer");
+    const mainRoots = (model.threads.find((t) => t.kind === "main")?.roots ?? []).map((id) => model.functions.find((f) => f.id === id)?.name ?? id);
+    for (const bad of ["hasFile", "hasNode", "listFiles"]) {
+      expect(mainRoots.map(last)).not.toContain(bad);
+      expect(unreferencedNames.map(last)).not.toContain(bad);
+    }
   });
 });

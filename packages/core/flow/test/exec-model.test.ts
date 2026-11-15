@@ -1103,3 +1103,30 @@ describe("execModel: message dispatches cross threads", () => {
     expect(runtimeIn(model, "src/page.ts#onPageMsg")).toBe("thread");
   });
 });
+
+describe("execModel: closures defined inside a function are not roots", () => {
+  const file = "src/c.ts";
+  const id = (name: string) => `${file}#${name}`;
+  // Top-level functions and a top-level bound literal's function, next to a function that makes a local arrow, a nested
+  // declaration and a named property of a literal, as the TypeScript frontend emits them.
+  const nodes = [
+    fnNode(file, "link", 0),
+    fnNode(file, "link.ctx.hasFile", 1),
+    fnNode(file, "outer", 4),
+    fnNode(file, "outer.helper", 5),
+    fnNode(file, "outer.inner", 6),
+    fnNode(file, "top", 8),
+    fnNode(file, "api.get", 10),
+  ];
+  const creators = [closureEdge(id("link"), id("link.ctx.hasFile"), file, 1), closureEdge(id("outer"), id("outer.helper"), file, 5), closureEdge(id("outer"), id("outer.inner"), file, 6)];
+
+  it("roots the top-level functions, and not the closures their creators make", () => {
+    const roots = execModel(nodes, creators, "src").threads.find((t) => t.kind === "main")?.roots ?? [];
+    expect([...roots].sort()).toEqual([id("api.get"), id("link"), id("outer"), id("top")]);
+  });
+
+  it("roots the same closures when no creator reaches them", () => {
+    const roots = execModel(nodes, [], "src").threads.find((t) => t.kind === "main")?.roots ?? [];
+    expect(roots).toEqual(expect.arrayContaining([id("link.ctx.hasFile"), id("outer.helper"), id("outer.inner")]));
+  });
+});
