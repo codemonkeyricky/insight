@@ -64,10 +64,6 @@ const SHEET_ROOM_MARGIN = 16;
 const TILE_LABEL_PX = 16;
 
 /**
- * The room the status pill takes at the bottom of a desktop stage: its measured height (or the fallback) and a gap. Nothing
- * when the pill is not shown (a phone hides it).
- */
-/**
  * Annotates a chart (MapSource.annotateChart: its messages, its resource peers). An annotation that throws leaves the chart
  * as it is, so the chart still shows.
  */
@@ -79,6 +75,10 @@ function annotateOrKeep(chart: FunctionFlow, annotate: () => FunctionFlow): Func
   }
 }
 
+/**
+ * The room the status pill takes at the bottom of a desktop stage: its measured height (or the fallback) and a gap. Nothing
+ * when the pill is not shown (a phone hides it).
+ */
 function pillRoomOf(): number {
   const pill = document.querySelector<HTMLElement>(".sh-sheet .sh-title");
   if (pill === null || getComputedStyle(pill).display === "none") return 0;

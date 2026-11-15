@@ -424,7 +424,8 @@ const nonEmpty = (s: string | undefined): string | undefined => (s === undefined
 
 /** The resources a function has a site in: every lock, channel, condvar, semaphore and atomic it operates on there. */
 export function resourcesOf(model: ExecModel, fnId: string): ExecResource[] {
-  return (model.resources ?? []).filter((r) => r.sites.some((s) => s.fn === fnId));
+  // An unresolved (`<dynamic>`) resource is not one shared thing: all such sites share the name, so none is listed as shared.
+  return (model.resources ?? []).filter((r) => r.name !== DYNAMIC_NAME && r.sites.some((s) => s.fn === fnId));
 }
 
 /** The last path segment of a file: the name a module entry's card shows, with its "top level" tag beside it. */

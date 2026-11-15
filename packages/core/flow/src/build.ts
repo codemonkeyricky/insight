@@ -303,7 +303,9 @@ function convert(ev: Ev, sources: boolean): Item[] {
       return [...convertAll(ev.children, sources), step("call", ev, ev.label, sources)];
     case "sync":
       // One row: a lock, condvar, semaphore, atomic or channel operation. A lock frame is built from the lock it names.
+      // Calls inside the operation's arguments run first, so they are drawn before the operation's row.
       return [
+        ...convertAll(ev.children, sources),
         {
           ...step("sync", ev, ev.label, sources),
           ...(ev.lock !== undefined ? { lock: ev.lock } : {}),

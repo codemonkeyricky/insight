@@ -288,3 +288,17 @@ describe("buildExecScene: dynamic resources never pair", () => {
     expect(syncEdges(buildExecScene(model))).toEqual([]);
   });
 });
+
+describe("resourcesOf: <dynamic> is never shared", () => {
+  it("lists no <dynamic> resource as shared, so two functions with different dynamic locks share nothing", () => {
+    const nodes = [
+      fnNode("src/m.ts", "a", 0),
+      lockOf("src/m.ts", 1, "src/m.ts#a", "<dynamic>"),
+      fnNode("src/m.ts", "b", 10),
+      lockOf("src/m.ts", 11, "src/m.ts#b", "<dynamic>"),
+    ];
+    const model = execModel(nodes, [], "src");
+    expect(resourcesOf(model, "src/m.ts#a")).toEqual([]);
+    expect(resourcesOf(model, "src/m.ts#b")).toEqual([]);
+  });
+});
