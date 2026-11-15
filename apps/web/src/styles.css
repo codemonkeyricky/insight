@@ -275,6 +275,10 @@ a.flow-node { cursor: pointer; }
 .flow-node.cp-conc .flow-text { fill: var(--thread); }
 .flow-node.cp-conc .st { stroke: var(--thread); }
 .flow-node.cp-state .flow-text { fill: var(--ok-text); }
+.flow-node.cp-state .st { stroke: var(--ok-text); }
+.flow-node.cp-state-write .flow-text { font-weight: 700; }
+.flow-node.cp-state-write .st { fill: var(--ok-text); }
+.flow-node.cp-global .flow-text { text-decoration: underline; }
 .flow-node.cp-escape .flow-text { fill: var(--red-text); font-weight: 600; }
 .flow-node.cp-escape .st { stroke: var(--red-text); }
 .flow-fold .flow-text { fill: var(--muted); font-size: 11px; font-style: italic; }
@@ -286,6 +290,7 @@ a.flow-node { cursor: pointer; }
 .cp-key.cp-cross { background: var(--accent-text); }
 .cp-key.cp-io { background: var(--coroutine); }
 .cp-key.cp-conc { background: var(--thread); }
+.cp-key.cp-state { background: var(--ok-text); }
 .cp-key.cp-escape { background: var(--red-text); }
 .cp-key.cp-fold { background: none; border: 1px dashed var(--muted); }
 .exec-coupling h3 { margin: 12px 0 4px; font-size: var(--t-md); }

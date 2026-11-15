@@ -56,6 +56,9 @@ interface Extra {
   handler?: true;
   coupling?: CouplingClass;
   hoisted?: string;
+  write?: true;
+  hidden?: true;
+  global?: true;
   foldId?: string;
   fold?: number;
   open?: true;
@@ -84,6 +87,9 @@ class Maker {
     if (extra.handler) out.handler = true;
     if (extra.coupling !== undefined) out.coupling = extra.coupling;
     if (extra.hoisted !== undefined) out.hoisted = extra.hoisted;
+    if (extra.write) out.write = true;
+    if (extra.hidden) out.hidden = true;
+    if (extra.global) out.global = true;
     if (extra.foldId !== undefined) out.foldId = extra.foldId;
     if (extra.fold !== undefined) out.fold = extra.fold;
     if (extra.open === true) out.open = true;
@@ -223,6 +229,9 @@ function walkItem(c: Ctx, mk: Maker, item: Item, lane: number, labelLane: number
         ...(item.handler ? { handler: true as const } : {}),
         ...(item.coupling !== undefined ? { coupling: item.coupling } : {}),
         ...(item.hoisted !== undefined ? { hoisted: item.hoisted } : {}),
+        ...(item.write ? { write: true as const } : {}),
+        ...(item.hidden ? { hidden: true as const } : {}),
+        ...(item.global ? { global: true as const } : {}),
       });
       return stepRow(c, mk, node, lane, labelLane, skip, into);
     }

@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { IREdge, IRNode, IRRecord } from "@insight/ir";
 import { projectPaths, readSnapshot, runIndex } from "../src/index.js";
 // The flow package is not a dependency of the indexer, so its sources are imported by path.
-import { couplingChart, couplingFacts, type CouplingFootprint } from "../../flow/src/coupling.js";
+import { couplingChart, couplingFacts, stateClass, type CouplingFootprint } from "../../flow/src/coupling.js";
 import type { Item } from "../../flow/src/build.js";
 import type { ModuleMap } from "../../flow/src/modules.js";
 import { layoutFunction } from "../../flow/src/layout.js";
@@ -50,9 +50,12 @@ function lockHeads(items: readonly Item[], out: string[] = []): string[] {
 }
 
 /** Rows whose span should survive pruning, with the reason. Throws count only when no enclosing try catches them. */
-function mustKeep(items: readonly Item[], M: string, modules: ModuleMap, out: Map<string, string> = new Map(), caught = false): Map<string, string> {
+function mustKeep(items: readonly Item[], M: string, modules: ModuleMap, onSurface: boolean, out: Map<string, string> = new Map(), caught = false): Map<string, string> {
   for (const item of items) {
-    if (item.t === "step") {
+    if (item.t === "step" && item.role === "state" && item.state !== undefined) {
+      // A state row is kept when stateClass keeps it: global, other mutable state, or hidden state on the surface.
+      if (stateClass(item.state, M, onSurface).keep) out.set(spanKey(item.span), "state");
+    } else if (item.t === "step") {
       const targets = item.targets ?? (item.target ? [item.target] : []);
       const cross = targets.some((t) => {
         const m = modules.moduleOf(t);
@@ -67,9 +70,9 @@ function mustKeep(items: readonly Item[], M: string, modules: ModuleMap, out: Ma
       // A lock frame's head is the acquire it replaces: a conc row.
       if (item.role === "lock") out.set(spanKey(item.span), "conc");
       const tryCatches = item.role === "try" && item.arms.some((a) => a.kind === "exception");
-      for (const a of item.arms) mustKeep(a.body, M, modules, out, tryCatches && a.kind === "next" ? true : caught);
+      for (const a of item.arms) mustKeep(a.body, M, modules, onSurface, out, tryCatches && a.kind === "next" ? true : caught);
     } else if (item.t === "loop") {
-      mustKeep(item.body, M, modules, out, caught);
+      mustKeep(item.body, M, modules, onSurface, out, caught);
     }
   }
   return out;
@@ -120,19 +123,39 @@ interface Measured {
   emptyCharts: number;
 }
 
+/** Every state row of a list (including inside forks and loops), with its span and variable. */
+function stateRowsOf(items: readonly Item[], out: Step[] = []): Step[] {
+  for (const item of items) {
+    if (item.t === "step" && item.role === "state") out.push(item);
+    else if (item.t === "fork") for (const a of item.arms) stateRowsOf(a.body, out);
+    else if (item.t === "loop") stateRowsOf(item.body, out);
+  }
+  return out;
+}
+
 /** Runs the no-loss check and collects per-function row counts for one index. */
 function measure(index: IndexRecords): Measured {
-  const { modules, facts, footprints } = couplingFacts(index.nodes, index.edges);
+  const { modules, facts, footprints, surface } = couplingFacts(index.nodes, index.edges);
   const fp = footprints as ReadonlyMap<string, CouplingFootprint>;
   const m: Measured = { functions: 0, lossFailures: [], checked: 0, allRows: [], couplingRows: [], folds: [], histogram: new Map(), hoisted: 0, emptyCharts: 0 };
   for (const [id, f] of facts) {
     const full = layoutFunction(f);
     if (full.tooLarge || full.nodes.length === 0) continue;
     const M = modules.moduleOf(id) ?? ".";
-    const pruned = couplingChart(id, f.items, modules, fp);
+    const onSurface = surface.has(id);
+    const pruned = couplingChart(id, f.items, modules, fp, surface);
     const chart = layoutFunction({ id, name: f.name, async: f.async, ...(f.span ? { span: f.span } : {}), items: pruned.items });
 
-    const required = mustKeep(f.items, M, modules);
+    // Cheap hoisting check: a hidden state row folded out of a non-surface function must be in that function's footprint,
+    // which is what its surface callers take in through their call rows (computeFootprints hoists the footprint, not the rows).
+    for (const row of stateRowsOf(f.items)) {
+      if (row.state === undefined || stateClass(row.state, M, onSurface).keep) continue;
+      m.checked++;
+      const reached = fp.get(id)?.entries.some((e) => e.cls === "state" && e.hidden === true && e.target === row.state?.variable) ?? false;
+      if (!reached) m.lossFailures.push(`${id} hidden-state-not-hoisted ${spanKey(row.span)}`);
+    }
+
+    const required = mustKeep(f.items, M, modules, onSurface);
     const kept = new Set([...allRows(pruned.items).map((r) => spanKey(r.span)), ...lockHeads(pruned.items)]);
     for (const [key, why] of required) {
       m.checked++;

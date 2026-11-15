@@ -2,6 +2,32 @@ import type { IREdge, IRNode } from "@insight/ir";
 import { edgeTargets } from "@insight/sdk";
 import type { CouplingClass, FlowRole, FlowSpan } from "./types.js";
 
+/** A mutable variable a state row touches, as the coupling pass classifies it. */
+export interface StateRef {
+  /** The data.variable node's id. */
+  variable: string;
+  /** The variable's storage kind, as the IR records it. */
+  storage: string;
+  exported: boolean;
+  write: boolean;
+  /** The module the variable belongs to. */
+  owner: string | undefined;
+  /** The modules that write the variable (data.write edges), each once. */
+  writers: string[];
+  /** A TypeScript global property (`globalThis.x`, `window.x`, `self.x`). */
+  tsGlobal: boolean;
+}
+
+/** A data.variable node and the modules that write it, for every variable of a project. */
+export interface StateVariable {
+  node: IRNode;
+  module: string | undefined;
+  writers: string[];
+}
+
+/** The project's data.variable nodes by id. A state row looks its variable up here, so the variable may be in another file. */
+export type StateIndex = ReadonlyMap<string, StateVariable>;
+
 type Pos = readonly [number, number];
 const cmp = (a: Pos, b: Pos) => a[0] - b[0] || a[1] - b[1];
 
@@ -16,7 +42,7 @@ export function topLevelName(file: string): string {
 
 /** One fact inside a function that takes part in the flow, reduced to what the chart needs. */
 interface Ev {
-  type: "call" | "await" | "spawn" | "effect" | "sync" | "branch" | "switch" | "arm" | "loop" | "block" | "try" | "return" | "throw" | "break" | "continue";
+  type: "call" | "await" | "spawn" | "effect" | "sync" | "state" | "branch" | "switch" | "arm" | "loop" | "block" | "try" | "return" | "throw" | "break" | "continue";
   start: Pos;
   end: Pos;
   /** Breaks ties between events with the same range: smaller sorts outer. */
@@ -31,6 +57,8 @@ interface Ev {
   targets?: string[];
   /** A handler the code installs (`onmessage = …`): its step opens the handler even when it is a folded lambda. */
   handler?: true;
+  /** A state row: the variable it reads or writes. */
+  state?: StateRef;
   /** A synchronisation or channel operation: the lock it names, and whether it takes (`acquire`) or gives (`release`) it. */
   lock?: string;
   lockOp?: "acquire" | "release";
@@ -53,6 +81,8 @@ export type Item =
       kind?: string;
       /** All candidate targets of a multi-candidate call (`sources` builds only). */
       targets?: string[];
+      /** A state row: the variable it reads or writes (coupling view only). */
+      state?: StateRef;
       /** Coupling pass: the row's class. */
       coupling?: CouplingClass;
       /** Coupling pass: the classes and labels a local call hoists. */
@@ -67,6 +97,12 @@ export type Item =
       text?: string;
       /** Coupling pass: an open fold's header row (`▾ n local`), before the rows it folds. */
       open?: boolean;
+      /** Coupling pass: a state row that writes its variable. */
+      write?: true;
+      /** Coupling pass: a state row on module-private state the surface reaches (`◆`). */
+      hidden?: true;
+      /** Coupling pass: a state row on global state. */
+      global?: true;
     }
   | { t: "term"; role: "return" | "throw" | "break" | "continue"; label: string; span?: FlowSpan; coupling?: CouplingClass }
   | { t: "fork"; role: "branch" | "switch" | "try" | "lock"; label: string; title?: string; span?: FlowSpan; arms: Arm[]; complete: boolean; lock?: string; coupling?: CouplingClass }
@@ -94,6 +130,7 @@ const RANK: Record<Ev["type"], number> = {
   spawn: 3.1,
   effect: 3.2,
   sync: 3.2,
+  state: 3.4,
   call: 4,
 };
 
@@ -272,6 +309,8 @@ function convert(ev: Ev, sources: boolean): Item[] {
           ...(ev.text !== undefined ? { text: ev.text } : {}),
         },
       ];
+    case "state":
+      return [{ ...step("state", ev, ev.label, sources), ...(ev.state !== undefined ? { state: ev.state } : {}) }];
     case "await":
     case "spawn":
     case "effect": {
@@ -405,6 +444,25 @@ function frameList(list: Item[]): Item[] {
   return out;
 }
 
+/**
+ * Merges each run of consecutive reads of one variable within a list into the first read's row. Nested lists are merged too.
+ * A row of any other kind between two reads keeps them apart.
+ */
+export function mergeStateReads(items: Item[]): Item[] {
+  const out: Item[] = [];
+  for (const item of items) {
+    const prev = out[out.length - 1];
+    if (
+      item.t === "step" && item.role === "state" && item.state !== undefined && !item.state.write &&
+      prev?.t === "step" && prev.role === "state" && prev.state !== undefined && !prev.state.write && prev.target === item.target
+    ) continue;
+    if (item.t === "fork") out.push({ ...item, arms: item.arms.map((a) => ({ ...a, body: mergeStateReads(a.body) })) });
+    else if (item.t === "loop") out.push({ ...item, body: mergeStateReads(item.body) });
+    else out.push(item);
+  }
+  return out;
+}
+
 export interface FunctionFacts {
   id: string;
   name: string;
@@ -417,9 +475,10 @@ export interface FunctionFacts {
  * Group a file's IR records by the function that owns them and rebuild each function's flow.
  * `nodes` and `edges` may hold more than the file; records from other files are ignored.
  */
-export function factsForFile(file: string, nodes: Iterable<IRNode>, edges: Iterable<IREdge>, opts: { sources?: boolean } = {}): FunctionFacts[] {
+export function factsForFile(file: string, nodes: Iterable<IRNode>, edges: Iterable<IREdge>, opts: { sources?: boolean; state?: StateIndex } = {}): FunctionFacts[] {
   const sources = opts.sources === true;
   const allNodes = [...nodes];
+  const allEdges = [...edges];
   const functions = new Map<string, FunctionFacts>();
   const events = new Map<string, Ev[]>();
 
@@ -448,7 +507,7 @@ export function factsForFile(file: string, nodes: Iterable<IRNode>, edges: Itera
     const ev = toEvent(n);
     if (ev) add(n.parent, ev);
   }
-  for (const e of edges) {
+  for (const e of allEdges) {
     if (e.kind !== "calls.call" || e.span?.file !== file || (!functions.has(e.from) && e.from !== file)) continue;
     const callee = typeof e.attrs?.callee === "string" ? e.attrs.callee : "call";
     const targets = edgeTargets(e);
@@ -469,15 +528,49 @@ export function factsForFile(file: string, nodes: Iterable<IRNode>, edges: Itera
     });
   }
 
+  // State rows: a read or write of a mutable variable. Immutable variables get no row. Module-level code is keyed by its file.
+  const state = opts.state;
+  for (const e of allEdges) {
+    if ((e.kind !== "data.read" && e.kind !== "data.write") || e.span?.file !== file || state === undefined) continue;
+    const varId = typeof e.to === "string" ? e.to : undefined;
+    const sv = varId === undefined ? undefined : state.get(varId);
+    if (varId === undefined || sv === undefined || sv.node.attrs.mutable !== true) continue;
+    const parent = e.from === `${file}#(module)` ? file : e.from;
+    if (!functions.has(parent) && parent !== file) continue;
+    const write = e.kind === "data.write";
+    const name = String(sv.node.attrs.qualifiedName ?? sv.node.attrs.name ?? varId);
+    const ref: StateRef = {
+      variable: varId,
+      storage: String(sv.node.attrs.storage ?? ""),
+      exported: sv.node.attrs.exported === true,
+      write,
+      owner: sv.module,
+      writers: [...sv.writers],
+      tsGlobal: /^(globalThis|window|self)\./.test(name),
+    };
+    add(parent, {
+      type: "state",
+      start: e.span.start as Pos,
+      end: e.span.end as Pos,
+      rank: RANK.state,
+      label: `${write ? "▲" : "▽"} ${name}`,
+      span: spanOf(e),
+      target: varId,
+      kind: e.kind,
+      state: ref,
+      children: [],
+    });
+  }
+
   const out: FunctionFacts[] = [];
   for (const fn of functions.values()) {
-    fn.items = frameLocks(convertAll(nest(events.get(fn.id) ?? []), sources));
+    fn.items = mergeStateReads(frameLocks(convertAll(nest(events.get(fn.id) ?? []), sources)));
     out.push(fn);
   }
   // Statements outside every function run when the module loads.
   const top = events.get(file);
   if (top && top.length > 0) {
-    out.push({ id: file, name: topLevelName(file), async: false, items: frameLocks(convertAll(nest(top), sources)) });
+    out.push({ id: file, name: topLevelName(file), async: false, items: mergeStateReads(frameLocks(convertAll(nest(top), sources))) });
   }
   return out.sort((a, b) => (a.span ? a.span.start[0] : 0) - (b.span ? b.span.start[0] : 0) || a.name.localeCompare(b.name));
 }

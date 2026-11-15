@@ -274,3 +274,52 @@ describe("re-anchoring by span, inline frames and frames cleared", () => {
     return layoutFunction({ id: "m#run", name: "run", async: false, items });
   }
 });
+
+describe("state rows in the coupling view", () => {
+  it("draws a write with cp-state-write, a global with cp-global, and no unresolved mark for a variable target", () => {
+    const items = [
+      step("▲ counter", { role: "state", coupling: "state", write: true, hidden: true, target: "m#var:counter" }),
+      step("▽ config", { role: "state", coupling: "state", global: true, target: "m#var:config" }),
+    ];
+    const fn = layoutFunction({ id: "m#run", name: "run", async: false, items });
+    const html = renderToStaticMarkup(<FlowChart id="p" fn={fn} scope="m" />);
+    expect(html).toContain("cp-state-write");
+    expect(html).toContain("cp-global");
+    expect(html).toContain("▲ counter");
+    expect(html).not.toContain("unresolved");
+  });
+
+  it("draws a plain read with cp-state only, not the write or global classes", () => {
+    const items = [step("▽ total", { role: "state", coupling: "state", target: "m#var:total" })];
+    const fn = layoutFunction({ id: "m#run", name: "run", async: false, items });
+    const html = renderToStaticMarkup(<FlowChart id="p" fn={fn} scope="m" />);
+    expect(html).toContain("cp-state");
+    expect(html).not.toContain("cp-state-write");
+    expect(html).not.toContain("cp-global");
+  });
+
+  it("lists the state entries in the panel with their hidden and global badges", () => {
+    const base: ListBase = { id: "p", scope: "s", roots: false, onOpen: () => {} };
+    const { coupling } = coupledFlow();
+    const info = {
+      module: "m",
+      summary: "state 1w 1r · ◆",
+      footprint: {
+        entries: [
+          { cls: "state" as const, label: "▲ counter", target: "m#var:counter", write: true, hidden: true },
+          { cls: "state" as const, label: "▽ config", target: "m#var:config", global: true },
+        ],
+        modules: [],
+        escape: false,
+      },
+      chart: coupling,
+      rows: { all: 3, coupling: 2 },
+    };
+    const html = renderToStaticMarkup(<CouplingSection base={base} info={info} />);
+    expect(html).toContain("Touches shared state");
+    expect(html).toContain("▲ counter");
+    expect(html).toContain("◆ hidden");
+    expect(html).toContain("▽ config");
+    expect(html).toContain("global");
+  });
+});
