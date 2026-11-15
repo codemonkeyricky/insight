@@ -148,10 +148,16 @@ Arch packages are merged by `root`. Two `structure.package` nodes with the same 
 
 A C++ call whose target is ambiguous becomes a `calls.call` edge with `candidates`. Several functions in the project may have the same name, and only one of them may be linked into the caller's binary. The core narrows those candidates after the resolvers have run (`narrowByBuildGraph` in `packages/core/indexer/src/narrow.ts`).
 
-For each build system that owns both the caller's file and a candidate's file:
+Narrowing only drops free functions. A **method** is never dropped, because virtual dispatch can reach any override, including a sibling implementation that the caller's binary links. A candidate is a method when either:
+
+- its parent chain reaches a `structure.type` before the file, or
+- its qualified name is `<prefix>::<name>`, where the last segment of `<prefix>` names a `structure.type` in the project. This covers out-of-line definitions such as `int Circle::area() {...}` in a `.cc` file, which the C++ frontend parents to the file rather than to the type.
+
+The call edges carry no receiver flag, so a member call is not detected separately.
+
+For each build system that owns both the caller's file and a candidate's file, a free-function candidate is handled as follows:
 
 - The candidate is **kept** when one of the caller's owning targets reaches a target that owns the candidate (through `dep-edge`s), or when the caller's closure is **open**.
-- The candidate is **kept** when it is a method and the candidate's owner reaches one of the caller's owners. A downstream override or a callback is reached by virtual dispatch, though the library does not link it.
 - The candidate is **dropped** only when at least one shared build system says it is not linked and none says it is linked.
 - A candidate with no shared build system is kept.
 
