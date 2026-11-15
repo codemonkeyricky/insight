@@ -46,6 +46,8 @@ A plugin that fails any check (bad JSON, missing entry, wrong export, mismatched
 ```
 
 - `files` lists the project files the frontend reads. `ctx.files` only holds paths that match it. When `files` is omitted, the `detect` globs are used, and when both are omitted, every file.
+- `inputs` lists extra globs whose file contents matter. Their contents are hashed into the frontend's `inputsHash`, and when that hash changes every shard of the frontend is extracted again. Use it for files like build definitions, where an edit changes the output.
+- `inputListing` lists globs for frontends whose output depends on which files exist, not on their contents, such as build-file globs (`glob(["*.cc"])`, `file(GLOB ...)`). A matching file contributes only its path to `inputsHash`, so adding or removing one re-extracts every shard, and editing one does not. A file that matches both `inputs` and `inputListing` contributes its path and its contents.
 - `detect` lists globs that suggest the frontend applies. `detect(root)` still decides.
 - `provides` lists the facets it fills. The coverage table in the overview reports them per run.
 - `roles.frontend` is a module whose default export is the `Frontend`.

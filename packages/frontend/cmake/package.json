@@ -1,7 +1,7 @@
 {
   "name": "@insight/frontend-cmake",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Insight plugin: CMake targets, packages and external packages read statically from CMakeLists.txt. Loaded by @insight/indexer.",
   "type": "module",
   "dependencies": {
