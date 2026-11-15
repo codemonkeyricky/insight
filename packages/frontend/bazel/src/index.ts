@@ -121,7 +121,7 @@ function batchFor(file: string, model: BazelModel, files: Set<string>, externals
 
 export const frontend: Frontend = {
   id: FRONTEND_ID,
-  version: "0.3.2",
+  version: "0.3.3",
   provides: ["packaging", "structure"],
 
   async detect(root: ProjectRoot) {

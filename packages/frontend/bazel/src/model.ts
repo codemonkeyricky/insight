@@ -259,7 +259,7 @@ export function moduleVariables(toks: Tok[]): ModuleVars {
  */
 const LABEL_ATTRS = new Set([
   "deps", "implementation_deps", "srcs", "hdrs", "textual_hdrs", "data", "visibility", "default_visibility",
-  "actual", "exports", "runtime_deps", "src",
+  "actual", "exports", "runtime_deps", "src", "main",
 ]);
 
 /** The call with each label attribute's strings normalised by normalizeMainLabel. */

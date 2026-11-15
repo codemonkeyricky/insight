@@ -1,6 +1,6 @@
 {
   "id": "frontend-bazel",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Bazel: packages, cc_* and binary targets, their sources, headers and deps, bzlmod and WORKSPACE repositories, and visibility, read from BUILD and module files without running bazel. Answers C++ includes through target include paths.",
   "irVersion": "^1.0",
   "detect": ["**/BUILD", "**/BUILD.bazel", "MODULE.bazel", "WORKSPACE", "WORKSPACE.bazel"],

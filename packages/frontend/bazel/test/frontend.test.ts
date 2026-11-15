@@ -940,3 +940,10 @@ describe("label normalisation is limited to label attributes", () => {
     expect(edges.some((e) => e.to.includes("argsfile") || e.to.includes("params"))).toBe(false);
   });
 });
+
+describe("py_binary main label", () => {
+  it("normalises a main label that names the main repository, as it does for srcs", () => {
+    const [app] = parseBuildFile("app/BUILD.bazel", 'py_binary(name = "y", main = "@me//x:y.py")', [], new Set(["app"]), ["me"]);
+    expect(app?.srcs).toEqual(["x/y.py"]);
+  });
+});
