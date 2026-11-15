@@ -2,7 +2,7 @@
 // drawn for an open set: frames, boxes and the edges between the visible boxes. See scene.ts for the model.
 import { PROJECT_ID, type Rect, type ScopeLink, type ScopeTree } from "./scope-map.js";
 import { LAYERED, ZOOM_SIZE, edgeCurve, frameSize, readLayout, type ContainerLayout, type LayoutGraph, type Placed, type PlacedEdge, type PlacedItem, type Size } from "./zoom-layout.js";
-import { addSyncResources, type Scene, type SceneEdge, type SceneEdgeKind, type SceneSyncResource, SceneLayout, SceneNode } from "./scene.js";
+import { addSyncResources, syncEdgeKey, type Scene, type SceneEdge, type SceneEdgeKind, type SceneSyncResource, SceneLayout, SceneNode } from "./scene.js";
 
 /** What a solver answers for one container graph: ELK's shape, reduced to what readLayout reads. */
 export interface SolvedGraph {
@@ -166,8 +166,9 @@ export function sceneEdges(scene: Scene, open: ReadonlySet<string>): SceneMapEdg
     const a = sceneBoxOf(scene, visible, e.from);
     const b = sceneBoxOf(scene, visible, e.to);
     if (a === undefined || b === undefined || a === b) continue;
+    // A sync edge is keyed by its pair of boxes and direction alone, so every resource between the two merges into one edge.
     const how = e.kind === "sync" ? e.how : undefined;
-    const key = `${a}\u0000${b}\u0000${e.kind}\u0000${how ?? ""}\u0000${e.directed === true ? "directed" : ""}`;
+    const key = e.kind === "sync" ? syncEdgeKey(a, b, e.directed === true) : `${a}\u0000${b}\u0000${e.kind}`;
     let m = acc.get(key);
     if (!m) {
       m = { from: a, to: b, kind: e.kind, count: 0, candidate: false, ...(how !== undefined ? { how } : {}) };

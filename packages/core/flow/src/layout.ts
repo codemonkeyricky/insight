@@ -51,6 +51,7 @@ interface Scope {
 /** The fields a row takes from its chart item. */
 interface Extra {
   title?: string;
+  resource?: { kind: "lock" | "channel"; name: string };
   span?: FlowSpan;
   target?: string;
   handler?: true;
@@ -93,6 +94,7 @@ class Maker {
     if (extra.foldId !== undefined) out.foldId = extra.foldId;
     if (extra.fold !== undefined) out.fold = extra.fold;
     if (extra.open === true) out.open = true;
+    if (extra.resource !== undefined) out.resource = extra.resource;
     return out;
   }
 }
@@ -232,6 +234,7 @@ function walkItem(c: Ctx, mk: Maker, item: Item, lane: number, labelLane: number
         ...(item.write ? { write: true as const } : {}),
         ...(item.hidden ? { hidden: true as const } : {}),
         ...(item.global ? { global: true as const } : {}),
+        ...(item.resource !== undefined ? { resource: item.resource } : {}),
       });
       return stepRow(c, mk, node, lane, labelLane, skip, into);
     }
@@ -260,6 +263,7 @@ function fork(c: Ctx, mk: Maker, item: Extract<Item, { t: "fork" }>, lane: numbe
         ? // A lock frame's head is the acquire: a conc row that opens the frame's siding.
           mk.node("sync", "label", clipLabel(item.label, LABEL_MAX), {
             title: item.title ?? item.label,
+            ...(item.resource !== undefined ? { resource: item.resource } : {}),
             ...(item.span ? { span: item.span } : {}),
             ...(item.coupling !== undefined ? { coupling: item.coupling } : {}),
           })
@@ -444,8 +448,9 @@ export function measure(items: Item[]): FlowStats {
         s.loops++;
         walk(i.body, depth + 1);
       } else {
-        if (i.role === "try" || i.role === "lock") s.tries++;
-        else s.decisions++;
+        // A lock frame is neither a try nor a decision: it only groups the rows held under its lock.
+        if (i.role === "try") s.tries++;
+        else if (i.role !== "lock") s.decisions++;
         for (const a of i.arms) walk(a.body, depth + 1);
       }
     }

@@ -599,12 +599,14 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
 
   // Locks and channels the exec model lists, with each site's operation. One resource per program that uses it.
   for (const r of plan.exec.resources) {
-    // Condvars, semaphores and atomics are read from the IR below, so the exec model's copies would count twice.
+    // Condvars and semaphores are read from the IR below, so the exec model's copies would count twice. Atomics are not shown in this view.
     if (r.kind === "condvar" || r.kind === "semaphore" || r.kind === "atomic") continue;
     const kind = r.kind === "lock" ? "lock" : "queue";
     const source = r.kind === "lock" ? "sync" : "channel";
     for (const site of r.sites) {
       if (!inside(site.file)) continue;
+      // Only a lock's acquire is a verb here. A release, or a condvar wait or notify that names a lock, adds no fact.
+      if (r.kind === "lock" && site.op !== "acquire") continue;
       const comp = compOf.get(site.file)?.id as string;
       const verb: SystemEdge["verb"] = site.op === "acquire" ? "locks" : site.op === "send" ? "enqueues" : "dequeues";
       const at: Site = { file: site.file, line: site.line, fn: site.fn };

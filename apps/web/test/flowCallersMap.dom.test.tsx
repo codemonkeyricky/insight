@@ -51,7 +51,12 @@ const flow = (id: string, targets: readonly string[] = ["X"]): FunctionFlow =>
 const flat = (id: string): FunctionFlow => ({ ...flow(id), items: undefined }) as FunctionFlow;
 
 let chartOf: ReturnType<typeof vi.fn>;
-const charts = () => ({ id: "p", scope: "", store: { chartOf } as unknown as ZoomStore });
+// loadMessages stands in for the store's: it reads the function's references, as the real one does.
+const charts = () => ({
+  id: "p",
+  scope: "",
+  store: { chartOf, loadMessages: async (id: string) => { await getRefs("p", "", id); }, messagesOf: (_id: string, c: FunctionFlow) => c } as unknown as ZoomStore,
+});
 const refRow = (id: string): RefRow => ({ id, name: id, file: "src/a.ts", line: 3, isFunction: true, kind: "call", how: undefined, candidate: false, count: 1, inScope: true }) as RefRow;
 
 beforeEach(() => {
@@ -285,5 +290,65 @@ describe("the map's callers wiring", () => {
     await act(async () => slowA.resolve(flow("A")));
     await act(async () => new Promise((r) => setTimeout(r, 20)));
     expect(chartBox("A")).toBeUndefined();
+  });
+});
+
+/** A function whose coupling chart keeps a `⋯ 1 local` fold; `post` adds a message step to its own chart. */
+function foldedChart(id: string, post: boolean): FunctionFlow {
+  const fold = { t: "step" as const, role: "marker" as const, label: "⋯ 1 local", foldId: "F1", fold: [{ t: "step" as const, role: "call" as const, label: "a()" }] };
+  const items = post ? [{ t: "step" as const, role: "call" as const, label: "message.post(x)" }, fold] : [fold];
+  const source = layoutFunction({ id, name: id, async: false, items });
+  return { ...source, coupling: { module: "m", footprint: { entries: [], modules: [], escape: false }, summary: "io 1", chart: source, rows: { all: 2, coupling: 1 } } };
+}
+
+describe("unfolding a coupling fold", () => {
+  async function openFold() {
+    await mount();
+    fireEvent.click(document.querySelector('[data-fid="nF"]')!);
+    await waitFor(() => expect(document.querySelector('[data-fold="F1"]')).not.toBeNull());
+    // A fold opens from a double click or Enter (a single click selects it).
+    fireEvent.keyDown(document.querySelector('[data-fold="F1"]')!, { key: "Enter" });
+    await waitFor(() => expect(document.querySelector('[data-fold="F1"].flow-fold-open')).not.toBeNull());
+  }
+
+  it("does not request the function's references when its chart has no post step", async () => {
+    chartOf.mockImplementation(async () => foldedChart("F", false));
+    await openFold();
+    expect(getRefs).not.toHaveBeenCalled();
+  });
+
+  it("keeps a sync row's resource peers after the fold opens", async () => {
+    // The map annotates each chart it loads, as MapSource.annotateChart does: a sync row gets a peer title.
+    const annotated = { ...source, annotateChart: (_b: MapBuild, _id: string, c: FunctionFlow): FunctionFlow => ({ ...c, nodes: c.nodes.map((n) => (n.role === "sync" ? { ...n, title: `${n.label} · also taken on: Thread · G` } : n)) }) };
+    const fold = { t: "step" as const, role: "marker" as const, label: "⋯ 1 local", foldId: "F1", fold: [{ t: "step" as const, role: "call" as const, label: "a()" }] };
+    const items = [{ t: "step" as const, role: "sync" as const, label: "🔒 m" }, fold];
+    const withSync = (): FunctionFlow => {
+      const chart = layoutFunction({ id: "F", name: "F", async: false, items });
+      return { ...chart, coupling: { module: "m", footprint: { entries: [], modules: [], escape: false }, summary: "io 1", chart, rows: { all: 2, coupling: 2 } } };
+    };
+    chartOf.mockImplementation(async () => withSync());
+    render(<ZoomMap id="p" source={annotated} scope="" charts={charts()} flat hint={false} />);
+    await waitFor(() => expect(document.querySelector('[data-fid="nF"]')).not.toBeNull());
+    fireEvent.click(document.querySelector('[data-fid="nF"]')!);
+    await waitFor(() => expect(document.querySelector('[data-fold="F1"]')).not.toBeNull());
+    fireEvent.keyDown(document.querySelector('[data-fold="F1"]')!, { key: "Enter" });
+    await waitFor(() => expect(document.querySelector('[data-fold="F1"].flow-fold-open')).not.toBeNull());
+    expect(document.body.innerHTML).toContain("🔒 m · also taken on: Thread · G");
+  });
+
+  it("still draws the folded chart when annotating it throws", async () => {
+    const throwing = { ...source, annotateChart: (): FunctionFlow => { throw new Error("annotate failed"); } };
+    chartOf.mockImplementation(async () => foldedChart("F", false));
+    render(<ZoomMap id="p" source={throwing} scope="" charts={charts()} flat hint={false} />);
+    await waitFor(() => expect(document.querySelector('[data-fid="nF"]')).not.toBeNull());
+    fireEvent.click(document.querySelector('[data-fid="nF"]')!);
+    await waitFor(() => expect(document.querySelector('[data-fold="F1"]')).not.toBeNull());
+  });
+
+  it("requests the references when its chart has a post step (control)", async () => {
+    chartOf.mockImplementation(async () => foldedChart("F", true));
+    getRefs.mockResolvedValue({ calledBy: [] });
+    await openFold();
+    expect(getRefs).toHaveBeenCalledWith("p", "", "F");
   });
 });

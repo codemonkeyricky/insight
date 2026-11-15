@@ -68,20 +68,6 @@ export class ZoomStore {
     return load;
   }
 
-  /**
-   * A chart of a function with its message steps pointed at their receivers, for a chart derived from the function's own
-   * (an unfolded coupling chart): the receivers are cached per function, the chart is not. A chart with no message step, or
-   * whose receivers cannot be read, is returned as it is.
-   */
-  async withMessages(fnId: string, chart: FunctionFlow): Promise<FunctionFlow> {
-    if (!chart.nodes.some(isPostStep)) return chart;
-    try {
-      return withMessageTargets(chart, await this.receiversOf(fnId));
-    } catch {
-      return chart;
-    }
-  }
-
   /** Loads `fnId`'s receivers, so that `messagesOf` can point a chart's message steps at them synchronously. Never throws. */
   async loadMessages(fnId: string): Promise<void> {
     try {

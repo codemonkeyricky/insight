@@ -8,7 +8,7 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type Keyb
 import { select } from "d3-selection";
 import { zoom, zoomIdentity, type D3ZoomEvent, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
 import { CHART_FIT_MAX_K, CHART_HEAD, MORE_SUFFIX, ZOOM_SIZE, fitCamera, fitChartCamera, visibleWorld, type Camera, type FlowNode, type FlowSpan, type FunctionFlow, type PlacedItem, type Rect } from "@insight/flow";
-import { nameOfId, runtimeLabel, stepRuntime } from "../../flowTargets";
+import { isPostStep, nameOfId, runtimeLabel, stepRuntime } from "../../flowTargets";
 import { hrefView } from "../../router";
 import { CHART_MIN_PX } from "../../zoom/chart";
 import { anchoredTo, CALLERS_CAP, callerRowRect, callersAt, chainHas, hangCallersFrom, hangsFromCallers, expandCamera, headerAnchor, isInPlace, calloutOf, closeExpansion, footprintOf, isNested, loadFunctionChart, NARROW_VIEW_PX, openExpansion, ownerOf, REVEAL_MIN_K, refresh, refusedCallersPlan, resizeCallers, revealCamera, rootBoxOf, sameFootprint, sceneCamera, setInline, SLOT_PAD, shiftAt, stepRect, stillOpen, syncCallerRows, toggleCallers, toggleFold, type Expansion, type ExpandAnchor } from "../../zoom/expand";
@@ -644,7 +644,13 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
       const f = await loadFunctionChart(charts.store, fnId);
       if (f === undefined || f.tooLarge || f.nodes.length === 0) return undefined;
       const b = buildRef.current;
-      return b !== undefined && source.annotateChart !== undefined ? source.annotateChart(b, fnId, f) : f;
+      if (b === undefined || source.annotateChart === undefined) return f;
+      // An annotation that throws leaves the chart as it is, so the chart still shows.
+      try {
+        return source.annotateChart(b, fnId, f);
+      } catch {
+        return f;
+      }
     } catch {
       return undefined;
     }
@@ -979,15 +985,21 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     // The loaded chart carries the coupling (the summary the box shows) and the message targets; the unfolded chart is laid
     // out again from the coupling chart's items, with the message targets applied to it.
     const flow = await loadChart(fnId);
-    const source = flow?.coupling?.chart;
-    if (flow === undefined || source === undefined) return;
-    await charts?.store.loadMessages(fnId);
+    const chartSource = flow?.coupling?.chart;
+    if (flow === undefined || chartSource === undefined) return;
+    // Receivers are read only when the function posts messages: a chart with no post step needs no references request.
+    if (flow.nodes.some(isPostStep)) await charts?.store.loadMessages(fnId);
     if (!loadsRef.current.isLatest(fnId, token)) return;
     // The build and the expansions are read now, after the awaits: the folds are those open at this moment.
     const cur = buildRef.current;
     if (cur === undefined || !expRef.current.some((x) => x.fnId === fnId)) return;
     const store = charts?.store;
-    setExp(toggleFold(placeAll(cur, expRef.current), fnId, foldId, source, placeView(cur), flow.coupling, (chart) => store?.messagesOf(fnId, chart) ?? chart));
+    // The unfolded chart gets the same annotations as a loaded one: its messages, then its resource peers.
+    const finish = (chart: FunctionFlow): FunctionFlow => {
+      const withMessages = store?.messagesOf(fnId, chart) ?? chart;
+      return source.annotateChart !== undefined ? source.annotateChart(cur, fnId, withMessages) : withMessages;
+    };
+    setExp(toggleFold(placeAll(cur, expRef.current), fnId, foldId, chartSource, placeView(cur), flow.coupling, finish));
   };
 
   /**

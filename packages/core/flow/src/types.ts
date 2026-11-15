@@ -50,6 +50,8 @@ export interface FlowNode {
   target?: string;
   /** The step is a handler the code installs (`onmessage = …`): it opens its target, even a folded lambda. */
   handler?: true;
+  /** A lock or channel row: the resource it names, as the model names it (peers are matched by this, not by the label). */
+  resource?: { kind: "lock" | "channel"; name: string };
   /** The row's coupling class (coupling view only). */
   coupling?: CouplingClass;
   /** What a local call hoists from its callee, or `may throw` for a cross call (coupling view only). */
