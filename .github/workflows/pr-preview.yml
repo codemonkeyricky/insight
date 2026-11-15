@@ -1,0 +1,79 @@
+name: PR preview
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+concurrency:
+  group: pr-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+env:
+  VERCEL_ORG_ID: team_nGvXys7AfnNkB1qyxfcG7KWH
+  VERCEL_PROJECT_ID: prj_Pxn17Kbem2bNLIBffr7hR0ppmcUK
+  VERCEL_SCOPE: richards-projects-fcf7a01b
+  VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+  KV_PUBLIC_BASE: https://insight-storage.insight-vserkk.workers.dev
+  ALIAS: system-insight-pr-${{ github.event.pull_request.number }}.vercel.app
+  PR: ${{ github.event.pull_request.number }}
+  GH_TOKEN: ${{ github.token }}
+jobs:
+  deploy:
+    if: github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Require VERCEL_TOKEN
+        run: '[ -n "$VERCEL_TOKEN" ] || { echo "::error::repo secret VERCEL_TOKEN is not set"; exit 1; }'
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.8.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Install Vercel CLI
+        run: npm i -g vercel@63.1.0
+      - name: Build hosted package
+        run: node scripts/build-vercel-hosted.mjs "$RUNNER_TEMP/out"
+      - name: Deploy preview
+        id: deploy
+        working-directory: ${{ runner.temp }}/out
+        run: |
+          json="$(vercel deploy --prebuilt --archive=tgz --token "$VERCEL_TOKEN")"
+          url="$(printf '%s' "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["deployment"]["url"])')"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "bundle=$(basename "$(ls .vercel/output/static/assets/index-*.js | head -1)")" >> "$GITHUB_OUTPUT"
+      - name: Alias
+        working-directory: ${{ runner.temp }}/out
+        run: vercel alias set "${{ steps.deploy.outputs.url }}" "$ALIAS" --scope "$VERCEL_SCOPE" --token "$VERCEL_TOKEN"
+      - name: Verify live bundle and health
+        run: |
+          want="${{ steps.deploy.outputs.bundle }}"
+          for i in $(seq 1 10); do
+            live="$(curl -s "https://$ALIAS/" | grep -o 'assets/index-[^"]*\.js' | head -1 | sed 's#.*/##')"
+            if [ "$live" = "$want" ]; then
+              echo "verified $live"
+              health="$(curl -s "https://$ALIAS/api/health" || true)"
+              printf '%s' "$health" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("ok") is True and d.get("storage")=="kv", d' && { echo "health ok"; exit 0; }
+              echo "::error::health check failed: $health"; exit 1
+            fi
+            sleep 6
+          done
+          echo "::error::https://$ALIAS serves '$live', expected '$want'"; exit 1
+      - name: PR comment
+        run: |
+          body="$(printf '<!-- pr-preview -->\n**Preview:** https://%s\ncommit `%s` (head `%s`), bundle `%s`' "$ALIAS" "${GITHUB_SHA::7}" "${{ github.event.pull_request.head.sha }}" "${{ steps.deploy.outputs.bundle }}")"
+          id="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate --jq '.[] | select(.body | startswith("<!-- pr-preview -->")) | .id' | head -1)"
+          if [ -n "$id" ]; then gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -f body="$body"; else gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -f body="$body"; fi
+  cleanup:
+    if: github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm i -g vercel@63.1.0
+      - name: Remove preview alias
+        run: vercel alias rm "$ALIAS" --yes --scope "$VERCEL_SCOPE" --token "$VERCEL_TOKEN" || true

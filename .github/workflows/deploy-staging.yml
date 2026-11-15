@@ -1,0 +1,63 @@
+name: Deploy staging
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+permissions:
+  contents: read
+env:
+  VERCEL_ORG_ID: team_nGvXys7AfnNkB1qyxfcG7KWH
+  VERCEL_PROJECT_ID: prj_mtV2GW2wkN39dO68MsDEYUtEmaF6
+  VERCEL_SCOPE: richards-projects-fcf7a01b
+  VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+  KV_PUBLIC_BASE: https://insight-storage.insight-vserkk.workers.dev
+  STAGING_HOST: system-insight-staging.vercel.app
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Require VERCEL_TOKEN
+        run: '[ -n "$VERCEL_TOKEN" ] || { echo "::error::repo secret VERCEL_TOKEN is not set"; exit 1; }'
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.8.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Install Vercel CLI
+        run: npm i -g vercel@63.1.0
+      - name: Build hosted package
+        run: node scripts/build-vercel-hosted.mjs "$RUNNER_TEMP/out"
+      - name: Deploy to staging (production deployment of system-insight-staging)
+        id: deploy
+        working-directory: ${{ runner.temp }}/out
+        run: |
+          deploy() { vercel deploy --prebuilt --prod --archive=tgz --token "$VERCEL_TOKEN"; }
+          json="$(deploy)" || { echo "deploy failed, retrying once"; sleep 10; json="$(deploy)"; }
+          url="$(printf '%s' "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["deployment"]["url"])')"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "bundle=$(basename "$(ls .vercel/output/static/assets/index-*.js | head -1)")" >> "$GITHUB_OUTPUT"
+      - name: Verify staging serves the built bundle and health
+        run: |
+          want="${{ steps.deploy.outputs.bundle }}"
+          for i in $(seq 1 20); do
+            live="$(curl -s "https://$STAGING_HOST/" | grep -o 'assets/index-[^"]*\.js' | head -1 | sed 's#.*/##')"
+            if [ "$live" = "$want" ]; then
+              echo "verified $live"
+              health="$(curl -s "https://$STAGING_HOST/api/health" || true)"
+              printf '%s' "$health" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("ok") is True and d.get("storage")=="kv", d' && { echo "health ok"; break; }
+              echo "::error::health check failed: $health"; exit 1
+            fi
+            sleep 6
+          done
+          [ "$live" = "$want" ] || { echo "::error::https://$STAGING_HOST serves '$live', expected '$want'"; exit 1; }
+      - name: Step summary
+        run: echo "Deployed master to https://$STAGING_HOST (deployment ${{ steps.deploy.outputs.url }}, bundle ${{ steps.deploy.outputs.bundle }})" >> "$GITHUB_STEP_SUMMARY"

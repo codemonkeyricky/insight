@@ -56,6 +56,13 @@ vercel rollback <previous-deployment-url> --scope richards-projects-fcf7a01b
 
 `vercel ls arch-insight --scope richards-projects-fcf7a01b` lists past deployments. The domain alias was added once with `vercel domains add omninsight.vercel.app arch-insight` and does not need to be re-added.
 
+## CI deploys
+
+- Every pull request is deployed by `.github/workflows/pr-preview.yml` to https://system-insight-pr-<N>.vercel.app (Vercel project `system-insight-pr`). Each push redeploys it; the alias is removed when the PR closes.
+- Every push to `master` is deployed by `.github/workflows/deploy-staging.yml` to staging, https://system-insight-staging.vercel.app (project `system-insight-staging`).
+- Prod (`system-insight`) stays manual.
+- Both workflows need the repo secret `VERCEL_TOKEN`.
+
 ## Local server
 
 `node apps/server/dist/main.js` runs from a worktree with `PORT=4317 HOST=127.0.0.1 INSIGHT_HOME=~/.insight` and logs to `~/.insight-serve.log`. The repo lives at `~/deploy/insight`. After moving it, run `git worktree repair`.
