@@ -100,7 +100,7 @@ describe("frontend-systemverilog", () => {
     expect(kinds("structure.type").map((n) => n.attrs.name)).toEqual(expect.arrayContaining(["alu", "top"]));
     expect(kinds("structure.module").map((n) => n.attrs.name)).toEqual(expect.arrayContaining(["pkg", "dv_pkg"]));
     expect(kinds("structure.function").map((n) => n.id)).toEqual(
-      expect.arrayContaining(["pkg.sv#pkg.saturate_add", "top.sv#top.report", "alu.sv#alu.always_comb[1]", "top.sv#top.always_ff[1]", "top.sv#top.g_lanes.always_ff[2]"]),
+      expect.arrayContaining(["pkg.sv#pkg.saturate_add", "top.sv#top.report", "alu.sv#alu.always_comb[1]", "top.sv#top.always_ff[1]", "top.sv#top.g_lanes.always_ff[1]"]),
     );
     expect(kinds("structure.function").find((n) => n.id === "top.sv#top.always_ff[1]")?.attrs.clock).toBe("clk");
 
@@ -403,8 +403,8 @@ describe("cross-file resolution", () => {
   it("a caller in a generate branch takes that branch's definition; a caller outside them gets the candidates", async () => {
     const edges = edgesOf(allRecords(await extractDir(round2, ["gen_pick.sv"])));
     const g1 = edges.find((e) => e.kind === "calls.call" && e.from === "gen_pick.sv#gen_pick.g1.initial[1]");
-    const g2 = edges.find((e) => e.kind === "calls.call" && e.from === "gen_pick.sv#gen_pick.g2.initial[2]");
-    const top = edges.find((e) => e.kind === "calls.call" && e.from === "gen_pick.sv#gen_pick.initial[3]");
+    const g2 = edges.find((e) => e.kind === "calls.call" && e.from === "gen_pick.sv#gen_pick.g2.initial[1]");
+    const top = edges.find((e) => e.kind === "calls.call" && e.from === "gen_pick.sv#gen_pick.initial[1]");
     expect(g1?.to).toBe("gen_pick.sv#gen_pick.g1.pick");
     expect(g1?.provenance?.confidence).toBe("exact");
     expect(g2?.to).toBe("gen_pick.sv#gen_pick.g2.pick");
@@ -812,6 +812,17 @@ describe("package declared in several files", () => {
     const imp = edges.find((e) => e.kind === "packaging.import" && e.from === "user.sv#user_m");
     expect(imp?.to).toEqual({ candidates: ["cfg_a.sv#cfg_pkg", "cfg_b.sv#cfg_pkg"] });
     expect(imp?.provenance?.confidence).toBe("heuristic");
+  });
+});
+
+describe("process ordinals per generate path", () => {
+  it("a process in one generate block is numbered from 1 in that block, whatever the other blocks hold", async () => {
+    const nodes = nodesOf(allRecords(await extractDir(join(fixturesDir, "gen_ordinals"), ["top.sv"])));
+    const g1 = nodes.find((n) => n.id === "top.sv#top.g1.always_ff[1]");
+    expect(g1?.attrs.name).toBe("top.g1.always_ff[1]");
+    expect(g1?.parent).toBe("top.sv#top");
+    expect(nodes.find((n) => n.id === "top.sv#top.g0.always_ff[2]")?.attrs.name).toBe("top.g0.always_ff[2]");
+    expect(nodes.some((n) => n.id === "top.sv#top.g1.always_ff[2]")).toBe(false);
   });
 });
 

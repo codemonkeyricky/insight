@@ -60,19 +60,24 @@ function hasSuperNewTokens(n: SyntaxNode): boolean {
   return kids.some((k, i) => k.type === "super" && kids[i + 1]?.type === "." && kids[i + 2]?.type === "new");
 }
 
-/** The processes directly owned by a module: those not inside a nested definition. */
-function ownProcesses(n: SyntaxNode): SyntaxNode[] {
-  const out: SyntaxNode[] = [];
+/**
+ * The processes directly owned by a module: those not inside a nested definition. Each comes with the generate
+ * labels around it, outermost first, so its ordinal can count within its own generate path.
+ */
+function ownProcesses(n: SyntaxNode): Array<{ process: SyntaxNode; gen: string[] }> {
+  const out: Array<{ process: SyntaxNode; gen: string[] }> = [];
   // Explicit stack in place of recursion. Children are queued in reverse, so the processes come out in source order.
-  const work: SyntaxNode[] = [...n.namedChildren].reverse();
+  const work: Array<[SyntaxNode, string[]]> = [...n.namedChildren].reverse().map((c) => [c, []]);
   while (work.length > 0) {
-    const c = work.pop() as SyntaxNode;
+    const [c, gen] = work.pop() as [SyntaxNode, string[]];
     if (PROCESS_TYPES.includes(c.type)) {
-      out.push(c);
+      out.push({ process: c, gen });
       continue;
     }
     if (OWNER_TYPES.has(c.type)) continue;
-    for (const k of [...c.namedChildren].reverse()) work.push(k);
+    const label = c.type === "generate_block" ? genNameOf(c) : undefined;
+    const inner = label ? [...gen, label] : gen;
+    for (const k of [...c.namedChildren].reverse()) work.push([k, inner]);
   }
   return out;
 }
@@ -427,13 +432,14 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
           .map((a) => a.namedChildren.find((c) => c.type === "simple_identifier")?.text)
           .filter((p): p is string => p !== undefined);
         const ports = portsOf(n, header);
-        // Every process of a module gets its ordinal per keyword, in source order, generate blocks included.
+        // A process's ordinal counts per keyword within its own generate path, in source order.
+        // A process in g1 is always_ff[1] whatever the processes in g0 are.
         const ords = new Map<string, number>();
         const counts = new Map<string, number>();
-        for (const p of ownProcesses(n)) {
-          const kw = processKeyword(p);
-          const c = (counts.get(kw) ?? 0) + 1;
-          counts.set(kw, c);
+        for (const { process: p, gen } of ownProcesses(n)) {
+          const bucket = `${gen.join(".")}\u0000${processKeyword(p)}`;
+          const c = (counts.get(bucket) ?? 0) + 1;
+          counts.set(bucket, c);
           ords.set(nodeKey(p), c);
         }
         // A module is a structure.type. Its typeKind is struct for module and program, since the schema has no hardware kind.
