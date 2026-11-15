@@ -1027,6 +1027,42 @@ describe("an escaped class name is the plain name everywhere", () => {
   });
 });
 
+describe("one name rule at every name site", () => {
+  const dir = join(fixturesDir, "esc_names");
+  const rels = ["mod.sv", "pm.sv", "top.sv", "fn.sv"];
+
+  it("`module \\mymod` with an instance `\\mymod u0()` gives a resolved instantiates edge", async () => {
+    const edge = edgesOf(allRecords(await extractDir(dir, rels))).find((e) => e.kind === "x-sv.instantiates" && e.attrs?.instance === "u0");
+    expect(edge?.from).toBe("top.sv#top");
+    expect(edge?.to).toBe("mod.sv#mymod");
+  });
+
+  it("`function \\f` called as `\\f (1)` resolves to the function", async () => {
+    const call = edgesOf(allRecords(await extractDir(dir, rels))).find((e) => e.kind === "calls.call" && e.attrs?.callee === "f");
+    expect(call?.to).toBe("fn.sv#f");
+  });
+
+  it("`\\$paramod\\foo\\W=8` instantiated by the same escaped name resolves, and its id keeps the backslash", async () => {
+    const records = allRecords(await extractDir(dir, rels));
+    const edge = edgesOf(records).find((e) => e.kind === "x-sv.instantiates" && e.attrs?.instance === "u1");
+    expect(edge?.to).toBe("pm.sv#\\$paramod\\foo\\W=8");
+    expect(nodesOf(records).some((n) => n.id === "pm.sv#\\$paramod\\foo\\W=8")).toBe(true);
+  });
+
+  it("a class `\\x/y` and module x with an instance y in one file: the instance id is x/y with no ~2, and the class id keeps the backslash", async () => {
+    const ids = nodesOf(allRecords(await extractDir(join(fixturesDir, "esc_ids"), ["t.sv", "g.sv"]))).map((n) => n.id);
+    expect(ids.filter((id) => id === "t.sv#x/y")).toHaveLength(1);
+    expect(ids.some((id) => id.includes("~2"))).toBe(false);
+    expect(ids).toContain("t.sv#\\x/y");
+  });
+
+  it("an escaped generate label `\\g1 ` is the name `g1`: the instance inside it is g/g1.u", async () => {
+    const ids = nodesOf(allRecords(await extractDir(join(fixturesDir, "esc_ids"), ["t.sv", "g.sv"]))).map((n) => n.id);
+    expect(ids).toContain("g.sv#g/g1.u");
+    expect(ids.some((id) => id.includes("\\g1"))).toBe(false);
+  });
+});
+
 describe("bind directives", () => {
   const dir = join(fixturesDir, "bind_scope");
   const files = ["dut.sv", "chk.sv", "tb.sv", "bindf.sv"];

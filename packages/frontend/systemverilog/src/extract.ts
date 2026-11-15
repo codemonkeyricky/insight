@@ -3,6 +3,9 @@ import type { IRBatch } from "@insight/sdk";
 import { getParser, type SyntaxNode } from "./parser.js";
 import {
   declId,
+  fieldName,
+  identChild,
+  IDENT_TYPES,
   isExternDecl,
   isHdlText,
   svName,
@@ -51,7 +54,7 @@ function labelOf(construct: SyntaxNode): string | undefined {
     if (!next) return undefined;
     if (BLOCKS.has(next.type)) {
       const first = next.namedChildren[0];
-      return first?.type === "simple_identifier" ? first.text : undefined;
+      return first !== undefined && IDENT_TYPES.has(first.type) ? svName(first.text) : undefined;
     }
     cur = next;
   }
@@ -164,7 +167,7 @@ function portsOf(n: SyntaxNode, header: SyntaxNode | undefined): Array<{ name: s
       for (const id of decl.descendantsOfType(lists)) {
         // `output reg b;` lists its names as variable port identifiers, which may wrap the name in a node.
         for (const s of id.namedChildren) {
-          const name = s.type === "simple_identifier" ? s.text : s.namedChildren.find((c) => c.type === "simple_identifier")?.text;
+          const name = IDENT_TYPES.has(s.type) ? svName(s.text) : identChild(s);
           if (name !== undefined) dirs.set(name, dir);
         }
       }
@@ -172,7 +175,7 @@ function portsOf(n: SyntaxNode, header: SyntaxNode | undefined): Array<{ name: s
     const list = header.namedChildren.find((c) => c.type === "list_of_ports");
     return (list?.namedChildren ?? [])
       .filter((c) => c.type === "port")
-      .map((p) => p.namedChildren.find((c) => c.type === "simple_identifier")?.text)
+      .map((p) => identChild(p))
       .filter((name): name is string => name !== undefined)
       .map((name) => {
         const dir = dirs.get(name);
@@ -188,7 +191,7 @@ function portsOf(n: SyntaxNode, header: SyntaxNode | undefined): Array<{ name: s
         const d = p.descendantsOfType("port_direction")[0]?.text;
         if (d) dir = d;
       }
-      const name = p.childForFieldName("port_name")?.text ?? p.namedChildren.find((c) => c.type === "simple_identifier")?.text ?? "";
+      const name = fieldName(p, "port_name") ?? identChild(p) ?? "";
       return dir ? { name, dir } : { name };
     })
     .filter((p) => p.name !== "");
@@ -273,7 +276,7 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
   const assignedName = (n: SyntaxNode): string | undefined => {
     const cur = n.parent;
     if (!cur) return undefined;
-    if (cur.type === "variable_decl_assignment") return cur.childForFieldName("name")?.text ?? cur.namedChildren.find((c) => c.type === "simple_identifier")?.text;
+    if (cur.type === "variable_decl_assignment") return fieldName(cur, "name") ?? identChild(cur);
     if (cur.type === "blocking_assignment" || cur.type === "nonblocking_assignment") {
       const lhs = cur.descendantsOfType("hierarchical_identifier")[0]?.text.trim();
       return lhs !== undefined && /^[A-Za-z_]\w*$/.test(lhs) ? lhs : undefined;
@@ -308,7 +311,7 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
     }
     const nameNode = body?.childForFieldName("name");
     if (!body || !nameNode || !body.text.includes("(")) return;
-    const name = nameNode.text;
+    const name = svName(nameNode.text);
     const receiver = n.namedChildren.find((c) => c.type === "implicit_class_handle")?.text.trim();
     if (receiver === "this") {
       emitCall(f, nameNode, `this.${name}`, name, f.scope !== undefined ? { kind: "member", cls: f.scope } : { kind: "none" });
@@ -354,18 +357,18 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
     const text = hi.text.replace(/\s+/g, "");
     if (text.includes("::")) {
       const parts = text.split("::");
-      const name = parts[parts.length - 1] ?? text;
-      const scope = parts.length === 2 ? parts[0] : undefined;
+      const name = svName(parts[parts.length - 1] ?? text);
+      const scope = parts.length === 2 && parts[0] !== undefined ? svName(parts[0]) : undefined;
       emitCall(f, hi, text, name, scope !== undefined ? { kind: "scoped", scope } : { kind: "none" });
       return;
     }
     const parts = text.split(".");
-    const name = parts[parts.length - 1] ?? text;
+    const name = svName(parts[parts.length - 1] ?? text);
     if (parts.length === 1) {
       emitCall(f, hi, name, name, { kind: "plain" });
       return;
     }
-    const recv = parts[0] ?? "";
+    const recv = svName(parts[0] ?? "");
     const cls = parts.length === 2 ? varClass(project, rel, f.scope, recv) : undefined;
     emitCall(f, hi, text, name, cls !== undefined ? { kind: "member", cls } : { kind: "none" });
   };
@@ -454,7 +457,7 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
         const hdl: Hdl = n.type === "interface_declaration" ? "interface" : n.type === "program_declaration" ? "program" : "module";
         const header = n.namedChildren.find((c) => c.type.endsWith("_header"));
         const params = (header?.namedChildren.find((c) => c.type === "parameter_port_list")?.descendantsOfType(["param_assignment", "type_assignment"]) ?? [])
-          .map((a) => a.namedChildren.find((c) => c.type === "simple_identifier")?.text)
+          .map((a) => identChild(a))
           .filter((p): p is string => p !== undefined);
         const ports = portsOf(n, header);
         // A process's ordinal counts per keyword within its own generate path, in source order.
@@ -567,7 +570,7 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
         const id = project.idOf.get(fileNodeKey(rel, n));
         if (id === undefined) break;
         const proto = n.descendantsOfType(["function_prototype", "task_prototype"])[0];
-        const name = proto?.childForFieldName("name")?.text ?? proto?.namedChildren.find((c) => c.type === "simple_identifier")?.text ?? "";
+        const name = (proto === undefined ? undefined : fieldName(proto, "name") ?? identChild(proto)) ?? "";
         const scope = f.scope;
         node({
           id,
@@ -590,7 +593,7 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
         break;
       }
       case "module_instantiation": {
-        const type = n.childForFieldName("instance_type")?.text;
+        const type = fieldName(n, "instance_type");
         if (!type) break;
         const modName = f.module?.name ?? basename;
         const defs = moduleDefs(project, type);
@@ -599,7 +602,8 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
         const bindNode = n.parent?.type === "bind_directive" ? n.parent.namedChildren.find((c) => c.type === "bind_target_scope" || c.type === "bind_target_instance") : undefined;
         const bindTarget = bindNode?.text.replace(/\s+/g, "");
         for (const hi of n.namedChildren.filter((c) => c.type === "hierarchical_instance")) {
-          const inst = hi.namedChildren.find((c) => c.type === "name_of_instance")?.childForFieldName("instance_name")?.text;
+          const noi = hi.namedChildren.find((c) => c.type === "name_of_instance");
+          const inst = noi === undefined ? undefined : fieldName(noi, "instance_name");
           if (!inst) continue;
           const local = f.gen.length > 0 ? `${f.gen.join(".")}.${inst}` : inst;
           const id = ids.take(bindTarget !== undefined ? `${rel}#bind:${bindTarget}/${local}` : `${rel}#${modName}/${local}`);
@@ -660,7 +664,7 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
       }
       case "package_import_declaration": {
         for (const item of n.namedChildren.filter((c) => c.type === "package_import_item")) {
-          const pkg = item.namedChildren.find((c) => c.type === "simple_identifier")?.text;
+          const pkg = identChild(item);
           if (!pkg) continue;
           const pkgs = (project.declsByName.get(pkg) ?? []).filter((d) => d.hdl === "package");
           const only = pkgs.length === 1 ? pkgs[0] : undefined;

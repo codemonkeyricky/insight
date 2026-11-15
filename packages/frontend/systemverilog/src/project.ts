@@ -229,16 +229,37 @@ export const isExternDecl = (n: SyntaxNode): boolean => /^extern\b/.test(n.text)
 /** The name of a module, interface or program (in its header), or of a package or class. */
 export function declName(n: SyntaxNode): string | undefined {
   const header = n.namedChildren.find((c) => c.type.endsWith("_header"));
-  const text = (header ?? n).childForFieldName("name")?.text;
-  return text === undefined ? undefined : svName(text);
+  return fieldName(header ?? n, "name");
 }
 
+/** The node types of an identifier: a plain one and an escaped one (`\\name ` in source). */
+export const IDENT_TYPES: ReadonlySet<string> = new Set(["simple_identifier", "escaped_identifier"]);
+
 /**
- * The name an identifier text stands for. IEEE 1800 says an escaped identifier and its plain form are one name, so
- * the leading backslash and the whitespace that ends an escaped identifier are dropped: `\C ` is `C`.
+ * The name an identifier text stands for, used as a lookup key and in an id. IEEE 1800 says an escaped identifier
+ * and its plain form are one name, so `\\C ` is `C`. Only an escaped name that is a plain identifier loses its
+ * backslash. Any other escaped name keeps it, so it cannot collide with a hierarchical or generate path (`\\x/y`).
  */
 export function svName(text: string): string {
-  return text.replace(/^\\/, "").trim();
+  const t = text.trim();
+  if (!t.startsWith("\\")) return t;
+  const plain = t.slice(1);
+  return /^[A-Za-z_][A-Za-z0-9_$]*$/.test(plain) ? plain : t;
+}
+
+/** The svName of a node's text, or undefined when the node is absent. */
+export function nameOf(n: SyntaxNode | null | undefined): string | undefined {
+  return n === undefined || n === null ? undefined : svName(n.text);
+}
+
+/** The svName of a named field of a node, or undefined when the field is absent. */
+export function fieldName(n: SyntaxNode, field: string): string | undefined {
+  return nameOf(n.childForFieldName(field));
+}
+
+/** The svName of the first identifier child of a node, or undefined when it has none. */
+export function identChild(n: SyntaxNode): string | undefined {
+  return nameOf(n.namedChildren.find((c) => IDENT_TYPES.has(c.type)));
 }
 
 /** The class a out-of-class definition qualifies, such as `a` in `function void a::run()`. */
@@ -258,8 +279,7 @@ export function subroutineOf(n: SyntaxNode): { name: string; hdl: "function" | "
     return { name: "new", hdl: "function", ...(scope !== undefined ? { scope } : {}) };
   }
   const body = n.namedChildren.find((c) => c.type === "function_body_declaration" || c.type === "task_body_declaration");
-  const raw = body?.childForFieldName("name")?.text;
-  const name = raw === undefined ? undefined : svName(raw);
+  const name = body === undefined ? undefined : fieldName(body, "name");
   if (!body || !name) return undefined;
   const scope = classScopeOf(body);
   return { name, hdl: n.type === "task_declaration" ? "task" : "function", ...(scope !== undefined ? { scope } : {}) };
@@ -267,7 +287,7 @@ export function subroutineOf(n: SyntaxNode): { name: string; hdl: "function" | "
 
 /** The name of a generate block, `begin : name`, read from its label when the grammar gives no field name. */
 export function genNameOf(n: SyntaxNode): string | undefined {
-  return n.childForFieldName("name")?.text ?? n.namedChildren.find((c) => c.type === "simple_identifier")?.text;
+  return fieldName(n, "name") ?? identChild(n);
 }
 
 /** The base class of a class declaration, from its `extends` clause. */
@@ -377,7 +397,7 @@ function collectDecls(unit: Unit, root: SyntaxNode, p: Project, imports: Map<str
       const spec = n.namedChildren.find((c) => c.type === "dpi_spec_string")?.text ?? "";
       if (/^import\b/.test(n.text) && /DPI/.test(spec)) {
         const proto = n.descendantsOfType(["function_prototype", "task_prototype"])[0];
-        const name = proto?.childForFieldName("name")?.text ?? proto?.namedChildren.find((c) => c.type === "simple_identifier")?.text;
+        const name = proto === undefined ? undefined : fieldName(proto, "name") ?? identChild(proto);
         if (name && proto) {
           const hdlKind = proto.type === "task_prototype" ? "task" : "function";
           const id = unit.ids.take(fnBase(rel, scope, gen, name));
@@ -391,9 +411,9 @@ function collectDecls(unit: Unit, root: SyntaxNode, p: Project, imports: Map<str
     }
     if (n.type === "package_import_item") {
       // The item text is `pkg::*` for a wildcard or `pkg::name` for one named item.
-      const pkg = n.namedChildren.find((c) => c.type === "simple_identifier")?.text;
+      const pkg = identChild(n);
       const parts = n.text.replace(/\s+/g, "").split("::");
-      const item = parts[1];
+      const item = parts[1] === undefined ? undefined : svName(parts[1]);
       if (pkg && item !== undefined) {
         // The import belongs to the scope it is written in: the enclosing module, package or class, or "" at file level.
         const scopeKey = key ?? "";
@@ -467,23 +487,23 @@ function collectVars(unit: Unit, root: SyntaxNode): void {
     if (n.type === "data_declaration") {
       const type = typeOf(n.namedChildren.find((c) => c.type === "data_type_or_implicit"));
       for (const v of n.descendantsOfType("variable_decl_assignment")) {
-        const name = v.childForFieldName("name")?.text ?? v.namedChildren.find((c) => c.type === "simple_identifier")?.text;
+        const name = fieldName(v, "name") ?? identChild(v);
         if (name) add(scope, name, type);
       }
       return;
     }
     if (n.type === "tf_port_item") {
-      const name = n.childForFieldName("name")?.text ?? n.namedChildren.find((c) => c.type === "simple_identifier")?.text;
+      const name = fieldName(n, "name") ?? identChild(n);
       if (name) add(scope, name, typeOf(n.namedChildren.find((c) => c.type === "data_type_or_implicit")));
       return;
     }
     // Inside a module the grammar parses `C c2;` (a class handle after another declaration) as a net declaration.
     // Its type is the first direct identifier; a plain net such as `wire w;` has none and is skipped.
     if (n.type === "net_declaration") {
-      const type = n.namedChildren.find((c) => c.type === "simple_identifier")?.text;
+      const type = identChild(n);
       if (type !== undefined) {
         for (const a of n.descendantsOfType("net_decl_assignment")) {
-          const name = a.namedChildren.find((c) => c.type === "simple_identifier")?.text;
+          const name = identChild(a);
           if (name) add(scope, name, type);
         }
       }
