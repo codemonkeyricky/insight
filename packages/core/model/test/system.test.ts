@@ -224,7 +224,8 @@ describe("systemModel rules", () => {
       findings: [],
     };
     const sys = systemModel(modelOf(doc), "");
-    expect(sys.externals).toEqual([{ id: "fs", label: "Filesystem", category: "filesystem" }]);
+    // Flat mode keeps the API evidence of each fact, as grounded mode does (the Filesystem external lists its ops).
+    expect(sys.externals).toEqual([{ id: "fs", label: "Filesystem", category: "filesystem", ops: [{ api: "fs.readFile", level: "api", count: 1 }, { api: "fs.writeFile", level: "api", count: 1 }] }]);
     expect(sys.edges.map((e) => e.verb).sort()).toEqual(["reads", "writes"]);
   });
 

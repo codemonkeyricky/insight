@@ -2,7 +2,7 @@
 // component on one runtime), and the in-process resources (queues, locks, semaphores, condvars, env) and kernel ops.
 // Built from execModel with the Flow grounding rules, so a thread exists only where the IR grounds it. Pure: the same
 // model and scope give the same plan, whatever order the IR arrives in (every list is sorted by id).
-import { execCoroutineId, execModel, execProgramId, execThreadId, hasRuntimeContext, UNTHREADED_ID, UNTHREADED_LABEL, type ExecFunctionRef, type ExecModel, type ExecProgram, type ExecSpawn, type ExecSpawnStatus, type ExecThread } from "@insight/flow";
+import { execCoroutineId, execModel, isNoisePath, execProgramId, execThreadId, hasRuntimeContext, UNTHREADED_ID, UNTHREADED_LABEL, type ExecFunctionRef, type ExecModel, type ExecProgram, type ExecSpawn, type ExecSpawnStatus, type ExecThread } from "@insight/flow";
 import type { NodeId } from "@insight/ir";
 import type { ProjectModel } from "./model.js";
 import type { Site } from "./system.js";
@@ -33,6 +33,12 @@ export interface SystemRuntime {
   resources?: string[];
   /** In-scope root function ids of the thread, or the coroutine's target: sorted, capped at SITE_CAP. Absent when none is in scope. */
   roots?: string[];
+  /**
+   * A placeholder: a thread whose spawn target is unresolved (a dynamic function value), so no code of it is known. It has no
+   * slices and sits under the program whose thread reaches the spawn site. `note` says what is known of the target.
+   */
+  unresolved?: true;
+  note?: string;
 }
 
 /** One component on one runtime: the functions of the component that the runtime runs. */
@@ -89,6 +95,8 @@ export interface RuntimePlan {
   label(runtime: string): string;
   /** The thread a thread spawn node starts, when the spawn is grounded. */
   threadOfSpawn(node: NodeId): string | undefined;
+  /** Placeholder threads (unresolved spawns): the spawning slice and the spawn, by the placeholder's runtime id. */
+  placeholders: Map<string, { from: string; spawn: SystemSpawn }>;
   /** The program runtime a process spawn starts, when its target is a project program. */
   programOfSpawn(node: NodeId): string | undefined;
   /** The program runtime a command runs, when exactly one project program has that name. Records the spawn that ran it. */
@@ -144,9 +152,10 @@ function addTo(map: Map<string, Set<string>>, key: string, value: string): void 
 
 /**
  * The runtime plan of one scope. `compOfFile` gives the System component of an in-scope file (undefined for a file outside
- * the scope). When the scope has no runtime context the plan is "none" and holds no runtimes.
+ * the scope). When the scope has no runtime context the plan is "none" and holds no runtimes. `tests` keeps the spawns and
+ * programs whose code lies in a test, fixture or sample file; without it they are left out, as the files are.
  */
-export function buildRuntimePlan(model: ProjectModel, scope: string, compOfFile: (file: string) => string | undefined): RuntimePlan {
+export function buildRuntimePlan(model: ProjectModel, scope: string, compOfFile: (file: string) => string | undefined, tests = true): RuntimePlan {
   const exec = execModel(model.doc.nodes, model.doc.edges, scope, { maxFunctions: Infinity });
   const mode: SystemRuntimeMode = exec.truncated ? "truncated" : hasRuntimeContext(exec) ? "grounded" : "none";
   const grounded = mode === "grounded";
@@ -172,6 +181,7 @@ export function buildRuntimePlan(model: ProjectModel, scope: string, compOfFile:
   const coroutinesOfFn = new Map<string, Set<string>>();
   const rootKeys = new Set<string>();
   const spawnOfProgram = new Map<string, SystemSpawn>();
+  const placeholderOf = new Map<string, { from: string; spawn: SystemSpawn }>();
 
   const sliceId = (runtime: string, component: string): string => {
     const id = `${runtime}|${component}`;
@@ -241,9 +251,12 @@ export function buildRuntimePlan(model: ProjectModel, scope: string, compOfFile:
       label: string;
       implicit: boolean;
       spawn?: SystemSpawn;
+      /** A placeholder thread: the note on its unresolved target. */
+      unresolved?: string;
     }
     const specs: ThreadSpec[] = [];
-    const threadIds = new Set(exec.threads.filter((t) => t.grounded && t.kind !== "process").map((t) => t.id));
+    // A thread spawned from a test, fixture or sample file runs no code of the program: it is left out unless tests are shown.
+    const threadIds = new Set(exec.threads.filter((t) => t.grounded && t.kind !== "process" && (tests || t.spawn === undefined || !isNoisePath(t.spawn.file))).map((t) => t.id));
     const programOfThread = new Map<string, string>();
     for (const p of exec.programs) {
       for (const tid of p.threads) {
@@ -262,6 +275,8 @@ export function buildRuntimePlan(model: ProjectModel, scope: string, compOfFile:
         continue;
       }
       if (t.spawn.status !== "resolved") continue;
+      // A resolved process started from a test, fixture or sample file gets no program of its own (same rule as threads).
+      if (!tests && isNoisePath(t.spawn.file)) continue;
       const rootFile = fnById.get(t.roots[0] ?? "")?.file ?? t.roots[0] ?? "";
       const pid = `program:${t.spawn.node}`;
       runtimes.set(pid, { id: pid, kind: "program", label: rootFile, programKind: "node", spawn });
@@ -284,6 +299,25 @@ export function buildRuntimePlan(model: ProjectModel, scope: string, compOfFile:
       runtimes.set(pid, { id: pid, kind: "program", label: basename(scope) || "project", programKind: scripted ? "node" : "native" });
       for (const t of orphans) programOfThread.set(t.id, pid);
     }
+    // Unresolved thread spawns (the target is a dynamic function value, so no code is known): a placeholder thread under the
+    // program of the thread that reaches the spawn site. Its spawning slice is the spawn site's component on that thread.
+    const placeholderNote = new Map<string, string>();
+    const reachedBy = (h: ExecThread) => new Set([...h.reached, ...h.roots]);
+    for (const t of exec.threads) {
+      if (!threadIds.has(t.id) || t.spawn === undefined || t.spawn.status !== "unresolved") continue;
+      const owner = t.spawn.owner;
+      if (owner === undefined) continue;
+      // The thread that reaches the spawn site (a thread that is not a process, with a program of its own).
+      const host = exec.threads
+        .filter((h) => threadIds.has(h.id) && programOfThread.has(h.id) && h.kind !== "process" && reachedBy(h).has(owner))
+        .sort((a, b) => cmp(a.id, b.id))[0];
+      if (host === undefined) continue;
+      if (!programOfThread.has(t.id)) programOfThread.set(t.id, programOfThread.get(host.id) as string);
+      const target = model.byId.get(t.spawn.node)?.attrs.target;
+      placeholderNote.set(execThreadId(t.id), target === undefined || target === "" ? "target unresolved" : `target unresolved: ${String(target)}`);
+      const comp = compOfFile(t.spawn.file);
+      if (comp !== undefined) placeholderOf.set(execThreadId(t.id), { from: sliceId(execThreadId(host.id), comp), spawn: spawnOf(t.spawn) });
+    }
     const groupSize = new Map<string, number>();
     for (const t of exec.threads) {
       if (!threadIds.has(t.id)) continue;
@@ -301,6 +335,7 @@ export function buildRuntimePlan(model: ProjectModel, scope: string, compOfFile:
         label: threadLabel(t),
         implicit: t.kind === "main" && groupSize.get(parent ?? "") === 1,
         ...(spawn !== undefined ? { spawn } : {}),
+        ...(placeholderNote.has(execThreadId(t.id)) ? { unresolved: placeholderNote.get(execThreadId(t.id)) as string } : {}),
       });
     }
     for (const sp of specs) {
@@ -316,6 +351,7 @@ export function buildRuntimePlan(model: ProjectModel, scope: string, compOfFile:
         ...(sp.spawn !== undefined ? { spawn: sp.spawn } : {}),
         ...(started.length > 0 ? { coroutines: started.length } : {}),
         ...(roots.length > 0 ? { roots } : {}),
+        ...(sp.unresolved !== undefined ? { unresolved: true as const, note: sp.unresolved } : {}),
       });
       if (t.spawn !== undefined && t.kind !== "process") threadOfSpawnMap.set(t.spawn.node, rt);
       // Functions a coroutine alone runs are owned by the coroutine, not by the thread that awaits it.
@@ -411,6 +447,7 @@ export function buildRuntimePlan(model: ProjectModel, scope: string, compOfFile:
     threadOf,
     label,
     threadOfSpawn: (node) => threadOfSpawnMap.get(node),
+    placeholders: placeholderOf,
     programOfSpawn: (node) => programOfSpawnMap.get(node),
     programOfCommand,
     putResource,

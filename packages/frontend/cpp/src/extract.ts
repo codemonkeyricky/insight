@@ -309,14 +309,14 @@ export function emitUnit(project: Project, rel: string): IRBatch {
    * A thread or task start. The spawn node is always recorded with the target text. The spawns edge
    * is added only when the target argument names a function the project defines.
    */
-  const spawn = (n: SyntaxNode, container: NodeId, how: SpawnHow, target: string | undefined, targetArg: SyntaxNode | undefined) => {
+  const spawn = (n: SyntaxNode, container: NodeId, how: SpawnHow, api: string, target: string | undefined, targetArg: SyntaxNode | undefined) => {
     const id = ids.take(`${rel}@spawn:${n.startPosition.row}:${n.startPosition.column}`);
     node({
       id,
       facet: "concurrency",
       kind: "concurrency.spawn-thread",
       parent: container,
-      attrs: target !== undefined ? { target: target.slice(0, 120) } : {},
+      attrs: { api, ...(target !== undefined ? { target: target.slice(0, 120) } : {}) },
       span: spanOf(rel, n),
       provenance: prov,
     });
@@ -453,7 +453,7 @@ export function emitUnit(project: Project, rel: string): IRBatch {
     if (spawnCall) {
       const targetArg =
         spawnCall.arg === -1 ? args.find((a) => !norm(a.text).startsWith("std::launch")) : args[spawnCall.arg];
-      spawn(call, container, spawnCall.how, targetArg?.text, targetArg);
+      spawn(call, container, spawnCall.how, callee, targetArg?.text, targetArg);
     }
 
     if (fnNode.type === "field_expression") {
@@ -531,12 +531,12 @@ export function emitUnit(project: Project, rel: string): IRBatch {
         const only = params?.namedChildren[0];
         const nameArg =
           only?.type === "parameter_declaration" && !only.childForFieldName("declarator") ? only.childForFieldName("type") : null;
-        spawn(decl, container, "thread", firstArgument(params?.text), nameArg ?? undefined);
+        spawn(decl, container, "thread", base, firstArgument(params?.text), nameArg ?? undefined);
       } else if (declarator?.type === "init_declarator") {
         // `std::thread t{f, x}` holds its arguments in an initializer list. `std::thread t{}` starts nothing.
         const value = declarator.childForFieldName("value");
         if (value?.type === "argument_list" || (value?.type === "initializer_list" && namedArgs(value).length > 0)) {
-          spawn(decl, container, "thread", firstArgument(value.text), namedArgs(value)[0]);
+          spawn(decl, container, "thread", base, firstArgument(value.text), namedArgs(value)[0]);
         }
       }
     }

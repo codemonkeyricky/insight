@@ -174,7 +174,7 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
   for (const c of compOf.values()) componentById.set(c.id, c);
 
   // The runtime: which threads and coroutines run each component's code. Empty unless the scope has runtime context.
-  const plan = buildRuntimePlan(model, scope, (file) => compOf.get(file)?.id);
+  const plan = buildRuntimePlan(model, scope, (file) => compOf.get(file)?.id, tests);
   const grounded = plan.mode === "grounded";
 
   const fnCount = new Map<string, number>();
@@ -338,11 +338,11 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
       const verb = node.kind === "effects.fs.read" ? "reads" : "writes";
       const api = typeof attrs.api === "string" ? attrs.api : "fs";
       const id = ensureExternal({ id: "fs", label: "Filesystem", category: "filesystem" });
-      const ev = grounded ? evidenceOf(attrs, attrs.path === "<dynamic>") : undefined;
+      const ev = evidenceOf(attrs, attrs.path === "<dynamic>");
       for (const s of sourcesOf(owner, file, comp)) addFact(s.from, id, verb, api, site, exact, ev ? { ev, fact: node.id } : undefined);
     } else if (node.kind === "effects.proc.exec") {
       const command = commandName(attrs.command);
-      const ev = grounded ? evidenceOf(attrs, command === "dynamic command") : undefined;
+      const ev = evidenceOf(attrs, command === "dynamic command");
       // A command that names one project program runs that program; any other is a process box by its name.
       const api = typeof attrs.api === "string" ? attrs.api : undefined;
       const prog = grounded ? plan.programOfCommand(command, { file: site.file, line: site.line, ...(site.fn !== undefined ? { fn: site.fn } : {}), status: "resolved", ...(api !== undefined ? { api } : {}) }) : undefined;
@@ -412,7 +412,7 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
 
     const verb = methodVerb(method);
     const tag = method ?? "fetch";
-    const ev = grounded ? evidenceOf(attrs, host === "<dynamic>") : undefined;
+    const ev = evidenceOf(attrs, host === "<dynamic>");
     if (host === "<dynamic>") {
       const ext: SystemExternal = env !== undefined
         ? { id: `config:${env}`, label: `URL from ${env}`, category: "service" }
@@ -479,6 +479,12 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
     }
   }
 
+  // Placeholder threads of unresolved spawns: started from the spawning slice (the spawn site's component on its thread).
+  for (const [rt, ph] of plan.placeholders) {
+    const site: Site = { file: ph.spawn.file, line: ph.spawn.line, ...(ph.spawn.fn !== undefined ? { fn: ph.spawn.fn } : {}) };
+    addFact(ph.from, rt, "spawns", `spawns ${ph.spawn.api ?? "thread"}`, site, true);
+  }
+
   // Message handoffs and event-loop queues, per the runtime's dispatches. Flat: one inbox per receiving component.
   for (const d of plan.exec.dispatches) {
     if (!inside(d.file)) continue;
@@ -500,7 +506,14 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
           if (grounded) {
             const tRt = plan.owners(target, tfile)[0];
             const recv = tRt === undefined ? undefined : plan.threadOf(tRt);
-            if (recv === undefined || recv === s.rt) continue;
+            if (recv === s.rt) continue;
+            if (recv === undefined) {
+              // The handler runs on no grounded thread: the message goes to the peer inbox of the sender's program.
+              const prog = progOf(s.rt);
+              const peer = putResource({ id: resId("queue", "peer", prog), kind: "queue", label: "inbox (unknown peer)", ...(prog !== undefined ? { program: prog } : {}), source: "message" });
+              addFact(s.from, peer, "enqueues", "message", site, true);
+              continue;
+            }
             const inbox = putResource({ id: `queue:${recv}:inbox`, kind: "queue", label: `${plan.label(recv)} inbox`, ...(progOf(recv) !== undefined ? { program: progOf(recv) as string } : {}), source: "message" });
             addFact(s.from, inbox, "enqueues", "message", site, true);
             addFact(inbox, plan.sliceId(tRt as string, tcomp), "dequeues", "message", site, true);
@@ -722,7 +735,20 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
   if (plan.mode === "truncated") out.skippedFunctions = Math.max(0, plan.exec.stats.functionsInScope - plan.exec.functions.filter((f) => f.inScope).length);
   if (grounded) {
     const { runtimes, slices } = plan.finish();
-    out.runtimes = runtimes;
+    // A program with nothing in this scope (no slice of its threads, no child thread, no resource, no edge into it) is not drawn.
+    const endpoints = new Set<string>();
+    for (const e of edges) {
+      endpoints.add(e.from);
+      endpoints.add(e.to);
+    }
+    const busy = new Set<string>();
+    for (const sl of slices) {
+      const prog = plan.programOf(sl.runtime);
+      if (prog !== undefined) busy.add(prog);
+    }
+    // A drawn child thread counts; an implicit main thread is not drawn, so it does not keep its program.
+    for (const rt of runtimes) if (rt.parent !== undefined && rt.implicit !== true) busy.add(rt.parent);
+    out.runtimes = runtimes.filter((rt) => rt.kind !== "program" || busy.has(rt.id) || (rt.resources?.length ?? 0) > 0 || endpoints.has(rt.id));
     out.slices = slices;
   }
   const resourceList = [...plan.resources.values()].sort((x, y) => cmp(x.id, y.id));
