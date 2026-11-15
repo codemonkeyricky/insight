@@ -21,10 +21,10 @@
         "frontend-cpp"
       ],
       "filesScanned": 121,
-      "filesWithRecords": 88,
+      "filesWithRecords": 87,
       "filesWithErrors": 0,
       "nodes": 0,
-      "edges": 1625
+      "edges": 1618
     },
     {
       "facet": "concurrency",
@@ -102,7 +102,7 @@
     {
       "id": "lens-calls",
       "status": "ok",
-      "findings": 368
+      "findings": 372
     },
     {
       "id": "lens-concurrency-map",
@@ -149,7 +149,7 @@
     "asyncWithoutAwait": 0
   },
   "recordsByKind": {
-    "calls.call": 1554,
+    "calls.call": 1547,
     "calls.reference": 71,
     "concurrency.spawn-thread": 5,
     "concurrency.spawns": 3,
