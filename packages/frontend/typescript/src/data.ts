@@ -79,7 +79,11 @@ function isFunctionValue(init: ts.Expression | undefined): boolean {
   return e !== undefined && (ts.isArrowFunction(e) || ts.isFunctionExpression(e) || ts.isClassExpression(e));
 }
 
-/** Whether a const's initializer is a mutable container: a new expression or a literal, not frozen and not `as const`. */
+/**
+ * Whether a const's initializer can hold mutable state: any expression (a literal, a new expression, a call result such as
+ * `vi.hoisted(…)`), except a frozen value (`Object.freeze(…)`) or an `as const` literal. A const counts as state only when a
+ * write targets it (see `constBound`).
+ */
 function constIsMutable(init: ts.Expression | undefined): boolean {
   if (init === undefined) return false;
   if (ts.isAsExpression(init) && ts.isTypeReferenceNode(init.type) && ts.isIdentifier(init.type.typeName) && init.type.typeName.text === "const") return false;
@@ -89,7 +93,7 @@ function constIsMutable(init: ts.Expression | undefined): boolean {
     const callee = e.expression;
     if (ts.isIdentifier(callee.expression) && callee.expression.text === "Object" && callee.name.text === "freeze") return false;
   }
-  return ts.isNewExpression(e) || ts.isArrayLiteralExpression(e) || ts.isObjectLiteralExpression(e);
+  return true;
 }
 
 /** A top-level `let`, `var` or `const` with a plain name. Undefined for anything else, and for ambient declarations. */
@@ -300,7 +304,6 @@ export function emitData(h: DataHelpers): DataOutput {
             id,
             facet: "data",
             kind: "data.variable",
-            parent: GLOBAL_FILE,
             attrs: { name, qualifiedName: `${(unwrapExpr(ref.expression) as ts.Identifier).text}.${name}`, storage: "global", exported: true, mutable: true },
             span: h.spanOf(ref),
             provenance,

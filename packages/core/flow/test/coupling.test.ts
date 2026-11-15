@@ -652,3 +652,32 @@ export function apiFn(): number {
   });
 });
 
+
+describe("named re-exports from a package entry", () => {
+  const NAMED_FILES: Record<string, string> = {
+    "package.json": JSON.stringify({ name: "root", private: true }),
+    "pkgs/c/package.json": JSON.stringify({ name: "c" }),
+    // the entry names one function of impl.ts; impl.ts also exports internal(), which the entry does not re-export
+    "pkgs/c/src/index.ts": `export { pub } from "./impl.js";
+`,
+    "pkgs/c/src/impl.ts": `export function pub(): number {
+  return internal() + 1;
+}
+export function internal(): number {
+  return 2;
+}
+`,
+  };
+  let ix: Awaited<ReturnType<typeof load>>;
+  beforeAll(async () => {
+    ix = await load(NAMED_FILES);
+  });
+
+  it("a named re-export puts the named function on the surface", () => {
+    expect(ix.surface.has("pkgs/c/src/impl.ts#pub")).toBe(true);
+  });
+
+  it("an export of the same file that the entry does not name is not on the surface", () => {
+    expect(ix.surface.has("pkgs/c/src/impl.ts#internal")).toBe(false);
+  });
+});

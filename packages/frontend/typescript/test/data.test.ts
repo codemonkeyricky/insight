@@ -8,7 +8,7 @@ import frontend from "../src/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "fixtures", "data-ts");
-const files = ["data/counters.ts", "data/registry.ts", "data/meter.ts", "data/globals.ts", "data/state.ts", "data/writer.ts", "data/deep.ts", "data/globals-2.ts"];
+const files = ["data/counters.ts", "data/registry.ts", "data/meter.ts", "data/globals.ts", "data/state.ts", "data/writer.ts", "data/deep.ts", "data/globals-2.ts", "data/hoisted.ts"];
 const root: ProjectRoot = { path: fixtureRoot, name: "data-ts", allowBuildTools: false };
 const readFile = async (rel: string) => readFileSync(join(fixtureRoot, rel), "utf8");
 
@@ -145,5 +145,28 @@ describe("frontend-typescript data facts", () => {
     expect(records(b).some((r) => "node" in r && r.node.id === moduleEntry)).toBe(true);
     expect(dataEdges(b)).toContainEqual(expect.objectContaining({ from: moduleEntry, to: "data/counters.ts#var:hits", kind: "data.read" }));
     expect(dataEdges(b).filter((e) => e.from === "data/counters.ts")).toEqual([]);
+  });
+});
+
+describe("frontend-typescript data facts, const bound to a call result", () => {
+  it("d1: a const bound to a call result, written through a property, is mutable state", async () => {
+    const b = await extractAll();
+    const v = "data/hoisted.ts#var:s";
+    expect(dataNodes(b).find((n) => n.id === v)?.attrs).toMatchObject({ constBound: true, mutable: true });
+    expect(dataEdges(b)).toContainEqual(expect.objectContaining({ from: fnId(b, "load"), to: v, kind: "data.write", attrs: { how: "mutate" } }));
+  });
+
+  it("d2: a const bound to a call result that is only read has no write edges (the flow layer treats it as not state)", async () => {
+    const b = await extractAll();
+    const v = "data/hoisted.ts#var:r";
+    expect(dataNodes(b).find((n) => n.id === v)?.attrs).toMatchObject({ constBound: true, mutable: true });
+    expect(dataEdges(b).filter((e) => e.to === v && e.kind === "data.write")).toEqual([]);
+  });
+
+  it("d3: a global written through globalThis has no parent", async () => {
+    const b = await extractAll();
+    const g = dataNodes(b).find((n) => n.id === "<global>#global:flag");
+    expect(g).toBeDefined();
+    expect(g?.parent).toBeUndefined();
   });
 });

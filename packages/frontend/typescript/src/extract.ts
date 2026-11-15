@@ -1319,7 +1319,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
     return found.to !== undefined && found.confidence !== undefined ? { to: found.to, confidence: found.confidence } : undefined;
   };
 
-  const emitModule = (from: string, spec: string, specNode: ts.Node, typeOnly: boolean, dynamic: boolean, kind: "packaging.import" | "packaging.re-export") => {
+  const emitModule = (from: string, spec: string, specNode: ts.Node, typeOnly: boolean, dynamic: boolean, kind: "packaging.import" | "packaging.re-export", names?: readonly string[]) => {
     const target = project.resolveModule(spec, sf.fileName);
     let to: NodeId | UnresolvedRef;
     if (target !== undefined && project.rels.has(target)) {
@@ -1333,7 +1333,8 @@ export function emitFile(project: Project, rel: string): IRBatch {
     }
     // A bare specifier may name a workspace package, whose package.json decides its source. Any manifest change re-extracts.
     if (!spec.startsWith(".") && !spec.startsWith("/")) for (const m of project.manifestRels) dependOn(m);
-    const attrs: Record<string, unknown> = kind === "packaging.import" ? { specifier: spec, typeOnly, dynamic } : { specifier: spec };
+    // A re-export records the names it passes on: the exported-from side of `export { a as b } from` (`a`), `["*"]` for `export *`.
+    const attrs: Record<string, unknown> = kind === "packaging.import" ? { specifier: spec, typeOnly, dynamic } : { specifier: spec, names: [...(names ?? ["*"])] };
     pushEdge({ from, to, facet: "packaging", kind, attrs, span: spanOf(rel, sf, specNode), provenance: PROV });
   };
 
@@ -1850,7 +1851,9 @@ export function emitFile(project: Project, rel: string): IRBatch {
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
       emitModule(rel, node.moduleSpecifier.text, node.moduleSpecifier, node.importClause?.isTypeOnly ?? false, false, "packaging.import");
     } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
-      emitModule(rel, node.moduleSpecifier.text, node.moduleSpecifier, false, false, "packaging.re-export");
+      const clause = node.exportClause;
+      const names = clause && ts.isNamedExports(clause) ? clause.elements.map((e) => (e.propertyName ?? e.name).text) : ["*"];
+      emitModule(rel, node.moduleSpecifier.text, node.moduleSpecifier, false, false, "packaging.re-export", names);
     } else if (ts.isCallExpression(node)) {
       if (node.expression.kind === ts.SyntaxKind.ImportKeyword && node.arguments[0] && ts.isStringLiteralLike(node.arguments[0])) {
         emitModule(rel, node.arguments[0].text, node.arguments[0], false, true, "packaging.import");

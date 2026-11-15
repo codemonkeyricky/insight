@@ -113,17 +113,30 @@ function declaredName(d: SyntaxNode | null | undefined): string | undefined {
 }
 
 /**
+ * Every name a declarator declares: one for a plain declarator, every identifier of a structured binding (`auto [k, v] = …`).
+ */
+function declaredNames(d: SyntaxNode | null | undefined): string[] {
+  let c: SyntaxNode | null | undefined = d;
+  while (c && c.type !== "structured_binding_declarator" && !NAME_TYPES.has(c.type)) {
+    c = c.childForFieldName("declarator") ?? (c.type.endsWith("_declarator") ? c.namedChildren.find((x) => x.type.endsWith("_declarator") || NAME_TYPES.has(x.type)) ?? null : null);
+  }
+  if (!c) return [];
+  if (c.type === "structured_binding_declarator") return c.namedChildren.filter((x) => x.type === "identifier").map((x) => x.text);
+  return [c.text];
+}
+
+/**
  * Whether a scope node declares `name` where a use at `before` sees it: a declaration in a block that comes before the use,
- * a for-loop or range-for variable, a lambda's or function's parameter, or a condition's declaration. A declaration in a
- * nested block is not seen here.
+ * a for-loop or range-for variable (also a structured binding), a lambda's, function's or catch clause's parameter, or a
+ * condition's declaration. A declaration in a nested block is not seen here.
  */
 function declaresIn(scope: SyntaxNode, name: string, before: number): boolean {
   // A static or extern local names a variable of the function's index, not a shadow of the global.
   const isShadowDecl = (decl: SyntaxNode): boolean => decl.type === "declaration" && !hasStorage(decl, "static") && !hasStorage(decl, "extern");
   const declaresAmong = (decls: readonly SyntaxNode[]): boolean =>
-    decls.some((decl) => isShadowDecl(decl) && decl.startIndex < before && decl.childrenForFieldName("declarator").some((d) => declaredName(d) === name));
+    decls.some((decl) => isShadowDecl(decl) && decl.startIndex < before && decl.childrenForFieldName("declarator").some((d) => declaredNames(d).includes(name)));
   const paramsDeclare = (params: SyntaxNode | null | undefined): boolean =>
-    (params?.namedChildren ?? []).some((p) => (p.type === "parameter_declaration" || p.type === "optional_parameter_declaration") && declaredName(p.childForFieldName("declarator")) === name);
+    (params?.namedChildren ?? []).some((p) => (p.type === "parameter_declaration" || p.type === "optional_parameter_declaration") && declaredNames(p.childForFieldName("declarator")).includes(name));
   switch (scope.type) {
     case "compound_statement":
       return declaresAmong(scope.namedChildren);
@@ -132,7 +145,9 @@ function declaresIn(scope: SyntaxNode, name: string, before: number): boolean {
       return init !== null && init.type === "declaration" && declaresAmong([init]);
     }
     case "for_range_loop":
-      return declaredName(scope.childForFieldName("declarator")) === name;
+      return declaredNames(scope.childForFieldName("declarator")).includes(name);
+    case "catch_clause":
+      return paramsDeclare(scope.childForFieldName("parameters"));
     case "lambda_expression":
       return paramsDeclare(scope.childForFieldName("declarator")?.childForFieldName("parameters"));
     case "function_definition":
@@ -141,7 +156,7 @@ function declaresIn(scope: SyntaxNode, name: string, before: number): boolean {
     case "while_statement":
     case "switch_statement": {
       const cond = scope.childForFieldName("condition");
-      return cond !== null && cond.namedChildren.some((c) => isShadowDecl(c) && c.startIndex < before && c.childrenForFieldName("declarator").some((d) => declaredName(d) === name));
+      return cond !== null && cond.namedChildren.some((c) => isShadowDecl(c) && c.startIndex < before && c.childrenForFieldName("declarator").some((d) => declaredNames(d).includes(name)));
     }
     default:
       return false;

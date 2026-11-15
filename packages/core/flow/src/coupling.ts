@@ -520,10 +520,10 @@ function isEntryFile(file: string, roots: readonly PackageRoot[]): boolean {
 
 /**
  * The module surface: the functions another module reaches (a `calls.call` or `calls.reference` from a different module), plus
- * the exported functions of package entry files (`index.*` at a package root or in its `src`; C++ has none). A function a
- * package entry re-exports (`export * from` or `export { x } from`, followed through re-export chains) counts as exported
- * from that entry. The IR records a re-export by its file only, so every exported function of a re-exported file counts.
- * Plain `exported` alone does not count.
+ * the exported functions of package entry files (`index.*` at a package root or in its `src`; C++ has none). A package entry
+ * counts every exported function of its own file. A function a package entry re-exports counts only when the re-export names
+ * it: `export { x } from` names `x`, `export * from` names everything (`["*"]` on the edge), and names are followed through
+ * re-export chains. Plain `exported` alone does not count. A re-export edge without names counts everything.
  */
 export function moduleSurface(nodes: readonly IRNode[], edges: readonly IREdge[], modules: ModuleMap): Set<string> {
   const surface = new Set<string>();
@@ -536,32 +536,70 @@ export function moduleSurface(nodes: readonly IRNode[], edges: readonly IREdge[]
       if (cm !== undefined && cm !== fromM) surface.add(callee);
     }
   }
-  // Re-exports: from a file to the file it re-exports. The entries are the files that are package entries.
-  const reexports = new Map<string, string[]>();
+  // Re-exports: from a file to the file it re-exports, with the names it passes on.
+  const reexports = new Map<string, { to: string; names: readonly string[] | "*" }[]>();
   for (const e of edges) {
     if (e.kind !== "packaging.re-export" || typeof e.to !== "string") continue;
+    const raw = e.attrs?.names;
+    const names: readonly string[] | "*" = Array.isArray(raw) && !raw.includes("*") ? (raw as string[]) : "*";
     const list = reexports.get(e.from);
-    if (list) list.push(e.to);
-    else reexports.set(e.from, [e.to]);
+    if (list) list.push({ to: e.to, names });
+    else reexports.set(e.from, [{ to: e.to, names }]);
   }
-  const reached = new Set<string>();
-  const queue: string[] = [];
-  for (const file of [...reexports.keys(), ...nodes.map((n) => n.span?.file ?? "")]) {
-    if (file !== "" && !reached.has(file) && isEntryFile(file, modules.roots)) {
-      reached.add(file);
-      queue.push(file);
+  const entryCache = new Map<string, boolean>();
+  const isEntry = (file: string): boolean => {
+    let v = entryCache.get(file);
+    if (v === undefined) {
+      v = isEntryFile(file, modules.roots);
+      entryCache.set(file, v);
     }
+    return v;
+  };
+  // For each file reached through a package entry: whether all its exports count, and the named ones that do.
+  const allowed = new Map<string, { all: boolean; names: Set<string> }>();
+  const queue: string[] = [];
+  const grant = (file: string, all: boolean, names: readonly string[]): void => {
+    let a = allowed.get(file);
+    let changed = a === undefined;
+    if (a === undefined) {
+      a = { all: false, names: new Set() };
+      allowed.set(file, a);
+    }
+    if (all && !a.all) {
+      a.all = true;
+      changed = true;
+    }
+    for (const n of names) {
+      if (!a.names.has(n)) {
+        a.names.add(n);
+        changed = true;
+      }
+    }
+    if (changed) queue.push(file);
+  };
+  for (const file of [...reexports.keys(), ...nodes.map((n) => n.span?.file ?? "")]) {
+    if (file !== "" && isEntry(file)) grant(file, true, []);
   }
   for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
-    for (const to of reexports.get(file) ?? []) {
-      if (reached.has(to)) continue;
-      reached.add(to);
-      queue.push(to);
+    const a = allowed.get(file);
+    if (a === undefined) continue;
+    for (const { to, names } of reexports.get(file) ?? []) {
+      if (names === "*") {
+        if (a.all || a.names.size > 0) grant(to, a.all, [...a.names]);
+      } else {
+        const passed = names.filter((n) => a.all || a.names.has(n));
+        if (passed.length > 0) grant(to, false, passed);
+      }
     }
   }
   for (const n of nodes) {
     if (n.kind !== "structure.function" || n.attrs.exported !== true || n.span === undefined) continue;
-    if (isEntryFile(n.span.file, modules.roots) || reached.has(n.span.file)) surface.add(n.id);
+    if (isEntry(n.span.file)) {
+      surface.add(n.id);
+      continue;
+    }
+    const a = allowed.get(n.span.file);
+    if (a !== undefined && (a.all || a.names.has(String(n.attrs.name)))) surface.add(n.id);
   }
   return surface;
 }

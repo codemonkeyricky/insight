@@ -128,3 +128,15 @@ describe("frontend-cpp data facts", () => {
     expect(edges(r)).toContainEqual(expect.objectContaining({ from: "src/deep.cc#first_name", to: "src/deep.cc#var:kNames", kind: "data.read" }));
   });
 });
+
+describe("frontend-cpp data facts, catch parameters and structured bindings", () => {
+  it("c1: a catch parameter named like a global is a local, not a write to the global", async () => {
+    const r = await extractFiles(["src/c.cc"]);
+    expect(edges(r).filter((e) => e.from === "src/c.cc#guard" && e.to === "src/c.cc#var:total" && e.kind === "data.write")).toEqual([]);
+  });
+
+  it("c2: a structured binding named like a global is a local, not a write to the global", async () => {
+    const r = await extractFiles(["src/c.cc"]);
+    expect(edges(r).filter((e) => e.from === "src/c.cc#unpack" && (e.to === "src/c.cc#var:k" || e.to === "src/c.cc#var:count") && e.kind === "data.write")).toEqual([]);
+  });
+});
