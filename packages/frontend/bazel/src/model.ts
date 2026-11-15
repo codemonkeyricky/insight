@@ -1,6 +1,6 @@
 import { posix } from "node:path";
 import type { Span } from "@insight/ir";
-import { globsIn, labelsIn, stringsIn, topLevelCalls, tokenize, type Arg, type Tok } from "./starlark.js";
+import { globsIn, labelsIn, stringsIn, topLevelCalls, tokenize, type Arg, type Call, type Tok } from "./starlark.js";
 
 /** Rules whose names start with cc_ are C++ targets: cc_library, cc_binary, cc_test, and so on. */
 const CC_PREFIX = "cc_";
@@ -15,6 +15,26 @@ export function isModelledRule(name: string): boolean {
 /** Whether the rule is a C++ rule, read with its headers and include directories. */
 export function isCcRule(kind: string): boolean {
   return kind.startsWith(CC_PREFIX);
+}
+
+/**
+ * Names that a call with deps and sources can still have without being a C++ target: other languages,
+ * filegroups, aliases, and the rest of the Bazel vocabulary.
+ */
+const NOT_A_TARGET = [
+  "py_", "java_", "go_", "rust_", "sh_", "proto_", "js_", "ts_", "kt_", "scala_", "swift_", "objc_", "android_", "apple_",
+  "genrule", "filegroup", "alias", "config_setting", "platform", "package_group", "test_suite", "exports_files", "load", "package",
+];
+
+/**
+ * Whether a top-level call the model does not otherwise read is a C++ target made by a macro or a custom
+ * rule: it takes deps, and srcs or hdrs. Test rules (names ending _test) are not.
+ */
+export function isUnknownRule(call: Call): boolean {
+  if (isModelledRule(call.name) || call.name.endsWith("_test")) return false;
+  if (NOT_A_TARGET.some((prefix) => call.name.startsWith(prefix))) return false;
+  const keys = new Set(call.args.map((a) => a.key));
+  return keys.has("deps") && (keys.has("srcs") || keys.has("hdrs"));
 }
 
 export interface BazelTarget {
@@ -42,6 +62,10 @@ export interface BazelTarget {
   includePrefix?: string;
   /** Absolute visibility labels: the target's own `visibility`, else its package's `default_visibility`. Absent when neither is set. */
   visibility?: string[];
+  /** Whether the target is read like a cc_library: its headers, include directories and cc-only fields. cc_* rules, and macros with deps and sources. */
+  cc: boolean;
+  /** `heuristic` for a target read from a macro or custom rule rather than a known Bazel rule. */
+  confidence: "exact" | "heuristic";
 }
 
 export interface BazelModel {
@@ -141,8 +165,8 @@ function fileList(toks: Tok[], pkg: string, files: string[], subpackages: Set<st
 }
 
 /**
- * Reads one BUILD file and returns the targets it declares: the cc_* rules, and the *_binary rules of
- * other languages. A non-cc binary's `main` file is one of its sources.
+ * Reads one BUILD file and returns the targets it declares: the cc_* rules, the *_binary rules of
+ * other languages, and macro or custom rules that look like C++ targets. A non-cc binary's `main` file is one of its sources.
  */
 export function parseBuildFile(buildFile: string, text: string, files: string[], subpackages: Set<string>): BazelTarget[] {
   const pkg = packageOf(buildFile);
@@ -151,8 +175,9 @@ export function parseBuildFile(buildFile: string, text: string, files: string[],
   const pkgCall = calls.find((c) => c.name === "package");
   const defaultVisibility = pkgCall === undefined ? undefined : visibilityOf(pkgCall.args, "default_visibility", pkg);
   for (const call of calls) {
-    if (!isModelledRule(call.name)) continue;
-    const cc = isCcRule(call.name);
+    const modelled = isModelledRule(call.name);
+    if (!modelled && !isUnknownRule(call)) continue;
+    const cc = modelled ? isCcRule(call.name) : true;
     const arg = (key: string): Tok[] => call.args.find((a) => a.key === key)?.tokens ?? [];
     const name = stringsIn(arg("name"))[0];
     if (name === undefined) continue;
@@ -191,6 +216,8 @@ export function parseBuildFile(buildFile: string, text: string, files: string[],
       ...(strip !== undefined ? { stripPrefix: strip.startsWith("/") ? strip.slice(1) : joinPath(pkg, strip) } : {}),
       ...(prefix !== undefined ? { includePrefix: prefix.replace(/^\/+|\/+$/g, "") } : {}),
       ...(ownVisibility !== undefined ? { visibility: ownVisibility } : {}),
+      cc,
+      confidence: modelled ? "exact" : "heuristic",
     });
   }
   return targets;

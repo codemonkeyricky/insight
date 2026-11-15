@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join, posix } from "node:path";
 import type { IRRecord, NodeId } from "@insight/ir";
 import type { ExtractContext, Frontend, IRBatch, ProjectRoot } from "@insight/sdk";
-import { buildModel, isBuildFile, isCcRule, type BazelModel, type BazelTarget } from "./model.js";
+import { buildModel, isBuildFile, type BazelModel, type BazelTarget } from "./model.js";
 import { EXTERNAL_FILES, externalIdOf, parseExternals, repoOf, type Externals } from "./externals.js";
 
 export { resolver } from "./resolve.js";
@@ -80,7 +80,7 @@ function batchFor(file: string, model: BazelModel, files: Set<string>, externals
           ...(t.visibility !== undefined ? { visibility: t.visibility } : {}),
         },
         span: t.span,
-        provenance: PROV,
+        provenance: { frontend: FRONTEND_ID, confidence: t.confidence },
       },
     });
     for (const f of new Set([...t.srcs, ...t.hdrs])) {
@@ -91,7 +91,7 @@ function batchFor(file: string, model: BazelModel, files: Set<string>, externals
     }
     // A cc_* rule's dependencies are all recorded, resolved or not. A binary of another language records
     // only the dependencies that name a target this model knows.
-    const cc = isCcRule(t.kind);
+    const cc = t.cc;
     for (const dep of t.deps) {
       if (!cc && !model.targets.has(dep)) continue;
       const to: NodeId | { unresolved: { scheme: string; text: string } } = model.targets.has(dep)

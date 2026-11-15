@@ -1,15 +1,70 @@
 import { readFile } from "node:fs/promises";
 import { join, posix } from "node:path";
 import type { ResolveAnswer, ResolveContext, Resolver } from "@insight/sdk";
-import { buildModel, closureOf, isBuildFile, joinPath, ownersOf, type BazelTarget } from "./model.js";
+import { buildModel, closureOf, isBuildFile, joinPath, ownersOf, type BazelModel, type BazelTarget } from "./model.js";
+import { EXTERNAL_FILES, externalIdOf, parseExternals, repoOf, type Externals } from "./externals.js";
+
+/** Include path prefixes that name a module, mapped to the module's name in the Bazel registry. */
+const MODULE_ALIASES = new Map<string, string>([
+  ["absl", "abseil-cpp"],
+  ["gtest", "googletest"],
+  ["gmock", "googletest"],
+  ["benchmark", "google_benchmark"],
+  ["google/protobuf", "protobuf"],
+  ["grpc", "grpc"],
+  ["grpcpp", "grpc"],
+  ["fmt", "fmt"],
+  ["spdlog", "spdlog"],
+  ["nlohmann", "nlohmann_json"],
+  ["boost", "boost"],
+  ["re2", "re2"],
+  ["glog", "glog"],
+  ["gflags", "gflags"],
+]);
+
+/** An external repository, by id, with the name and repo_name that an include path can match. */
+export interface ExternalName {
+  id: string;
+  name: string;
+  repoName?: string;
+}
+
+/**
+ * The external repositories an include path names, by id. A path with one segment names none, so `<string>`
+ * and `"foo.h"` are never external. A path whose first segment (or `google/protobuf`) is a known module
+ * matches an external of that module's name (boost also matches boost.*). Otherwise the first segment
+ * matches an external's name or repo_name.
+ */
+export function externalMatches(include: string, externals: ExternalName[]): string[] {
+  const parts = include.split("/");
+  if (parts.length < 2) return [];
+  const key = parts[0] === "google" && parts[1] === "protobuf" ? "google/protobuf" : (parts[0] ?? "");
+  const module = MODULE_ALIASES.get(key);
+  if (module !== undefined) {
+    const found = externals.filter((e) => e.name === module || (module === "boost" && e.name.startsWith("boost.")));
+    if (found.length > 0) return found.map((e) => e.id).sort();
+  }
+  const first = parts[0] ?? "";
+  return externals.filter((e) => e.name === first || e.repoName === first).map((e) => e.id).sort();
+}
 
 /** Reads every BUILD file of the project. Each lookup re-reads them, so an edit is seen at once. */
-async function loadModel(ctx: ResolveContext) {
+async function loadModel(ctx: ResolveContext): Promise<BazelModel> {
   const texts = new Map<string, string>();
   for (const f of ctx.listFiles()) {
     if (isBuildFile(f)) texts.set(f, await readFile(join(ctx.root.path, f), "utf8"));
   }
   return buildModel(texts, ctx.listFiles());
+}
+
+/** Reads the declarations of the external repositories, as the frontend does. */
+async function loadExternals(ctx: ResolveContext): Promise<Externals> {
+  const texts = new Map<string, string>();
+  const files = ctx.listFiles();
+  for (const f of EXTERNAL_FILES) {
+    if (files.includes(f)) texts.set(f, await readFile(join(ctx.root.path, f), "utf8"));
+  }
+  return parseExternals(texts);
 }
 
 /** The header a target exposes under an include path, through strip_include_prefix and include_prefix. */
@@ -21,9 +76,27 @@ function exposedAs(t: BazelTarget, header: string): string {
 }
 
 /**
+ * The external repositories that the targets of a closure depend on. Only cc targets record their external
+ * dependencies as dep-edges, so only they count here, as the graph does.
+ */
+function externalsOfClosure(closure: BazelTarget[], externals: Externals): Set<string> {
+  const ids = new Set<string>();
+  for (const t of closure) {
+    if (!t.cc) continue;
+    for (const label of t.externalDeps) {
+      const repo = repoOf(label);
+      const id = repo === undefined ? undefined : externalIdOf(repo, externals);
+      if (id !== undefined) ids.add(id);
+    }
+  }
+  return ids;
+}
+
+/**
  * Answers a C++ include with the headers that the including file's Bazel targets can see. Include
  * directories and header prefixes come from the target and everything it depends on, which is how
- * Bazel itself builds the include path. Returns null when no target explains the include.
+ * Bazel itself builds the include path. When no in-repository header explains the include, it answers
+ * with an external repository that the same targets depend on. Returns null when neither does.
  */
 export const resolver: Resolver = {
   scheme: "cpp.include",
@@ -31,11 +104,11 @@ export const resolver: Resolver = {
   async resolve(ref, ctx): Promise<ResolveAnswer | null> {
     const model = await loadModel(ctx);
     const owners = ownersOf(model, ctx.fromFile);
-    if (owners.length === 0) return null;
+    const closure = closureOf(model, owners);
     const text = ref.text.replace(/^\.\//, "");
     const matches = new Set<string>();
     const notes = new Set<string>();
-    for (const t of closureOf(model, owners)) {
+    for (const t of closure) {
       for (const dir of t.includes) {
         const candidate = posix.normalize(posix.join(dir, text));
         if (ctx.hasFile(candidate)) {
@@ -50,8 +123,29 @@ export const resolver: Resolver = {
         }
       }
     }
-    if (matches.size === 0) return null;
-    return { targets: [...matches].sort(), confidence: "inferred", note: `via Bazel: ${[...notes].sort().join(", ")}` };
+    if (matches.size > 0) {
+      return { targets: [...matches].sort(), confidence: "inferred", note: `via Bazel: ${[...notes].sort().join(", ")}` };
+    }
+
+    // No owner target: every declared external is a candidate. Otherwise, only those the closure depends on.
+    const externals = await loadExternals(ctx);
+    const scope = owners.length === 0 ? [...externals.entries.keys()] : [...externalsOfClosure(closure, externals)];
+    const candidates: ExternalName[] = [];
+    for (const id of scope) {
+      const decl = externals.entries.get(id);
+      if (decl === undefined || !ctx.hasNode(id)) continue;
+      const repoName = decl.attrs.repoName;
+      candidates.push({ id, name: String(decl.attrs.name), ...(repoName !== undefined ? { repoName: String(repoName) } : {}) });
+    }
+    const ids = externalMatches(text, candidates);
+    if (ids.length === 0) return null;
+    // Through an owner's dependency closure the external is declared as a dependency: inferred. With no
+    // owner, any declared external may match, which is only a guess: heuristic.
+    return {
+      targets: ids,
+      confidence: owners.length === 0 ? "heuristic" : "inferred",
+      note: `external repository: ${ids.join(", ")}`,
+    };
   },
 };
 

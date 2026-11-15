@@ -6,7 +6,7 @@ import { type IRRecord } from "@insight/ir";
 import { createCoreRegistry } from "@insight/ir/node";
 import { runFrontendConformance, type IRBatch, type ProjectRoot } from "@insight/sdk";
 import frontend from "../src/index.js";
-import { resolver } from "../src/resolve.js";
+import { externalMatches, resolver, type ExternalName } from "../src/resolve.js";
 import { buildModel, globRegex, labelOf, parseBuildFile } from "../src/model.js";
 import { externalIdOf, parseExternals, repoOf } from "../src/externals.js";
 import { globsIn, labelsIn, stringsIn, tokenize, topLevelCalls } from "../src/starlark.js";
@@ -19,11 +19,16 @@ const files = [
   "MODULE.bazel",
   "MODULE.bazel.lock",
   "app/main.cc",
+  "ext/BUILD",
+  "ext/consumer.cc",
+  "ext/macros.bzl",
   "lib/BUILD",
   "lib/include/core/core.h",
   "lib/src/core.cc",
   "lib/test/core_test.cc",
   "lib/util/log.h",
+  "third_party/BUILD",
+  "third_party/absl/strings/str_cat.h",
 ];
 
 const root: ProjectRoot = { path: fixtureRoot, name: "sample-bazel", allowBuildTools: false };
@@ -71,7 +76,7 @@ describe("frontend-bazel", () => {
     const nodes = records.flatMap((r) => ("node" in r ? [r.node] : []));
     const edges = records.flatMap((r) => ("edge" in r ? [r.edge] : []));
     const targets = nodes.filter((n) => n.kind === "packaging.build-target");
-    expect(targets.map((n) => n.id).sort()).toEqual(["//:app", "//lib:core", "//lib:core_test", "//lib:util"]);
+    expect(targets.map((n) => n.id).sort()).toEqual(["//:app", "//ext:consumer", "//lib:core", "//lib:core_test", "//lib:util", "//third_party:vendored_absl"]);
     expect(targets.find((n) => n.id === "//lib:core")?.attrs).toMatchObject({ name: "core", targetKind: "cc_library", source: "static" });
     const contains = edges.filter((e) => e.kind === "packaging.target-contains" && e.from === "//lib:core").map((e) => e.to).sort();
     expect(contains).toEqual(["lib/include/core/core.h", "lib/src/core.cc"]);
@@ -243,7 +248,7 @@ describe("packages and parents", () => {
   it("emits one structure.package per BUILD file, and parents each target to its package", async () => {
     const nodes = nodesOf(await extractAll());
     const pkgs = nodes.filter((n) => n.kind === "structure.package");
-    expect(pkgs.map((n) => n.id).sort()).toEqual(["//", "//lib"]);
+    expect(pkgs.map((n) => n.id).sort()).toEqual(["//", "//ext", "//lib", "//third_party"]);
     expect(pkgs.find((n) => n.id === "//")).toMatchObject({ facet: "structure", attrs: { name: "//", root: "." } });
     expect(pkgs.find((n) => n.id === "//lib")).toMatchObject({ facet: "structure", attrs: { name: "//lib", root: "lib" } });
     expect(nodes.find((n) => n.id === "//:app")?.parent).toBe("//");
@@ -462,3 +467,117 @@ const LOCK = JSON.stringify({
 function moduleText(): string {
   return readFileSync(join(fixtureRoot, "MODULE.bazel"), "utf8");
 }
+
+describe("external includes", () => {
+  it("answers an alias-mapped include with the external that declares its module", () => {
+    const ext: ExternalName[] = [
+      { id: "@abseil-cpp", name: "abseil-cpp" },
+      { id: "@com_google_googletest", name: "googletest", repoName: "com_google_googletest" },
+    ];
+    expect(externalMatches("absl/strings/str_cat.h", ext)).toEqual(["@abseil-cpp"]);
+    expect(externalMatches("gtest/gtest.h", ext)).toEqual(["@com_google_googletest"]);
+    expect(externalMatches("gmock/gmock.h", ext)).toEqual(["@com_google_googletest"]);
+    expect(externalMatches("absl/strings/str_cat.h", [])).toEqual([]);
+  });
+
+  it("maps google/protobuf and boost.* modules by their two- or one-segment alias", () => {
+    expect(externalMatches("google/protobuf/message.h", [{ id: "@protobuf", name: "protobuf" }])).toEqual(["@protobuf"]);
+    expect(externalMatches("boost/asio.hpp", [{ id: "@boost.asio", name: "boost.asio" }])).toEqual(["@boost.asio"]);
+  });
+
+  it("matches the first segment against an external's name or repo_name when no alias applies", () => {
+    expect(externalMatches("libpfm/pfmlib.h", [{ id: "@libpfm", name: "libpfm" }])).toEqual(["@libpfm"]);
+    expect(externalMatches("libpfm/pfmlib.h", [{ id: "@pfm", name: "other", repoName: "libpfm" }])).toEqual(["@pfm"]);
+    expect(externalMatches("libpfm/pfmlib.h", [{ id: "@other", name: "other" }])).toEqual([]);
+  });
+
+  it("never matches a single-segment include, even when an external has that name", () => {
+    const ext: ExternalName[] = [
+      { id: "@string", name: "string" },
+      { id: "@foo.h", name: "foo.h" },
+      { id: "@vector", name: "vector", repoName: "vector" },
+    ];
+    expect(externalMatches("string", ext)).toEqual([]);
+    expect(externalMatches("vector", ext)).toEqual([]);
+    expect(externalMatches("foo.h", ext)).toEqual([]);
+  });
+
+  it("answers through the closure of the including file's owner targets, as inferred", async () => {
+    const answer = await resolver.resolve({ scheme: "cpp.include", text: "absl/strings/str_cat.h" }, resolveCtx("ext/consumer.cc"));
+    expect(answer?.targets).toEqual(["@abseil-cpp"]);
+    expect(answer?.confidence).toBe("inferred");
+    expect(await resolver.resolve({ scheme: "cpp.include", text: "gtest/gtest.h" }, resolveCtx("ext/consumer.cc"))).toMatchObject({
+      targets: ["@com_google_googletest"],
+      confidence: "inferred",
+    });
+  });
+
+  it("does not answer with an external that no owner target's closure depends on", async () => {
+    // lib/src/core.cc's targets depend on @abseil-cpp, but not on @com_google_googletest.
+    expect(await resolver.resolve({ scheme: "cpp.include", text: "gtest/gtest.h" }, resolveCtx("lib/src/core.cc"))).toBeNull();
+    expect(await resolver.resolve({ scheme: "cpp.include", text: "absl/strings/str_cat.h" }, resolveCtx("lib/src/core.cc"))).toMatchObject({
+      targets: ["@abseil-cpp"],
+    });
+  });
+
+  it("uses every declared external when the including file has no owner target, as heuristic", async () => {
+    expect(await resolver.resolve({ scheme: "cpp.include", text: "absl/strings/str_cat.h" }, resolveCtx("nowhere.cc"))).toMatchObject({
+      targets: ["@abseil-cpp"],
+      confidence: "heuristic",
+    });
+    expect(await resolver.resolve({ scheme: "cpp.include", text: "gtest/gtest.h" }, resolveCtx("nowhere.cc"))).toMatchObject({
+      targets: ["@com_google_googletest"],
+    });
+  });
+
+  it("answers from the in-repository header of the file's own target before any external", async () => {
+    const answer = await resolver.resolve({ scheme: "cpp.include", text: "absl/strings/str_cat.h" }, resolveCtx("third_party/absl/strings/str_cat.h"));
+    expect(answer?.targets).toEqual(["third_party/absl/strings/str_cat.h"]);
+    expect(answer?.confidence).toBe("inferred");
+  });
+});
+
+describe("macro and custom rules", () => {
+  it("reads a macro call with deps and srcs as a heuristic C++ target", () => {
+    const [t] = parseBuildFile(
+      "p/BUILD",
+      'load("//p:m.bzl", "my_cc_library")\nmy_cc_library(name = "m", srcs = ["m.cc"], hdrs = ["m.h"], deps = [":core"])',
+      [],
+      new Set(["p"]),
+    );
+    expect(t).toMatchObject({ id: "//p:m", kind: "my_cc_library", cc: true, confidence: "heuristic", deps: ["//p:core"] });
+    expect(t?.hdrs).toEqual(["p/m.h"]);
+  });
+
+  it("does not read a py_test with srcs and deps as a target, nor a py_library or filegroup", () => {
+    const build = [
+      'py_test(name = "t", srcs = ["t.py"], deps = [":x"])',
+      'py_library(name = "x", srcs = ["x.py"], deps = [])',
+      'filegroup(name = "f", srcs = ["a.txt"], deps = [])',
+      'my_cc_test(name = "ct", srcs = ["ct.cc"], deps = [":x"])',
+    ].join("\n");
+    expect(parseBuildFile("p/BUILD", build, ["p/t.py", "p/x.py", "p/a.txt", "p/ct.cc"], new Set(["p"]))).toEqual([]);
+  });
+
+  it("gives a modelled rule exact confidence and keeps cc_library's cc flag", () => {
+    const [lib] = parseBuildFile("p/BUILD", 'cc_library(name = "l", srcs = ["l.cc"])', ["p/l.cc"], new Set(["p"]));
+    expect(lib).toMatchObject({ confidence: "exact", cc: true });
+    const [bin] = parseBuildFile("p/BUILD", 'py_binary(name = "b", srcs = ["b.py"])', ["p/b.py"], new Set(["p"]));
+    expect(bin).toMatchObject({ confidence: "exact", cc: false });
+  });
+
+  it("gives the macro target heuristic provenance in the IR", async () => {
+    const nodes = nodesOf(await extractAll());
+    expect(nodes.find((n) => n.id === "//ext:consumer")).toMatchObject({
+      attrs: { targetKind: "my_cc_library", source: "static" },
+      provenance: { confidence: "heuristic" },
+    });
+    expect(nodes.find((n) => n.id === "//lib:core")?.provenance).toMatchObject({ confidence: "exact" });
+  });
+
+  it("records every dep of the macro target as a dep-edge, including the external ones", async () => {
+    const edges = edgesOf(await extractAll());
+    expect(edges).toContainEqual(expect.objectContaining({ kind: "packaging.dep-edge", from: "//ext:consumer", to: "@abseil-cpp" }));
+    expect(edges).toContainEqual(expect.objectContaining({ kind: "packaging.dep-edge", from: "//ext:consumer", to: "@com_google_googletest" }));
+  });
+});
