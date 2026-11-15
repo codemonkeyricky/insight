@@ -17,7 +17,7 @@
     "inputListing": { "description": "Globs whose matching files contribute only their paths to the inputs hash. Adding or removing a matching file marks every shard of this plugin dirty, editing one does not.", "type": "array", "items": { "type": "string", "minLength": 1 } },
     "provides": {
       "type": "array",
-      "items": { "type": "string", "pattern": "^(structure|packaging|flow|calls|concurrency|sync|effects|state|x-[a-z0-9-]+)$" },
+      "items": { "type": "string", "pattern": "^(structure|packaging|flow|calls|concurrency|sync|effects|state|data|x-[a-z0-9-]+)$" },
       "uniqueItems": true
     },
     "hidden": { "description": "A lens with no tab in the web app. It still runs and its results stay available to the CLI and API.", "type": "boolean" },

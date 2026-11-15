@@ -7,6 +7,7 @@ import { importBindings, matchCall, matchEnvRead, matchExportRoute, matchFetch, 
 import { channelIndex, matchChannelRecv, matchChannelSend } from "./channels.js";
 import { scriptKind } from "./digest.js";
 import { emitState } from "./state.js";
+import { emitData } from "./data.js";
 import { dispatchFor, MAX_DISPATCH_TARGETS, propName, registryFor } from "./dispatch.js";
 import { workspaceManifestPaths, workspacePackages, workspaceProgramEntries, workspaceSource, type ProgramEntry, type WorkspacePackage } from "./packages.js";
 
@@ -1912,6 +1913,9 @@ export function emitFile(project: Project, rel: string): IRBatch {
       const edge = callEdges.get(call);
       if (edge) edge.attrs = { ...edge.attrs, ...attrs };
     }
+    const data = emitData({ project, rel, sf, moduleId, spanOf: (n) => spanOf(rel, sf, n), provenance: PROV, dependOn });
+    for (const n of data.nodes) push(n);
+    for (const e of data.edges) pushEdge(e);
   }
 
   for (const d of project.program.getSyntacticDiagnostics(sf)) {

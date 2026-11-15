@@ -40,6 +40,7 @@ Facets are optional and declared. A frontend lists the facets it fills, and a le
 | `sync` | Coordination: locks, semaphores, atomics, condition variables |
 | `effects` | Contact with the outside world: fs, net, process, env, clock |
 | `state` | Explicit finite state: holders whose type is a finite set of values, the writes that set them, and the tests that compare them |
+| `data` | Module-level data: variables, globals and class statics, and the reads and writes of them |
 | `x-*` | Open namespace for plugin facets |
 
 ## Kinds
@@ -107,6 +108,9 @@ Base kinds shipped by the core:
 | `state.holder` | state | node | – | A field, variable or useState slot whose declared type is a finite set of values (enum or literal union). |
 | `state.write` | state | node | – | One site that sets a holder: an assignment, an object-literal property, an initializer, or a call to a setter helper. `from` is the set of values the holder is known to have just before. `fromEntry: true` (only when `from` is absent) says the known set at the write is exactly the enclosing function's entry set, so a consumer may fill it from the callers; a write without `from` and without `fromEntry` is unknown for another reason (dynamic write, join with an unknown side, loop widening, stale after an await). |
 | `state.test` | state | node | – | One comparison of a holder against literal values (`===`, `!==`, `==`, `!=`, or a switch case group), with the branch arms where it holds or doesn't. |
+| `data.variable` | data | node | – | A module-level `let`, `var` or `const`, a global written through `globalThis`, `window` or `self`, or a class `static` field. Parent is the file, or the class for a static. Required attrs are `name`, `qualifiedName`, `storage`, `exported` and `mutable`; see below. |
+| `data.read` | data | edge | – | A function (or the file, for module-level code) reads a `data.variable`. |
+| `data.write` | data | edge | – | A function (or the file, for module-level code) writes a `data.variable`. `attrs.how` is `assign` (`=`), `update` (`++`, `--`, `+=` and the other compound assignments), `mutate` (a mutating method such as `set` or `push`, or a property or element assignment through the variable; heuristic provenance) or `address`. |
 | `effects.fs.read` | effects | node | – | Optional `attrs.syscall`, see below. |
 | `effects.fs.write` | effects | node | – | Optional `attrs.syscall`, see below. |
 | `effects.net.connect` | effects | node | – | Optional `attrs.syscall`, see below. |
@@ -143,6 +147,15 @@ Other attributes added with the System tab, all from the same schema files:
 | `sync.rwlock-acquire` | `mode` | yes | `shared` or `exclusive`. |
 | | `lock` | yes | The mutex name the lock is taken on. |
 
+### data.variable attributes
+
+| Kind | Attribute | Required | Notes |
+| --- | --- | --- | --- |
+| `data.variable` | `name`, `qualifiedName` | yes | `qualifiedName` is `Class.name` for a static, `globalThis.name` (or `window`, `self`) for a global, and `name` otherwise. |
+| | `storage` | yes | `global`, `module`, `file-static`, `function-static`, `class-static` or `extern-decl`. |
+| | `exported`, `mutable` | yes | `exported` is true when the variable is visible outside its file. `mutable` is false for a `const` whose initializer is not a new expression or a literal, and for a frozen or `as const` literal, and for a `readonly` static. |
+| | `type` | no | The declared type, when known. |
+
 ### Which frontend emits each kind
 
 The fact rules that turn these kinds into System-view edges are in `docs/system-view.md`, under "Fact rules". This table says only which frontend emits each kind today.
@@ -162,6 +175,7 @@ The fact rules that turn these kinds into System-view edges are in `docs/system-
 | `sync.lock-acquire`, `sync.lock-release`, `sync.rwlock-acquire` | catalog (`lock-acquire`); `navigator.locks` | `src/extract.ts` |
 | `sync.semaphore` | not emitted | `src/extract.ts` |
 | `sync.condvar`, `sync.atomic-op` | catalog | `src/extract.ts` |
+| `data.variable`, `data.read`, `data.write` | `src/data.ts` | `src/data.ts` |
 | `state.holder` | state | node | – | A field, variable or useState slot whose declared type is a finite set of values (enum or literal union). |
 | `state.write` | state | node | – | One site that sets a holder: an assignment, an object-literal property, an initializer, or a call to a setter helper. `from` is the set of values the holder is known to have just before. `fromEntry: true` (only when `from` is absent) says the known set at the write is exactly the enclosing function's entry set, so a consumer may fill it from the callers; a write without `from` and without `fromEntry` is unknown for another reason (dynamic write, join with an unknown side, loop widening, stale after an await). |
 | `state.test` | state | node | – | One comparison of a holder against literal values (`===`, `!==`, `==`, `!=`, or a switch case group), with the branch arms where it holds or doesn't. |

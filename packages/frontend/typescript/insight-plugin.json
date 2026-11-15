@@ -29,6 +29,7 @@
   "provides": [
     "calls",
     "concurrency",
+    "data",
     "effects",
     "flow",
     "packaging",
