@@ -4,11 +4,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { fireEvent, render, screen, cleanup } from "@testing-library/react";
-import { layoutFunction, type FunctionFlow } from "@insight/flow";
+import { layoutFunction, unfoldChart, type FunctionFlow } from "@insight/flow";
+import { stepAction } from "../src/zoom/stepAction";
+import { isPostStep } from "../src/flowTargets";
 import { DETAIL_KEY, readDetail, writeDetail } from "../src/zoom/detailPref";
 import { LayersPanel, type LayerState } from "../src/components/sheet/LayersPanel";
 import { ZoomStore } from "../src/zoom/scene";
-import { toggleFold, type Expansion } from "../src/zoom/expand";
+import { foldsAfter, refold, toggleFold, type Expansion } from "../src/zoom/expand";
 import { FlowChart, couplingClassOf } from "../src/components/FlowChart";
 import { CouplingSection, type ListBase } from "../src/components/zoom/ExecFunctionPanel";
 
@@ -88,7 +90,7 @@ describe("toggleFold", () => {
     const e = { fnId: "m#run", anchor: { kind: "box", nodeId: "n1", rect: { x: 0, y: 0, w: 10, h: 10 } }, chart: coupling, base: coupling } as unknown as Expansion;
     const opened = toggleFold([e], "m#run", "F1", coupling, undefined);
     expect(opened[0]!.folds).toEqual(["F1"]);
-    expect(opened[0]!.chart.nodes.some((n) => n.foldId === "F1")).toBe(false);
+    expect(opened[0]!.chart.nodes.filter((n) => n.foldId === "F1").map((n) => n.open)).toEqual([true]);
     expect(opened[0]!.chart.nodes.some((n) => n.label === "a()")).toBe(true);
     const closed = toggleFold(opened, "m#run", "F1", coupling, undefined);
     expect(closed[0]!.folds).toEqual([]);
@@ -107,7 +109,8 @@ describe("FlowChart coupling rows", () => {
 
   it("classes an escape row and a hoisted throw as escape", () => {
     expect(couplingClassOf({ coupling: "escape" } as never)).toBe("escape");
-    expect(couplingClassOf({ coupling: "io", hoisted: "may throws" } as never)).toBe("escape");
+    // A throw hoisted under an io row does not restyle it: the row takes its strongest class (io).
+    expect(couplingClassOf({ coupling: "io", hoisted: "may throws" } as never)).toBe("io");
     expect(couplingClassOf({ coupling: "cross" } as never)).toBe("cross");
     expect(couplingClassOf({} as never)).toBeUndefined();
   });
@@ -138,5 +141,82 @@ describe("CouplingSection", () => {
     expect(html).toContain("Does I/O");
     expect(html).toContain("db.save");
     expect(html).toContain("fn=db%23save");
+  });
+});
+
+describe("fold re-anchoring and refold", () => {
+  /** A run whose coupling chart is a fold of a() and b() before a cross call to db.save(). */
+  function foldThenSave() {
+    const items = [
+      { t: "step" as const, role: "marker" as const, label: "⋯ 2 local", foldId: "F1", fold: [step("a()"), step("b()")] },
+      step("db.save()", { target: "db#save", coupling: "cross" }),
+    ];
+    return layoutFunction({ id: "m#run", name: "run", async: false, items });
+  }
+
+  it("re-anchors a box to the same row after the fold opens, not the row that now has its old id", () => {
+    const coupling = foldThenSave();
+    const saveOld = coupling.nodes.find((n) => n.label === "db.save()");
+    if (!saveOld) throw new Error("no db.save row");
+    const box = { fnId: "db#save", anchor: { kind: "step", fnId: "m#run", stepId: saveOld.id, rect: { x: 0, y: 0, w: 1, h: 1 } }, chart: coupling, base: coupling } as unknown as Expansion;
+    const run = { fnId: "m#run", anchor: { kind: "box", nodeId: "n1", rect: { x: 0, y: 0, w: 10, h: 10 } }, chart: coupling, base: coupling } as unknown as Expansion;
+    const opened = toggleFold([run, box], "m#run", "F1", coupling, undefined);
+    const saveNew = opened[0]!.chart.nodes.find((n) => n.label === "db.save()");
+    const hung = opened.find((x) => x.fnId === "db#save");
+    expect(saveNew).toBeDefined();
+    expect(hung).toBeDefined();
+    expect(hung!.anchor.kind === "step" && hung!.anchor.stepId).toBe(saveNew!.id);
+    expect(opened[0]!.chart.nodes.find((n) => n.id === (hung!.anchor as { stepId?: string }).stepId)?.label).toBe("db.save()");
+  });
+
+  it("closes a box whose row has no match in the new chart", () => {
+    const coupling = foldThenSave();
+    const gone = { fnId: "x#gone", anchor: { kind: "step", fnId: "m#run", stepId: "n99", rect: { x: 0, y: 0, w: 1, h: 1 } }, chart: coupling, base: coupling } as unknown as Expansion;
+    const run = { fnId: "m#run", anchor: { kind: "box", nodeId: "n1", rect: { x: 0, y: 0, w: 10, h: 10 } }, chart: coupling, base: coupling } as unknown as Expansion;
+    const opened = toggleFold([run, gone], "m#run", "F1", coupling, undefined);
+    expect(opened.some((x) => x.fnId === "x#gone")).toBe(false);
+  });
+
+  it("an open fold's header folds the rows back through the step action", () => {
+    const { coupling } = coupledFlow();
+    const e = { fnId: "m#run", anchor: { kind: "box", nodeId: "n1", rect: { x: 0, y: 0, w: 10, h: 10 } }, chart: coupling, base: coupling } as unknown as Expansion;
+    const opened = toggleFold([e], "m#run", "F1", coupling, undefined);
+    const header = opened[0]!.chart.nodes.find((n) => n.foldId === "F1");
+    if (!header) throw new Error("expected the open header");
+    expect(header.open).toBe(true);
+    expect(header.label.startsWith("▾")).toBe(true);
+    const ctx = { hasCallee: false, isLambda: false, runtime: "same" as const };
+    expect(stepAction(header, "open", ctx)).toBe("unfold");
+    const closed = toggleFold(opened, "m#run", "F1", coupling, undefined);
+    expect(closed[0]!.folds).toEqual([]);
+    expect(closed[0]!.chart.nodes.find((n) => n.foldId === "F1")?.open).toBeUndefined();
+  });
+
+  it("draws the open header with a down chevron and no second ▾ in its text", () => {
+    const { coupling } = coupledFlow();
+    const e = { fnId: "m#run", anchor: { kind: "box", nodeId: "n1", rect: { x: 0, y: 0, w: 10, h: 10 } }, chart: coupling, base: coupling } as unknown as Expansion;
+    const opened = toggleFold([e], "m#run", "F1", coupling, undefined);
+    const html = renderToStaticMarkup(<FlowChart id="p" fn={opened[0]!.chart} scope="" />);
+    expect(html).toContain("flow-fold-open");
+    expect(html).toContain(">2 local<");
+  });
+
+  it("keeps the message target and the coupling summary after a fold opens", async () => {
+    const items = [step("message.post(x)"), { t: "step" as const, role: "marker" as const, label: "⋯ 1 local", foldId: "F1", fold: [step("a()")] }];
+    const source = layoutFunction({ id: "m#run", name: "run", async: false, items });
+    const flow: FunctionFlow = {
+      ...source,
+      coupling: { module: "m", footprint: { entries: [], modules: [], escape: false }, summary: "io 1", chart: source, rows: { all: 2, coupling: 2 } },
+    };
+    const store = new ZoomStore("p", "coupling");
+    (store as unknown as { receivers: Map<string, Promise<{ id: string; name: string }[]>> }).receivers.set("m#run", Promise.resolve([{ id: "w#onmsg", name: "onmsg" }]));
+    const e = { fnId: "m#run", anchor: { kind: "box", nodeId: "n1", rect: { x: 0, y: 0, w: 10, h: 10 } }, chart: flow, base: flow } as unknown as Expansion;
+    const folds = foldsAfter([e], "m#run", "F1");
+    if (folds === undefined) throw new Error("expected the fold to open");
+    const chart = await store.withMessages("m#run", unfoldChart(source, new Set(folds), flow.coupling));
+    const opened = refold([e], "m#run", folds, chart, undefined);
+    const post = opened[0]!.chart.nodes.find((n) => isPostStep(n));
+    expect(post?.target).toBe("w#onmsg");
+    expect(opened[0]!.chart.coupling?.summary).toBe("io 1");
   });
 });

@@ -7,11 +7,11 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as KeyEvent, type PointerEvent as PointerEv, type ReactNode } from "react";
 import { select } from "d3-selection";
 import { zoom, zoomIdentity, type D3ZoomEvent, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
-import { CHART_FIT_MAX_K, CHART_HEAD, MORE_SUFFIX, ZOOM_SIZE, fitCamera, fitChartCamera, visibleWorld, type Camera, type FlowNode, type FlowSpan, type FunctionFlow, type PlacedItem, type Rect } from "@insight/flow";
+import { CHART_FIT_MAX_K, CHART_HEAD, MORE_SUFFIX, ZOOM_SIZE, fitCamera, fitChartCamera, unfoldChart, visibleWorld, type Camera, type FlowNode, type FlowSpan, type FunctionFlow, type PlacedItem, type Rect } from "@insight/flow";
 import { nameOfId, runtimeLabel, stepRuntime } from "../../flowTargets";
 import { hrefView } from "../../router";
 import { CHART_MIN_PX } from "../../zoom/chart";
-import { anchoredTo, CALLERS_CAP, callerRowRect, callersAt, chainHas, hangCallersFrom, hangsFromCallers, expandCamera, headerAnchor, isInPlace, calloutOf, closeExpansion, footprintOf, isNested, loadFunctionChart, NARROW_VIEW_PX, openExpansion, ownerOf, REVEAL_MIN_K, refresh, refusedCallersPlan, resizeCallers, revealCamera, rootBoxOf, sameFootprint, sceneCamera, setInline, SLOT_PAD, shiftAt, stepRect, stillOpen, syncCallerRows, toggleCallers, toggleFold, type Expansion, type ExpandAnchor } from "../../zoom/expand";
+import { anchoredTo, CALLERS_CAP, callerRowRect, callersAt, chainHas, hangCallersFrom, hangsFromCallers, expandCamera, headerAnchor, isInPlace, calloutOf, closeExpansion, footprintOf, isNested, loadFunctionChart, NARROW_VIEW_PX, openExpansion, ownerOf, REVEAL_MIN_K, refresh, refusedCallersPlan, resizeCallers, revealCamera, rootBoxOf, sameFootprint, sceneCamera, setInline, SLOT_PAD, shiftAt, stepRect, stillOpen, syncCallerRows, toggleCallers, toggleFold, foldsAfter, refold, type Expansion, type ExpandAnchor } from "../../zoom/expand";
 import { callersKey, isCallersKey, refOfCallersKey, type CallerRow } from "../../zoom/callers";
 import { LatestLoad } from "../../zoom/latestLoad";
 import { CallersBox } from "./CallersBox";
@@ -968,9 +968,16 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     if (!b || foldId === undefined) return;
     const e = expRef.current.find((x) => x.fnId === fnId);
     if (e === undefined || ownerOf(e, node.id) !== fnId) return;
-    const source = (await loadChart(fnId))?.coupling?.chart;
-    if (source === undefined) return;
-    setExp(toggleFold(placeAll(b, expRef.current), fnId, foldId, source, placeView(b)));
+    // The loaded chart carries the coupling (the summary the box shows) and the message targets; the unfolded chart is laid
+    // out again from the coupling chart's items, so both are applied to it again.
+    const flow = await loadChart(fnId);
+    const source = flow?.coupling?.chart;
+    if (flow === undefined || source === undefined) return;
+    const folds = foldsAfter(expRef.current, fnId, foldId);
+    if (folds === undefined) return;
+    const chart = await charts?.store.withMessages(fnId, unfoldChart(source, new Set(folds), flow.coupling));
+    if (chart === undefined) return;
+    setExp(refold(placeAll(b, expRef.current), fnId, folds, chart, placeView(b)));
   };
 
   /**

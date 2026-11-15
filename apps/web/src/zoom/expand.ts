@@ -3,7 +3,7 @@
 // layout never depends on expansions (a function box keeps its compact size), so everything here is placement: where
 // each expansion goes, how a chain follows its parent, what closes with what, and how the camera shows a new one. Pure,
 // so these rules are unit tested (test/expand.test.ts).
-import { CHART_FIT_MAX_K, CHART_HEAD, CHART_PAD, relayout, unfoldChart, type Camera, type FunctionFlow, type InlineEntry, type InlineTree, type Rect } from "@insight/flow";
+import { CHART_FIT_MAX_K, CHART_HEAD, CHART_PAD, relayout, unfoldChart, type Camera, type FlowNode, type FunctionFlow, type InlineEntry, type InlineTree, type Rect } from "@insight/flow";
 import { zoneLetter } from "./zones";
 import { callersKey, isCallersKey } from "./callers";
 
@@ -448,21 +448,59 @@ export function isNested(e: Expansion, nodeId: string): boolean {
  * The box takes the new chart's size. Nested callees are cleared: a fold changes the ids of the rows, so an inline frame's ids
  * would no longer match, and the boxes anchored into them close. Returns `list` itself when `fnId` is not open.
  */
-export function toggleFold(list: readonly Expansion[], fnId: string, foldId: string, source: FunctionFlow, view: Rect | undefined): Expansion[] {
+export function toggleFold(list: readonly Expansion[], fnId: string, foldId: string, source: FunctionFlow, view: Rect | undefined, coupling?: FunctionFlow["coupling"]): Expansion[] {
+  const folds = foldsAfter(list, fnId, foldId);
+  if (folds === undefined) return list as Expansion[];
+  return refold(list, fnId, folds, unfoldChart(source, new Set(folds), coupling), view);
+}
+
+/** The folds open in `fnId`'s coupling chart once `foldId` is toggled: opened when closed, folded back when open. Undefined when `fnId` is not open. */
+export function foldsAfter(list: readonly Expansion[], fnId: string, foldId: string): string[] | undefined {
+  const e = list.find((x) => x.fnId === fnId);
+  if (e === undefined) return undefined;
+  const open = e.folds ?? [];
+  return open.includes(foldId) ? open.filter((f) => f !== foldId) : [...open, foldId];
+}
+
+/**
+ * The row of `chart` that is the row `id` of `old`. The rows are matched by a stable key in this order: the span (file and
+ * range), the label, then the target. The first key that matches exactly one row of `chart` gives the row. Undefined when no
+ * key does, or `id` is not a row of `old`.
+ */
+export function sameRow(old: FunctionFlow, chart: FunctionFlow, id: string): FlowNode | undefined {
+  const node = old.nodes.find((n) => n.id === id);
+  if (node === undefined) return undefined;
+  const keys: ((n: FlowNode) => string | undefined)[] = [
+    (n) => (n.span === undefined ? undefined : `${n.span.file}|${n.span.start.join(",")}|${n.span.end.join(",")}`),
+    (n) => n.label,
+    (n) => n.target,
+  ];
+  for (const key of keys) {
+    const k = key(node);
+    if (k === undefined) continue;
+    const hits = chart.nodes.filter((n) => key(n) === k);
+    if (hits.length === 1) return hits[0];
+  }
+  return undefined;
+}
+
+/**
+ * `fnId`'s coupling chart replaced by `chart` (with the folds `folds` open), laid out again. The boxes anchored to its steps
+ * re-anchor to the same rows of the new chart (see sameRow), or close when no row matches. Returns `list` itself when `fnId`
+ * is not open.
+ */
+export function refold(list: readonly Expansion[], fnId: string, folds: readonly string[], chart: FunctionFlow, view: Rect | undefined): Expansion[] {
   const e = list.find((x) => x.fnId === fnId);
   if (e === undefined) return list as Expansion[];
-  const open = e.folds ?? [];
-  const folds = open.includes(foldId) ? open.filter((f) => f !== foldId) : [...open, foldId];
-  const chart = unfoldChart(source, new Set(folds));
-  const resized: Expansion = { ...e, folds, base: chart, chart, inline: undefined, ...expansionSize(chart) };
+  const old = e.chart;
+  const resized: Expansion = { ...e, folds: [...folds], base: chart, chart, inline: undefined, ...expansionSize(chart) };
   let out = list.map((x) => (x === e ? resized : x));
-  // A box opened from a step of this chart follows the step; one whose step is gone closes with its chain.
+  // A box opened from a step of this chart follows the same row; one whose row is gone closes with its chain.
   for (const x of out) {
     if (x.anchor.kind !== "step" || x.anchor.fnId !== fnId || x.anchor.stepId === undefined || x.anchor.stepId === HEADER_STEP) continue;
-    const id = x.anchor.stepId;
-    const n = chart.nodes.find((c) => c.id === id);
+    const n = sameRow(old, chart, x.anchor.stepId);
     if (n === undefined) out = closeExpansion(out, x.fnId);
-    else out = out.map((y) => (y === x ? { ...y, anchor: { ...x.anchor, rect: { x: n.x, y: n.y, w: n.w, h: n.h } } } : y));
+    else out = out.map((y) => (y === x ? { ...y, anchor: { ...x.anchor, stepId: n.id, rect: { x: n.x, y: n.y, w: n.w, h: n.h } } } : y));
   }
   return reflow(out, view);
 }

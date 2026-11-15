@@ -330,7 +330,8 @@ const couplingCache = new Map<string, CouplingIndex>();
 
 /** The project-wide coupling index of a snapshot, built once and kept for the last few snapshots. */
 function couplingFor(paths: ProjectPaths, snapshot: string): CouplingIndex {
-  const key = `${paths.root}|${snapshot}`;
+  // Keyed like loadSnapshot's cache: by the state directory, which is what the snapshot is read from.
+  const key = `${paths.state}\0${snapshot}`;
   const hit = couplingCache.get(key);
   if (hit) return hit;
   const snap = loadSnapshot(paths, snapshot);

@@ -65,6 +65,8 @@ export type Item =
       lockOp?: "acquire" | "release";
       /** A sync row: its footprint text, without the emoji. */
       text?: string;
+      /** Coupling pass: an open fold's header row (`▾ n local`), before the rows it folds. */
+      open?: boolean;
     }
   | { t: "term"; role: "return" | "throw" | "break" | "continue"; label: string; span?: FlowSpan; coupling?: CouplingClass }
   | { t: "fork"; role: "branch" | "switch" | "try" | "lock"; label: string; title?: string; span?: FlowSpan; arms: Arm[]; complete: boolean; lock?: string; coupling?: CouplingClass }

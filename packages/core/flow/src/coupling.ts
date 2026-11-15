@@ -59,10 +59,14 @@ function armCaught(fork: Extract<Item, { t: "fork" }>, arm: Arm, caught: boolean
 function effective(targets: string[], caught: boolean, ctx: Ctx): FootprintEntry[] {
   const out: FootprintEntry[] = [];
   for (const t of targets) {
-    for (const e of ctx.footprints.get(t)?.entries ?? []) {
+    const fp = ctx.footprints.get(t);
+    if (fp === undefined) continue;
+    for (const e of fp.entries) {
       if (e.cls === "escape" && caught) continue;
       out.push(e);
     }
+    // Past the cap the callee's throw may not be among its entries: its escape flag still hoists `throws`.
+    if (fp.escape && !caught && !fp.entries.some((e) => e.cls === "escape")) out.push({ cls: "escape", label: "throws" });
   }
   return out;
 }
@@ -97,8 +101,12 @@ function stepInfo(item: StepItem, caught: boolean, ctx: Ctx): { kept: boolean; c
         const mayThrow = !caught && cross.some((t) => ctx.footprints.get(t)?.escape === true);
         return { kept: true, coupling: "cross", ...(mayThrow ? { hoisted: "may throw" } : {}) };
       }
-      if (item.role === "await") return { kept: true, coupling: "conc" };
       const eff = effective(targets, caught, ctx);
+      // An await is a concurrency row: it keeps class conc unless what its callee hoists is stronger under ORDER.
+      if (item.role === "await") {
+        if (eff.length === 0) return { kept: true, coupling: "conc" };
+        return { kept: true, coupling: strongest([{ cls: "conc", label: item.label }, ...eff]), hoisted: hoistedText(eff) };
+      }
       if (eff.length === 0) return { kept: false };
       return { kept: true, coupling: strongest(eff), hoisted: hoistedText(eff) };
     }
@@ -135,15 +143,19 @@ function keepItem(item: Item, caught: boolean, ctx: Ctx, st: { next: number }): 
   switch (item.t) {
     case "step": {
       const info = stepInfo(item, caught, ctx);
-      const local = item.role === "call" && info.coupling !== "cross" && info.hoisted !== undefined;
-      // A suspension point says that other coroutines may run there.
+      // A suspension point says that other coroutines may run there; a hoisted callee footprint shows as ⇢ on the label and title.
       const suspends = item.role === "await";
+      const hoisted = info.hoisted;
+      const baseLabel = hoisted !== undefined ? `${item.label} ⇢ ${hoisted}` : item.label;
+      const baseTitle = hoisted !== undefined ? `${item.title ?? item.label} ⇢ ${hoisted}` : item.title;
       return {
         ...item,
         ...(info.coupling !== undefined ? { coupling: info.coupling } : {}),
-        ...(info.hoisted !== undefined ? { hoisted: info.hoisted, label: `${item.label} ⇢ ${info.hoisted}` } : {}),
-        ...(local ? { title: `${item.title ?? item.label} ⇢ ${info.hoisted}` } : {}),
-        ...(suspends ? { label: `⏸ ${item.label}`, title: `${item.title ?? item.label} (other coroutines may run here)` } : {}),
+        ...(hoisted !== undefined ? { hoisted } : {}),
+        label: suspends ? `⏸ ${baseLabel}` : baseLabel,
+        ...(suspends
+          ? { title: `${baseTitle ?? baseLabel} (other coroutines may run here)` }
+          : baseTitle !== undefined ? { title: baseTitle } : {}),
       };
     }
     case "term":
@@ -184,12 +196,35 @@ function prune(items: readonly Item[], caught: boolean, ctx: Ctx, st: { next: nu
   return out;
 }
 
-/** Adds an entry unless it is already there or the footprint is full. Reports whether it was added. */
-function add(mine: Map<string, FootprintEntry>, e: FootprintEntry): boolean {
+/**
+ * A function's footprint while it is built. The entries stop at FOOTPRINT_CAP, but the escape flag and the module set are
+ * kept past the cap, so the footprint's `escape` and `modules` stay right for a function with many entries.
+ */
+interface Acc {
+  entries: Map<string, FootprintEntry>;
+  escape: boolean;
+  modules: Set<string>;
+}
+
+const newAcc = (): Acc => ({ entries: new Map(), escape: false, modules: new Set() });
+
+/** Adds an entry, the escape flag and its module. Reports whether the footprint grew. */
+function add(acc: Acc, e: FootprintEntry): boolean {
+  let grew = false;
+  if (e.cls === "escape" && !acc.escape) {
+    acc.escape = true;
+    grew = true;
+  }
+  if (e.cls === "cross" && e.module !== undefined && e.module !== "" && !acc.modules.has(e.module)) {
+    acc.modules.add(e.module);
+    grew = true;
+  }
   const key = `${e.cls}|${e.label}|${e.target ?? ""}`;
-  if (mine.has(key) || mine.size >= FOOTPRINT_CAP) return false;
-  mine.set(key, e);
-  return true;
+  if (!acc.entries.has(key) && acc.entries.size < FOOTPRINT_CAP) {
+    acc.entries.set(key, e);
+    grew = true;
+  }
+  return grew;
 }
 
 interface Site {
@@ -199,7 +234,7 @@ interface Site {
 }
 
 /** The direct entries of a list, and the call sites that may pull in a callee's footprint. */
-function collect(list: readonly Item[], caught: boolean, M: string | undefined, modules: ModuleMap, mine: Map<string, FootprintEntry>, sites: Site[]): void {
+function collect(list: readonly Item[], caught: boolean, M: string | undefined, modules: ModuleMap, mine: Acc, sites: Site[]): void {
   for (const item of list) {
     switch (item.t) {
       case "step": {
@@ -240,15 +275,15 @@ function collect(list: readonly Item[], caught: boolean, M: string | undefined, 
  * `may throw` when its callee may throw. A fixpoint, so recursion terminates: entries only grow, up to a cap.
  */
 export function computeFootprints(fns: ReadonlyMap<string, readonly Item[]>, modules: ModuleMap): Map<string, CouplingFootprint> {
-  const entries = new Map<string, Map<string, FootprintEntry>>();
+  const accs = new Map<string, Acc>();
   const sites = new Map<string, Site[]>();
   const modOf = new Map<string, string | undefined>();
   for (const [id, items] of fns) {
     const M = modules.moduleOf(id);
-    const mine = new Map<string, FootprintEntry>();
+    const mine = newAcc();
     const ss: Site[] = [];
     collect(items, false, M, modules, mine, ss);
-    entries.set(id, mine);
+    accs.set(id, mine);
     sites.set(id, ss);
     modOf.set(id, M);
   }
@@ -257,19 +292,27 @@ export function computeFootprints(fns: ReadonlyMap<string, readonly Item[]>, mod
     changed = false;
     for (const [id, ss] of sites) {
       const M = modOf.get(id);
-      const mine = entries.get(id) as Map<string, FootprintEntry>;
+      const mine = accs.get(id) as Acc;
       for (const s of ss) {
         for (const t of s.targets) {
           const tm = modules.moduleOf(t);
-          const callee = entries.get(t);
+          const callee = accs.get(t);
           if (tm === undefined || callee === undefined) continue;
-          const calleeEntries = [...callee.values()];
           if (tm === M) {
-            for (const e of calleeEntries) {
+            for (const e of callee.entries.values()) {
               if (e.cls === "escape" && s.caught) continue;
               if (add(mine, e)) changed = true;
             }
-          } else if (!s.caught && calleeEntries.some((e) => e.cls === "escape")) {
+            // A callee whose throw is past the cap has no stored escape entry: the flag still hoists `throws`.
+            const storedEscape = [...callee.entries.values()].some((e) => e.cls === "escape");
+            if (callee.escape && !s.caught && !storedEscape && add(mine, { cls: "escape", label: "throws" })) changed = true;
+            for (const m of callee.modules) {
+              if (!mine.modules.has(m)) {
+                mine.modules.add(m);
+                changed = true;
+              }
+            }
+          } else if (!s.caught && callee.escape) {
             if (add(mine, { cls: "escape", label: `${s.label} may throw` })) changed = true;
           }
         }
@@ -277,10 +320,9 @@ export function computeFootprints(fns: ReadonlyMap<string, readonly Item[]>, mod
     }
   }
   const out = new Map<string, CouplingFootprint>();
-  for (const [id, mine] of entries) {
-    const list = [...mine.values()];
-    const mods = [...new Set(list.filter((e) => e.cls === "cross").map((e) => e.module ?? ""))].filter((m) => m !== "").sort();
-    out.set(id, { entries: list, modules: mods, escape: list.some((e) => e.cls === "escape") });
+  for (const [id, acc] of accs) {
+    const mods = [...acc.modules].filter((m) => m !== "").sort();
+    out.set(id, { entries: [...acc.entries.values()], modules: mods, escape: acc.escape });
   }
   return out;
 }
@@ -317,7 +359,11 @@ export function couplingChart(fnId: string, items: Item[], modules: ModuleMap, f
 /** The chart with every fold whose id is in `open` replaced by the rows it folds, recursively. */
 export function unfold(items: readonly Item[], open: ReadonlySet<string>): Item[] {
   return items.flatMap((item): Item[] => {
-    if (item.t === "step" && item.foldId !== undefined && open.has(item.foldId) && item.fold !== undefined) return unfold(item.fold, open);
+    // An open fold keeps a thin header row (`▾ n local`) before its rows, so it can be folded back.
+    if (item.t === "step" && item.foldId !== undefined && open.has(item.foldId) && item.fold !== undefined && item.open !== true) {
+      const header: Item = { t: "step", role: "marker", label: `▾ ${countItems(item.fold)} local`, foldId: item.foldId, fold: item.fold, open: true };
+      return [header, ...unfold(item.fold, open)];
+    }
     if (item.t === "fork") return [{ ...item, arms: item.arms.map((a) => ({ ...a, body: unfold(a.body, open) })) }];
     if (item.t === "loop") return [{ ...item, body: unfold(item.body, open) }];
     return [item];
@@ -328,10 +374,10 @@ export function unfold(items: readonly Item[], open: ReadonlySet<string>): Item[
  * The coupling chart with every fold in `open` replaced by the rows it folds, laid out again. The chart keeps its coupling
  * (`coupling`). A flow without its pre-layout items (too large to draw) is returned as it is.
  */
-export function unfoldChart(flow: FunctionFlow, open: ReadonlySet<string>): FunctionFlow {
+export function unfoldChart(flow: FunctionFlow, open: ReadonlySet<string>, coupling: FunctionFlow["coupling"] = flow.coupling): FunctionFlow {
   if (flow.items === undefined) return flow;
   const out = layoutFunction({ id: flow.id, name: flow.name, async: flow.async, ...(flow.span ? { span: flow.span } : {}), items: unfold(flow.items, open) });
-  return flow.coupling === undefined ? out : { ...out, coupling: flow.coupling };
+  return coupling === undefined ? out : { ...out, coupling };
 }
 
 /** The module map, every function's chart with call sites that resolve, and every footprint, for a set of IR records. */
