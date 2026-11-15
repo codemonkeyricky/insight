@@ -261,8 +261,8 @@ function Station({ node, cx, cy, resolved }: { node: FlowNode; cx: number; cy: n
 }
 
 /**
- * The coupling class a kept row is drawn in (`cp-<class>`): its own class, or `escape` when it throws out (an escape row, or
- * a row whose hoisted text says `throws` / `may throw`). A cross row stays cross. Undefined for a row with no class.
+ * The coupling class a kept row is drawn in (`cp-<class>`): the row's `coupling`, which is already its strongest class (its
+ * own or hoisted, see coupling.ts ORDER). A hoisted throw does not restyle the row here. Undefined for a row with no class.
  */
 export function couplingClassOf(node: FlowNode): string | undefined {
   // `coupling` is already the strongest class of the row (coupling.ts ORDER), its own or hoisted; the hoisted text is only a

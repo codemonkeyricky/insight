@@ -4,13 +4,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { fireEvent, render, screen, cleanup } from "@testing-library/react";
-import { layoutFunction, unfoldChart, type FunctionFlow } from "@insight/flow";
+import { layoutFunction, type FunctionFlow } from "@insight/flow";
 import { stepAction } from "../src/zoom/stepAction";
 import { isPostStep } from "../src/flowTargets";
 import { DETAIL_KEY, readDetail, writeDetail } from "../src/zoom/detailPref";
 import { LayersPanel, type LayerState } from "../src/components/sheet/LayersPanel";
 import { ZoomStore } from "../src/zoom/scene";
-import { foldsAfter, refold, toggleFold, type Expansion } from "../src/zoom/expand";
+import { refold, toggleFold, type Expansion } from "../src/zoom/expand";
 import { FlowChart, couplingClassOf } from "../src/components/FlowChart";
 import { CouplingSection, type ListBase } from "../src/components/zoom/ExecFunctionPanel";
 
@@ -107,7 +107,7 @@ describe("FlowChart coupling rows", () => {
     expect(html).toContain("cp-cross");
   });
 
-  it("classes an escape row and a hoisted throw as escape", () => {
+  it("draws each row in its coupling class, without restyling a row by a hoisted throw", () => {
     expect(couplingClassOf({ coupling: "escape" } as never)).toBe("escape");
     // A throw hoisted under an io row does not restyle it: the row takes its strongest class (io).
     expect(couplingClassOf({ coupling: "io", hoisted: "may throws" } as never)).toBe("io");
@@ -211,12 +211,64 @@ describe("fold re-anchoring and refold", () => {
     const store = new ZoomStore("p", "coupling");
     (store as unknown as { receivers: Map<string, Promise<{ id: string; name: string }[]>> }).receivers.set("m#run", Promise.resolve([{ id: "w#onmsg", name: "onmsg" }]));
     const e = { fnId: "m#run", anchor: { kind: "box", nodeId: "n1", rect: { x: 0, y: 0, w: 10, h: 10 } }, chart: flow, base: flow } as unknown as Expansion;
-    const folds = foldsAfter([e], "m#run", "F1");
-    if (folds === undefined) throw new Error("expected the fold to open");
-    const chart = await store.withMessages("m#run", unfoldChart(source, new Set(folds), flow.coupling));
-    const opened = refold([e], "m#run", folds, chart, undefined);
+    await store.loadMessages("m#run");
+    const opened = toggleFold([e], "m#run", "F1", source, undefined, flow.coupling, (c) => store.messagesOf("m#run", c));
     const post = opened[0]!.chart.nodes.find((n) => isPostStep(n));
     expect(post?.target).toBe("w#onmsg");
     expect(opened[0]!.chart.coupling?.summary).toBe("io 1");
   });
+});
+
+describe("re-anchoring by span, inline frames and frames cleared", () => {
+  /** A `helper()` call at `line` of a.ts, as a step with its span. */
+  const helperAt = (line: number) => step("helper()", { span: { file: "a.ts", start: [line, 2], end: [line, 10] } });
+
+  /** A coupling chart with a fold of the helper at line 10 and a kept helper at line 20 (same label, different span). */
+  function helperChart() {
+    const items = [{ t: "step" as const, role: "marker" as const, label: "⋯ 1 local", foldId: "F1", fold: [helperAt(10)] }, helperAt(20)];
+    return layoutFunction({ id: "m#run", name: "run", async: false, items });
+  }
+
+  it("closes a box from a fold's row when the fold folds back, rather than hanging from a same-label row", () => {
+    const coupling = helperChart();
+    const opened = toggleFold([{ fnId: "m#run", anchor: { kind: "box", nodeId: "n1", rect: { x: 0, y: 0, w: 10, h: 10 } }, chart: coupling, base: coupling } as unknown as Expansion], "m#run", "F1", coupling, undefined);
+    const inner = opened[0]!.chart.nodes.find((n) => n.label === "helper()" && n.span?.start[0] === 10);
+    if (!inner) throw new Error("expected the line-10 helper row in the open fold");
+    const box = { fnId: "x#helper", anchor: { kind: "step", fnId: "m#run", stepId: inner.id, rect: { x: 0, y: 0, w: 1, h: 1 } }, chart: coupling, base: coupling } as unknown as Expansion;
+    const closed = toggleFold([opened[0]!, box], "m#run", "F1", coupling, undefined);
+    expect(closed[0]!.folds).toEqual([]);
+    expect(closed.some((x) => x.fnId === "x#helper")).toBe(false);
+  });
+
+  it("closes a box anchored to an inline-frame row (id outer/inner) when a fold toggles, rather than matching an outer row", () => {
+    const coupling = helperChart();
+    const opened = toggleFold([{ fnId: "m#run", anchor: { kind: "box", nodeId: "n1", rect: { x: 0, y: 0, w: 10, h: 10 } }, chart: coupling, base: coupling } as unknown as Expansion], "m#run", "F1", coupling, undefined);
+    // The line-20 helper, as a row of an inline frame: same span as the outer row it would otherwise match.
+    const framed = { ...opened[0]!.chart, nodes: opened[0]!.chart.nodes.map((n) => (n.span?.start[0] === 20 ? { ...n, id: "n5/n7" } : n)) };
+    const run = { ...opened[0]!, chart: framed } as Expansion;
+    const box = { fnId: "x#helper", anchor: { kind: "step", fnId: "m#run", stepId: "n5/n7", rect: { x: 0, y: 0, w: 1, h: 1 } }, chart: coupling, base: coupling } as unknown as Expansion;
+    const closed = toggleFold([run, box], "m#run", "F1", coupling, undefined);
+    expect(closed.some((x) => x.fnId === "x#helper")).toBe(false);
+  });
+
+  it("closes a callers box hung from a nested frame when the frame is cleared by a fold", () => {
+    const coupling = foldThenSaveChart();
+    const save = coupling.nodes.find((n) => n.label === "db.save()");
+    if (!save) throw new Error("no db.save row");
+    // The frame: the save call drawn as a nest step (as an inline callee is), so a callers box can hang from it.
+    const framed = { ...coupling, nodes: coupling.nodes.map((n) => (n.id === save.id ? { ...n, shape: "nest" } : n)) } as unknown as FunctionFlow;
+    const run = { fnId: "m#run", anchor: { kind: "box", nodeId: "n1", rect: { x: 0, y: 0, w: 10, h: 10 } }, chart: framed, base: coupling } as unknown as Expansion;
+    const callers = { fnId: "x#callers", kind: "callers", anchor: { kind: "step", fnId: "m#run", stepId: save.id, rect: { x: 0, y: 0, w: 1, h: 1 } }, chart: coupling, base: coupling } as unknown as Expansion;
+    const next = toggleFold([run, callers], "m#run", "F1", coupling, undefined);
+    expect(next.some((x) => x.fnId === "x#callers")).toBe(false);
+  });
+
+  /** A fold of a() and b() before a cross call to db.save(), as in the re-anchoring tests above. */
+  function foldThenSaveChart() {
+    const items = [
+      { t: "step" as const, role: "marker" as const, label: "⋯ 2 local", foldId: "F1", fold: [step("a()"), step("b()")] },
+      step("db.save()", { target: "db#save", coupling: "cross" }),
+    ];
+    return layoutFunction({ id: "m#run", name: "run", async: false, items });
+  }
 });
