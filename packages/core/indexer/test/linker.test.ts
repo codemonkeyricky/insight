@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { UnresolvedRef } from "@insight/ir";
+import type { IRRecord, UnresolvedRef } from "@insight/ir";
 import type { ResolveAnswer, Resolver } from "@insight/sdk";
 import { link, type LinkResolver, type LinkShard } from "../src/linker.js";
 
@@ -95,5 +95,183 @@ describe("linker agreement", () => {
   it("drops an answer whose target does not exist in the graph", async () => {
     const result = await run([table("fixture-a", 5, { "b.h": { targets: ["nope.h"], confidence: "exact" } })], [refEdge("a.cc", "b.h")]);
     expect(result.unresolved).toBe(1);
+  });
+});
+
+describe("build-graph narrowing", () => {
+  const CALL_PROV = { frontend: "fixture", confidence: "heuristic" as const };
+
+  const target = (id: string) =>
+    ({ node: { id, facet: "packaging", kind: "packaging.build-target", attrs: {}, provenance: PROV } }) as const;
+  const owns = (t: string, file: string) =>
+    ({ edge: { from: t, to: file, facet: "packaging", kind: "packaging.target-contains", provenance: PROV } }) as const;
+  const dep = (from: string, to: string) =>
+    ({ edge: { from, to, facet: "packaging", kind: "packaging.dep-edge", provenance: PROV } }) as const;
+  const fn = (id: string, file: string) =>
+    ({ node: { id, facet: "calls", kind: "structure.function", parent: file, attrs: {}, provenance: PROV } }) as const;
+  const call = (from: string, candidates: string[], kind = "calls.call") =>
+    ({ edge: { from, to: { candidates } as never, facet: "calls", kind, provenance: CALL_PROV } }) as const;
+
+  /** Runs link over one shard whose records are all in `shardFile`. */
+  async function linkRecords(records: IRRecord[], shardFile: string, files: string[], narrow?: boolean) {
+    return link({
+      root,
+      files,
+      shards: [{ frontend: "fixture", file: shardFile, records }],
+      resolvers: [],
+      ...(narrow === undefined ? {} : { narrowByBuildGraph: narrow }),
+    });
+  }
+
+  const FILES = ["app/main.cc", "lib/x.cc", "other/o.cc", "mid/b.cc", "deep/c.cc", "unrelated/d.cc", "loose/main.cc", "gen/loose.cc"];
+
+  it("(1) keeps only the candidate the caller's dependency closure can link", async () => {
+    const records: IRRecord[] = [
+      target("//app:a"), target("//lib:x"), target("//other:o"),
+      owns("//app:a", "app/main.cc"), owns("//lib:x", "lib/x.cc"), owns("//other:o", "other/o.cc"),
+      dep("//app:a", "//lib:x"),
+      fn("app/main.cc#main", "app/main.cc"), fn("lib/x.cc#f", "lib/x.cc"), fn("other/o.cc#f", "other/o.cc"),
+      call("app/main.cc#main", ["lib/x.cc#f", "other/o.cc#f"]),
+    ];
+    const result = await linkRecords(records, "app/main.cc", FILES);
+    const edge = result.doc.edges.find((e) => e.kind === "calls.call");
+    expect(edge?.to).toBe("lib/x.cc#f");
+    expect(edge?.provenance.confidence).toBe("inferred");
+    expect(edge?.provenance.resolvedBy).toContain("build-graph");
+    expect(result.narrowed).toBe(1);
+  });
+
+  it("(2) follows dependencies transitively and drops the unrelated candidate", async () => {
+    const records: IRRecord[] = [
+      target("//app:a"), target("//mid:b"), target("//deep:c"), target("//unrelated:d"),
+      owns("//app:a", "app/main.cc"), owns("//mid:b", "mid/b.cc"), owns("//deep:c", "deep/c.cc"), owns("//unrelated:d", "unrelated/d.cc"),
+      dep("//app:a", "//mid:b"), dep("//mid:b", "//deep:c"),
+      fn("app/main.cc#main", "app/main.cc"), fn("deep/c.cc#g", "deep/c.cc"), fn("unrelated/d.cc#g", "unrelated/d.cc"),
+      call("app/main.cc#main", ["deep/c.cc#g", "unrelated/d.cc#g"]),
+    ];
+    const result = await linkRecords(records, "app/main.cc", FILES);
+    const edge = result.doc.edges.find((e) => e.kind === "calls.call");
+    expect(edge?.to).toBe("deep/c.cc#g");
+    expect(result.narrowed).toBe(1);
+  });
+
+  it("(3) leaves the edge unchanged when the caller's file is in no target", async () => {
+    const records: IRRecord[] = [
+      target("//lib:x"), target("//other:o"),
+      owns("//lib:x", "lib/x.cc"), owns("//other:o", "other/o.cc"),
+      fn("loose/main.cc#main", "loose/main.cc"), fn("lib/x.cc#f", "lib/x.cc"), fn("other/o.cc#f", "other/o.cc"),
+      call("loose/main.cc#main", ["lib/x.cc#f", "other/o.cc#f"]),
+    ];
+    const result = await linkRecords(records, "loose/main.cc", FILES);
+    const edge = result.doc.edges.find((e) => e.kind === "calls.call");
+    expect(edge?.to).toEqual({ candidates: ["lib/x.cc#f", "other/o.cc#f"] });
+    expect(edge?.provenance.resolvedBy).toBeUndefined();
+    expect(result.narrowed).toBe(0);
+  });
+
+  it("(4) leaves the edge unchanged when every candidate is outside the closure", async () => {
+    const records: IRRecord[] = [
+      target("//app:a"), target("//lib:x"), target("//other:o"),
+      owns("//app:a", "app/main.cc"), owns("//lib:x", "lib/x.cc"), owns("//other:o", "other/o.cc"),
+      fn("app/main.cc#main", "app/main.cc"), fn("lib/x.cc#f", "lib/x.cc"), fn("other/o.cc#f", "other/o.cc"),
+      call("app/main.cc#main", ["lib/x.cc#f", "other/o.cc#f"]),
+    ];
+    const result = await linkRecords(records, "app/main.cc", FILES);
+    const edge = result.doc.edges.find((e) => e.kind === "calls.call");
+    expect(edge?.to).toEqual({ candidates: ["lib/x.cc#f", "other/o.cc#f"] });
+    expect(edge?.provenance.resolvedBy).toBeUndefined();
+    expect(result.narrowed).toBe(0);
+  });
+
+  it("(5) keeps a candidate whose file no target owns", async () => {
+    const records: IRRecord[] = [
+      target("//app:a"), target("//other:o"),
+      owns("//app:a", "app/main.cc"), owns("//other:o", "other/o.cc"),
+      fn("app/main.cc#main", "app/main.cc"), fn("gen/loose.cc#f", "gen/loose.cc"), fn("other/o.cc#f", "other/o.cc"),
+      call("app/main.cc#main", ["gen/loose.cc#f", "other/o.cc#f"]),
+    ];
+    const result = await linkRecords(records, "app/main.cc", FILES);
+    const edge = result.doc.edges.find((e) => e.kind === "calls.call");
+    expect(edge?.to).toBe("gen/loose.cc#f");
+    expect(result.narrowed).toBe(1);
+  });
+
+  it("(6) does nothing when narrowByBuildGraph is false", async () => {
+    const records: IRRecord[] = [
+      target("//app:a"), target("//lib:x"), target("//other:o"),
+      owns("//app:a", "app/main.cc"), owns("//lib:x", "lib/x.cc"), owns("//other:o", "other/o.cc"),
+      dep("//app:a", "//lib:x"),
+      fn("app/main.cc#main", "app/main.cc"), fn("lib/x.cc#f", "lib/x.cc"), fn("other/o.cc#f", "other/o.cc"),
+      call("app/main.cc#main", ["lib/x.cc#f", "other/o.cc#f"]),
+    ];
+    const result = await linkRecords(records, "app/main.cc", FILES, false);
+    const edge = result.doc.edges.find((e) => e.kind === "calls.call");
+    expect(edge?.to).toEqual({ candidates: ["lib/x.cc#f", "other/o.cc#f"] });
+    expect(edge?.provenance.resolvedBy).toBeUndefined();
+    expect(result.narrowed).toBe(0);
+  });
+
+  it("(7) never touches calls.reference edges", async () => {
+    const records: IRRecord[] = [
+      target("//app:a"), target("//lib:x"), target("//other:o"),
+      owns("//app:a", "app/main.cc"), owns("//lib:x", "lib/x.cc"), owns("//other:o", "other/o.cc"),
+      dep("//app:a", "//lib:x"),
+      fn("app/main.cc#main", "app/main.cc"), fn("lib/x.cc#f", "lib/x.cc"), fn("other/o.cc#f", "other/o.cc"),
+      call("app/main.cc#main", ["lib/x.cc#f", "other/o.cc#f"], "calls.reference"),
+    ];
+    const result = await linkRecords(records, "app/main.cc", FILES);
+    const edge = result.doc.edges.find((e) => e.kind === "calls.reference");
+    expect(edge?.to).toEqual({ candidates: ["lib/x.cc#f", "other/o.cc#f"] });
+    expect(edge?.provenance).toEqual(CALL_PROV);
+    expect(result.narrowed).toBe(0);
+  });
+
+  const targetIn = (id: string, frontend: string) =>
+    ({ node: { id, facet: "packaging", kind: "packaging.build-target", attrs: {}, provenance: { frontend, confidence: "exact" as const } } }) as const;
+  const unresolvedDep = (from: string) =>
+    ({ edge: { from, to: { unresolved: { scheme: "fixture.dep", text: "@external" } }, facet: "packaging", kind: "packaging.dep-edge", provenance: PROV } }) as const;
+
+  it("(a) keeps a candidate whose only owner belongs to a frontend the caller does not share", async () => {
+    const records: IRRecord[] = [
+      targetIn("//app:a", "frontend-x"), targetIn("//other:o", "frontend-x"), targetIn("//hdr:h", "frontend-y"),
+      owns("//app:a", "app/main.cc"), owns("//other:o", "other/o.cc"), owns("//hdr:h", "inc/h.h"),
+      fn("app/main.cc#main", "app/main.cc"), fn("inc/h.h#f", "inc/h.h"), fn("other/o.cc#f", "other/o.cc"),
+      call("app/main.cc#main", ["inc/h.h#f", "other/o.cc#f"]),
+    ];
+    const result = await linkRecords(records, "app/main.cc", [...FILES, "inc/h.h"]);
+    const edge = result.doc.edges.find((e) => e.kind === "calls.call");
+    expect(edge?.to).toBe("inc/h.h#f");
+    expect(result.narrowed).toBe(1);
+  });
+
+  it("(b) leaves the edge unchanged when a dependency of the caller's closure is unresolved", async () => {
+    const records: IRRecord[] = [
+      target("//app:a"), target("//lib:x"), target("//other:o"),
+      owns("//app:a", "app/main.cc"), owns("//lib:x", "lib/x.cc"), owns("//other:o", "other/o.cc"),
+      dep("//app:a", "//lib:x"), unresolvedDep("//app:a"),
+      fn("app/main.cc#main", "app/main.cc"), fn("lib/x.cc#f", "lib/x.cc"), fn("other/o.cc#f", "other/o.cc"),
+      call("app/main.cc#main", ["lib/x.cc#f", "other/o.cc#f"]),
+    ];
+    const result = await linkRecords(records, "app/main.cc", FILES);
+    const edge = result.doc.edges.find((e) => e.kind === "calls.call");
+    expect(edge?.to).toEqual({ candidates: ["lib/x.cc#f", "other/o.cc#f"] });
+    expect(edge?.provenance.resolvedBy).toBeUndefined();
+    expect(result.narrowed).toBe(0);
+  });
+
+  it("(c) keeps a candidate when one shared frontend says linked and the other says not linked", async () => {
+    const records: IRRecord[] = [
+      targetIn("//app:a", "frontend-x"), targetIn("//app:b", "frontend-y"),
+      targetIn("//lib:x", "frontend-x"), targetIn("//lib:y", "frontend-y"), targetIn("//other:o", "frontend-x"),
+      owns("//app:a", "app/main.cc"), owns("//app:b", "app/main.cc"),
+      owns("//lib:x", "lib/x.cc"), owns("//lib:y", "lib/x.cc"), owns("//other:o", "other/o.cc"),
+      dep("//app:a", "//lib:x"),
+      fn("app/main.cc#main", "app/main.cc"), fn("lib/x.cc#f", "lib/x.cc"), fn("other/o.cc#f", "other/o.cc"),
+      call("app/main.cc#main", ["lib/x.cc#f", "other/o.cc#f"]),
+    ];
+    const result = await linkRecords(records, "app/main.cc", FILES);
+    const edge = result.doc.edges.find((e) => e.kind === "calls.call");
+    expect(edge?.to).toBe("lib/x.cc#f");
+    expect(result.narrowed).toBe(1);
   });
 });
