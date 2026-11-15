@@ -212,3 +212,65 @@ describe("review fixes", () => {
     expect(nodes(b, "state.write").length).toBeGreaterThan(depth);
   });
 });
+
+describe("review round 2", () => {
+  let cache: IRBatch[] | undefined;
+  const rv = async (): Promise<IRBatch[]> => {
+    if (cache) return cache;
+    const batches: IRBatch[] = [];
+    const lf = ["states/review2.ts"];
+    const ctx = { root, files: lf, listFiles: () => [...lf], readFile, log: () => undefined };
+    for await (const batch of frontend.extract(ctx)) batches.push(batch);
+    return (cache = batches);
+  };
+  const wr = async (fn: string) =>
+    nodes(await rv(), "state.write")
+      .filter((n) => n.parent === `states/review2.ts#${fn}`)
+      .sort((x, y) => x.span!.start[0] - y.span!.start[0]);
+  const last = async (fn: string) => {
+    const w = await wr(fn);
+    return w[w.length - 1]!.attrs;
+  };
+
+  it("item 1: a throw from the catch and a return from the try reach the finally entry", async () => {
+    expect((await last("Fin.thrown")).from).toEqual(expect.arrayContaining(["S.A", "S.B"]));
+    expect((await last("Fin.returned")).from).toEqual(expect.arrayContaining(["S.C"]));
+  });
+  it("item 1: a break through a finally continues with the state after the finally", async () => {
+    const from = (await last("Fin.broken")).from as string[];
+    expect(from).toContain("S.B");
+    expect(from).not.toContain("S.A");
+  });
+  it("item 2: iterating continues after widening", async () => {
+    expect((await last("Wide.drive")).from).toEqual(["S.Idle", "S.C"]);
+  });
+  it("item 3: a write followed by a throw through the loop back edge (while, for, for-of, for-await)", async () => {
+    for (const fn of ["w", "wAwait", "fr", "fo", "fa"]) {
+      const y = (await wr(`Poll.${fn}`)).find((n) => n.attrs.value === "S.Y")!;
+      expect(y.attrs.from, fn).toEqual(expect.arrayContaining(["S.A"]));
+    }
+  });
+  it("item 4: after a parameter-property default the set is plain unknown", async () => {
+    const [, b] = await wr("PP.constructor");
+    expect(b!.attrs.from).toBeUndefined();
+    expect(b!.attrs.fromEntry).toBeUndefined();
+  });
+  it("item 8: a test through a plain getter narrows the backing field", async () => {
+    const [w] = await wr("Get.go");
+    expect(w!.attrs).toMatchObject({ holder: "states/review2.ts#Get._s", from: ["S.A"] });
+  });
+  it("item 9: a negated test on an entry set never keeps the entry marker", async () => {
+    const [w] = await wr("Neg.go");
+    expect(w!.attrs.fromEntry).toBeUndefined();
+    expect(w!.attrs.from).toEqual(["S.Idle", "S.B", "S.C", "S.D", "S.X", "S.Y"]);
+  });
+  it("item 10: a call to a same-class method that writes the holder resets the set", async () => {
+    for (const fn of ["Reset.go", "Reset.go2"]) {
+      const [w] = await wr(fn);
+      expect(w!.attrs.fromEntry, fn).toBeUndefined();
+      expect(w!.attrs.from, fn).toBeUndefined();
+    }
+    const [p] = await wr("Reset.plain");
+    expect(p!.attrs.fromEntry).toBe(true);
+  });
+});
