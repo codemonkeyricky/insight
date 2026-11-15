@@ -325,7 +325,10 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
       // A parameterised class is not placed: its name alone does not say which specialisation holds the function.
       const scope = classType.namedChildren.some((c) => c.type === "parameter_value_assignment")
         ? undefined
-        : classType.namedChildren.filter((c) => c.type === "simple_identifier").at(-1)?.text;
+        : classType.namedChildren
+            .filter((c) => c.type === "simple_identifier" || c.type === "escaped_identifier")
+            .at(-1)
+            ?.text.trim();
       emitCall(f, nameNode, callee, name, scope !== undefined ? { kind: "scoped", scope } : { kind: "none" });
       return;
     }
