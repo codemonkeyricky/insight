@@ -53,6 +53,12 @@ function batchFor(file, model, fileSet) {
       if (!fileSet.has(f)) continue;
       records.push({ edge: { from: t.id, to: f, facet: "packaging", kind: "packaging.target-contains", provenance: PROV } });
     }
+    // Headers under the target's include directories: inferred, since the target does not list them.
+    const INFERRED = { frontend: FRONTEND_ID, confidence: "inferred" };
+    for (const f of new Set(t.headers ?? [])) {
+      if (!fileSet.has(f)) continue;
+      records.push({ edge: { from: t.id, to: f, facet: "packaging", kind: "packaging.target-contains", provenance: INFERRED } });
+    }
     const seen = new Set();
     for (const link of t.links) {
       const r = resolveLink(model, link.name);

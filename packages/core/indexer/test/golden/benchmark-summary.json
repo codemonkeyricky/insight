@@ -70,7 +70,7 @@
       "filesWithRecords": 127,
       "filesWithErrors": 0,
       "nodes": 76,
-      "edges": 1173
+      "edges": 1185
     },
     {
       "facet": "structure",
@@ -102,7 +102,7 @@
     {
       "id": "lens-calls",
       "status": "ok",
-      "findings": 365
+      "findings": 369
     },
     {
       "id": "lens-concurrency-map",
@@ -112,7 +112,7 @@
     {
       "id": "lens-dependencies",
       "status": "ok",
-      "findings": 23
+      "findings": 1
     },
     {
       "id": "lens-effects",
@@ -164,10 +164,10 @@
     "flow.throw": 8,
     "flow.try": 1,
     "packaging.build-target": 64,
-    "packaging.dep-edge": 98,
+    "packaging.dep-edge": 97,
     "packaging.external": 12,
     "packaging.include": 889,
-    "packaging.target-contains": 186,
+    "packaging.target-contains": 199,
     "structure.file": 225,
     "structure.function": 1038,
     "structure.namespace": 191,

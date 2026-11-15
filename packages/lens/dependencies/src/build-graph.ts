@@ -21,6 +21,8 @@ const BUILD_TARGET = "packaging.build-target";
 const EXTERNAL = "packaging.external";
 const PACKAGE = "structure.package";
 const FILE = "structure.file";
+/** Header files, by extension. A target that owns one can be used through includes. */
+const HEADER_FILE = /\.(h|hh|hpp|hxx|inc|ipp)$/i;
 
 /** A target's dependency closure: the targets and externals it reaches, and whether a dependency is unresolved. */
 interface Reach {
@@ -302,17 +304,30 @@ export function buildGraphRules(view: View, config: BuildGraphConfig): BuildGrap
         return files;
       };
 
+      // Files that define main(). A target linked for its entry point is used by no call, so it is not unused.
+      const mainFiles = new Set<NodeId>();
+      for (const n of view.nodes({ kind: "structure.function" })) {
+        if (n.attrs.name !== "main") continue;
+        const f = fileOf(n.id);
+        if (f !== undefined) mainFiles.add(f);
+      }
+
       for (const t of [...targetIds].sort()) {
         const tFiles = filesOf.get(t);
         if (!tFiles || tFiles.size === 0) continue;
         const includeTo = new Set<NodeId>();
         for (const f of tFiles) for (const x of includesByFile.get(f) ?? []) includeTo.add(x);
+        const definesMain = [...tFiles].some((f) => mainFiles.has(f));
 
         for (const u of [...new Set(deps.get(t) ?? [])].sort()) {
           if (u === t) continue;
           const uFiles = filesOf.get(u);
           if (!uFiles || uFiles.size === 0) continue;
           if ([...uFiles].some((f) => includeTo.has(f))) continue;
+          if (!definesMain && [...uFiles].some((f) => mainFiles.has(f))) continue;
+          // A provider with no header is used only by linking (a main() from a macro, static registration), which
+          // includes and calls cannot show.
+          if (![...uFiles].some((f) => HEADER_FILE.test(f))) continue;
           const reached = reachedFiles(t);
           if ([...uFiles].some((f) => reached.has(f))) continue;
           emit(

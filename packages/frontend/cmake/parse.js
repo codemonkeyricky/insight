@@ -20,10 +20,16 @@ const MAX_CALL_DEPTH = 16;
 /** Most macro and function calls one file may run, against a recursion that branches at every level. */
 const MAX_INVOCATIONS = 10000;
 /** Link items that are system libraries rather than targets (compared in lower case). Flags start with "-". */
-const SYSTEM_LIBS = new Set(["pthread", "m", "dl", "rt", "c", "stdc++", "atomic", "ws2_32", "shlwapi"]);
+const SYSTEM_LIBS = new Set(["pthread", "m", "dl", "rt", "c", "stdc++", "atomic", "ws2_32", "shlwapi", "kstat"]);
 /** Test executables by convention, from their name. */
 const TEST_NAME = /(^|_)tests?$|^test_/;
 const VERSION = /^\d+(\.\d+)*$/;
+/** A link item that is a bare library name (no path, generator expression or namespace). */
+const BARE_NAME = /^[A-Za-z_][A-Za-z0-9_+.-]*$/;
+/** Header files a target's include directories own. */
+const HEADER = /\.(h|hh|hpp|hxx|inc|ipp)$/i;
+/** Variables a directory argument may use that the reader resolves. */
+const KNOWN_VARS = new Set(["PROJECT_SOURCE_DIR", "CMAKE_SOURCE_DIR", "CMAKE_CURRENT_SOURCE_DIR", "CMAKE_CURRENT_LIST_DIR"]);
 
 export function isCMakeFile(path) {
   return posix.basename(path) === "CMakeLists.txt";
@@ -170,6 +176,14 @@ function nameOf(arg, vars) {
   return arg === undefined ? "" : (expand([arg], vars)[0] ?? "");
 }
 
+/** True when a raw argument names a ${VAR} that is neither a variable set so far nor one the reader resolves. */
+function hasUnknownVar(text, vars) {
+  for (const m of text.matchAll(/\$\{([A-Za-z0-9_]+)\}/g)) {
+    if (!vars.has(m[1]) && !KNOWN_VARS.has(m[1])) return true;
+  }
+  return false;
+}
+
 /** A path as CMake sees it: a leading slash is project-root relative, anything else is relative to the directory. */
 function resolvePath(p, dir) {
   if (p.startsWith("/")) return joinPath(p.replace(/^\/+/, ""));
@@ -283,10 +297,24 @@ function runCommands(cmds, vars, ctx, depth) {
         ctx.out.externals.push({ id: `cmake:pkg:${pkg}`, name: pkg, source: "find_package", version, span: cmd.span });
         break;
       }
+      case "externalproject_add": {
+        // An ExternalProject builds code outside the parsed tree, so a bare link name may be one of its libraries.
+        ctx.out.outside = true;
+        break;
+      }
+      case "add_subdirectory": {
+        // A subdirectory outside the parsed tree (or one named by an unresolved variable) is code the reader cannot see.
+        const list = expand(args, vars);
+        const dir = list[0] === undefined ? undefined : resolvePath(list[0], ctx.dir);
+        if (dir === undefined || dir.startsWith("..")) ctx.out.outside = true;
+        else ctx.out.subdirs.push(dir);
+        break;
+      }
       case "fetchcontent_declare": {
         const list = expand(args, vars);
         const name = list[0];
         if (name === undefined) break;
+        ctx.out.outside = true;
         // The value after a keyword, read from the first occurrence after the name.
         const opt = (key) => {
           const i = list.findIndex((v, k) => k > 0 && v.toUpperCase() === key);
@@ -332,16 +360,20 @@ function runCommands(cmds, vars, ctx, depth) {
         // The scope keyword applies to the items after it, so one command may mix PUBLIC and PRIVATE.
         const name = nameOf(args[0], vars);
         let scope = "PUBLIC";
-        for (const v of expand(args.slice(1), vars)) {
-          const u = v.toUpperCase();
-          if (u === "PUBLIC" || u === "PRIVATE" || u === "INTERFACE") {
-            scope = u;
-            continue;
+        for (const raw of args.slice(1)) {
+          // An item naming a variable the reader does not know is unresolvable, and is skipped rather than read as the root.
+          if (hasUnknownVar(raw.text, vars)) continue;
+          for (const v of expand([raw], vars)) {
+            const u = v.toUpperCase();
+            if (u === "PUBLIC" || u === "PRIVATE" || u === "INTERFACE") {
+              scope = u;
+              continue;
+            }
+            if (u === "SYSTEM" || u === "BEFORE" || u === "AFTER") continue;
+            const d = includeItem(v, ctx.dir);
+            if (d === undefined) continue;
+            ctx.out.ops.push({ op: "include", name, usage: scope !== "PRIVATE", local: scope !== "INTERFACE", dir: d });
           }
-          if (u === "SYSTEM" || u === "BEFORE" || u === "AFTER") continue;
-          const d = includeItem(v, ctx.dir);
-          if (d === undefined) continue;
-          ctx.out.ops.push({ op: "include", name, usage: scope !== "PRIVATE", local: scope !== "INTERFACE", dir: d });
         }
         break;
       }
@@ -413,7 +445,8 @@ function readFile(dir, buildFile, text, files) {
     ["CMAKE_SOURCE_DIR", ["/"]],
     ["PROJECT_SOURCE_DIR", ["/"]],
   ]);
-  const out = { defs: [], ops: [], externals: [], aliases: [], tests: [], project: undefined };
+  // outside: the file fetches or builds code the reader cannot see. subdirs: add_subdirectory directories, checked later.
+  const out = { defs: [], ops: [], externals: [], aliases: [], tests: [], project: undefined, outside: false, subdirs: [] };
   const ctx = { dir, buildFile, files, out, callables: new Map(), invocations: 0 };
   runCommands(parseCommands(text), vars, ctx, 0);
   return out;
@@ -492,9 +525,11 @@ export function buildCmakeModel(texts, files) {
   const projects = new Map();
   const testCommands = [];
   const allOps = [];
+  let declaredOutside = false;
   for (const file of [...texts.keys()].sort()) {
     const out = readFile(dirOf(file), file, texts.get(file), files);
     if (out.project !== undefined) projects.set(file, out.project);
+    if (out.outside || out.subdirs.some((d) => !files.some((f) => f.startsWith(`${d}/`)))) declaredOutside = true;
     for (const d of out.defs) {
       if (targets.has(d.name)) continue;
       targets.set(d.name, {
@@ -525,6 +560,15 @@ export function buildCmakeModel(texts, files) {
     if (t !== undefined) t.isTest = true;
   }
   for (const t of targets.values()) t.output = outputOfTarget(t);
+  // A bare name that is no target, alias or declared external is a system library (pthread, m, kstat...) when the
+  // project fetches or builds nothing from outside the tree. Such a link is no dependency, so it is not kept.
+  const externalNames = new Set([...externals.values()].map((e) => e.name.toLowerCase()));
+  const isSystemLink = (name) =>
+    !declaredOutside &&
+    BARE_NAME.test(name) &&
+    !aliases.has(name) &&
+    !targets.has(followAlias(aliases, name)) &&
+    !externalNames.has(name.toLowerCase());
   for (const op of allOps) {
     const t = targets.get(op.name);
     if (!t) continue;
@@ -532,8 +576,25 @@ export function buildCmakeModel(texts, files) {
     else if (op.op === "include") {
       if (op.usage) t.publicDirs.push(op.dir);
       if (op.local) t.privateDirs.push(op.dir);
+      t.includeDirs ??= [];
+      t.includeDirs.push(op.dir);
     } else if (op.op === "link") {
-      for (const name of op.items) t.links.push({ name, propagates: op.propagates });
+      for (const name of op.items) {
+        if (isSystemLink(name)) continue;
+        t.links.push({ name, propagates: op.propagates });
+      }
+    }
+  }
+  // Header ownership: a header under a target's include directory (not the project root) belongs to that target,
+  // as the include directory is how its sources and its users reach it. Inferred, since no file lists them.
+  for (const t of targets.values()) {
+    const dirs = [...new Set(t.includeDirs ?? [])].filter((d) => d !== "" && !d.startsWith(".."));
+    t.headers = [];
+    if (dirs.length === 0) continue;
+    const owned = new Set(t.sources);
+    for (const f of files) {
+      if (!HEADER.test(f) || owned.has(f)) continue;
+      if (dirs.some((d) => f.startsWith(`${d}/`))) t.headers.push(f);
     }
   }
   return model;

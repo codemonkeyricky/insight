@@ -214,7 +214,9 @@ function graph(spec: GraphSpec) {
   for (const x of spec.externals ?? []) {
     nodes.push(inFrontend(fx.node(x, "packaging", "packaging.external", { attrs: { name: x, manager: "bazel", source: "bzlmod" } }), "bazel"));
   }
-  for (const [id, file] of spec.functions ?? []) nodes.push(fx.node(id, "structure", "structure.function", { parent: file }));
+  for (const [id, file] of spec.functions ?? []) {
+    nodes.push(fx.node(id, "structure", "structure.function", { parent: file, attrs: { name: id.split("#")[1] } }));
+  }
 
   const edges = [];
   for (const t of spec.targets) {
@@ -328,7 +330,7 @@ describe("build-graph: unused dependency", () => {
     const result = await runGraph({
       ...base,
       targets: [
-        { id: "//lib:a", files: ["lib/a.cc"] },
+        { id: "//lib:a", files: ["lib/a.cc", "lib/a.h"] },
         { id: "//app:main", files: ["app/main.cc"], deps: ["//lib:a"] },
       ],
       includes: [],
@@ -363,6 +365,54 @@ describe("build-graph: unused dependency", () => {
       calls: [["app/main.cc#m", "lib/mid.cc#g"], ["lib/mid.cc#g", "lib/a.cc#f"]],
     });
     expect(rulesOf(result, "unused")).toEqual([]);
+  });
+
+  it("does not report a dependency whose files define main(), since it is linked for its entry point", async () => {
+    const result = await runGraph({
+      files: ["app/main.cc", "lib/entry.cc"],
+      targets: [
+        { id: "//lib:entry", files: ["lib/entry.cc"] },
+        { id: "//test:t", files: ["app/main.cc"], deps: ["//lib:entry"] },
+      ],
+      functions: [["lib/entry.cc#main", "lib/entry.cc"]],
+    });
+    expect(rulesOf(result, "unused")).toEqual([]);
+  });
+
+  it("does not report a dependency that owns no header, since it is used only by linking", async () => {
+    const result = await runGraph({
+      files: ["app/main.cc", "lib/impl.cc"],
+      targets: [
+        { id: "//lib:impl", files: ["lib/impl.cc"] },
+        { id: "//app:main", files: ["app/main.cc"], deps: ["//lib:impl"] },
+      ],
+      includes: [],
+    });
+    expect(rulesOf(result, "unused")).toEqual([]);
+  });
+
+  it("still reports a dependency that owns a header and that no use reaches", async () => {
+    const result = await runGraph({
+      files: ["app/main.cc", "lib/impl.cc", "lib/impl.h"],
+      targets: [
+        { id: "//lib:impl", files: ["lib/impl.cc", "lib/impl.h"] },
+        { id: "//app:main", files: ["app/main.cc"], deps: ["//lib:impl"] },
+      ],
+      includes: [],
+    });
+    expect(rulesOf(result, "unused").map((f) => f.id)).toEqual(["unused://app:main>//lib:impl"]);
+  });
+
+  it("still reports a main() dependency when the depending target defines main() itself", async () => {
+    const result = await runGraph({
+      files: ["app/main.cc", "lib/entry.cc", "lib/entry.h"],
+      targets: [
+        { id: "//lib:entry", files: ["lib/entry.cc", "lib/entry.h"] },
+        { id: "//app:main", files: ["app/main.cc"], deps: ["//lib:entry"] },
+      ],
+      functions: [["lib/entry.cc#main", "lib/entry.cc"], ["app/main.cc#main", "app/main.cc"]],
+    });
+    expect(rulesOf(result, "unused").map((f) => f.id)).toEqual(["unused://app:main>//lib:entry"]);
   });
 
   it("reports an unused external that some include maps to", async () => {
@@ -453,7 +503,7 @@ describe("build-graph: configuration and output", () => {
   const spec: GraphSpec = {
     ...base,
     targets: [
-      { id: "//lib:a", files: ["lib/a.cc"] },
+      { id: "//lib:a", files: ["lib/a.cc", "lib/a.h"] },
       { id: "//lib/b:x", files: ["lib/b/x.h"], visibility: ["//visibility:private"] },
       { id: "//app:main", files: ["app/main.cc"], deps: ["//lib:a", "//lib/b:x"] },
     ],

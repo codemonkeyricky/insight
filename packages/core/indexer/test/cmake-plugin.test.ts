@@ -48,7 +48,7 @@ describe("frontend-cmake through the loader", () => {
   it("records target sources, the link between targets, and a link it cannot resolve", () => {
     const edges = records.flatMap((r) => ("edge" in r ? [r.edge] : []));
     const contains = edges.filter((e) => e.kind === "packaging.target-contains" && e.from === "cmake://lib:shapes").map((e) => e.to).sort();
-    expect(contains).toEqual(["lib/include/shapes/area.h", "lib/src/shapes.cc"]);
+    expect(contains).toEqual(["lib/include/shapes/area.h", "lib/src/shapes.cc", "lib/src/shapes_internal.h"]);
     expect(edges).toContainEqual(expect.objectContaining({ kind: "packaging.dep-edge", from: "cmake://:app", to: "cmake://lib:shapes" }));
     expect(edges).toContainEqual(
       expect.objectContaining({
@@ -129,6 +129,7 @@ describe("frontend-cmake macros and functions", () => {
         "  target_link_libraries(${name}_lib PUBLIC ${name}_dep)",
         "endmacro()",
         "outer(net)",
+        "FetchContent_Declare(net_dep GIT_REPOSITORY https://example.com/net.git)",
       ].join("\n"),
       ["net_lib.cpp"],
     );
@@ -191,5 +192,81 @@ describe("frontend-cmake macros and functions", () => {
       "last.cc",
     ]);
     expect([...targets.keys()].sort()).toEqual(["first", "last"]);
+  });
+});
+
+describe("frontend-cmake header ownership and system libraries", () => {
+  /** The model for one top-level CMakeLists.txt (plus any extra files) over the given file list. */
+  const modelOf = (text: string, files: string[], extra: Record<string, string> = {}) =>
+    buildCmakeModel(new Map([["CMakeLists.txt", text], ...Object.entries(extra)]), ["CMakeLists.txt", ...Object.keys(extra), ...files]);
+
+  const benchmarkLike = `
+project(bm CXX)
+add_library(benchmark src/a.cc)
+target_include_directories(benchmark PUBLIC
+  $<BUILD_INTERFACE:\${PROJECT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+target_include_directories(benchmark PRIVATE \${BUILD_ONLY_DIR}/gen)
+`;
+  const benchmarkFiles = ["src/a.cc", "include/benchmark/benchmark.h", "include/benchmark/benchmark_api.h", "include/benchmark/notes.txt"];
+
+  it("owns every header under a PUBLIC BUILD_INTERFACE include directory, and no other header", () => {
+    const t = modelOf(benchmarkLike, benchmarkFiles).targets.get("benchmark");
+    expect(t?.headers.sort()).toEqual(["include/benchmark/benchmark.h", "include/benchmark/benchmark_api.h"]);
+  });
+
+  it("does not own headers through the project root or a skipped unknown-variable item", () => {
+    const t = modelOf('add_library(lib a.cc)\ntarget_include_directories(lib PUBLIC ${PROJECT_SOURCE_DIR})\n', ["a.h", "x/y.h"]).targets.get("lib");
+    expect(t?.headers).toEqual([]);
+  });
+
+  it("keeps a header the target already lists as a source out of its owned headers", () => {
+    const t = modelOf(
+      "add_library(lib include/x.h include/y.cc)\ntarget_include_directories(lib PUBLIC include)\n",
+      ["include/x.h", "include/y.cc"],
+    ).targets.get("lib");
+    expect(t?.headers).toEqual([]);
+  });
+
+  it("resolves the include directory of benchmark/benchmark.h back to its header", () => {
+    const model = modelOf(benchmarkLike, benchmarkFiles);
+    expect(model.targets.get("benchmark")?.publicDirs).toEqual(["include"]);
+  });
+
+  it("drops a bare unknown library with no FetchContent or ExternalProject (a system library)", () => {
+    const t = modelOf("add_library(a a.cc)\ntarget_link_libraries(a PRIVATE kstat fancylib)\n", ["a.cc"]).targets.get("a");
+    expect(t?.links).toEqual([]);
+  });
+
+  it("keeps a bare unknown library unresolved when the project declares FetchContent", () => {
+    const t = modelOf(
+      'add_library(a a.cc)\ntarget_link_libraries(a PRIVATE fancylib)\nFetchContent_Declare(other GIT_REPOSITORY https://x)\n',
+      ["a.cc"],
+    ).targets.get("a");
+    expect(t?.links.map((l) => l.name)).toEqual(["fancylib"]);
+  });
+
+  it("keeps a bare unknown library unresolved when a subdirectory is outside the parsed tree", () => {
+    const t = modelOf(
+      "add_library(a a.cc)\ntarget_link_libraries(a PRIVATE fancylib)\nadd_subdirectory(\${GOOGLETEST_SOURCE_DIR} build EXCLUDE_FROM_ALL)\n",
+      ["a.cc"],
+    ).targets.get("a");
+    expect(t?.links.map((l) => l.name)).toEqual(["fancylib"]);
+  });
+
+  it("keeps a bare name declared as an ALIAS of an external, since the project declares it", () => {
+    const model = modelOf(
+      "find_package(GTest)\nadd_library(gmock_main ALIAS GTest::gmock_main)\nadd_library(t t.cc)\ntarget_link_libraries(t PRIVATE gmock_main)\n",
+      ["t.cc"],
+    );
+    expect(model.targets.get("t")?.links.map((l) => l.name)).toEqual(["gmock_main"]);
+  });
+
+  it("keeps a bare name that is a declared external or a project target", () => {
+    const model = modelOf(
+      "find_package(Threads)\nadd_library(core core.cc)\nadd_library(app app.cc)\ntarget_link_libraries(app PRIVATE Threads core)\n",
+      ["core.cc", "app.cc"],
+    );
+    expect(model.targets.get("app")?.links.map((l) => l.name)).toEqual(["Threads", "core"]);
   });
 });

@@ -319,4 +319,44 @@ describe("build-graph narrowing", () => {
     expect(edge?.to).toBe("lib/x.cc#f");
     expect(result.narrowed).toBe(1);
   });
+
+  /** A structure.type node in a file, and a method whose parent is that type. */
+  const typeIn = (id: string, file: string) =>
+    ({ node: { id, facet: "calls", kind: "structure.type", parent: file, attrs: {}, provenance: PROV } }) as const;
+  const method = (id: string, parent: string) =>
+    ({ node: { id, facet: "calls", kind: "structure.function", parent, attrs: {}, provenance: PROV } }) as const;
+
+  it("(d) keeps a method defined in a target downstream of the caller, and drops an unrelated sibling method", async () => {
+    // lib depends on app, so lib's closure contains the caller's owner: the Fixture::Run override is linked by
+    // virtual dispatch even though app does not link lib. The other target's method has no such link and is dropped.
+    const records: IRRecord[] = [
+      target("//app:a"), target("//lib:x"), target("//other:o"),
+      owns("//app:a", "app/main.cc"), owns("//lib:x", "lib/x.cc"), owns("//other:o", "other/o.cc"),
+      dep("//lib:x", "//app:a"),
+      fn("app/main.cc#main", "app/main.cc"),
+      typeIn("lib/x.cc#Fixture", "lib/x.cc"), method("lib/x.cc#Fixture::Run", "lib/x.cc#Fixture"),
+      typeIn("other/o.cc#Other", "other/o.cc"), method("other/o.cc#Other::Run", "other/o.cc#Other"),
+      call("app/main.cc#main", ["lib/x.cc#Fixture::Run", "other/o.cc#Other::Run"]),
+    ];
+    const result = await linkRecords(records, "app/main.cc", FILES);
+    const edge = result.doc.edges.find((e) => e.kind === "calls.call");
+    expect(edge?.to).toBe("lib/x.cc#Fixture::Run");
+    expect(edge?.provenance.resolvedBy).toContain("build-graph");
+    expect(result.narrowed).toBe(1);
+  });
+
+  it("(e) drops a free function defined downstream of the caller", async () => {
+    // app/peer.cc is in the caller's own target, so it is linked and survives; the downstream free function is not.
+    const records: IRRecord[] = [
+      target("//app:a"), target("//lib:x"),
+      owns("//app:a", "app/main.cc"), owns("//app:a", "app/peer.cc"), owns("//lib:x", "lib/x.cc"),
+      dep("//lib:x", "//app:a"),
+      fn("app/main.cc#main", "app/main.cc"), fn("lib/x.cc#helper", "lib/x.cc"), fn("app/peer.cc#g", "app/peer.cc"),
+      call("app/main.cc#main", ["lib/x.cc#helper", "app/peer.cc#g"]),
+    ];
+    const result = await linkRecords(records, "app/main.cc", [...FILES, "app/peer.cc"]);
+    const edge = result.doc.edges.find((e) => e.kind === "calls.call");
+    expect(edge?.to).toBe("app/peer.cc#g");
+    expect(result.narrowed).toBe(1);
+  });
 });

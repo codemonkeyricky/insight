@@ -70,6 +70,21 @@ export function narrowByBuildGraph(nodes: ReadonlyMap<NodeId, IRNode>, edges: Sh
     return grouped;
   };
 
+  /** A method: its parent chain reaches a structure.type before the structure.file. */
+  const isMethod = (id: NodeId): boolean => {
+    const seen = new Set<NodeId>();
+    let cur = nodes.get(id)?.parent;
+    while (cur !== undefined && !seen.has(cur)) {
+      seen.add(cur);
+      const n = nodes.get(cur);
+      if (!n) return false;
+      if (n.kind === "structure.type") return true;
+      if (n.kind === "structure.file") return false;
+      cur = n.parent;
+    }
+    return false;
+  };
+
   const closures = new Map<NodeId, Reach>();
   const closureOf = (target: NodeId): Reach => {
     const cached = closures.get(target);
@@ -114,11 +129,16 @@ export function narrowByBuildGraph(nodes: ReadonlyMap<NodeId, IRNode>, edges: Sh
       reachByFrontend.set(f, reach);
     }
 
-    /** Keep unless some shared frontend says not linked and none says linked. */
+    /**
+     * Keep unless some shared frontend says not linked and none says linked. A method that lives downstream of the
+     * caller (one of the caller's owners is in a candidate owner's closure) is linked too: library code reaches
+     * downstream overrides and callbacks by virtual dispatch, though the library does not link them.
+     */
     const keeps = (candidate: NodeId): boolean => {
       const file = fileOf(candidate);
       if (file === undefined) return true;
       const candidateByFrontend = ownersByFrontend(file);
+      const method = isMethod(candidate);
       let shared = 0;
       for (const [f, reach] of reachByFrontend) {
         const candidateOwners = candidateByFrontend.get(f);
@@ -126,6 +146,12 @@ export function narrowByBuildGraph(nodes: ReadonlyMap<NodeId, IRNode>, edges: Sh
         shared++;
         if (reach.open) return true;
         for (const t of candidateOwners) if (reach.targets.has(t)) return true;
+        if (method) {
+          const callerOwners = callerByFrontend.get(f) ?? new Set<NodeId>();
+          for (const t of candidateOwners) {
+            for (const s of closureOf(t).targets) if (callerOwners.has(s)) return true;
+          }
+        }
       }
       return shared === 0;
     };
