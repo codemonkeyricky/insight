@@ -1243,6 +1243,23 @@ button.add-submit:disabled { background: var(--faint); color: var(--graphite); b
 .pipe-head h2 { font-size: var(--t-lg); margin: 0; }
 .pipe-points { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px 22px; margin: 10px 0 0; padding: 0; list-style: none; }
 .pipe-points li { min-width: 0; overflow-wrap: anywhere; }
+.pipe-seqs { display: grid; gap: 12px; margin-bottom: 12px; }
+.pipe-seqs.capped { max-height: 45vh; overflow-y: auto; }
+.pipe-seqs.stale { opacity: 0.6; }
+.pipe-seq { padding: 12px 14px; border-radius: var(--r-md); background: var(--chip-solid); box-shadow: 0 0 0 0.5px var(--hair); min-width: 0; }
+.pipe-seq-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; margin-bottom: 10px; overflow-wrap: anywhere; }
+.pipe-seq-h { margin: 0; font-weight: inherit; }
+.pipe-seq-strip { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px 22px; margin: 0; padding: 0; list-style: none; }
+.pipe-seq-card { min-width: 0; width: 220px; max-width: 100%; padding: 8px 10px; border-radius: var(--r-sm); background: var(--raised); box-shadow: 0 0 0 1px var(--line); overflow-wrap: anywhere; }
+/* The arrow trails the card it leaves, so a wrapped row starts flush with the first. Empty alt text: not read aloud. */
+.pipe-seq-strip > li:not(:last-child) { position: relative; }
+.pipe-seq-strip > li:not(:last-child)::after { content: "→"; content: "→" / ""; position: absolute; right: -17px; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: var(--t-md); }
+.pipe-seq-title { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.pipe-seq-n { flex: none; }
+.pipe-seq-name { color: var(--accent-text); font-size: var(--t-md); min-width: 0; }
+.pipe-seq-where { margin: 2px 0 4px; }
+.pipe-seq-card .sysv-sites { margin-top: 2px; }
+.pipe-seq-more { align-self: center; }
 .sysv.expanded { position: fixed; inset: 0; z-index: 60; padding: 12px 16px; background: var(--sheet); }
 .sysv.expanded .sysv-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .sysv.expanded .sysv-stage { flex: 1 1 auto; height: auto; min-height: 0; }

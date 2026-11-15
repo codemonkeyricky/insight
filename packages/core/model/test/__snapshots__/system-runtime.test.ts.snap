@@ -566,6 +566,22 @@ exports[`runtime model: TypeScript fixture > matches the committed snapshot of t
       "confidence": "exact",
       "count": 1,
       "from": "thread:main:entry:node:src/main.ts|src",
+      "id": "thread:main:entry:node:src/main.ts|src>spawns>thread:src/main.ts@spawn:10|src",
+      "label": "spawns Worker",
+      "sites": [
+        {
+          "file": "src/main.ts",
+          "fn": "src/main.ts#main",
+          "line": 11,
+        },
+      ],
+      "to": "thread:src/main.ts@spawn:10|src",
+      "verb": "spawns",
+    },
+    {
+      "confidence": "exact",
+      "count": 1,
+      "from": "thread:main:entry:node:src/main.ts|src",
       "id": "thread:main:entry:node:src/main.ts|src>spawns>thread:src/main.ts@spawn:20",
       "label": "spawns Worker",
       "sites": [

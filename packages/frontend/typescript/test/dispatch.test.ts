@@ -114,7 +114,7 @@ describe("interface and abstract dispatch", () => {
     expect(targetText(persist as IREdge)).toBe(
       "[src/repo.ts#Cache.save, src/repo.ts#FastMem.save, src/repo.ts#MemRepo.save, src/repo.ts#SqlRepo.save]",
     );
-    expect(persist?.attrs).toEqual({ callee: "r.save", how: "interface" });
+    expect(persist?.attrs).toEqual({ callee: "r.save", how: "interface", callEnd: expect.any(Array) });
     expect(persist?.provenance.confidence).toBe("heuristic");
   });
 
@@ -134,14 +134,14 @@ describe("interface and abstract dispatch", () => {
     const persistStore = callFrom(edges, "src/use.ts#persistStore", "s.save");
     expect(persistStore?.kind).toBe("calls.call");
     expect(targetText(persistStore as IREdge)).toBe("[src/repo.ts#Cache.save]");
-    expect(persistStore?.attrs).toEqual({ callee: "s.save", how: "interface" });
+    expect(persistStore?.attrs).toEqual({ callee: "s.save", how: "interface", callEnd: expect.any(Array) });
   });
 
   it("gives a receiver typed by the class itself an ordinary edge to its own method, not candidates", async () => {
     const { edges } = await extract();
     const direct = callFrom(edges, "src/use.ts#direct", "s.save");
     expect(targetText(direct as IREdge)).toBe("src/repo.ts#SqlRepo.save");
-    expect(direct?.attrs).toEqual({ callee: "s.save" });
+    expect(direct?.attrs).toEqual({ callee: "s.save", callEnd: expect.any(Array) });
     expect(direct?.provenance.confidence).toBe("exact");
   });
 
@@ -165,7 +165,7 @@ describe("interface and abstract dispatch", () => {
     expect(to.candidates).toHaveLength(32);
     expect(to.candidates[0]).toBe("src/wide.ts#W00.go");
     expect(to.candidates[31]).toBe("src/wide.ts#W31.go");
-    expect(sweep.attrs).toEqual({ callee: "w.go", how: "interface", truncated: true });
+    expect(sweep.attrs).toEqual({ callee: "w.go", how: "interface", callEnd: expect.any(Array), truncated: true });
   });
 
   it("leaves truncated off an edge that is under the cap", async () => {
@@ -216,7 +216,7 @@ describe("object-literal implementers of an interface", () => {
     const call = callFrom(edges, "src/use.ts#viaFactory", "c.bump") as IREdge;
     expect(call?.kind).toBe("calls.call");
     expect(targetText(call)).toContain("src/factory.ts#makeCounter.bump");
-    expect(call.attrs).toEqual({ callee: "c.bump", how: "interface" });
+    expect(call.attrs).toEqual({ callee: "c.bump", how: "interface", callEnd: expect.any(Array) });
   });
 
   it("(b) an interface-annotated variable and a satisfies literal are both candidates", async () => {

@@ -54,6 +54,7 @@ function sample(): PipelineModel {
     host: H,
     driver: { id: `${H}/src/run.ts#runIndex`, name: "runIndex" },
     points,
+    sequences: [],
     columns: [[BAZEL, CPP, TS], [H, IR, SDK], [LA, LB]],
     components: [BAZEL, CPP, TS, H, IR, SDK, LA, LB].map(comp),
     edges: [
@@ -70,7 +71,7 @@ function sample(): PipelineModel {
   };
 }
 
-const EMPTY: PipelineModel = { scope: "packages/lens", points: [], columns: [], components: [], edges: [], omitted: 0, dropped: 0, reason: "no extension points in this scope" };
+const EMPTY: PipelineModel = { scope: "packages/lens", points: [], sequences: [], columns: [], components: [], edges: [], omitted: 0, dropped: 0, reason: "no extension points in this scope" };
 
 describe("pipeline titles and columns", () => {
   it("names the columns: points by label and count, the host by its package", () => {
@@ -172,6 +173,16 @@ describe("pipeline empty state", () => {
   it("shows the parent-scope message when the model gives a reason", () => {
     const html = renderToStaticMarkup(<PipelineDiagram id="p" pipeline={EMPTY} tests={false} onTests={() => {}} />);
     expect(html).toContain("No extension points in this scope. Pick a parent scope.");
+  });
+
+  it("draws a capped sequence strip above the diagram and its toolbar when there are points and sequences", () => {
+    const st = (order: number, name: string) => ({ fn: `${H}/src/s${order}.ts#${name}`, name, file: `${H}/src/s${order}.ts`, order, site: { file: `${H}/src/run.ts`, line: 5 + order } });
+    const seqs = [{ id: `${H}/src/run.ts#runIndex`, name: "runIndex", file: `${H}/src/run.ts`, stages: [st(0, "a"), st(1, "b"), st(2, "c"), st(3, "d")], more: 0, files: 4, score: 10 }];
+    const html = renderToStaticMarkup(<PipelineDiagram id="p" pipeline={{ ...sample(), sequences: seqs }} tests={false} onTests={() => {}} />);
+    expect(html).toContain('class="pipe-seqs capped"');
+    expect(html).toContain("sysv-stage");
+    expect(html).toContain("Show tests");
+    expect(html.indexOf("pipe-seqs")).toBeLessThan(html.indexOf("sysv-bar"));
   });
 
   it("draws the pipeline legend and the summary panel with nothing selected", () => {

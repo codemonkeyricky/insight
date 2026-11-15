@@ -8,6 +8,7 @@ import type { ProjectModel, Rel } from "./model.js";
 import { normalizeScope, ROOT_SCOPE } from "./scope.js";
 import { componentOf, nodePackageRoots, packageRoots, systemModel, type Site, type SystemComponent, type SystemOptions } from "./system.js";
 import { scopeView } from "./view.js";
+import { enclosingFn, sequencePipelines, type PipelineSequence } from "./sequence.js";
 
 export type PipelineOptions = SystemOptions;
 
@@ -40,6 +41,7 @@ export interface PipelineModel {
   host?: string;
   driver?: { id: string; name: string };
   points: PipelinePoint[];
+  sequences: PipelineSequence[]; // sequence pipelines of the scope, best first; drawn above the points
   columns: string[][]; // component ids per column, left → right
   components: SystemComponent[]; // only those drawn in a column
   edges: PipelineEdge[];
@@ -49,7 +51,7 @@ export interface PipelineModel {
 }
 
 /** Edge `how` values that mark an interface-dispatch call site. */
-const INTERFACE_HOW = new Set(["interface", "abstract"]);
+const INTERFACE_HOW = new Set(["interface", "abstract", "registry"]);
 /** Sites kept per point and per edge. The count still covers every site. */
 const SITE_CAP = 20;
 const NO_POINTS = "no extension points in this scope";
@@ -75,7 +77,18 @@ interface RawPoint {
  */
 export function pipelineModel(model: ProjectModel, scopePath: string, opts: PipelineOptions = {}): PipelineModel {
   const scope = normalizeScope(scopePath);
-  const empty = (): PipelineModel => ({ scope, points: [], columns: [], components: [], edges: [], omitted: 0, dropped: 0, reason: NO_POINTS });
+  // The reason is shown only when the scope has neither points nor sequences.
+  const empty = (sequences: PipelineSequence[] = []): PipelineModel => ({
+    scope,
+    points: [],
+    sequences,
+    columns: [],
+    components: [],
+    edges: [],
+    omitted: 0,
+    dropped: 0,
+    ...(sequences.length === 0 ? { reason: NO_POINTS } : {}),
+  });
 
   // The System view's own scope: a single code folder is descended into, exactly as systemModel does.
   const sys = systemModel(model, scope, opts);
@@ -94,6 +107,7 @@ export function pipelineModel(model: ProjectModel, scopePath: string, opts: Pipe
     if (sysById.has(id)) compOfFile.set(file, id);
   }
   const compOf = (file: string | undefined): string | undefined => (file === undefined ? undefined : compOfFile.get(file));
+  const sequences = sequencePipelines(model, compOf, tests);
 
   // Interface relations grouped by their shared edge: one group is one call site with its candidates.
   const groups = new Map<IREdge, Rel[]>();
@@ -120,9 +134,7 @@ export function pipelineModel(model: ProjectModel, scopePath: string, opts: Pipe
 
     const span: Span | undefined = first.edge.span;
     const callee = typeof first.edge.attrs?.callee === "string" ? first.edge.attrs.callee : "";
-    const dot = callee.lastIndexOf(".");
-    const receiver = dot >= 0 ? callee.slice(0, dot) : "";
-    const calleeMember = dot >= 0 ? callee.slice(dot + 1) : callee;
+    const { receiver, member: calleeMember } = splitCallee(callee);
     const members = calleeMember !== "" ? [calleeMember] : [...new Set(rels.map((r) => targetMember(r.to)))].sort();
     const fn = enclosingFn(model, first.from);
     const raw: RawSite = {
@@ -139,7 +151,7 @@ export function pipelineModel(model: ProjectModel, scopePath: string, opts: Pipe
     point.sites.push(raw);
     rawPoints.set(key, point);
   }
-  if (rawPoints.size === 0) return empty();
+  if (rawPoints.size === 0) return empty(sequences);
 
   // Host choice: the host with the most extension points (then the most sites, then the id). Other hosts are dropped.
   const byHost = new Map<string, RawPoint[]>();
@@ -282,6 +294,7 @@ export function pipelineModel(model: ProjectModel, scopePath: string, opts: Pipe
     host,
     ...(driver !== undefined ? { driver: { id: driver.id, name: model.functionById.get(driver.id)?.name ?? driver.id } } : {}),
     points,
+    sequences,
     columns,
     components,
     edges,
@@ -294,17 +307,6 @@ function edgeOf(from: string, to: string, verb: PipelineEdge["verb"], label: str
   return { id: `${from}>${verb}>${to}`, from, to, verb, label, count, sites, confidence };
 }
 
-/** The function an owner node belongs to: its nearest named parent (anonymous functions count as their owner). */
-function enclosingFn(model: ProjectModel, id: NodeId): NodeId | undefined {
-  let cur = id;
-  for (let depth = 0; depth < 1000; depth++) {
-    const node = model.byId.get(cur);
-    if (!node || node.kind !== "structure.function" || node.attrs.anonymous !== true || node.parent === undefined) break;
-    cur = node.parent;
-  }
-  return model.functionById.has(cur) ? cur : undefined;
-}
-
 function siteOfRel(model: ProjectModel, rel: Rel): Site {
   const file = model.fileOf(rel.from) as string;
   const fn = enclosingFn(model, rel.from);
@@ -312,6 +314,30 @@ function siteOfRel(model: ProjectModel, rel: Rel): Site {
 }
 
 /** The member name a target contributes: the function name after '#', or the id's tail. */
+/**
+ * A callee's receiver and member, split at its last "." outside brackets and parentheses: `frontend.extract` gives frontend
+ * and extract, and `REG[k].run` gives `REG[k]` and run. A registry lookup `HANDLERS[msg.kind]` names no member: its receiver
+ * is HANDLERS, and the member is left empty so the candidates' names are used.
+ */
+export function splitCallee(callee: string): { receiver: string; member: string } {
+  let depth = 0;
+  let dot = -1;
+  for (let i = 0; i < callee.length; i++) {
+    const c = callee[i];
+    if (c === "[" || c === "(") depth++;
+    else if ((c === "]" || c === ")") && depth > 0) depth--;
+    else if (c === "." && depth === 0) dot = i;
+  }
+  const tail = dot >= 0 ? callee.slice(dot + 1) : callee;
+  const open = tail.indexOf("[");
+  if (open >= 0 && tail.endsWith("]")) {
+    // An element access names no member. Its receiver is the text before the brackets.
+    const head = tail.slice(0, open);
+    return { receiver: dot >= 0 ? `${callee.slice(0, dot)}.${head}` : head, member: "" };
+  }
+  return { receiver: dot >= 0 ? callee.slice(0, dot) : "", member: tail };
+}
+
 function targetMember(id: NodeId): string {
   const hash = id.indexOf("#");
   const tail = hash >= 0 ? id.slice(hash + 1) : id;

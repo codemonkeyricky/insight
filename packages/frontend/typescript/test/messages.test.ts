@@ -9,7 +9,7 @@ import frontend from "../src/index.js";
 // posts to the function that handles it, in the worker file or the page. Both ends must resolve.
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "fixtures", "messages");
-const files = ["src/page.ts", "src/worker.ts", "src/ping.ts"];
+const files = ["src/page.ts", "src/worker.ts", "src/ping.ts", "src/letworker.ts"];
 const root = { path: fixtureRoot, name: "messages", allowBuildTools: false };
 const readFile = async (rel: string) => readFileSync(join(fixtureRoot, rel), "utf8");
 
@@ -47,6 +47,25 @@ describe("worker messages", () => {
     const edges = await messageEdges();
     expect(edges).toContain("src/page.ts#startPing -> src/ping.ts#λ2:29");
     expect(edges).toContain("src/ping.ts#λ2:29 -> src/page.ts#onReply");
+  });
+
+  it("pairs a worker held in a let assigned later, a ternary, and a ?? fallback with the worker's handler", async () => {
+    const edges = await messageEdges();
+    expect(edges).toContain("src/letworker.ts#letAssigned -> src/worker.ts#λ7:17");
+    expect(edges).toContain("src/letworker.ts#ternaryPick -> src/worker.ts#λ7:17");
+    expect(edges).toContain("src/letworker.ts#nullishPick -> src/worker.ts#λ7:17");
+  });
+
+  it("follows a worker stored by ??= or ||=, and a var assigned after the block that declares it", async () => {
+    const edges = await messageEdges();
+    expect(edges).toContain("src/letworker.ts#lazyNullish -> src/worker.ts#λ7:17");
+    expect(edges).toContain("src/letworker.ts#lazyOrAssign -> src/worker.ts#λ7:17");
+    expect(edges).toContain("src/letworker.ts#varInBlock -> src/worker.ts#λ7:17");
+  });
+
+  it("follows a self-referencing lazy init (`w = w ?? new Worker(…)`) from many posts", async () => {
+    const edges = await messageEdges();
+    expect(edges).toContain("src/letworker.ts#useShared -> src/worker.ts#λ7:17");
   });
 
   it("emits nothing for a postMessage on a Worker that arrives as a parameter", async () => {
