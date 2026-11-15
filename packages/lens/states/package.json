@@ -1,6 +1,6 @@
 {
   "name": "@insight/lens-states",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Insight lens: explicit finite state machines (holders, writes, tests) drawn as state diagrams",
   "license": "MIT",
   "type": "module",

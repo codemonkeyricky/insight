@@ -25,6 +25,7 @@ const LENS_IDS = [
   "lens-execution",
   "lens-flow-complexity",
   "lens-lock-order",
+  "lens-states",
 ];
 
 const TS_FILES: Record<string, string> = {

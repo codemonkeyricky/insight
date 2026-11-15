@@ -202,7 +202,7 @@ export interface StateMachineTransition {
   to: string;
   label?: string;
   confidence: "exact" | "inferred" | "heuristic";
-  sites: { span?: Span; fn?: string; guard?: string }[];
+  sites: { span?: Span; fn?: string; guard?: string; confidence?: "exact" | "inferred" | "heuristic" }[];
 }
 
 /** A finite state holder drawn as a state diagram: states are its values, transitions are its writes. */

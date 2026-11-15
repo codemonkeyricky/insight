@@ -6,7 +6,7 @@ import type { ElkNode } from "elkjs/lib/elk-api";
 import { Legend, MIN_SCALE, MachineSvg, arcName, arcTitle, fitScale, type MachinePick } from "../src/components/StateDiagram";
 import { MachineList, SiteList } from "../src/components/MachineSection";
 import { ViewBlock } from "../src/pages/LensPage";
-import { layoutMachine, type Solve } from "../src/states/layout";
+import { layoutMachine, withTimeout, type Solve } from "../src/states/layout";
 import { machinesOf, readMachineParam, selectMachine, withMachineParam } from "../src/states/machineParam";
 import type { TableView } from "../src/api";
 import { hubConnectionMachine, twoStateMachine } from "./fixtures/hubConnectionMachine";
@@ -152,6 +152,16 @@ describe("machine list and selection", () => {
   });
 });
 
+describe("per-site confidence (nit 15)", () => {
+  it("shows each site's own confidence", () => {
+    const t = hubConnectionMachine.transitions.find((x) => x.sites.length === 2)!;
+    const mixed = { ...t, confidence: "exact" as const, sites: [{ ...t.sites[0]!, confidence: "exact" as const }, { ...t.sites[1]!, confidence: "heuristic" as const }] };
+    const html = renderToStaticMarkup(<SiteList view={hubConnectionMachine} transition={mixed} onShow={vi.fn()} />);
+    expect(html).toContain("heuristic");
+    expect(html).toContain("exact");
+  });
+});
+
 describe("table spans", () => {
   const table: TableView = {
     type: "table",
@@ -206,5 +216,24 @@ describe("arc tooltip", () => {
     expect(title.startsWith(arcName(hubConnectionMachine, t))).toBe(true);
     const site = t.sites.find((y) => y.span && y.fn)!;
     expect(title).toContain(`${site.fn} ${site.span!.file}:${site.span!.start[0] + 1}`);
+  });
+});
+
+describe("withTimeout (risk 14)", () => {
+  it("rejects when the solver never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const p = layoutMachine(hubConnectionMachine, withTimeout(() => new Promise<ElkNode>(() => undefined), 15_000));
+      const caught = p.then(() => "ok", (e: Error) => e.message);
+      await vi.advanceTimersByTimeAsync(15_001);
+      expect(await caught).toMatch(/timed out/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects when the solver errors, and passes a good result through", async () => {
+    await expect(layoutMachine(hubConnectionMachine, withTimeout(() => Promise.reject(new Error("worker died"))))).rejects.toThrow("worker died");
+    await expect(layoutMachine(hubConnectionMachine, withTimeout(solve))).resolves.toBeTruthy();
   });
 });

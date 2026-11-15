@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactElement } from "react";
 import type { Span, StateMachineTransition, StateMachineView } from "../api";
-import { layoutMachine, nearestArc, type LaidArc, type LaidMachine, type LaidState, type Solve } from "../states/layout";
+import { layoutMachine, nearestArc, withTimeout, type LaidArc, type LaidMachine, type LaidState, type Solve } from "../states/layout";
 import { solveInWorker } from "../states/elkClient";
 
 /** What a click on the diagram reports: the first source line of an arc, or the line of a state. */
@@ -91,20 +91,24 @@ export function MachineSvg({ view, laid, hot = null, selected = null, viewBox, s
           const pickOf = (x: StateMachineTransition) => onPick?.({ ...(x.sites[0]?.span ? { span: x.sites[0].span } : {}), label: arcName(view, x), transition: x });
           const pick = () => pickOf(t);
           // Two lines can sit under one pointer (a crossing, parallel runs): the line nearest the pointer is the one meant.
-          const click = (e?: MouseEvent<SVGGElement>) => {
+          const nearOf = (e?: MouseEvent<SVGGElement>): LaidArc | undefined => {
             const svg = e?.currentTarget.ownerSVGElement;
             const ctm = svg?.getScreenCTM();
-            if (e && svg && ctm && !(e.target as Element).closest?.(".sm-label")) {
-              const pt = svg.createSVGPoint();
-              pt.x = e.clientX;
-              pt.y = e.clientY;
-              const p = pt.matrixTransform(ctm.inverse());
-              const near = nearestArc(laid.arcs, p.x, p.y);
-              const other = near && near.id !== a.id ? byTransition.get(near.id) : undefined;
-              if (other) return pickOf(other);
-            }
+            if (!e || !svg || !ctm || (e.target as Element).closest?.(".sm-label")) return undefined;
+            const pt = svg.createSVGPoint();
+            pt.x = e.clientX;
+            pt.y = e.clientY;
+            const p = pt.matrixTransform(ctm.inverse());
+            return nearestArc(laid.arcs, p.x, p.y);
+          };
+          const click = (e?: MouseEvent<SVGGElement>) => {
+            const near = nearOf(e);
+            const other = near && near.id !== a.id ? byTransition.get(near.id) : undefined;
+            if (other) return pickOf(other);
             pick();
           };
+          // Hover follows the same nearest line, not the DOM order of the lines under the pointer.
+          const hover = (e: MouseEvent<SVGGElement>) => onHot?.(nearOf(e)?.id ?? a.id);
           const cls = ["sm-arc", `sm-arc--${t.confidence}`, hotArc(a) ? "sm-arc--hot" : "", selected === a.id ? "sm-arc--selected" : ""].filter(Boolean).join(" ");
           return (
             <g
@@ -115,7 +119,8 @@ export function MachineSvg({ view, laid, hot = null, selected = null, viewBox, s
               aria-label={arcName(view, t)}
               onClick={click}
               onKeyDown={activate(pick)}
-              onMouseEnter={() => onHot?.(a.id)}
+              onMouseEnter={hover}
+              onMouseMove={hover}
               onMouseLeave={() => onHot?.(null)}
               onFocus={() => onHot?.(a.id)}
               onBlur={() => onHot?.(null)}
@@ -212,7 +217,7 @@ export function StateDiagram({ view, onPick, selected = null, solve = solveInWor
     setLaid(null);
     setFailed(null);
     setBox(null);
-    layoutMachine(view, solve).then(
+    layoutMachine(view, withTimeout(solve)).then(
       (l) => {
         if (!cancelled) setLaid(l);
       },

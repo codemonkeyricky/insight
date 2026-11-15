@@ -58,7 +58,7 @@ export function SiteList({
                 )}
               </div>
               <div className="muted small">
-                {s.guard ? `guard: ${s.guard}` : "no guard"} · {transition.confidence}
+                {s.guard ? `guard: ${s.guard}` : "no guard"} · {s.confidence ?? transition.confidence}
               </div>
             </li>
           ))}

@@ -46,6 +46,14 @@ describe("frontend-cpp state facts", () => {
     expect(kind("flow.branch-arm").map((a) => a.attrs.label)).toEqual(expect.arrayContaining(["then", "else", "default", "case ConnState::Idle"]));
   });
 
+  it("only names emitted state.test nodes in write guards", async () => {
+    const nodes = (await extractAll()).flatMap((r) => ("node" in r ? [r.node] : []));
+    const tests = new Set(nodes.filter((n) => n.kind === "state.test").map((n) => n.id));
+    const guarded = nodes.filter((n) => n.kind === "state.write" && n.attrs.guards !== undefined);
+    expect(guarded.length).toBeGreaterThan(0);
+    for (const w of guarded) for (const g of w.attrs.guards as string[]) expect(tests.has(g)).toBe(true);
+  });
+
   it("validates against the schema", async () => {
     const reg = createCoreRegistry();
     reg.add(JSON.parse(readFileSync(kindsFile, "utf8")) as unknown[], "frontend-cpp");
