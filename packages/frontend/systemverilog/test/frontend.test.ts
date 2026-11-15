@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,7 +7,7 @@ import { type IRRecord, type IREdge, type IRNode, validateIR } from "@insight/ir
 import { createCoreRegistry } from "@insight/ir/node";
 import { runFrontendConformance, type IRBatch, type ProjectRoot } from "@insight/sdk";
 import frontend, { extractFiles } from "../src/index.js";
-import { buildProject, indexStats, releaseProject } from "../src/project.js";
+import { buildProject, Ids, indexStats, releaseProject } from "../src/project.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(here, "fixtures");
@@ -896,4 +896,35 @@ describe("system task effects", () => {
     expect(fopen?.attrs?.modeUnknown).toBe(true);
     expect(fopen?.attrs?.path).toBe("out.txt");
   });
+});
+
+describe("node id allocation", () => {
+  it("take returns the base first, then base~2, base~3, skipping ids already taken, as the probe always did", () => {
+    const ids = new Ids();
+    expect(ids.take("a")).toBe("a");
+    expect(ids.take("a")).toBe("a~2");
+    expect(ids.take("a~2")).toBe("a~2~2");
+    expect(ids.take("a")).toBe("a~3");
+    const forked = ids.fork();
+    expect(forked.take("a")).toBe("a~4");
+    expect(ids.take("a")).toBe("a~4");
+    expect(forked.take("a~2")).toBe("a~2~3");
+  });
+
+  it("a 20,000-arm case extracts in under 10 seconds, with one flow arm per label", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "sv-arms-"));
+    try {
+      const arms = Array.from({ length: 20000 }, (_, i) => `${i}: y = ${i};`).join("\n");
+      writeFileSync(join(dir, "big.sv"), `module big(input logic [14:0] s, output logic [14:0] y);\nalways_comb\n case (s)\n${arms}\n endcase\nendmodule\n`);
+      const started = performance.now();
+      const batches = await extractDir(dir, ["big.sv"]);
+      const ms = performance.now() - started;
+      console.log(`20,000-arm case extracted in ${Math.round(ms)} ms`);
+      expect(ms).toBeLessThan(10000);
+      expect(nodesOf(allRecords(batches)).filter((n) => n.kind === "flow.branch-arm")).toHaveLength(20000);
+      expect(duplicateIds(allRecords(batches))).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60000);
 });

@@ -58,17 +58,28 @@ export interface ScannedDef {
 /** Keeps node IDs unique within one file. Two nodes with the same base get `~2`, `~3`, and so on. */
 export class Ids {
   private readonly seen = new Set<string>();
+  /**
+   * The next suffix to try for each base. Every suffix below it was taken when it was probed, and taken ids stay
+   * taken, so probing can start here without changing which id a take returns.
+   */
+  private readonly next = new Map<string, number>();
   take(base: string): string {
-    let id = base;
-    let n = 2;
-    while (this.seen.has(id)) id = `${base}~${n++}`;
+    if (!this.seen.has(base)) {
+      this.seen.add(base);
+      return base;
+    }
+    let n = this.next.get(base) ?? 2;
+    while (this.seen.has(`${base}~${n}`)) n++;
+    const id = `${base}~${n}`;
     this.seen.add(id);
+    this.next.set(base, n + 1);
     return id;
   }
   /** A copy holding the same taken ids, so a later pass takes ids that do not clash with the first. */
   fork(): Ids {
     const copy = new Ids();
     for (const id of this.seen) copy.seen.add(id);
+    for (const [base, n] of this.next) copy.next.set(base, n);
     return copy;
   }
 }
