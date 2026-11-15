@@ -229,10 +229,19 @@ export function declName(n: SyntaxNode): string | undefined {
   return (header ?? n).childForFieldName("name")?.text;
 }
 
+/**
+ * The name an identifier text stands for. IEEE 1800 says an escaped identifier and its plain form are one name, so
+ * the leading backslash and the whitespace that ends an escaped identifier are dropped: `\C ` is `C`.
+ */
+export function svName(text: string): string {
+  return text.replace(/^\\/, "").trim();
+}
+
 /** The class a out-of-class definition qualifies, such as `a` in `function void a::run()`. */
 function classScopeOf(n: SyntaxNode): string | undefined {
   const cs = n.namedChildren.find((c) => c.type === "class_scope");
-  return cs?.descendantsOfType("simple_identifier").at(-1)?.text;
+  const last = cs?.descendantsOfType(["simple_identifier", "escaped_identifier"]).at(-1);
+  return last === undefined ? undefined : svName(last.text);
 }
 
 /**

@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -984,6 +984,14 @@ describe("class-scoped calls in statement form", () => {
   });
 });
 
+describe("escaped identifiers name the same class", () => {
+  it("`\\C ::m()` resolves to class C's m: an escaped identifier and its plain form are one name", async () => {
+    const dir = join(fixturesDir, "esc_scope");
+    const call = edgesOf(allRecords(await extractDir(dir, ["c.sv", "t.sv"]))).find((e) => e.kind === "calls.call" && e.attrs?.callee === "C::m");
+    expect(call?.to).toBe("c.sv#C.m");
+  });
+});
+
 describe("bind directives", () => {
   const dir = join(fixturesDir, "bind_scope");
   const files = ["dut.sv", "chk.sv", "tb.sv", "bindf.sv"];
@@ -1125,5 +1133,54 @@ describe("detection past several Coq .v files", () => {
     mkdirSync(join(dir, "sub"));
     writeFileSync(join(dir, "sub", "real.v"), "module real;\nendmodule\n");
     expect(await frontend.detect({ path: dir, name: "mixed", allowBuildTools: false })).toEqual({ reason: "found sub/real.v" });
+  });
+});
+
+describe("detect reads a bounded head of each .v file", () => {
+  it("a Coq-looking .v file whose only HDL end keyword starts past 64 KiB is not accepted", async () => {
+    const dir = makeTemp("sv-head-");
+    writeFileSync(join(dir, "late.v"), `Require Import Coq.Lists.List.\n${"// padding line\n".repeat(6000)}module m;\nendmodule\n`);
+    expect(await frontend.detect({ path: dir, name: "late", allowBuildTools: false })).toBeNull();
+  });
+
+  it("the same Coq-looking .v file with its end keyword inside the first 64 KiB is accepted", async () => {
+    const dir = makeTemp("sv-head-near-");
+    writeFileSync(join(dir, "near.v"), `Require Import Coq.Lists.List.\nendmodule\n${"// padding line\n".repeat(6000)}`);
+    expect(await frontend.detect({ path: dir, name: "near", allowBuildTools: false })).toEqual({ reason: "found near.v" });
+  });
+
+  const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
+  it.skipIf(isRoot)("an unreadable .v file makes detect return without throwing, and the search goes on to the next file", async () => {
+    const dir = makeTemp("sv-unreadable-");
+    writeFileSync(join(dir, "bad.v"), "module m;\nendmodule\n");
+    chmodSync(join(dir, "bad.v"), 0o000);
+    mkdirSync(join(dir, "sub"));
+    writeFileSync(join(dir, "sub", "good.sv"), "module g;\nendmodule\n");
+    try {
+      expect(await frontend.detect({ path: dir, name: "bad", allowBuildTools: false })).toEqual({ reason: "found sub/good.sv" });
+    } finally {
+      chmodSync(join(dir, "bad.v"), 0o600);
+    }
+  });
+
+  it("an unreadable .v file alone gives no detection, and no throw", async () => {
+    if (typeof process.getuid === "function" && process.getuid() === 0) return;
+    const dir = makeTemp("sv-unreadable-only-");
+    writeFileSync(join(dir, "bad.v"), "module m;\nendmodule\n");
+    chmodSync(join(dir, "bad.v"), 0o000);
+    try {
+      expect(await frontend.detect({ path: dir, name: "bad", allowBuildTools: false })).toBeNull();
+    } finally {
+      chmodSync(join(dir, "bad.v"), 0o600);
+    }
+  });
+});
+
+describe("include index candidate order", () => {
+  it("a suffix with two candidates lists them in project order, not sorted by name", async () => {
+    const { indexIncludes, matchInclude } = await import("../src/include-match.js");
+    const index = indexIncludes(["z/inc/cfg.svh", "a/inc/cfg.svh", "m/other.svh"]);
+    expect(matchInclude("top.sv", "inc/cfg.svh", index)).toEqual({ suffix: ["z/inc/cfg.svh", "a/inc/cfg.svh"] });
+    expect(matchInclude("top.sv", "cfg.svh", index).suffix).toEqual(["z/inc/cfg.svh", "a/inc/cfg.svh"]);
   });
 });

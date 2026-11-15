@@ -5,6 +5,7 @@ import {
   declId,
   isExternDecl,
   isHdlText,
+  svName,
   declName,
   errorNodes,
   fnBase,
@@ -298,7 +299,8 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
       if (n.namedChildren.find((c) => c.type === "implicit_class_handle")?.text.trim() === "super") superCtor(f, newArgs);
       else {
         // `C::new(args)` parses as a method call on `C`. It is a constructor call of class C.
-        const cls = n.namedChildren.find((c) => c.type === "primary")?.text.trim();
+        const clsText = n.namedChildren.find((c) => c.type === "primary")?.text;
+        const cls = clsText === undefined ? undefined : svName(clsText);
         const head = n.text.slice(0, body.startIndex - n.startIndex);
         if (cls !== undefined && /^[A-Za-z_]\w*$/.test(cls) && head.includes("::")) emitCall(f, newArgs, `${cls}.new`, "new", { kind: "member", cls });
       }
@@ -317,18 +319,17 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
       emitCall(f, nameNode, `super.${name}`, name, base ? { kind: "member", cls: base.name } : { kind: "none" });
       return;
     }
-    const primary = n.namedChildren.find((c) => c.type === "primary")?.text.trim();
+    const primaryText = n.namedChildren.find((c) => c.type === "primary")?.text;
+    const primary = primaryText === undefined ? undefined : svName(primaryText);
     // `pkg::C::m()` and `C#(T)::m()` in statement form parse with a class type and no primary. They are scoped calls, never plain ones.
     const classType = n.namedChildren.find((c) => c.type === "class_type");
     if (primary === undefined && classType !== undefined) {
       const callee = `${n.text.slice(0, body.startIndex - n.startIndex).replace(/\s+/g, "")}${name}`;
       // A parameterised class is not placed: its name alone does not say which specialisation holds the function.
-      const scope = classType.namedChildren.some((c) => c.type === "parameter_value_assignment")
+      const lastName = classType.namedChildren.filter((c) => c.type === "simple_identifier" || c.type === "escaped_identifier").at(-1);
+      const scope = classType.namedChildren.some((c) => c.type === "parameter_value_assignment") || lastName === undefined
         ? undefined
-        : classType.namedChildren
-            .filter((c) => c.type === "simple_identifier" || c.type === "escaped_identifier")
-            .at(-1)
-            ?.text.trim();
+        : svName(lastName.text);
       emitCall(f, nameNode, callee, name, scope !== undefined ? { kind: "scoped", scope } : { kind: "none" });
       return;
     }
