@@ -25,6 +25,9 @@ export type FlowRole =
   | "break"
   | "continue";
 
+/** What a chart row is for the coupling view: a local row, or the boundary it crosses. */
+export type CouplingClass = "local" | "cross" | "io" | "state" | "conc" | "escape" | "ctl";
+
 /** How the renderer draws a node. */
 export type FlowShape = "terminator" | "step" | "decision" | "loop" | "label" | "join" | "exit" | "nest" | "fork" | "line";
 
@@ -41,6 +44,14 @@ export interface FlowNode {
   target?: string;
   /** The step is a handler the code installs (`onmessage = …`): it opens its target, even a folded lambda. */
   handler?: true;
+  /** The row's coupling class (coupling view only). */
+  coupling?: CouplingClass;
+  /** What a local call hoists from its callee, or `may throw` for a cross call (coupling view only). */
+  hoisted?: string;
+  /** A `⋯ n local` fold row: the id that unfolds it. */
+  foldId?: string;
+  /** A `⋯ n local` fold row: how many rows it folds. */
+  fold?: number;
   /** Absolute lane of the node's station (line map layout). */
   lane?: number;
   /** Absolute x where the label text starts. */
