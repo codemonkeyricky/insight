@@ -243,6 +243,9 @@ export interface ExecModelStats {
   locks: number;
   /** The channel resources the model lists. */
   channels: number;
+  condvars: number;
+  semaphores: number;
+  atomics: number;
   /** Functions whose file lies in the scope. */
   functionsInScope: number;
   /** Of those, the ones some thread runs, coroutines included. */
@@ -1028,6 +1031,9 @@ export function execModelLegacy(nodes: readonly IRNode[], edges: readonly IREdge
       dispatches: dispatches.length,
       locks: resources.filter((r) => r.kind === "lock").length,
       channels: resources.filter((r) => r.kind === "channel").length,
+      condvars: resources.filter((r) => r.kind === "condvar").length,
+      semaphores: resources.filter((r) => r.kind === "semaphore").length,
+      atomics: resources.filter((r) => r.kind === "atomic").length,
       functionsInScope: inScopeFns.length,
       functionsThreaded,
       functionsCoroutineOnly,
