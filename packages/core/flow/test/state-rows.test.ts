@@ -243,3 +243,37 @@ export function readTable(): number {
   });
 });
 
+
+// A data write nested inside a sync atomic op (`g++` on a std::atomic global): the write's row is drawn before the op's row.
+describe("state rows nested in sync ops", () => {
+  const SF = "src/atomic.cc";
+  const FN = `${SF}#app::bump`;
+  const syncSpan = { file: SF, start: [4, 0] as [number, number], end: [4, 10] as [number, number] };
+  const nodes: IRNode[] = [
+    fx.node(SF, "structure", "structure.file"),
+    fx.node(FN, "structure", "structure.function", {
+      parent: SF,
+      attrs: { name: "bump", qualifiedName: "app::bump", async: false, exported: true },
+      span: { file: SF, start: [2, 0], end: [6, 1] },
+    }),
+    varNode(SF, "g", 1, { storage: "global", mutable: true }),
+    fx.node(`${SF}@atomic:4:0`, "sync", "sync.atomic-op", {
+      parent: FN,
+      attrs: { op: "op", api: "std::atomic::operator++", lock: "g" },
+      span: syncSpan,
+    }),
+  ];
+  const edges: IREdge[] = [
+    fx.edge(FN, varId(SF, "g"), "data", "data.write", { attrs: { how: "mutate" }, span: { file: SF, start: [4, 2] as [number, number], end: [4, 3] as [number, number] } }),
+  ];
+
+  it("a data.write nested as a child of a sync atomic op produces a state row, drawn before the op", () => {
+    const items = couplingFacts(nodes, edges).facts.get(FN)?.items ?? [];
+    expect(stateRows(items).map((r) => r.label)).toEqual(["▲ g"]);
+    const labels = items.map((i) => (i.t === "step" ? `${i.role}:${i.label}` : i.t));
+    const stateAt = labels.indexOf("state:▲ g");
+    const syncAt = items.findIndex((i) => i.t === "step" && i.role === "sync");
+    expect(stateAt).toBeGreaterThanOrEqual(0);
+    expect(syncAt).toBeGreaterThan(stateAt);
+  });
+});
