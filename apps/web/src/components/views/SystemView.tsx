@@ -411,7 +411,7 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
                   const dim = lit !== null && !lit.nodes.has(f.id);
                   const picked = sel?.kind === "node" && sel.id === f.id;
                   const hdr = frameHeaderText(f.title, f.sub, f.w, f.collapsed);
-                  const cls = ["sysv-frame", f.kind, f.collapsed && "collapsed", dim && "dim", picked && "picked", lit?.nodes.has(f.id) && "lit"].filter(Boolean).join(" ");
+                  const cls = ["sysv-frame", f.kind, f.collapsed && "collapsed", f.unresolved !== undefined && "unresolved", dim && "dim", picked && "picked", lit?.nodes.has(f.id) && "lit"].filter(Boolean).join(" ");
                   return (
                     <g
                       key={f.id}
@@ -420,8 +420,8 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
                       data-frame={f.id}
                       role="button"
                       tabIndex={0}
-                      aria-expanded={!f.collapsed}
-                      aria-label={`${f.title}, ${f.sub}, ${f.collapsed ? "collapsed" : "expanded"}`}
+                      aria-expanded={f.unresolved !== undefined ? undefined : !f.collapsed}
+                      aria-label={f.unresolved !== undefined ? `${f.title}, unresolved thread, ${f.unresolved}` : `${f.title}, ${f.sub}, ${f.collapsed ? "collapsed" : "expanded"}`}
                       onClick={() => (f.openKey !== undefined ? toggleOpen(f.openKey) : setSel({ kind: "node", id: f.id }))}
                       onDoubleClick={() => (f.openKey !== undefined ? undefined : toggleFrame(f.id))}
                       onKeyDown={(e) => frameKey(f, e)}
@@ -439,6 +439,11 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
                       <text className="sysv-frame-sub" x={f.x + f.w - 14} y={f.y + 22} textAnchor="end">
                         {hdr.sub}
                       </text>
+                      {f.unresolved !== undefined && (
+                        <text className="sysv-frame-note" x={f.x + 14} y={f.y + f.hdrH + 17}>
+                          {f.unresolved}
+                        </text>
+                      )}
                     </g>
                   );
                 })}
@@ -786,9 +791,10 @@ function FrameDetail({ id, sys, frame, onToggle, onWiden }: { id: string; sys: S
     <>
       <h2 className="mono">{frame.title}</h2>
       <p className="small muted">
-        {frame.kind === "unthreaded" ? "Code on no thread" : frame.kind}
+        {frame.unresolved !== undefined ? "unresolved thread" : frame.kind === "unthreaded" ? "Code on no thread" : frame.kind}
         {frame.coroutines !== undefined ? ` · ${plural(frame.coroutines, "coroutine")}` : ""}
       </p>
+      {frame.unresolved !== undefined && <p className="small">{frame.unresolved}. No code of this thread is known, so it has no slices.</p>}
       {spawn !== undefined && (
         <>
           <h3>Spawned at</h3>
@@ -816,7 +822,7 @@ function FrameDetail({ id, sys, frame, onToggle, onWiden }: { id: string; sys: S
         {plural((sys.slices ?? []).filter((s) => s.runtime === frame.id).length, "slice")} in this frame
         {frame.hidden > 0 ? `, ${frame.hidden} more behind the chip` : ""}
       </p>
-      <p className="row-gap">
+      {frame.unresolved === undefined && <p className="row-gap">
         <button type="button" className="sysv-open" onClick={() => onToggle(frame.id)}>
           {frame.collapsed ? "Expand" : "Collapse"}
         </button>{" "}
@@ -830,7 +836,7 @@ function FrameDetail({ id, sys, frame, onToggle, onWiden }: { id: string; sys: S
             Show all slices
           </button>
         )}
-      </p>
+      </p>}
     </>
   );
 }

@@ -218,3 +218,16 @@ describe("frame and slice panels", () => {
     expect(screen.getByText(/2 atomic ops/)).toBeTruthy();
   });
 });
+
+describe("placeholder thread frame", () => {
+  it("is labelled as an unresolved thread, and its panel shows the note", () => {
+    const sys = model();
+    sys.runtimes = [...(sys.runtimes ?? []), { id: "thread:ph", kind: "thread", label: "Thread · std::thread", parent: PA, unresolved: true, note: "target unresolved: fn" }];
+    render(<SystemDiagram id="p" sys={sys} tests={false} onTests={() => {}} />);
+    const f = document.querySelector('[data-frame="thread:ph"]') as HTMLElement;
+    expect(f.getAttribute("aria-label")).toContain("unresolved thread");
+    expect(f.getAttribute("aria-label")).not.toContain("undefined");
+    fireEvent.click(f);
+    expect(screen.getAllByText(/target unresolved: fn/).length).toBeGreaterThan(1);
+  });
+});

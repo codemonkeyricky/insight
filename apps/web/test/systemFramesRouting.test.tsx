@@ -105,3 +105,51 @@ describe("text truncation", () => {
     expect(frameHeaderText("t".repeat(200), "x".repeat(200), 300, false).title.endsWith("…")).toBe(true);
   });
 });
+
+describe("placeholder thread frames (unresolved spawns)", () => {
+  const P = "program:bench";
+  const M = "thread:main";
+  const PH = "thread:ph";
+  const rts: SystemRuntime[] = [
+    { id: P, kind: "program", label: "bench · native", programKind: "native" },
+    { id: M, kind: "thread", label: "Main thread", parent: P },
+    { id: PH, kind: "thread", label: "Thread · std::thread", parent: P, spawn: { file: "a.cpp", line: 4, api: "std::thread", status: "unresolved" }, unresolved: true, note: "target unresolved: fn" },
+  ];
+  const sys: SystemModel = {
+    scope: "",
+    runtime: "grounded",
+    components: [A, B].map((id) => ({ id, label: id, path: id, kind: "folder" as const, files: 1, functions: 3, entry: false })),
+    routes: [],
+    externals: [],
+    edges: [edge(`${M}|${A}`, PH, "spawns", "spawns std::thread")],
+    stages: [[A], [B]],
+    runtimes: rts,
+    slices: [slice(M, A, 2), slice(M, B, 2)],
+  };
+  const l = layoutSystemFrames(sys);
+  const ph = (l.frames as SysFrame[]).find((f) => f.id === PH) as SysFrame;
+
+  it("keeps the compact placeholder frame inside its process, with its note", () => {
+    expect(ph).toBeDefined();
+    expect(ph.parent).toBe(P);
+    expect(ph.title).toBe("Thread · std::thread");
+    expect(ph.unresolved).toBe("target unresolved: fn");
+    expect(ph.h).toBeLessThan(80);
+    expect(ph.collapsed).toBe(false);
+  });
+  it("routes the spawns edge (dashed) to the placeholder frame", () => {
+    const a = l.arrows.find((x) => x.edge.verb === "spawns");
+    expect(a).toBeDefined();
+    expect(a?.to).toBe(PH);
+    expect(a?.dashed).toBe(true);
+    const pts = pathPoints(a?.d ?? "");
+    const end = pts[pts.length - 1] as [number, number];
+    expect(end[0] === ph.x || end[0] === ph.x + ph.w || (end[1] >= ph.y && end[1] <= ph.y + ph.hdrH)).toBe(true);
+    expect(crossings(l)).toEqual([]);
+  });
+  it("has no undefined in any label", () => {
+    const text = JSON.stringify([(l.frames ?? []).map((f) => [f.title, f.sub, f.unresolved]), l.arrows.map((x) => [x.pill.text, x.edge.label]), l.boxes.map((b) => [b.title, b.sub])]);
+    expect(text).not.toContain("undefined");
+    expect(JSON.stringify(l.frames)).not.toContain("undefined");
+  });
+});

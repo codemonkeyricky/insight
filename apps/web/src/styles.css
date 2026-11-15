@@ -1158,6 +1158,10 @@ button.add-submit:disabled { background: var(--faint); color: var(--graphite); b
 .sysv-frame-body { fill: var(--sheet); stroke: var(--hair); stroke-width: 1; }
 .sysv-frame.process > .sysv-frame-body { fill: var(--box); }
 .sysv-frame.coroutine > .sysv-frame-body { stroke-dasharray: 4 4; }
+.sysv-frame.unresolved > .sysv-frame-body { stroke-dasharray: 5 4; fill: transparent; }
+.sysv-frame.unresolved > .sysv-frame-hdr { fill: transparent; stroke-dasharray: 5 4; }
+.sysv-frame.unresolved .sysv-frame-title, .sysv-frame-note { fill: var(--muted); }
+.sysv-frame-note { font: italic 13px var(--font-ui); pointer-events: none; }
 .sysv-frame-hdr { fill: var(--faint); stroke: var(--hair); stroke-width: 1; }
 .sysv-frame.process > .sysv-frame-hdr { fill: var(--chip-solid); }
 .sysv-frame-title { fill: var(--fg); font: 600 15px var(--font-ui); pointer-events: none; }

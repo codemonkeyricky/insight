@@ -58,6 +58,8 @@ export interface SysFrame {
   parent?: string;
   spawn?: { file: string; line: number; api?: string; status: string; fn?: string };
   coroutines?: number;
+  /** A placeholder thread (its spawn target is unresolved): the note on the target. The frame is compact, with no slices. */
+  unresolved?: string;
   /** The root functions of the runtime, as Flow links (fn ids). */
   roots?: string[];
 }

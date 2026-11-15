@@ -46,6 +46,8 @@ const MARGIN = 28;
 const MAX_CHIPS = 4;
 const PILL_H = 24;
 const ROUTE_GUTTER = 7;
+/** The body line of a placeholder thread frame ("target unresolved"). */
+const UNRES_BODY_H = 26;
 
 export interface FrameOptions {
   /** Frames drawn collapsed: their header only, their edges re-attached to the header. */
@@ -148,7 +150,8 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
   const open = opts.open ?? new Set<string>();
   // Frames collapsed by default (a big unthreaded frame, a coroutine summary the user asked for).
   const autoCollapsed = new Set<string>();
-  const isCol = (id: string): boolean => collapsed.has(id) || autoCollapsed.has(id);
+  // A placeholder thread frame is compact already and never folds.
+  const isCol = (id: string): boolean => (collapsed.has(id) || autoCollapsed.has(id)) && frameById.get(id)?.rt?.unresolved !== true;
   const coGroups = new Map<string, { count: number; open: boolean }>(); // thread id -> its coroutine summary
   let gridRight = 0;
   const grounded = sys.runtime === "grounded" && (sys.runtimes ?? []).length > 0;
@@ -389,7 +392,7 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
       const body = block + (block > 0 && n.children.length > 0 ? PAD : 0) + content;
       let h = HDR_H + PAD + body + PAD;
       // A frame with nothing to show (a thread or coroutine with no slices of its own) is its header alone, not an empty body.
-      if (n.kind !== "process" && body === 0) h = HDR_H;
+      if (n.kind !== "process" && body === 0) h = n.rt?.unresolved === true ? HDR_H + UNRES_BODY_H : HDR_H;
       if (n.kind === "process") h = Math.max(h, HDR_H + PAD + stripH(n) + PAD);
       // Room for one port per bundle on the right edge, below the strip's resources.
       const ports = portKeys.get(n.id)?.size ?? 0;
@@ -419,6 +422,7 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
         ...(n.container !== undefined ? { parent: n.container } : {}),
         ...(n.rt?.spawn !== undefined ? { spawn: { file: n.rt.spawn.file, line: n.rt.spawn.line, ...(n.rt.spawn.api !== undefined ? { api: n.rt.spawn.api } : {}), status: n.rt.spawn.status, ...(n.rt.spawn.fn !== undefined ? { fn: n.rt.spawn.fn } : {}) } } : {}),
         ...(n.rt?.coroutines !== undefined ? { coroutines: n.rt.coroutines } : {}),
+        ...(n.rt?.unresolved === true ? { unresolved: n.rt.note ?? "target unresolved" } : {}),
         ...(n.rt?.kind === "thread" || n.rt?.kind === "program" ? { roots: [] } : {}),
       });
       if (isCol(n.id)) return;
@@ -480,6 +484,7 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
         const startsIn = n.slices.length === 0 && n.shared !== undefined ? n.startsIn : undefined;
         return ["coroutine", startsIn !== undefined ? `starts in ${shortLabel(startsIn, 26)}` : "", n.slices.length > 0 ? `${plural(n.slices.length, "own slice")}` : "", sharedNote].filter(Boolean).join(" · ");
       }
+      if (n.rt?.unresolved === true) return "unresolved";
       if (n.slices.length === 0 && n.children.length === 0) return "runs no component of this scope";
       return n.rt?.coroutines !== undefined ? `${plural(n.rt.coroutines, "coroutine")} · ${plural(n.slices.length, "slice")}` : plural(n.slices.length, "slice");
     };
