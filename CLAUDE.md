@@ -2,18 +2,20 @@
 
 Repo layout, apps and plugin rules: `README.md` and `docs/layout.md`. Hosted architecture, env vars and limits: `docs/hosting.md`.
 
-## Deployment: omninsight.vercel.app
+## Deployment: system-insight.vercel.app
+
+**Master is deployed automatically by CI** (`.github/workflows/deploy-prod.yml`). The manual steps below are only for a hotfix redeploy or a rollback.
 
 Production is the **hosted build**: the static `apps/web` (`build:hosted`) plus one Vercel Function (`apps/hosted`). It is packaged locally and deployed **prebuilt**.
 
 | | |
 |---|---|
-| Vercel project | `arch-insight` (scope `richards-projects-fcf7a01b`) |
-| Production domains | https://omninsight.vercel.app (project domain), https://polyoptic.vercel.app |
+| Vercel project | `system-insight` (scope `richards-projects-fcf7a01b`) |
+| Production domain | https://system-insight.vercel.app (its only domain) |
 | Storage | Cloudflare Workers KV, read through the `insight-storage` Worker (`KV_PUBLIC_BASE`) |
 | Function env | `CLOUDFLARE_API_TOKEN`, `R2_ACCOUNT_ID`, `CF_KV_NAMESPACE_ID`, … are set in the Vercel project, not locally |
 
-Every production deploy of `arch-insight` moves both domains to the new deployment.
+Every production deploy of `system-insight` moves the domain to the new deployment.
 
 **Never deploy `apps/server`.** It is the local-only Fastify app: it listens on a port and uses `~/.insight`, sqlite and `git` subprocesses. It does not run on Vercel.
 
@@ -27,7 +29,7 @@ mkdir -p "$WORK/src"
 git archive --format=tar HEAD | tar -x -C "$WORK/src"     # committed files only, no worktrees or dirty files
 
 cd "$WORK/src"
-vercel link --yes --project arch-insight --scope richards-projects-fcf7a01b
+vercel link --yes --project system-insight --scope richards-projects-fcf7a01b
 KV_PUBLIC_BASE=https://insight-storage.insight-vserkk.workers.dev \
   node scripts/build-vercel-hosted.mjs "$WORK/out"        # writes $WORK/out/.vercel/output
 
@@ -41,9 +43,9 @@ The upload is about 18 MB. The Function bundle is about 111 MB unzipped, against
 ### Verify
 
 ```sh
-curl -s https://omninsight.vercel.app/api/health    # {"ok":true,"storage":"kv"}
-curl -s -o /dev/null -w '%{http_code}\n' https://omninsight.vercel.app/
-vercel inspect omninsight.vercel.app --scope richards-projects-fcf7a01b
+curl -s https://system-insight.vercel.app/api/health    # {"ok":true,"storage":"kv"}
+curl -s -o /dev/null -w '%{http_code}\n' https://system-insight.vercel.app/
+vercel inspect system-insight.vercel.app --scope richards-projects-fcf7a01b
 ```
 
 After a deploy that touches `apps/hosted`, index a small public repo from the home page and check that `/api/status` reaches `done` (see `docs/hosting.md`, "Known limits").
@@ -54,7 +56,14 @@ After a deploy that touches `apps/hosted`, index a small public repo from the ho
 vercel rollback <previous-deployment-url> --scope richards-projects-fcf7a01b
 ```
 
-`vercel ls arch-insight --scope richards-projects-fcf7a01b` lists past deployments. The domain alias was added once with `vercel domains add omninsight.vercel.app arch-insight` and does not need to be re-added.
+`vercel ls system-insight --scope richards-projects-fcf7a01b` lists past deployments. The domain `system-insight.vercel.app` is already attached to the project and does not need to be re-added.
+
+## CI deploys
+
+- Every pull request is deployed by `.github/workflows/pr-preview.yml` to https://system-insight-pr-<N>.vercel.app (Vercel project `system-insight-pr`). Each push redeploys it; the alias is removed when the PR closes.
+- Every push to `master` is deployed to production, https://system-insight.vercel.app (project `system-insight`), by `.github/workflows/deploy-prod.yml`.
+- The staging project `system-insight-staging` still exists but is not deployed to anymore.
+- Both workflows need the repo secret `VERCEL_TOKEN`.
 
 ## Local server
 
