@@ -5,7 +5,7 @@ import "d3-transition";
 import type { SchemaDiagramView, SchemaEntity, Span } from "../api";
 import { solveInWorker } from "../states/elkClient";
 import { withTimeout, type Solve } from "../states/layout";
-import { CARD_PAD, CARD_W, HEADER_H, NOTE_H, ROW_H, VALUES_H, cardMetrics, extendsPath, layoutKinds, layoutRecords, refPath, type CardBox, type SchemaLayout } from "./layout";
+import { CARD_PAD, HEADER_H, NOTE_H, ROW_H, VALUES_H, cardMetrics, extendsPath, layoutKinds, layoutRecords, refPath, type CardBox, type SchemaLayout } from "./layout";
 
 export interface SchemaPick {
   span?: Span;
@@ -144,7 +144,7 @@ export function SchemaDiagram({ view, onPick, solve = solveInWorker }: SchemaDia
     }
     setLayout(null);
     const ctl = new AbortController();
-    layoutRecords(view, withTimeout(solve), ctl.signal).then(
+    layoutRecords(view, solve === solveInWorker ? solve : withTimeout(solve), ctl.signal).then(
       (l) => !ctl.signal.aborted && setLayout(l),
       (e: Error) => !ctl.signal.aborted && e.name !== "AbortError" && setError(e.message),
     );
@@ -251,7 +251,7 @@ export function SchemaDiagram({ view, onPick, solve = solveInWorker }: SchemaDia
     : [];
 
   return (
-    <div className="sd-wrap" ref={wrapRef} onScroll={(ev) => ev.currentTarget.scrollTo(0, 0)}>
+    <div className="sd-wrap" ref={wrapRef}>
       <div className="sd-tools">
         <span className="muted small">scroll to zoom, drag to pan{isKinds ? ", click a frame title to zoom to it (shift-click adds the last one)" : view.groups.length > 1 ? ", click a frame title to zoom to it" : ""}</span>
         <button type="button" onClick={() => layout && fitBox({ x: 0, y: 0, w: layout.width, h: layout.height }, true)}>
@@ -301,4 +301,3 @@ export function SchemaDiagram({ view, onPick, solve = solveInWorker }: SchemaDia
   );
 }
 
-export { CARD_W };

@@ -50,8 +50,7 @@ describe("generic fixture (no Insight paths, no kinds files)", () => {
     const bs = await run(genericRoot, files);
     const defNames = nodes(bs).filter((n) => n.kind === "x-schema.def").map((n) => n.attrs.name);
     expect(defNames).toEqual(expect.arrayContaining(["Person", "Name", "Address"]));
-    const imp = edges(bs).find((e) => e.kind === "packaging.import" && e.from === "schemas/person.schema.json");
-    expect(imp?.to).toBe("schemas/address.schema.json");
+    expect(edges(bs).some((e) => e.kind === "packaging.import")).toBe(false);
     const ref = edges(bs).find((e) => e.kind === "x-schema.ref" && e.to === "schemas/address.schema.json#def:Address");
     expect(ref).toBeDefined();
     const vb = edges(bs).filter((e) => e.kind === "x-schema.validated-by");
@@ -73,6 +72,21 @@ describe("generic fixture (no Insight paths, no kinds files)", () => {
     expect(bob?.records.some((r) => "edge" in r)).toBe(false);
   });
 
+  it("records the missing schema of an unresolved $schema as a dependency", async () => {
+    const bs = await run(genericRoot, files);
+    const bob = bs.find((b) => b.file === "data/bob.json");
+    expect(bob?.dependsOn).toEqual(["schemas/missing.schema.json"]);
+  });
+
+  it("still resolves an instance when ctx.files is a subset of listFiles()", async () => {
+    const pr: ProjectRoot = { path: genericRoot, name: "t", allowBuildTools: false };
+    const ctx = { root: pr, files: ["data/alice.json"], listFiles: () => [...files], readFile: async (rel: string) => readFileSync(join(genericRoot, rel), "utf8"), log: () => undefined };
+    const out: IRBatch[] = [];
+    for await (const b of frontend.extract(ctx)) out.push(b);
+    expect(out).toHaveLength(1);
+    expect(edges(out).find((e) => e.kind === "x-schema.validated-by")).toMatchObject({ from: "data/alice.json", to: "schemas/person.schema.json#def:$root" });
+  });
+
   it("leaves plain JSON alone", async () => {
     const bs = await run(genericRoot, files);
     for (const f of ["package.json", "tsconfig.json", "data/big-list.json"]) expect(bs.find((b) => b.file === f)?.records).toEqual([]);
@@ -89,5 +103,7 @@ describe("Insight's own repo", () => {
     const vb = edges(bs).filter((e) => e.kind === "x-schema.validated-by" && e.to === `${manifest}#def:$root` && (e.attrs as { via?: string }).via === "filename");
     expect(vb.length).toBeGreaterThanOrEqual(14);
     expect(vb.every((e) => e.from.endsWith("insight-plugin.json"))).toBe(true);
+    const kinds = bs.find((b) => b.file === "packages/core/ir/schema/core.kinds.json");
+    expect(kinds?.dependsOn).toContain("packages/core/ir/schema/facets/structure.schema.json");
   }, 60_000);
 });

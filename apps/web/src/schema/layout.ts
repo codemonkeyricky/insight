@@ -190,7 +190,7 @@ export interface LinkPath {
   head: string;
 }
 
-const arrowAt = (x: number, y: number, dx: number, dy: number, size: number, open: boolean): string => {
+const arrowAt = (x: number, y: number, dx: number, dy: number, size: number): string => {
   const len = Math.hypot(dx, dy) || 1;
   const ux = dx / len;
   const uy = dy / len;
@@ -198,7 +198,7 @@ const arrowAt = (x: number, y: number, dx: number, dy: number, size: number, ope
   const by = y - uy * size;
   const px = -uy * size * 0.55;
   const py = ux * size * 0.55;
-  return open ? `M${x} ${y} L${bx + px} ${by + py} L${bx - px} ${by - py} Z` : `M${x} ${y} L${bx + px} ${by + py} L${bx - px} ${by - py} Z`;
+  return `M${x} ${y} L${bx + px} ${by + py} L${bx - px} ${by - py} Z`;
 };
 
 /** A ref curve: from the right edge of a field row to the left edge of the target's header (or around, for a back ref). */
@@ -207,7 +207,7 @@ export function refPath(from: CardBox, rowMidY: number, to: CardBox): LinkPath {
   if (from.id === to.id) {
     const x = from.x + from.w;
     const d = `M${x} ${from.y + rowMidY} C${x + 46} ${from.y + rowMidY} ${x + 46} ${ty} ${x + 1} ${ty}`;
-    return { d, head: arrowAt(x + 1, ty, -1, 0, 7, false) };
+    return { d, head: arrowAt(x + 1, ty, -1, 0, 7) };
   }
   const forward = to.x >= from.x + from.w + 8;
   const backward = to.x + to.w <= from.x - 8;
@@ -235,7 +235,7 @@ export function refPath(from: CardBox, rowMidY: number, to: CardBox): LinkPath {
   }
   const d = `M${sx} ${sy} C${c1x} ${sy} ${c2x} ${ty} ${tx} ${ty}`;
   const dir = forward ? 1 : backward ? -1 : -1;
-  return { d, head: arrowAt(tx, ty, dir, 0, 7, false) };
+  return { d, head: arrowAt(tx, ty, dir, 0, 7) };
 }
 
 /** An extends curve: from the child's side to the parent's side, ending in a hollow triangle. */
@@ -250,12 +250,12 @@ export function extendsPath(child: CardBox, parent: CardBox): LinkPath {
     const x2 = parent.x;
     const bulge = 34 + Math.min(40, Math.abs(cy - py) * 0.05);
     const d = `M${x1} ${cy} C${x1 - bulge} ${cy} ${x2 - bulge} ${py} ${x2} ${py}`;
-    return { d, head: arrowAt(x2, py, 1, 0, 9, true) };
+    return { d, head: arrowAt(x2, py, 1, 0, 9) };
   }
   const right = parentMid > childMid;
   const x1 = right ? child.x + child.w : child.x;
   const x2 = right ? parent.x : parent.x + parent.w;
   const k = Math.max(40, Math.abs(x2 - x1) * 0.5);
   const d = `M${x1} ${cy} C${x1 + (right ? k : -k)} ${cy} ${x2 + (right ? -k : k)} ${py} ${x2} ${py}`;
-  return { d, head: arrowAt(x2, py, right ? 1 : -1, 0, 9, true) };
+  return { d, head: arrowAt(x2, py, right ? 1 : -1, 0, 9) };
 }

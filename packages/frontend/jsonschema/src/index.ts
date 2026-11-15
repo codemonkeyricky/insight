@@ -12,9 +12,15 @@ import type { Detection, ExtractContext, Frontend, IRBatch, IRRecord, ProjectRoo
 const FRONTEND_ID = "frontend-jsonschema";
 const KINDS_FILE = "packages/core/ir/schema/core.kinds.json";
 const MAX_BYTES = 1024 * 1024;
-const MAX_JSON_FILES = 5000;
+/** Stat cap for the detect walk, and the cap on files whose contents detect reads. */
+const MAX_WALK_FILES = 50000;
+const MAX_READ_FILES = 2000;
+/** Substrings a JSON file must contain to possibly be a schema, a kinds file or a $schema-bearing instance. */
+const CANDIDATE_RE = /"\$schema"|"\$defs"|"definitions"|"kind"/;
+/** A name that marks a schema or kinds file without reading it. */
+const SCHEMA_NAME_RE = /(^|\/)([^/]*\.schema\.json|[^/]*\.kinds\.json|kinds\.json|[^/]*\.kind\.json)$/;
 /** Directories whose JSON is never indexed. */
-const IGNORED_DIRS = new Set(["node_modules", "dist", ".git", ".insight", ".claude", "build", "coverage", ".next", ".turbo", ".cache"]);
+const IGNORED_DIRS = new Set(["node_modules", "dist", ".git", ".insight", ".claude", "build", "coverage", ".next", ".turbo", ".cache", "target", "out", "vendor", ".venv", "venv", "__pycache__"]);
 /** Built-in filename table: instance files that follow a schema without saying so. */
 const PLUGIN_MANIFEST_ID = "https://insight.dev/core/plugin-manifest.json";
 const IR_CORE_ID = "https://insight.dev/ir/core.json";
@@ -24,6 +30,8 @@ const filenameSchemaId = (file: string): string | undefined => {
   if (base.endsWith(".ir.json")) return IR_CORE_ID;
   return undefined;
 };
+/** A schema's $id with a trailing empty fragment removed, so "x.json#" and "x.json" match. */
+const normId = (id: string): string => id.replace(/#+$/, "");
 const ignoredPath = (file: string): boolean => file.split("/").slice(0, -1).some((d) => IGNORED_DIRS.has(d));
 /** Test fixture and sample data never counts as a schema or kinds file (it can still be an instance). */
 const fixturePath = (file: string): boolean => /(^|\/)(fixtures|samples)\//.test(file);
@@ -144,7 +152,7 @@ function parseDoc(file: string, text: string): Doc {
     if (typeof json.$schema === "string") doc.dollarSchema = json.$schema;
     return doc;
   }
-  if (typeof json.$id === "string") doc.schemaId = json.$id;
+  if (typeof json.$id === "string") doc.schemaId = normId(json.$id);
   const title = typeof json.title === "string" ? json.title : (file.split("/").pop() ?? file);
   doc.defs.push(makeDef(file, lines, "$root", title, json, 0, true));
   for (const section of ["$defs", "definitions"]) {
@@ -238,21 +246,33 @@ async function scanTs(ctx: ExtractContext): Promise<TsScan> {
     } catch {
       continue;
     }
+    const starts = [0];
+    for (let i = text.indexOf("\n"); i >= 0; i = text.indexOf("\n", i + 1)) starts.push(i + 1);
+    /** Index of the last line start at or before `idx`. */
+    const lineAt = (idx: number): number => {
+      let lo = 0;
+      let hi = starts.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if ((starts[mid] as number) <= idx) lo = mid;
+        else hi = mid - 1;
+      }
+      return lo;
+    };
     const seen = new Set<string>();
     const out: Hit[] = [];
     for (const m of text.matchAll(KIND_TOKEN)) {
       const kind = m[1] ?? "";
       const idx = m.index ?? 0;
-      const lineStart = text.lastIndexOf("\n", idx - 1) + 1;
+      const line = lineAt(idx);
+      const lineStart = starts[line] as number;
       const linePrefix = text.slice(lineStart, idx);
       const how: "emit" | "read" =
         EMIT_BEFORE.test(text.slice(Math.max(0, idx - 40), idx)) || EMIT_CALL_BEFORE.test(linePrefix) ? "emit" : "read";
       const key = `${kind}|${how}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      const before = text.slice(0, idx);
-      const line = before.split("\n").length - 1;
-      const col = idx - (before.lastIndexOf("\n") + 1);
+      const col = idx - lineStart;
       out.push({ kind, how, span: { file: f, start: [line, col], end: [line, col + m[0].length] } });
     }
     if (out.length > 0) hits.set(f, out);
@@ -260,9 +280,10 @@ async function scanTs(ctx: ExtractContext): Promise<TsScan> {
   return { files, hits };
 }
 
-function buildBatch(doc: Doc, byId: Map<string, string>, defById: Map<string, Def>, kindIdByName: Map<string, string>, ts: TsScan | undefined, ctx: ExtractContext): IRBatch {
+function buildBatch(doc: Doc, byId: Map<string, string>, defById: Map<string, Def>, kindIdByName: Map<string, string>, ts: TsScan | undefined, ctx: ExtractContext, dupId?: string): IRBatch {
   const records: IRRecord[] = [];
   const { file, lines } = doc;
+  /** Schema files this file points into, including expected paths that do not exist yet. */
   const imported = new Set<string>();
 
   // Unparseable, oversized, ignored or non-schema JSON yields nothing.
@@ -283,11 +304,10 @@ function buildBatch(doc: Doc, byId: Map<string, string>, defById: Map<string, De
       },
     } as IRRecord);
 
-  /** Resolves a $ref; logs and returns undefined when it cannot. Cross-file refs also get a packaging.import edge. */
-  const seenImports = new Set<string>();
+  /** Resolves a $ref; logs and returns undefined when it cannot. Every cross-file target, found or not, is recorded as a dependency. */
   const resolve = (ref: string, from: string, fromPropName: string): string | undefined => {
     const hash = ref.indexOf("#");
-    const doc0 = hash < 0 ? ref : ref.slice(0, hash);
+    const doc0 = normId(hash < 0 ? ref : ref.slice(0, hash));
     const frag = hash < 0 ? "" : ref.slice(hash + 1);
     let targetFile: string | undefined;
     if (doc0 === "") targetFile = file;
@@ -298,6 +318,8 @@ function buildBatch(doc: Doc, byId: Map<string, string>, defById: Map<string, De
         if (!rel.startsWith("..")) targetFile = rel;
       }
     }
+    // A target that does not resolve yet still counts: adding the file later re-extracts this one.
+    if (targetFile !== undefined && targetFile !== file) imported.add(targetFile);
     const key =
       frag === "" || frag === "/"
         ? "$root"
@@ -311,17 +333,14 @@ function buildBatch(doc: Doc, byId: Map<string, string>, defById: Map<string, De
       ctx.log(`${file}: unresolved $ref "${ref}"${fromPropName ? ` in ${fromPropName}` : ""} (${from})`);
       return undefined;
     }
-    if (targetFile !== file) imported.add(targetFile);
-    if (targetFile !== file && !seenImports.has(targetFile)) {
-      seenImports.add(targetFile);
-      records.push({
-        edge: { from: file, to: targetFile, facet: "packaging", kind: "packaging.import", attrs: { specifier: doc0 }, provenance: prov("exact") },
-      } as IRRecord);
-    }
     return id;
   };
 
   if (doc.kinds.length === 0) {
+    if (dupId !== undefined) {
+      const line = Math.max(0, lineOf(lines, /"\$id"\s*:/));
+      records.push({ finding: { severity: "warning", message: dupId, span: spanAt(file, lines, line), provenance: prov("exact") } });
+    }
     for (const def of doc.defs) {
       const defAttrs: Schema = { name: def.name, typeKind: "struct" };
       if (def.root && doc.schemaId) defAttrs.schemaId = doc.schemaId;
@@ -352,7 +371,7 @@ function buildBatch(doc: Doc, byId: Map<string, string>, defById: Map<string, De
         }
       }
     }
-    return { file, records, ...(imported.size > 0 ? { dependsOn: [...imported] } : {}) };
+    return { file, records, ...(imported.size > 0 ? { dependsOn: [...imported].sort() } : {}) };
   }
 
   // A kinds file: one x-schema.kind per declared kind.
@@ -394,7 +413,8 @@ function buildBatch(doc: Doc, byId: Map<string, string>, defById: Map<string, De
       xEdge(tsFile, kid, "x-schema.uses-kind", { how: hit.how }, hit.span);
     }
   }
-  return { file, records, ...(ts ? { dependsOn: ts.files } : {}) };
+  const deps = [...new Set([...(ts?.files ?? []), ...imported])].sort();
+  return { file, records, ...(deps.length > 0 ? { dependsOn: deps } : {}) };
 }
 
 /** A schema-bearing document by file: its root def id is `${file}#def:$root`. */
@@ -410,13 +430,17 @@ function buildInstance(doc: Doc, byId: Map<string, string>, schemaFiles: Set<str
   let target: string | undefined;
   let via: "$schema" | "filename" = "$schema";
   let finding: string | undefined;
+  let missing: string | undefined;
   if (ds !== undefined) {
-    const bare = ds.replace(/#$/, "");
+    const bare = normId(ds);
     target = byId.get(bare) ?? byId.get(ds);
     if (target === undefined && !/^[a-z][a-z0-9+.-]*:/i.test(ds)) {
       const rel = posix.normalize(posix.join(posix.dirname(file), ds));
       if (schemaFiles.has(rel)) target = rel;
-      else finding = `unknown $schema "${ds}" (no schema file at ${rel})`;
+      else {
+        finding = `unknown $schema "${ds}" (no schema file at ${rel})`;
+        if (!rel.startsWith("..")) missing = rel;
+      }
     }
   }
   if (target === undefined && finding === undefined) {
@@ -430,7 +454,7 @@ function buildInstance(doc: Doc, byId: Map<string, string>, schemaFiles: Set<str
   if (finding !== undefined) {
     const line = Math.max(0, lineOf(lines, /"\$schema"\s*:/));
     records.push({ finding: { severity: "info", message: finding, span: spanAt(file, lines, line), provenance: prov("exact") } });
-    return { file, records };
+    return { file, records, ...(missing !== undefined ? { dependsOn: [missing] } : {}) };
   }
   if (target === undefined) return { file, records };
   const line = via === "$schema" ? Math.max(0, lineOf(lines, /"\$schema"\s*:/)) : 0;
@@ -448,11 +472,15 @@ function buildInstance(doc: Doc, byId: Map<string, string>, schemaFiles: Set<str
   return { file, records, dependsOn: [target] };
 }
 
-/** True when the project has a schema or kinds file. Bounded walk; the Insight kinds file is a fast path. */
+/**
+ * True when the project has a schema or kinds file. Two bounded passes over one walk: a name-only check that stops at
+ * the first hit, then (if the names found nothing) a content check of at most MAX_READ_FILES small JSON files.
+ */
 function walkForSchemas(root: string): string | null {
   let seen = 0;
+  const jsonFiles: string[] = [];
   const stack: string[] = [""];
-  while (stack.length > 0) {
+  while (stack.length > 0 && seen <= MAX_WALK_FILES) {
     const rel = stack.pop() as string;
     let entries;
     try {
@@ -466,16 +494,25 @@ function walkForSchemas(root: string): string | null {
       if (e.isDirectory()) {
         if (!IGNORED_DIRS.has(e.name)) stack.push(childRel);
       } else if (e.isFile() && e.name.endsWith(".json")) {
-        if (++seen > MAX_JSON_FILES) return null;
+        seen++;
         if (fixturePath(childRel)) continue;
-        try {
-          const abs = join(root, childRel);
-          if (statSync(abs).size > MAX_BYTES) continue;
-          if (classifyJson(JSON.parse(readFileSync(abs, "utf8"))) !== "other") return childRel;
-        } catch {
-          // unreadable or not JSON
-        }
+        if (SCHEMA_NAME_RE.test(childRel)) return childRel;
+        jsonFiles.push(childRel);
       }
+    }
+  }
+  let read = 0;
+  for (const childRel of jsonFiles) {
+    if (read >= MAX_READ_FILES) break;
+    try {
+      const abs = join(root, childRel);
+      if (statSync(abs).size > MAX_BYTES) continue;
+      read++;
+      const text = readFileSync(abs, "utf8");
+      if (!CANDIDATE_RE.test(text)) continue;
+      if (classifyJson(JSON.parse(text)) !== "other") return childRel;
+    } catch {
+      // unreadable or not JSON
     }
   }
   return null;
@@ -484,7 +521,7 @@ function walkForSchemas(root: string): string | null {
 export const frontend: Frontend = {
   id: FRONTEND_ID,
   version: "0.2.0",
-  provides: ["structure", "packaging", "x-schema"],
+  provides: ["structure", "x-schema"],
 
   async detect(root: ProjectRoot): Promise<Detection | null> {
     if (existsSync(join(root.path, KINDS_FILE))) return { reason: `found ${KINDS_FILE}` };
@@ -510,6 +547,11 @@ export const frontend: Frontend = {
         docs.set(file, { file, lines: [], cls: "other", defs: [], kinds: [], error: (err as Error).message });
         return;
       }
+      // Cheap prefilter: skip the split and parse unless the text could be a schema, a kinds file or an instance.
+      if (!CANDIDATE_RE.test(text) && filenameSchemaId(file) === undefined) {
+        docs.set(file, { file, lines: [], cls: "other", defs: [], kinds: [] });
+        return;
+      }
       docs.set(file, parseDoc(file, text));
     };
     for (const file of ctx.files) await load(file);
@@ -518,8 +560,13 @@ export const frontend: Frontend = {
     const defById = new Map<string, Def>();
     const kindIdByName = new Map<string, string>();
     const schemaFiles = new Set<string>();
-    for (const d of docs.values()) {
-      if (d.schemaId !== undefined) byId.set(d.schemaId, d.file);
+    const dupIds = new Map<string, string>();
+    for (const d of [...docs.values()].sort((x, y) => (x.file < y.file ? -1 : x.file > y.file ? 1 : 0))) {
+      if (d.schemaId !== undefined) {
+        const first = byId.get(d.schemaId);
+        if (first === undefined) byId.set(d.schemaId, d.file);
+        else dupIds.set(d.file, `duplicate $id ${d.schemaId} (also declared in ${first})`);
+      }
       if (d.cls === "schema") schemaFiles.add(d.file);
       for (const def of d.defs) defById.set(def.id, def);
       for (const k of d.kinds) if (!kindIdByName.has(k.name)) kindIdByName.set(k.name, k.id);
@@ -539,7 +586,7 @@ export const frontend: Frontend = {
         continue;
       }
       if (doc.kinds.length > 0 && scan === undefined) scan = await scanTs(ctx);
-      yield buildBatch(doc, byId, defById, kindIdByName, doc.kinds.length > 0 ? scan : undefined, ctx);
+      yield buildBatch(doc, byId, defById, kindIdByName, doc.kinds.length > 0 ? scan : undefined, ctx, dupIds.get(file));
     }
   },
 };

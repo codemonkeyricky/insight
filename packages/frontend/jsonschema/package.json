@@ -1,6 +1,6 @@
 {
   "name": "@insight/frontend-jsonschema",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Insight frontend (POC): indexes Insight's own IR JSON Schema files and the kinds they declare",
   "license": "MIT",
   "type": "module",

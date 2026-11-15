@@ -171,10 +171,15 @@ export const lensIrSchema: Lens = {
     for (const f of schemaFiles) baseCount.set(baseName(f), (baseCount.get(baseName(f)) ?? 0) + 1);
     const fileLabel = (f: string): string => ((baseCount.get(baseName(f)) ?? 0) > 1 ? f : baseName(f));
     const defIds = new Set(schemaDefs.map((d) => d.id));
+    const refsFrom = new Map<string, IREdge[]>();
+    for (const e of refEdges) {
+      const list2 = refsFrom.get(e.from);
+      if (list2) list2.push(e);
+      else refsFrom.set(e.from, [e]);
+    }
     const refTargets = (id: string): string[] => {
       const out: string[] = [];
-      for (const e of refEdges) {
-        if (e.from !== id) continue;
+      for (const e of refsFrom.get(id) ?? []) {
         const t = targetOf(e);
         if (t !== undefined && defIds.has(t) && !out.includes(t)) out.push(t);
       }
@@ -240,7 +245,9 @@ export const lensIrSchema: Lens = {
     // Findings.
     const findings: LensFinding[] = [];
     for (const k of kinds) {
-      if (emitBy.has(k.id)) continue;
+      // The jsonschema frontend's own x-schema.* kinds are emitted by packages/frontend/jsonschema, which the TS scan skips
+      // (it would otherwise match every kind name quoted in its own source), so they would always look unemitted.
+      if (emitBy.has(k.id) || nameOf(k).startsWith("x-schema.")) continue;
       findings.push({
         lens: LENS_ID,
         id: `never-emitted:${nameOf(k)}`,

@@ -60,6 +60,9 @@ importers:
       '@insight/frontend-cpp':
         specifier: workspace:*
         version: link:../../packages/frontend/cpp
+      '@insight/frontend-jsonschema':
+        specifier: workspace:*
+        version: link:../../packages/frontend/jsonschema
       '@insight/frontend-systemverilog':
         specifier: workspace:*
         version: link:../../packages/frontend/systemverilog
@@ -84,6 +87,9 @@ importers:
       '@insight/lens-flow-complexity':
         specifier: workspace:*
         version: link:../../packages/lens/flow-complexity
+      '@insight/lens-ir-schema':
+        specifier: workspace:*
+        version: link:../../packages/lens/ir-schema
       '@insight/lens-lock-order':
         specifier: workspace:*
         version: link:../../packages/lens/lock-order
