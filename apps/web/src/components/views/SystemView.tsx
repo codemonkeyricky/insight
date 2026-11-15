@@ -3,7 +3,8 @@ import type { PipelineModel, Site, SystemEdge, SystemModel } from "@insight/mode
 import type { LayoutOptions } from "../../arch/system-layout";
 import { api } from "../../api";
 import { fileTarget, useCodeTarget } from "../../codeTarget";
-import { layoutSystem, pillText, routeText, type SysArrow, type SysBox, type SysLayout } from "../../arch/system-layout";
+import { layoutSystem, pillText, routeText, type SysArrow, type SysBox, type SysFrame, type SysLayout } from "../../arch/system-layout";
+import { frameHeaderText, layoutSystemFrames } from "../../arch/system-frames";
 import { hrefView } from "../../router";
 import { PipelineSummary } from "./PipelineSummary";
 
@@ -12,10 +13,15 @@ const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n =
 /** What is selected in the diagram: a card or one edge, by id. */
 type Selection = { kind: "node" | "edge"; id: string } | null;
 
+/** The model's own word for a level: syscall, API or unknown. */
+const LEVEL_TEXT = { syscall: "syscall", api: "API", unknown: "unknown" } as const;
+
 const MIN_K = 0.1;
 const MAX_K = 2.5;
 /** The smallest scale a fit settles on: a card title is 18 px, so it stays at 10 px or more. A wider graph is panned. */
 export const FIT_MIN_K = 0.56;
+/** The System view's fit floor: a deep process tree is shown whole (readable once zoomed in), not cut at FIT_MIN_K. */
+export const SYSTEM_FIT_MIN_K = 0.02;
 /** Edges above this count show a verb pill only on the edges of the hovered or selected node. */
 export const PILL_LIMIT = 30;
 const FIT_MAX_K = 1.15;
@@ -29,9 +35,9 @@ interface Camera {
 }
 
 /** The camera that shows the whole layout in a view of `w` by `h`. Expanding the view gives a wide diagram room to be read. */
-export function fitCamera(layout: Pick<SysLayout, "width" | "height"> & { focusY?: number }, w: number, h: number): Camera {
+export function fitCamera(layout: Pick<SysLayout, "width" | "height"> & { focusY?: number }, w: number, h: number, minK: number = FIT_MIN_K): Camera {
   if (layout.width === 0 || layout.height === 0 || w <= 0 || h <= 0) return { k: 1, x: 0, y: 0 };
-  const k = Math.max(FIT_MIN_K, Math.min(FIT_MAX_K, (w - 16) / layout.width, (h - 16) / layout.height));
+  const k = Math.max(minK, Math.min(FIT_MAX_K, (w - 16) / layout.width, (h - 16) / layout.height));
   const cx = layout.width * k <= w ? (w - layout.width * k) / 2 : 8;
   // A diagram taller than the view starts on its first column, not on the middle of the canvas.
   const cyy = layout.height * k <= h ? (h - layout.height * k) / 2 : Math.min(8, Math.max(h - layout.height * k - 8, h / 2 - (layout.focusY ?? layout.height / 2) * k));
@@ -51,19 +57,23 @@ export function SystemView({ id, scope }: { id: string; scope: string }) {
   const key = `${id}\0${scope}\0${tests}`;
   useEffect(() => {
     let cancelled = false;
-    api.getSystem(id, scope, tests).then(
-      (sys) => {
-        if (!cancelled) setDone({ key, sys });
-      },
-      (e: unknown) => {
-        if (!cancelled) setDone({ key, error: e instanceof Error ? e.message : String(e) });
-      },
-    );
+    // The model is computed on a later task, so "Computing runtime…" paints before the work starts.
+    const timer = setTimeout(() => {
+      api.getSystem(id, scope, tests).then(
+        (sys) => {
+          if (!cancelled) setDone({ key, sys });
+        },
+        (e: unknown) => {
+          if (!cancelled) setDone({ key, error: e instanceof Error ? e.message : String(e) });
+        },
+      );
+    }, 0);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
   }, [id, scope, tests, key]);
-  if (done === null) return <p className="muted">Loading</p>;
+  if (done === null) return <p className="muted" role="status">Computing runtime…</p>;
   if (done.sys === undefined) return <p className="error" role="alert">{done.error}</p>;
   return <SystemDiagram id={id} sys={done.sys} tests={tests} onTests={setTests} stale={done.key !== key} />;
 }
@@ -82,11 +92,53 @@ export interface SystemDiagramProps {
 
 /** The diagram, its toolbar and its side panel for one System model. Pure of data loading, so it renders from a model alone. */
 export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOptions, pipeline }: SystemDiagramProps) {
-  const layout = useMemo(() => layoutSystem(sys, layoutOptions), [sys, layoutOptions]);
+  // The Pipeline view keeps its own layout; the System view draws frames, strips and the kernel band.
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
+  const [widened, setWidened] = useState<ReadonlySet<string>>(() => new Set());
+  /** Folds the user toggled: an opened big unthreaded frame, or "group:<holder>" for a coroutine summary row. */
+  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
+  // A new model starts with everything folded the default way. Reset while rendering (not in an effect), so the first layout
+  // of the new model is already the default one and the auto-fit below measures it.
+  const [stateSys, setStateSys] = useState(sys);
+  if (stateSys !== sys) {
+    setStateSys(sys);
+    setCollapsed(new Set());
+    setWidened(new Set());
+    setOpen(new Set());
+  }
+  const layout = useMemo(() => (pipeline !== undefined ? layoutSystem(sys, layoutOptions) : layoutSystemFrames(sys, { collapsed, widened, open })), [sys, layoutOptions, pipeline, collapsed, widened, open]);
+  const toggleOpen = useCallback((key: string) => {
+    setOpen((o) => {
+      const next = new Set(o);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+  const toggleFrame = useCallback((id: string) => {
+    // "open:<thread>" groups or ungroups a thread's coroutines (coroutines are never grouped by default); the big unthreaded
+    // frame, collapsed by default, opens instead of collapsing.
+    if (id.startsWith("open:")) return toggleOpen(`group:${id.slice(5)}`);
+    const key = (layout.frames ?? []).find((f) => f.id === id)?.openKey;
+    if (key !== undefined) return toggleOpen(key);
+    setCollapsed((c) => {
+      const next = new Set(c);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, [layout, toggleOpen]);
+  const widen = useCallback((id: string) => setWidened((w) => new Set(w).add(id)), []);
   const [sel, setSel] = useState<Selection>(null);
   const [hover, setHover] = useState<string | null>(null);
   const [cam, setCam] = useState<Camera>({ k: 1, x: 0, y: 0 });
   const [expanded, setExpanded] = useState(false);
+  /** The scale of the last fit: zooming out stops there when it is below MIN_K (a large diagram fits at 0.02). */
+  const fitK = useRef(1);
+  /** The newest layout, for `fit`, so toggling a frame (which changes the layout) does not refit and lose the user's zoom and pan. */
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
+  const minK = (): number => Math.min(MIN_K, fitK.current);
   /** The stage's height in px: the room the window leaves, at least 60vh. Null while expanded (the view fills the window). */
   const [stageH, setStageH] = useState<number | null>(null);
   const stage = useRef<HTMLDivElement>(null);
@@ -101,16 +153,21 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
     const h = expanded ? (el?.clientHeight ?? 700) : Math.max(420, vh * 0.6, room);
     setStageH(expanded ? null : h);
     // The legend sits along the bottom edge, so the diagram is fitted above it.
-    setCam(fitCamera(layout, w, h - LEGEND_H));
-  }, [layout, expanded]);
-  // Fits when a layout arrives (a new scope, the tests flag) or the view expands, and clears the selection of the old layout.
+    // On a phone the legend wraps onto several lines, so measure it rather than assume one row.
+    const legendH = Math.max(LEGEND_H, (el?.querySelector<HTMLElement>(".sysv-legend")?.offsetHeight ?? 0) + 16);
+    const cam = fitCamera(layoutRef.current, w, h - legendH, pipeline === undefined ? SYSTEM_FIT_MIN_K : FIT_MIN_K);
+    fitK.current = cam.k;
+    setCam(cam);
+  }, [expanded, pipeline]);
+  // Fits when a new model arrives (a new scope, the tests flag), the view expands or the layout options change. Collapsing,
+  // widening or grouping changes the layout but keeps the user's zoom and pan.
   useLayoutEffect(() => {
     fit();
-  }, [fit]);
+  }, [fit, sys, layoutOptions]);
   useLayoutEffect(() => {
     setSel(null);
     setHover(null);
-  }, [layout]);
+  }, [sys, layoutOptions]);
   useEffect(() => {
     if (!expanded) return;
     const onKey = (e: globalThis.KeyboardEvent) => {
@@ -132,7 +189,7 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
       const px = e.clientX - r.left;
       const py = e.clientY - r.top;
       setCam((c) => {
-        const k = Math.min(MAX_K, Math.max(MIN_K, c.k * Math.exp(-e.deltaY * 0.0015)));
+        const k = Math.min(MAX_K, Math.max(minK(), c.k * Math.exp(-e.deltaY * 0.0015)));
         const s = k / c.k;
         return { k, x: px - (px - c.x) * s, y: py - (py - c.y) * s };
       });
@@ -146,7 +203,7 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
     const px = (el?.clientWidth ?? 800) / 2;
     const py = (el?.clientHeight ?? 500) / 2;
     setCam((c) => {
-      const k = Math.min(MAX_K, Math.max(MIN_K, c.k * f));
+      const k = Math.min(MAX_K, Math.max(minK(), c.k * f));
       const s = k / c.k;
       return { k, x: px - (px - c.x) * s, y: py - (py - c.y) * s };
     });
@@ -195,18 +252,40 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
         nodes.add(a.to);
       }
     }
+    // A bundled path runs slice -> port -> chip -> outside box: lighting one part lights the others of the same edge.
+    for (const a of layout.arrows) {
+      if (a.band === "in" && edges.has(a.id)) {
+        edges.add(`${a.to}>${a.edge.to}`);
+        nodes.add(a.edge.to);
+      } else if (a.band === "out" && edges.has(a.id)) {
+        for (const b of layout.arrows) if (b.band === "in" && b.to === a.from && b.edge.to === a.to) edges.add(b.id);
+      }
+    }
     return { edges, nodes };
   }, [focus, focusKind, layout]);
 
   const openScope = (path: string) => {
-    window.location.hash = hrefView(id, "arch", { scope: path });
+    window.location.hash = hrefView(id, "system", { scope: path });
   };
   const pickNode = (b: SysBox) => setSel({ kind: "node", id: b.id });
   const pickEdge = (a: SysArrow) => setSel({ kind: "edge", id: a.id });
+  // Enter does what a click does (selects the frame, or opens a coroutine summary); Space does what a double-click does
+  // (collapses or expands it). The selected frame's panel also has the Collapse and Group buttons.
+  const frameKey = (f: SysFrame, e: KeyboardEvent<SVGGElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (f.openKey !== undefined) toggleOpen(f.openKey);
+      else setSel({ kind: "node", id: f.id });
+    } else if (e.key === " ") {
+      e.preventDefault();
+      toggleFrame(f.id);
+    }
+  };
   const nodeKey = (b: SysBox, e: KeyboardEvent<SVGGElement>) => {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      pickNode(b);
+      if (b.kind === "more" && b.frame !== undefined) widen(b.frame);
+      else pickNode(b);
     }
   };
   const edgeKey = (a: SysArrow, e: KeyboardEvent<SVGGElement>) => {
@@ -219,7 +298,8 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
   // The edges keep their order: moving the DOM nodes of a hovered edge would swallow the click that follows the hover.
   const arrows = layout.arrows;
 
-  const empty = layout.boxes.length === 0;
+  // A collapsed lone process has frames but no boxes: it is not empty, and its header is how to open it again.
+  const empty = layout.boxes.length === 0 && (layout.frames ?? []).length === 0;
   // Content past the stage's edge: a fade along the right edge and a hint to pan.
   const stageW = stage.current?.clientWidth ?? 0;
   const stageHt = stage.current?.clientHeight ?? 0;
@@ -242,6 +322,12 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
             </span>
           )}
         </span>
+        {pipeline === undefined && sys.runtime === "none" && sys.components.length > 0 && (
+          <span className="muted small sysv-note">No runtime entry in this scope</span>
+        )}
+        {pipeline === undefined && sys.runtime === "truncated" && (
+          <span className="muted small sysv-note">Runtime skipped: the scope is too large to trace{sys.skippedFunctions !== undefined && sys.skippedFunctions > 0 ? ` (${plural(sys.skippedFunctions, "function")} skipped)` : ""}</span>
+        )}
         <label className="sysv-tests small">
           <input type="checkbox" checked={tests} onChange={(e) => onTests(e.target.checked)} /> Show tests
         </label>
@@ -305,16 +391,72 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
                     {g.title}
                   </text>
                 ))}
+                {layout.strips?.map((st) => (
+                  <g key={st.id} className="sysv-strip">
+                    <rect x={st.x} y={st.y} width={st.w} height={st.h} rx={10} />
+                    <text x={st.x + 10} y={st.y + 18}>
+                      {st.title}
+                    </text>
+                  </g>
+                ))}
+                {layout.band && (
+                  <g className="sysv-band">
+                    <rect x={layout.band.x} y={layout.band.y} width={layout.band.w} height={layout.band.h} />
+                    <text x={layout.band.x + 12} y={layout.band.y + 26}>
+                      Kernel
+                    </text>
+                  </g>
+                )}
+                {layout.frames?.map((f) => {
+                  const dim = lit !== null && !lit.nodes.has(f.id);
+                  const picked = sel?.kind === "node" && sel.id === f.id;
+                  const hdr = frameHeaderText(f.title, f.sub, f.w, f.collapsed, f.unresolved === undefined);
+                  const cls = ["sysv-frame", f.kind, f.collapsed && "collapsed", f.unresolved !== undefined && "unresolved", dim && "dim", picked && "picked", lit?.nodes.has(f.id) && "lit"].filter(Boolean).join(" ");
+                  return (
+                    <g
+                      key={f.id}
+                      className={cls}
+                      data-node={f.id}
+                      data-frame={f.id}
+                      role="button"
+                      tabIndex={0}
+                      aria-expanded={f.unresolved !== undefined ? undefined : !f.collapsed}
+                      aria-label={f.unresolved !== undefined ? `${f.title}, unresolved thread, ${f.unresolved}` : `${f.title}, ${f.sub}, ${f.collapsed ? "collapsed" : "expanded"}`}
+                      onClick={() => (f.openKey !== undefined ? toggleOpen(f.openKey) : setSel({ kind: "node", id: f.id }))}
+                      onDoubleClick={() => (f.openKey !== undefined ? undefined : toggleFrame(f.id))}
+                      onKeyDown={(e) => frameKey(f, e)}
+                      onMouseEnter={() => setHover(f.id)}
+                      onMouseLeave={() => setHover(null)}
+                      onFocus={() => setHover(f.id)}
+                      onBlur={() => setHover(null)}
+                    >
+                      <rect className="sysv-frame-body" x={f.x} y={f.y} width={f.w} height={f.h} rx={14} />
+                      <rect className="sysv-frame-hdr" x={f.x} y={f.y} width={f.w} height={f.hdrH} rx={14} />
+                      <title>{`${hdr.titleFull} — ${hdr.subFull}`}</title>
+                      <text className="sysv-frame-title" x={f.x + 14} y={f.y + 22}>
+                        {hdr.title}
+                      </text>
+                      <text className="sysv-frame-sub" x={f.x + f.w - 14} y={f.y + 22} textAnchor="end">
+                        {hdr.sub}
+                      </text>
+                      {f.unresolved !== undefined && (
+                        <text className="sysv-frame-note" x={f.x + 14} y={f.y + f.hdrH + 17}>
+                          {f.unresolved}
+                        </text>
+                      )}
+                    </g>
+                  );
+                })}
                 {arrows.map((a) => {
                   const on = lit?.edges.has(a.id) === true;
                   const dim = lit !== null && !on;
                   const picked = sel?.kind === "edge" && sel.id === a.id;
-                  const cls = ["sysv-edge", `v-${a.edge.verb}`, a.dashed && "dashed", a.inferred && "inferred", on && "lit", dim && "dim", picked && "picked"]
+                  const cls = ["sysv-edge", `v-${a.edge.verb}`, a.dashed && "dashed", a.inferred && "inferred", a.bundled && "bundled", a.band && `band-${a.band}`, on && "lit", dim && "dim", picked && "picked"]
                     .filter(Boolean)
                     .join(" ");
                   const pill = a.pill;
                   // A Pipeline's pills show for the hovered or selected edges only; a large System graph does the same above PILL_LIMIT.
-                  const showPill = pipeline !== undefined ? on : arrows.length <= PILL_LIMIT || on;
+                  const showPill = (pipeline !== undefined ? on : arrows.length <= PILL_LIMIT || on) && pill.text !== "" && a.noPill !== true;
                   return (
                     <g
                       key={a.id}
@@ -329,13 +471,33 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
                       onFocus={() => setHover(a.id)}
                       onBlur={() => setHover(null)}
                     >
-                      <path className="sysv-line" d={a.d} markerEnd={a.edge.verb === "writes" || a.edge.verb === "produces" ? "url(#sysv-head-w)" : "url(#sysv-head)"} />
+                      <path className="sysv-line" d={a.d} markerEnd={a.bundled === true ? undefined : a.edge.verb === "writes" || a.edge.verb === "produces" ? "url(#sysv-head-w)" : "url(#sysv-head)"} />
                       <path className="sysv-hit" d={a.d} onClick={() => pickEdge(a)} />
                       {showPill && (
                         <g className="sysv-pill" onClick={() => pickEdge(a)}>
                           <rect x={pill.x - pill.w / 2} y={pill.y - pill.h / 2} width={pill.w} height={pill.h} rx={pill.h / 2} />
                           <text x={pill.x} y={pill.y} textAnchor="middle" dy="0.35em">
                             {pill.text}
+                          </text>
+                        </g>
+                      )}
+                    </g>
+                  );
+                })}
+                {layout.trunks?.map((t) => {
+                  const on = lit !== null && t.edges.some((id) => lit.edges.has(id));
+                  const dim = lit !== null && !on;
+                  const cls = ["sysv-trunk", `v-${t.verb}`, on && "lit", dim && "dim"].filter(Boolean).join(" ");
+                  return (
+                    <g key={t.id} className={cls} data-trunk={t.id}>
+                      <path className="sysv-line" d={t.d} markerEnd={t.verb === "writes" ? "url(#sysv-head-w)" : "url(#sysv-head)"} />
+                      <path className="sysv-hit" d={t.d} onClick={() => setSel({ kind: "node", id: t.to })} onMouseEnter={() => setHover(t.to)} onMouseLeave={() => setHover(null)} />
+                      <circle className="sysv-port" cx={t.port.x} cy={t.port.y} r={4.5} />
+                      {t.pill.text !== "" && (
+                        <g className="sysv-pill" onClick={() => setSel({ kind: "node", id: t.to })}>
+                          <rect x={t.pill.x - t.pill.w / 2} y={t.pill.y - t.pill.h / 2} width={t.pill.w} height={t.pill.h} rx={t.pill.h / 2} />
+                          <text x={t.pill.x} y={t.pill.y} textAnchor="middle" dy="0.35em">
+                            {t.pill.text}
                           </text>
                         </g>
                       )}
@@ -353,24 +515,48 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
                       data-node={b.id}
                       role="button"
                       tabIndex={0}
-                      aria-label={b.kind === "component" ? `${b.component?.label}, ${b.sub}` : `${b.external?.label}, outside system`}
-                      onClick={() => pickNode(b)}
-                      onDoubleClick={() => b.kind === "component" && b.component && openScope(b.component.path)}
+                      aria-label={boxLabel(b)}
+                      onClick={() => (b.kind === "more" && b.frame !== undefined ? widen(b.frame) : pickNode(b))}
+                      onDoubleClick={() => (b.kind === "component" && b.component ? openScope(b.component.path) : undefined)}
                       onKeyDown={(e) => nodeKey(b, e)}
                       onMouseEnter={() => setHover(b.id)}
                       onMouseLeave={() => setHover(null)}
                       onFocus={() => setHover(b.id)}
                       onBlur={() => setHover(null)}
                     >
-                      <title>{b.kind === "component" ? b.component?.label : b.external?.label}</title>
-                      <rect className="sysv-card" x={b.x} y={b.y} width={b.w} height={b.h} rx={12} />
-                      <rect className="sysv-tab" x={b.x} y={b.y + 10} width={4} height={b.h - 20} rx={2} />
-                      <text className="sysv-name" x={b.x + 16} y={b.y + 26}>
-                        {b.title}
-                      </text>
-                      <text className="sysv-sub" x={b.x + 16} y={b.y + 46}>
-                        {b.sub}
-                      </text>
+                      <title>{b.kind === "component" ? b.component?.label : b.kind === "external" ? b.external?.label : b.title}</title>
+                      {b.kind === "chip" || b.kind === "more" ? (
+                        <>
+                          <rect className="sysv-card" x={b.x} y={b.y} width={b.w} height={b.h} rx={b.h / 2} />
+                          <text className="sysv-chipname" x={b.x + 12} y={b.y + b.h / 2} dy="0.35em">
+                            {b.title}
+                          </text>
+                        </>
+                      ) : (
+                        <>
+                          <rect className="sysv-card" x={b.x} y={b.y} width={b.w} height={b.h} rx={12} />
+                          <rect className="sysv-tab" x={b.x} y={b.y + 10} width={4} height={b.h - 20} rx={2} />
+                        </>
+                      )}
+                      {b.glyph !== undefined && <ResourceGlyph x={b.x + b.w - 22} y={b.y + 8} kind={b.glyph} />}
+                      {b.awaits !== undefined && (
+                        <g className="sysv-await">
+                          <rect x={b.x + b.w - 66} y={b.y + b.h - 22} width={52} height={16} rx={8} />
+                          <text x={b.x + b.w - 40} y={b.y + b.h - 14} textAnchor="middle" dy="0.35em">
+                            await ×{b.awaits}
+                          </text>
+                        </g>
+                      )}
+                      {b.kind !== "chip" && b.kind !== "more" && (
+                        <>
+                          <text className="sysv-name" x={b.x + 16} y={b.y + 26}>
+                            {b.title}
+                          </text>
+                          <text className="sysv-sub" x={b.x + 16} y={b.y + 46}>
+                            {b.sub}
+                          </text>
+                        </>
+                      )}
                       {b.chips.map((chip, i) => (
                         <g key={chip + i} className="sysv-chip">
                           <rect x={b.x + 14} y={b.y + 56 + i * 20} width={Math.min(b.w - 28, chip.length * 8 + 14)} height={16} rx={8} />
@@ -388,11 +574,67 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
           {cutRight && <div className="sysv-fade" aria-hidden="true" />}
           {cut && sel === null && <span className="sysv-hint small muted">drag to pan · Fit</span>}
           {!empty && sel === null && <Legend pipeline={pipeline !== undefined} />}
-          {sel !== null && <Panel id={id} sys={sys} layout={layout} sel={sel} onSelect={setSel} onOpen={openScope} onClose={() => setSel(null)} />}
+          {sel !== null && <Panel id={id} sys={sys} layout={layout} sel={sel} onSelect={setSel} onOpen={openScope} onClose={() => setSel(null)} onToggle={toggleFrame} onWiden={widen} />}
         </div>
         {!empty && sel === null && pipeline !== undefined && <PipelineSummary pipeline={pipeline} />}
       </div>
     </div>
+  );
+}
+
+/** What a screen reader says for a box: its name and what kind of thing it is. Never "undefined". */
+export function boxLabel(b: SysBox): string {
+  switch (b.kind) {
+    case "component":
+      return `${b.component?.label ?? b.title}, ${b.sub}`;
+    case "slice":
+      return `${b.title}, slice${b.sub !== "" ? `, ${b.sub}` : ""}`;
+    case "chip":
+      return `${b.title}, call into the kernel or an outside system`;
+    case "more":
+      return `${b.title} ${b.frame?.startsWith("res:") ? "resources" : "slices"}, show all`;
+    case "os":
+      return `${b.title}, kernel operation${b.sub !== "" ? `, ${b.sub}` : ""}`;
+    case "resource":
+      return `${b.title}, ${b.resource?.kind ?? "resource"}`;
+    case "external":
+      return `${b.external?.label ?? b.title}, outside system`;
+    default:
+      return b.title;
+  }
+}
+
+function ResourceGlyph({ x, y, kind }: { x: number; y: number; kind: string }) {
+  if (kind === "lock") {
+    // A padlock, drawn in SVG (not an emoji): a shackle over a body.
+    return (
+      <svg className="sysv-glyph" x={x} y={y} width={14} height={16} viewBox="0 0 14 16" aria-hidden="true">
+        <path d="M4 7 V5 a3 3 0 0 1 6 0 V7" fill="none" strokeWidth="1.6" />
+        <rect x="2" y="7" width="10" height="8" rx="1.5" />
+      </svg>
+    );
+  }
+  const text = kind === "queue" ? "▤" : kind === "semaphore" ? "▦" : kind === "condvar" ? "◎" : kind === "$" ? "$" : "◇";
+  return (
+    <text className="sysv-glyph-text" x={x + 7} y={y + 9} textAnchor="middle" dy="0.35em" aria-hidden="true">
+      {text}
+    </text>
+  );
+}
+
+function LevelMarks() {
+  return (
+    <>
+      <li>
+        <span className="lv syscall" /> syscall
+      </li>
+      <li>
+        <span className="lv api" /> API
+      </li>
+      <li>
+        <span className="lv unknown" /> unknown
+      </li>
+    </>
   );
 }
 
@@ -423,11 +665,12 @@ function Legend({ pipeline }: { pipeline: boolean }) {
       <li>
         <span className="sw inferred" /> inferred
       </li>
+      <LevelMarks />
     </ul>
   );
 }
 
-function Panel({ id, sys, layout, sel, onSelect, onOpen, onClose }: { id: string; sys: SystemModel; layout: SysLayout; sel: NonNullable<Selection>; onSelect: (s: Selection) => void; onOpen: (path: string) => void; onClose: () => void }) {
+function Panel({ id, sys, layout, sel, onSelect, onOpen, onClose, onToggle, onWiden }: { id: string; sys: SystemModel; layout: SysLayout; sel: NonNullable<Selection>; onSelect: (s: Selection) => void; onOpen: (path: string) => void; onClose: () => void; onToggle: (id: string) => void; onWiden: (id: string) => void }) {
   const nameOf = (nodeId: string): string => {
     const b = layout.boxes.find((x) => x.id === nodeId);
     return b ? (b.kind === "component" ? (b.component?.label ?? nodeId) : (b.external?.label ?? nodeId)) : nodeId;
@@ -446,8 +689,30 @@ function Panel({ id, sys, layout, sel, onSelect, onOpen, onClose }: { id: string
       </aside>
     );
   }
+  const frame = layout.frames?.find((f) => f.id === sel.id);
+  if (frame) {
+    return (
+      <aside className="sysv-panel" aria-label="Selection">{close}
+        <FrameDetail id={id} sys={sys} frame={frame} onToggle={onToggle} onWiden={onWiden} />
+      </aside>
+    );
+  }
   const box = layout.boxes.find((x) => x.id === sel.id);
   if (!box) return <aside className="sysv-panel" />;
+  if (box.kind === "slice" && box.slice) {
+    return (
+      <aside className="sysv-panel" aria-label="Selection">{close}
+        <SliceDetail id={id} sys={sys} box={box} layout={layout} onSelect={onSelect} />
+      </aside>
+    );
+  }
+  if ((box.kind === "resource" || box.kind === "os") && box.resource) {
+    return (
+      <aside className="sysv-panel" aria-label="Selection">{close}
+        <ResourceDetail id={id} sys={sys} box={box} layout={layout} onSelect={onSelect} />
+      </aside>
+    );
+  }
   const out = layout.arrows.filter((a) => a.from === box.id);
   const inn = layout.arrows.filter((a) => a.to === box.id);
   const routes = sys.routes.filter((r) => r.component === box.id);
@@ -500,10 +765,163 @@ function EdgeList({ title, id, rows, nameOf, onSelect }: { title: string; id: st
         {rows.map((a) => (
           <li key={a.id}>
             <button type="button" className="arch-link" onClick={() => onSelect({ kind: "edge", id: a.id })}>
-              <span className={`sysv-verb v-${a.edge.verb}`}>{a.pill.text}</span> <span className="mono small">{nameOf(a)}</span>
+              <span className={`sysv-verb v-${a.edge.verb}`}>{a.pill.text || a.edge.verb}</span> <span className="mono small">{nameOf(a)}</span>
             </button>
             <SiteLinks id={id} sites={a.edge.sites.slice(0, 3)} />
-            {a.edge.sites.length > 3 && <span className="muted small"> +{a.edge.sites.length - 3} more in the edge</span>}
+            {a.edge.count > Math.min(3, a.edge.sites.length) && <span className="muted small"> +{a.edge.count - Math.min(3, a.edge.sites.length)} more in the edge</span>}
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
+/** The runtime a slice id ("<runtime>|<component>") runs on. */
+const runtimeOfSlice = (sliceId: string): string => sliceId.slice(0, sliceId.lastIndexOf("|"));
+
+function runtimeLabel(sys: SystemModel, rt: string): string {
+  return sys.runtimes?.find((r) => r.id === rt)?.label ?? rt;
+}
+
+function FrameDetail({ id, sys, frame, onToggle, onWiden }: { id: string; sys: SystemModel; frame: SysFrame; onToggle: (id: string) => void; onWiden: (id: string) => void }) {
+  // The functions the frame starts in, each linked to its Flow chart.
+  const rootFns = sys.runtimes?.find((r) => r.id === frame.id)?.roots ?? [];
+  const spawn = frame.spawn;
+  return (
+    <>
+      <h2 className="mono">{frame.title}</h2>
+      <p className="small muted">
+        {frame.unresolved !== undefined ? "unresolved thread" : frame.kind === "unthreaded" ? "Code on no thread" : frame.kind}
+        {frame.coroutines !== undefined ? ` · ${plural(frame.coroutines, "coroutine")}` : ""}
+      </p>
+      {frame.unresolved !== undefined && <p className="small">{frame.unresolved}. No code of this thread is known, so it has no slices.</p>}
+      {spawn !== undefined && (
+        <>
+          <h3>Spawned at</h3>
+          <p className="small">
+            {spawn.api !== undefined ? <span className="mono">{spawn.api}</span> : "spawn"} · {spawn.status}
+          </p>
+          <SiteLinks id={id} sites={[{ file: spawn.file, line: spawn.line, ...(spawn.fn !== undefined ? { fn: spawn.fn } : {}) }]} />
+        </>
+      )}
+      {rootFns.length > 0 && (
+        <>
+          <h3>Roots</h3>
+          <ul className="arch-list">
+            {rootFns.map((fn) => (
+              <li key={fn} className="small">
+                <a className="mono" href={hrefView(id, "flow", { scope: dirname(fn.slice(0, fn.indexOf("#"))), fn, roots: true })} title={`Open ${fnName(fn)} in Flow`}>
+                  {fnName(fn)}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      <p className="small">
+        {plural((sys.slices ?? []).filter((s) => s.runtime === frame.id).length, "slice")} in this frame
+        {frame.hidden > 0 ? `, ${frame.hidden} more behind the chip` : ""}
+      </p>
+      {frame.unresolved === undefined && <p className="row-gap">
+        <button type="button" className="sysv-open" onClick={() => onToggle(frame.id)}>
+          {frame.collapsed ? "Expand" : "Collapse"}
+        </button>{" "}
+        {frame.coGroup !== undefined && (
+          <button type="button" className="sysv-open" onClick={() => onToggle(`open:${frame.id}`)}>
+            {frame.coGroup.open ? `Group the ${frame.coGroup.count} coroutines` : `Show the ${frame.coGroup.count} coroutines`}
+          </button>
+        )}{" "}
+        {frame.hidden > 0 && (
+          <button type="button" className="sysv-open" onClick={() => onWiden(frame.id)}>
+            Show all slices
+          </button>
+        )}
+      </p>}
+    </>
+  );
+}
+
+function SliceDetail({ id, sys, box, layout, onSelect }: { id: string; sys: SystemModel; box: SysBox; layout: SysLayout; onSelect: (s: Selection) => void }) {
+  const slice = box.slice as NonNullable<SysBox["slice"]>;
+  const rootSlice = (sys.slices ?? []).find((s) => s.runtime === slice.runtime && s.root);
+  const basis = slice.root ? "root of this thread" : `reached by calls from ${rootSlice?.component ?? "the root"}`;
+  const edges = layout.arrows.filter((a) => a.from === box.id || a.to === box.id);
+  return (
+    <>
+      <h2 className="mono">{slice.component}</h2>
+      <p className="small muted">
+        {runtimeLabel(sys, slice.runtime)} · {plural(slice.functions, "function")}
+        {slice.atomics !== undefined ? ` · ${plural(slice.atomics, "atomic op")}` : ""}
+      </p>
+      <p className="small">
+        Placement: {basis}. Placement is inferred from calls, so a function reached only through a call may sit on another thread than the one that runs it.
+      </p>
+      {slice.awaits !== undefined && <p className="small">Awaits {plural(slice.awaits, "function")} inline (they run in this slice).</p>}
+      <h3>Edges</h3>
+      <ul className="arch-list">
+        {edges.map((a) => (
+          <li key={a.id}>
+            <button type="button" className="arch-link" onClick={() => onSelect({ kind: "edge", id: a.id })}>
+              <span className={`sysv-verb v-${a.edge.verb}`}>{a.pill.text || a.edge.verb}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
+function ResourceDetail({ id, sys, box, layout, onSelect }: { id: string; sys: SystemModel; box: SysBox; layout: SysLayout; onSelect: (s: Selection) => void }) {
+  const res = box.resource as NonNullable<SysBox["resource"]>;
+  const into = layout.arrows.filter((a) => a.to === box.id);
+  const outOf = layout.arrows.filter((a) => a.from === box.id);
+  const byThread = (rows: SysArrow[], pick: (a: SysArrow) => string) => {
+    const groups = new Map<string, SysArrow[]>();
+    for (const a of rows) {
+      const rt = runtimeOfSlice(pick(a));
+      groups.set(rt, [...(groups.get(rt) ?? []), a]);
+    }
+    return [...groups.entries()].sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0));
+  };
+  const who = res.kind === "lock" ? "acquirers" : "producers";
+  const whoElse = res.kind === "lock" ? "" : "consumers";
+  const producers = byThread(into, (a) => a.from);
+  const consumers = byThread(outOf, (a) => a.to);
+  const group = (title: string, list: Array<[string, SysArrow[]]>) =>
+    list.length > 0 && (
+      <>
+        <h3>{title}</h3>
+        {list.map(([rt, rows]) => (
+          <div key={rt}>
+            <p className="small muted">{runtimeLabel(sys, rt)}</p>
+            <SiteLinks id={id} sites={rows.flatMap((a) => a.edge.sites).slice(0, 3)} />
+          </div>
+        ))}
+      </>
+    );
+  return (
+    <>
+      <h2 className="mono">{res.label}</h2>
+      <p className="small muted">
+        {res.kind}
+        {res.program !== undefined ? ` · ${runtimeLabel(sys, res.program)}` : ""}
+        {res.source !== undefined ? ` · ${res.source}` : ""}
+      </p>
+      {res.names !== undefined && res.names.length > 0 && <p className="small mono">{res.names.join(", ")}</p>}
+      {res.kind === "lock" || res.kind === "queue" ? (
+        <>
+          {group(who[0]?.toUpperCase() + who.slice(1), producers)}
+          {whoElse !== "" && group(whoElse[0]?.toUpperCase() + whoElse.slice(1), consumers)}
+          <p className="small muted">Atomic operations: not in the model yet.</p>
+        </>
+      ) : null}
+      <h3>Edges</h3>
+      <ul className="arch-list">
+        {[...into, ...outOf].map((a) => (
+          <li key={a.id}>
+            <button type="button" className="arch-link" onClick={() => onSelect({ kind: "edge", id: a.id })}>
+              <span className={`sysv-verb v-${a.edge.verb}`}>{a.pill.text || a.edge.verb}</span>
+            </button>
           </li>
         ))}
       </ul>
@@ -524,6 +942,28 @@ function EdgeDetail({ id, edge, fromName, toName }: { id: string; edge: SystemEd
         {plural(edge.count, "fact")}, confidence {edge.confidence}
         {edge.count > edge.sites.length ? `, first ${edge.sites.length} sites shown` : ""}
       </p>
+      {edge.evidence !== undefined && edge.evidence.length > 0 && (
+        <table className="sysv-evidence small">
+          <thead>
+            <tr>
+              <th>API</th>
+              <th>Syscall</th>
+              <th>Level</th>
+              <th>Count</th>
+            </tr>
+          </thead>
+          <tbody>
+            {edge.evidence.map((ev) => (
+              <tr key={`${ev.api}\0${ev.syscall ?? ""}\0${ev.level}`}>
+                <td className="mono">{ev.api}</td>
+                <td className="mono">{ev.syscall ?? "·"}</td>
+                <td>{LEVEL_TEXT[ev.level]}</td>
+                <td>{ev.count}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
       <h3>Sites</h3>
       <SiteLinks id={id} sites={edge.sites} />
     </>

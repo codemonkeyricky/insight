@@ -27,6 +27,7 @@ const edge = (from: string, to: string, verb: SystemEdge["verb"], label: string,
 function sample(): SystemModel {
   return {
     scope: "svc/src",
+    runtime: "none",
     components: [comp(G), comp(I), comp(S), comp(V, 1, true)],
     routes: [{ id: "route:1", component: V, framework: "export", method: "POST", path: "", handler: "POST", site: { file: V, line: 4 } }],
     externals: [
@@ -115,7 +116,7 @@ describe("layoutSystem", () => {
   });
 
   it("lays out an empty model as nothing", () => {
-    expect(layoutSystem({ scope: "", components: [], routes: [], externals: [], edges: [], stages: [] }).boxes).toEqual([]);
+    expect(layoutSystem({ scope: "", runtime: "none", components: [], routes: [], externals: [], edges: [], stages: [] }).boxes).toEqual([]);
   });
 
   it("shortens long labels at a segment and writes pills with the verb first", () => {
@@ -271,23 +272,29 @@ describe("SystemDiagram", () => {
 });
 
 describe("Arch mode toggle", () => {
-  it("renders System and Packages, with the chosen one pressed", () => {
-    const html = renderToStaticMarkup(<ArchModeToggle mode="system" onChange={() => {}} />);
-    expect(html).toMatch(/aria-pressed="true"[^>]*>System</);
+  it("renders Pipeline and Packages only, with the chosen one pressed", () => {
+    const html = renderToStaticMarkup(<ArchModeToggle mode="pipeline" onChange={() => {}} />);
+    expect(html).toMatch(/aria-pressed="true"[^>]*>Pipeline</);
     expect(html).toMatch(/aria-pressed="false"[^>]*>Packages</);
+    expect(html).not.toContain(">System<");
     const pk = renderToStaticMarkup(<ArchModeToggle mode="packages" onChange={() => {}} />);
     expect(pk).toMatch(/aria-pressed="true"[^>]*>Packages</);
   });
 
-  it("defaults to System and persists the choice", () => {
+  it("defaults to Packages and persists the choice", () => {
     const mem = new Map<string, string>();
     const store = { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => void mem.set(k, v) };
-    expect(readArchMode(store)).toBe("system");
-    writeArchMode("packages", store);
-    expect(mem.get(ARCH_MODE_KEY)).toBe("packages");
     expect(readArchMode(store)).toBe("packages");
+    writeArchMode("pipeline", store);
+    expect(mem.get(ARCH_MODE_KEY)).toBe("pipeline");
+    expect(readArchMode(store)).toBe("pipeline");
     mem.set(ARCH_MODE_KEY, "nonsense");
-    expect(readArchMode(store)).toBe("system");
+    expect(readArchMode(store)).toBe("packages");
+  });
+
+  it("reads a stored system (retired as a mode) as packages", () => {
+    const store = { getItem: () => "system", setItem: () => {} };
+    expect(readArchMode(store)).toBe("packages");
   });
 
   it("works when storage throws", () => {
@@ -299,7 +306,7 @@ describe("Arch mode toggle", () => {
         throw new Error("blocked");
       },
     };
-    expect(readArchMode(bad)).toBe("system");
+    expect(readArchMode(bad)).toBe("packages");
     expect(() => writeArchMode("packages", bad)).not.toThrow();
   });
 });

@@ -4,6 +4,7 @@ import ts from "typescript";
 import type { IREdge, IRFinding, IRNode, IRRecord, NodeId, Provenance, Span, UnresolvedRef } from "@insight/ir";
 import type { IRBatch } from "@insight/sdk";
 import { importBindings, matchCall, matchEnvRead, matchExportRoute, matchFetch, matchSchedule, matchServe, matchWorker, nodeScriptArgument, scriptPath, urlText, type ImportBinding, type ScriptPath, type UrlText, type WorkerEnv } from "./effects.js";
+import { channelIndex, matchChannelRecv, matchChannelSend } from "./channels.js";
 import { scriptKind } from "./digest.js";
 import { emitState } from "./state.js";
 import { dispatchFor, MAX_DISPATCH_TARGETS, propName } from "./dispatch.js";
@@ -1185,6 +1186,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
   // A spawn runs a script's module entry when the script has one, and the file otherwise.
   const spawnTarget = (to: string): string => project.moduleOf(to) ?? to;
   const workerEnv = workerEnvFor(project, sf);
+  const chans = channelIndex(project.checker, sf, rel);
   const usedIds = new Set<string>();
   const uniqueId = (base: string): string => {
     let id = `${rel}@${base}`;
@@ -1481,6 +1483,19 @@ export function emitFile(project: Project, rel: string): IRBatch {
       }
       // A call to a function the project declares is that function, not a network request, so a fetch-named one is not matched.
       const effect = matchCall(call, imports) ?? (target?.entity.type === "function" ? undefined : matchFetch(call, imports, workerEnv));
+      // A message on a BroadcastChannel or MessagePort is a send on that channel, not a message to a Worker's inbox.
+      const send = matchChannelSend(call, project.checker, chans);
+      if (send) {
+        push({
+          id: uniqueId(`chan:${pos(sf, call.getStart(sf)).join(":")}`),
+          facet: "concurrency",
+          kind: "concurrency.channel-send",
+          parent: owner,
+          attrs: { channel: send.channel, api: send.api },
+          span: spanOf(rel, sf, call),
+          provenance: PROV,
+        });
+      }
       // An HTTP route the call registers on a server object: the path it serves, owned by the code that registers it.
       const serve = matchServe(call, imports);
       if (serve) {
@@ -1495,7 +1510,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
         });
       }
       // A message a worker or page posts to its peer: a step of its own, since the runtime has no call the project declares.
-      if (!effect && target === undefined && ts.isPropertyAccessExpression(callee) && callee.name.text === "postMessage") {
+      if (!effect && !send && target === undefined && ts.isPropertyAccessExpression(callee) && callee.name.text === "postMessage") {
         push({
           id: uniqueId(`effect:${pos(sf, call.getStart(sf)).join(":")}`),
           facet: "effects",
@@ -1560,7 +1575,8 @@ export function emitFile(project: Project, rel: string): IRBatch {
       if (effect) {
         push({
           id: uniqueId(`effect:${pos(sf, call.getStart(sf)).join(":")}`),
-          facet: "effects",
+          // The facet is the kind's first segment: effects for OS and I/O, sync for locks and atomics.
+          facet: effect.kind.slice(0, effect.kind.indexOf(".")),
           kind: effect.kind,
           parent: owner,
           attrs: effect.attrs,
@@ -1693,6 +1709,19 @@ export function emitFile(project: Project, rel: string): IRBatch {
     }
 
     emitHandler(node);
+    // A receive on a BroadcastChannel or MessagePort: an onmessage assignment or a "message" listener on one.
+    const recv = matchChannelRecv(node, project.checker, chans);
+    if (recv) {
+      push({
+        id: uniqueId(`chanrecv:${pos(sf, node.getStart(sf)).join(":")}`),
+        facet: "concurrency",
+        kind: "concurrency.channel-recv",
+        parent: owner,
+        attrs: { channel: recv.channel, api: recv.api },
+        span: spanOf(rel, sf, node),
+        provenance: PROV,
+      });
+    }
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
       emitModule(rel, node.moduleSpecifier.text, node.moduleSpecifier, node.importClause?.isTypeOnly ?? false, false, "packaging.import");
     } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {

@@ -281,7 +281,7 @@ export const lensExecution: Lens = {
     };
 
     const findings: LensFinding[] = spawns
-      .filter((s) => s.target === DYNAMIC)
+      .filter((s) => s.target === DYNAMIC && !(s.kind === "process" && (s.api === "fork" || s.api === "vfork")))
       .map((s) => ({
         lens: "lens-execution",
         id: `dynamic-spawn:${s.node.id}`,

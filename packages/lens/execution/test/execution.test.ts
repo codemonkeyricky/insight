@@ -96,6 +96,21 @@ describe("lensExecution", () => {
     expect(result.findings[0]).toMatchObject({ id: "dynamic-spawn:src/b.ts@spawn:10:2", severity: "info" });
   });
 
+  it("does not flag fork or vfork as a non-literal target, since they take no target", async () => {
+    const view = fx.view({
+      nodes: [
+        fx.node("src/c.cc", "structure", "structure.file"),
+        fx.node("src/c.cc#spawnKids", "structure", "structure.function", { parent: "src/c.cc", attrs: { name: "spawnKids", async: false }, span: span("src/c.cc", 0) }),
+        fx.node("src/c.cc@procspawn:3:2", "concurrency", "concurrency.spawn-process", { parent: "src/c.cc#spawnKids", attrs: { api: "fork" }, span: span("src/c.cc", 2) }),
+        fx.node("src/c.cc@procspawn:4:2", "concurrency", "concurrency.spawn-process", { parent: "src/c.cc#spawnKids", attrs: { api: "vfork" }, span: span("src/c.cc", 3) }),
+        fx.node("src/c.cc@spawn:6:2", "concurrency", "concurrency.spawn-thread", { parent: "src/c.cc#spawnKids", attrs: { target: "<dynamic>", api: "std::thread" }, span: span("src/c.cc", 5) }),
+      ],
+    });
+    const result = await lensExecution.run(view, ctx());
+    expect(result.metrics).toEqual({ processes: 3, threads: 2, coroutines: 0, awaits: 0, spawnSites: 3 });
+    expect(result.findings.map((f) => f.id)).toEqual(["dynamic-spawn:src/c.cc@spawn:6:2"]);
+  });
+
   it("never counts or lists an external stub, even one that starts work", async () => {
     const view = fx.view({
       nodes: [

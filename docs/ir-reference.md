@@ -88,32 +88,84 @@ Base kinds shipped by the core:
 | `calls.call` | calls | edge | – | Caller function to callee function. A call through an interface member, or an abstract class member, has no body to call, so its `to` is `{"candidates": [...]}` with the implementations (`attrs.how` is `interface`, provenance `heuristic`). The candidates are every indexed class that implements the interface, directly, through an extended interface, or through a base class, and that declares the member or inherits it from its nearest base class; or, for an abstract member, every indexed concrete subclass of the abstract class and what it inherits or overrides. A receiver typed by an interface is matched against that interface's implementers, not the interface that declares the member. A set is sorted by id and holds at most 32 targets; `attrs.truncated` is `true` when the set was cut. A set always has at least one target, even when there is one implementation. Not covered: structural matches (a class that fits an interface without `implements`), classes in files outside the index, class expressions, and a new implementer in another file, which reaches a call site only when that call site's file is extracted again. Optional `attrs.knownState` maps a holder id to the values it is known to hold at the call site, `attrs.knownStale` lists the holders whose value there may be out of date, and `attrs.knownEntry` lists the holders whose known set at the call is exactly the caller's own entry set (no write or test of the holder, and no await, on any path from the caller's entry to the call, and no join with a non-entry set). |
 | `calls.reference` | calls | edge | – | Caller to a function it refers to without calling it. `attrs.how` is `new`, `jsx`, `value`, `closure` or `handler`. Caller is the enclosing function, or the file for module-level code. `closure` runs from a function to an anonymous function created inside it, so the creator still reaches what the closure calls. `handler` runs from the code that installs a project function as an event or message handler, such as `worker.onmessage = fn` or `addEventListener("message", fn)`, to that function. |
 | `calls.contains-call` | calls | edge | – |  |
-| `concurrency.spawn-thread` | concurrency | node | – |  |
-| `concurrency.spawn-process` | concurrency | node | – |  |
+| `concurrency.spawn-thread` | concurrency | node | – | `attrs.target` names the function run; `attrs.api` (optional) is the exact API that spawns it. |
+| `concurrency.spawn-process` | concurrency | node | – | `attrs.target` names the program run; `attrs.api` (optional) is the exact API that spawns it. |
 | `concurrency.coroutine` | concurrency | node | – |  |
 | `concurrency.async-task` | concurrency | node | – |  |
 | `concurrency.await` | concurrency | node | – |  |
-| `concurrency.channel-send` | concurrency | node | – | A send on a channel. `attrs.channel` names the channel; the execution model groups sends and receives by it. |
-| `concurrency.channel-recv` | concurrency | node | – | A receive on a channel. `attrs.channel` names the channel, as for a send. |
+| `concurrency.channel-send` | concurrency | node | – | A send on a channel. `attrs.channel` (required) names the queue or channel: a literal name, `Class::member`, or `<dynamic>`; the execution model groups sends and receives by it. Optional `attrs.api` is the exact API, and optional `attrs.guardedBy` names the lock for a queue inferred to be guarded by that lock. |
+| `concurrency.channel-recv` | concurrency | node | – | A receive on a channel. `attrs.channel` (required) names the channel, as for a send. Optional `attrs.api` and `attrs.guardedBy` as for a send. |
 | `concurrency.spawns` | concurrency | edge | – | Spawn node to the function (or script file) it runs. `attrs.how` is `thread`, `process` or `async`. The spawning function is the spawn node's owner. Only emitted when the target resolves. |
 | `concurrency.dispatches` | concurrency | edge | – | Function to the coroutine, async function or callback it hands work to. `attrs.how` is `await`, `start`, `callback`, `timer`, `microtask` or `message`. `message` is a Web Worker `postMessage` (page to worker, or worker to page) to the `onmessage` or `addEventListener("message")` handler the other side registers at its top level or on the Worker object; the TypeScript frontend emits it only when both ends resolve, with confidence `inferred`. |
 | `sync.lock-acquire` | sync | node | – | Takes a lock. `attrs.lock` names the lock; the execution model and the lock-order lens group acquires by it. |
 | `sync.lock-release` | sync | node | – |  |
-| `sync.rwlock-acquire` | sync | node | `sync.lock-acquire` |  |
-| `sync.semaphore` | sync | node | – |  |
-| `sync.atomic-op` | sync | node | – |  |
-| `sync.condvar` | sync | node | – |  |
+| `sync.rwlock-acquire` | sync | node | `sync.lock-acquire` | `attrs.mode` and `attrs.lock` are required. `attrs.mode` is `shared` or `exclusive`, and `attrs.lock` names the mutex. |
+| `sync.semaphore` | sync | node | – | `attrs.op` (required) is `acquire`, `release`, `wait`, `notify` or `op`. Optional `attrs.name`, `attrs.lock` (the lock the operation is tied to) and `attrs.api`. |
+| `sync.atomic-op` | sync | node | – | `attrs.op` (required) is `acquire`, `release`, `wait`, `notify` or `op`. Optional `attrs.lock` and `attrs.api`. |
+| `sync.condvar` | sync | node | – | `attrs.op` (required) is `acquire`, `release`, `wait`, `notify` or `op`. Optional `attrs.lock` and `attrs.api`, e.g. `wait` with `lock` `m_`. |
 | `state.holder` | state | node | – | A field, variable or useState slot whose declared type is a finite set of values (enum or literal union). |
 | `state.write` | state | node | – | One site that sets a holder: an assignment, an object-literal property, an initializer, or a call to a setter helper. `from` is the set of values the holder is known to have just before. `fromEntry: true` (only when `from` is absent) says the known set at the write is exactly the enclosing function's entry set, so a consumer may fill it from the callers; a write without `from` and without `fromEntry` is unknown for another reason (dynamic write, join with an unknown side, loop widening, stale after an await). |
 | `state.test` | state | node | – | One comparison of a holder against literal values (`===`, `!==`, `==`, `!=`, or a switch case group), with the branch arms where it holds or doesn't. |
-| `effects.fs.read` | effects | node | – |  |
-| `effects.fs.write` | effects | node | – |  |
-| `effects.net.connect` | effects | node | – |  |
-| `effects.net.listen` | effects | node | – |  |
-| `effects.proc.exec` | effects | node | – |  |
-| `effects.env.read` | effects | node | – |  |
-| `effects.clock.read` | effects | node | – |  |
-| `effects.unknown` | effects | node | – | An external call no catalog recognises. Kept rather than dropped. |
+| `effects.fs.read` | effects | node | – | Optional `attrs.syscall`, see below. |
+| `effects.fs.write` | effects | node | – | Optional `attrs.syscall`, see below. |
+| `effects.net.connect` | effects | node | – | Optional `attrs.syscall`, see below. |
+| `effects.net.listen` | effects | node | – | Optional `attrs.syscall`, see below. |
+| `effects.net.serve` | effects | node | – | An HTTP route a file serves: registered on a server object, or exported under an HTTP verb name. Required `attrs.framework`, `attrs.method` and `attrs.path`. Optional `attrs.handler` and `attrs.syscall`. |
+| `effects.proc.exec` | effects | node | – | Optional `attrs.syscall`, see below. |
+| `effects.env.read` | effects | node | – | Optional `attrs.syscall`, see below. |
+| `effects.clock.read` | effects | node | – | Optional `attrs.syscall`, see below. |
+| `effects.message.post` | effects | node | – | A message posted to a peer (postMessage) from a page or worker. Required `attrs.api`. Optional `attrs.syscall`, see below. |
+| `effects.os.call` | effects | node | – | An OS operation that is not a resource kind: signals, process control, memory mapping, device control, raw syscall, OS info, fd-level ops. Matched only from catalog entries naming an exact API. Required `attrs.api` (exact API, e.g. `process.kill`, `mmap`) and `attrs.op`, one of `signal`, `process-control`, `memory`, `device`, `raw-syscall`, `info` or `fd`. Optional `attrs.syscall` (kernel call it maps to 1:1, e.g. `kill`) and `attrs.target` (literal signal name, fd or path, or `<dynamic>`). |
+| `effects.unknown` | effects | node | – | An external call no catalog recognises. Kept rather than dropped. Optional `attrs.syscall`, see below. |
+
+Every `effects.*` kind accepts an optional `attrs.syscall`: the kernel call this API wraps 1:1 (e.g. `unlink`, `connect`, `execve`). It is unset for high-level APIs.
+
+`effects.os.call` requires `attrs.api` and `attrs.op`. `attrs.op` is one of `signal`, `process-control`, `memory`, `device`, `raw-syscall`, `info` or `fd`. The schema is `packages/core/ir/schema/facets/effects.schema.json`, `EffectsOsCall`.
+
+Other attributes added with the System tab, all from the same schema files:
+
+| Kind | Attribute | Required | Notes |
+| --- | --- | --- | --- |
+| `concurrency.spawn-thread`, `concurrency.spawn-process` | `api` | no | The exact API that spawns it. |
+| `concurrency.channel-send`, `concurrency.channel-recv` | `channel` | yes | Literal name, `Class::member`, or `<dynamic>`. |
+| | `api` | no | The exact API. |
+| | `guardedBy` | no | The lock an inferred guarded queue is held under. |
+| `sync.semaphore` | `op` | yes | `acquire`, `release`, `wait`, `notify` or `op`. |
+| | `name`, `lock`, `api` | no | `name` is the semaphore's name; `lock` is the mutex it is tied to. |
+| `sync.condvar` | `op` | yes | As for `sync.semaphore`. |
+| `state.holder` | state | node | – | A field, variable or useState slot whose declared type is a finite set of values (enum or literal union). |
+| `state.write` | state | node | – | One site that sets a holder: an assignment, an object-literal property, an initializer, or a call to a setter helper. `from` is the set of values the holder is known to have just before. `fromEntry: true` (only when `from` is absent) says the known set at the write is exactly the enclosing function's entry set, so a consumer may fill it from the callers; a write without `from` and without `fromEntry` is unknown for another reason (dynamic write, join with an unknown side, loop widening, stale after an await). |
+| `state.test` | state | node | – | One comparison of a holder against literal values (`===`, `!==`, `==`, `!=`, or a switch case group), with the branch arms where it holds or doesn't. |
+| | `name`, `lock`, `api` | no | `name` is the condvar's name. |
+| `sync.atomic-op` | `op` | yes | As for `sync.semaphore`. |
+| | `lock`, `api` | no | |
+| `sync.rwlock-acquire` | `mode` | yes | `shared` or `exclusive`. |
+| | `lock` | yes | The mutex name the lock is taken on. |
+
+### Which frontend emits each kind
+
+The fact rules that turn these kinds into System-view edges are in `docs/system-view.md`, under "Fact rules". This table says only which frontend emits each kind today.
+
+| Kind | TypeScript (`packages/frontend/typescript`) | C++ (`packages/frontend/cpp`) |
+| --- | --- | --- |
+| `effects.fs.read`, `effects.fs.write` | catalog `data/effects.json` | catalog `data/effects.json`, and `src/extract.ts` |
+| `effects.net.connect`, `effects.net.listen` | catalog `data/effects.json` | `net.connect`, `net.listen` in the catalog |
+| `effects.net.serve` | `src/effects.ts` | not emitted |
+| `effects.proc.exec` | catalog, and `src/extract.ts` | catalog |
+| `effects.env.read` | `src/extract.ts` | catalog |
+| `effects.clock.read` | catalog | catalog |
+| `effects.message.post` | `src/extract.ts` | not emitted |
+| `effects.os.call` | catalog (19 rows) | catalog (16 rows) |
+| `concurrency.spawn-thread`, `concurrency.spawn-process` | `src/extract.ts` | `spawn-process` in the catalog; `spawn-thread` in `src/extract.ts` |
+| `concurrency.channel-send`, `concurrency.channel-recv` | `src/extract.ts` (`MessageChannel`, `BroadcastChannel`) | `src/extract.ts` (queue methods) |
+| `sync.lock-acquire`, `sync.lock-release`, `sync.rwlock-acquire` | catalog (`lock-acquire`); `navigator.locks` | `src/extract.ts` |
+| `sync.semaphore` | not emitted | `src/extract.ts` |
+| `sync.condvar`, `sync.atomic-op` | catalog | `src/extract.ts` |
+| `state.holder` | state | node | – | A field, variable or useState slot whose declared type is a finite set of values (enum or literal union). |
+| `state.write` | state | node | – | One site that sets a holder: an assignment, an object-literal property, an initializer, or a call to a setter helper. `from` is the set of values the holder is known to have just before. `fromEntry: true` (only when `from` is absent) says the known set at the write is exactly the enclosing function's entry set, so a consumer may fill it from the callers; a write without `from` and without `fromEntry` is unknown for another reason (dynamic write, join with an unknown side, loop widening, stale after an await). |
+| `state.test` | state | node | – | One comparison of a holder against literal values (`===`, `!==`, `==`, `!=`, or a switch case group), with the branch arms where it holds or doesn't. |
+
+`effects.unknown` and the C++ `concurrency.async-task` are not emitted by any frontend.
 
 `calls.reference` has no parent on purpose. A query for a parent also returns its extensions, so extending `calls.call` would make every call query return references too.
 

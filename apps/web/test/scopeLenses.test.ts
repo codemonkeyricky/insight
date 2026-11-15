@@ -16,6 +16,11 @@ describe("tabbedLenses", () => {
     expect(tabbedLenses(rows).map((r) => r.id)).toEqual(["lens-calls", "lens-effects", "lens-flow-complexity"]);
   });
 
+  it("gives no tab to a lens whose id is a built-in tab id", () => {
+    const rows = [row({ id: "system" }), row({ id: "flow" }), row({ id: "lens-system" })];
+    expect(tabbedLenses(rows).map((r) => r.id)).toEqual(["lens-system"]);
+  });
+
   it("keeps every lens without the hidden flag, and does not change the list it is given", () => {
     const rows = [row({ id: "b" }), row({ id: "lens-execution", hidden: true }), row({ id: "a", hidden: false })];
     expect(tabbedLenses(rows).map((r) => r.id)).toEqual(["b", "a"]);

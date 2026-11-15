@@ -33,7 +33,8 @@
     "flow",
     "packaging",
     "state",
-    "structure"
+    "structure",
+    "sync"
   ],
   "roles": {
     "frontend": "dist/index.js"

@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { type IRRecord } from "@insight/ir";
+import { type IRNode, type IRRecord } from "@insight/ir";
 import { createCoreRegistry } from "@insight/ir/node";
 import { runFrontendConformance, type IRBatch, type ProjectRoot } from "@insight/sdk";
 import frontend from "../src/index.js";
@@ -11,7 +11,18 @@ const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "fixtures", "sample-cpp");
 const goldenFile = join(here, "golden", "sample-cpp.ndjson");
 const kindsFile = join(here, "..", "data", "kinds.json");
-const files = ["src/broken.cc", "src/main.cc", "src/store.cc", "src/store.h", "src/util/log.h"];
+const files = [
+  "src/broken.cc",
+  "src/main.cc",
+  "src/os.cc",
+  "src/queues.cc",
+  "src/queues.h",
+  "src/signals.cc",
+  "src/store.cc",
+  "src/store.h",
+  "src/sync.cc",
+  "src/util/log.h",
+];
 
 const root: ProjectRoot = { path: fixtureRoot, name: "sample-cpp", allowBuildTools: false };
 const readFile = async (rel: string) => readFileSync(join(fixtureRoot, rel), "utf8");
@@ -63,8 +74,10 @@ describe("frontend-cpp", () => {
     expect(kinds("effects.env.read").map((n) => n.attrs.api)).toEqual(["std::getenv"]);
     expect(kinds("effects.clock.read")).toHaveLength(1);
     expect(kinds("concurrency.spawn-thread").map((n) => n.attrs.target)).toEqual(["log_line"]);
-    expect(kinds("x-cpp.scoped-lock").map((n) => n.attrs.lock)).toEqual(["app::Store::mu_", "app::Store::mu_"]);
-    expect(kinds("sync.lock-release")).toHaveLength(3);
+    // The other fixtures take locks too, so these checks read store.cc only.
+    const inStore = (n: IRNode) => n.id.startsWith("src/store.cc@");
+    expect(kinds("x-cpp.scoped-lock").filter(inStore).map((n) => n.attrs.lock)).toEqual(["app::Store::mu_", "app::Store::mu_"]);
+    expect(kinds("sync.lock-release").filter(inStore)).toHaveLength(3);
     expect(kinds("sync.lock-acquire").map((n) => n.attrs.lock)).toEqual(["app::Store::mu_"]);
     const includes = edges.filter((e) => e.kind === "packaging.include");
     expect(includes.some((e) => typeof e.to === "object" && "unresolved" in e.to && e.to.unresolved.text === "util/log.h")).toBe(true);
