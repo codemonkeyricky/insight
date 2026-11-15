@@ -27,14 +27,14 @@ export function callersChipW(k: number, compact = false): number {
 }
 
 /**
- * `x` is the left of the full button's slot (CALLERS_BTN_W wide); a compact button keeps the slot's right edge. `k` is the
+ * `x` is the left edge of the button, full or compact: the button sits at the left of a header, before the function's name (its box opens to the left). `k` is the
  * map's label scale (lod.ts): the pill's size on screen is its size times `k`. `compact` asks for the ◂ alone at any scale.
  */
 export function CallersButton({ x, y, name, open, onClick, k = 1, compact = false }: { x: number; y: number; name: string; open: boolean; onClick: () => void; k?: number; compact?: boolean }) {
   if (k < GLYPH_K) return null;
   const small = compact || k < FULL_K;
   const w = small ? CALLERS_COMPACT_W : CALLERS_BTN_W;
-  const left = x + CALLERS_BTN_W - w;
+  const left = x;
   const label = `Show callers of ${name}`;
   return (
     <g

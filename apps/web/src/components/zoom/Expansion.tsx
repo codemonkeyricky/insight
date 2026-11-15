@@ -11,7 +11,7 @@ import { CALLOUT_INSET, detailLetter, type CalloutGeometry, type Expansion } fro
 import { displayName } from "../../zoom/names";
 import { fitLabel, labelChars } from "../../zoom/lod";
 import { FlowChart, type FlowNodeCallers } from "../FlowChart";
-import { CALLERS_BTN_H, CALLERS_BTN_W, CallersButton, callersChipW } from "./CallersControl";
+import { CALLERS_BTN_H, CallersButton, callersChipW } from "./CallersControl";
 import { keyActivates } from "./keys";
 
 interface Props {
@@ -82,7 +82,7 @@ export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClic
   const runtime = expansion.runtime;
   // A box on another thread or in another process names its runtime first: "Worker · print.worker", then the function.
   const own = displayName(chart.name, chart.id);
-  // The header's Callers button takes the room left of the close × (CHART_HEAD square), so the name is fitted to what is left.
+  // The header's Callers button sits at the left, before the name; the name is fitted to the room between it and the close × (CHART_HEAD square).
   const chipW = onCallers !== undefined ? callersChipW(k) : 0;
   const headRoom = onCallers !== undefined ? CHART_HEAD + 4 + (chipW > 0 ? chipW + 8 : 0) : 0;
   const label = fitLabel(runtime === undefined ? own : runtime.label.endsWith(own) ? runtime.label : `${runtime.label} · ${own}`, labelChars((w - headRoom) * k));
@@ -95,13 +95,13 @@ export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClic
         <rect x={x} y={y} width={w} height={CHART_HEAD} rx={14} className="zm-expansion-head" />
         <line x1={x + 12} x2={x + w - 12} y1={y + CHART_HEAD} y2={y + CHART_HEAD} className="zm-expansion-rule" />
         {label !== null && (
-          <text x={x + 14} y={y + CHART_HEAD / 2} dominantBaseline="central" className="zm-label">
+          <text x={x + 14 + (chipW > 0 ? chipW + 6 : 0)} y={y + CHART_HEAD / 2} dominantBaseline="central" className="zm-label">
             <tspan className={runtime !== undefined ? "zm-expansion-runtime" : "zm-card-glyph"}>{runtime !== undefined ? (runtime.kind === "process" ? "▣" : "⑂") : "ƒ"}</tspan>{" "}{label}
           </text>
         )}
       </g>
       {onCallers !== undefined && (
-        <CallersButton x={x + w - CHART_HEAD - 4 - CALLERS_BTN_W} y={y + (CHART_HEAD - CALLERS_BTN_H) / 2} name={chart.name} open={callersOpen} onClick={onCallers} k={k} />
+        <CallersButton x={x + 14} y={y + (CHART_HEAD - CALLERS_BTN_H) / 2} name={chart.name} open={callersOpen} onClick={onCallers} k={k} />
       )}
       <g
         className="zm-expansion-close"

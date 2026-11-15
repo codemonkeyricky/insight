@@ -6,7 +6,7 @@ import { hrefFile, hrefView } from "../router";
 import { backEdgeFlags, prefersReducedMotion, useOnScreen, usePageVisible } from "../zoom/flowMotion";
 import { runFlowToken, useTokenSlot } from "../zoom/flowToken";
 import { popDelay } from "../zoom/pop";
-import { CALLERS_BTN_H, CALLERS_BTN_W, CallersButton, callersChipW } from "./zoom/CallersControl";
+import { CALLERS_BTN_H, CallersButton, callersChipW } from "./zoom/CallersControl";
 
 /** The width of one character of a step's label, in chart units: the label's 12 px code font. */
 const NEST_CHAR_W = 7.3;
@@ -166,7 +166,7 @@ function NestFrame({ node, onNodeClick, onNodeOpen, onCallers, callersOpen, k, s
   const lane = laneOf((node.lane ?? 0) + 1);
   const lc = laneOf(node.lane);
   const [cx, cy] = station(node);
-  // With a Callers button in the header, the label is cut to the room left of it (the full name stays in the tooltip).
+  // With a Callers button in the header (at its left, before the name), the label is cut to the room after it (the full name stays in the tooltip).
   const chipW = onCallers !== undefined && node.target !== undefined ? callersChipW(k) : 0;
   const callers = chipW > 0;
   const room = x + w - CHEV_INSET - CHEV_HIT - 4 - chipW - 6 - labelAt(node);
@@ -187,14 +187,14 @@ function NestFrame({ node, onNodeClick, onNodeOpen, onCallers, callersOpen, k, s
       >
         <rect x={x} y={y} width={w} height={NEST_HEAD} rx={10} className="flow-nest-hit" />
         <CallStation cx={cx} cy={cy} />
-        <text x={labelAt(node)} y={cy} dominantBaseline="central" className="flow-text flow-nest-label">
+        <text x={labelAt(node) + (callers ? chipW + 6 : 0)} y={cy} dominantBaseline="central" className="flow-text flow-nest-label">
           {node.tag !== undefined && <tspan className="flow-kw">{node.tag} </tspan>}
           {label}
         </text>
         <Chevron node={node} x={x + w - CHEV_INSET - CHEV_HIT / 2} y={y} fold onNodeOpen={onNodeOpen} />
         {onCallers !== undefined && node.target !== undefined && (
-          // Left of the fold mark: the callers of the callee this frame nests.
-          <CallersButton x={x + w - CHEV_INSET - CHEV_HIT - 4 - CALLERS_BTN_W} y={y + (NEST_HEAD - CALLERS_BTN_H) / 2} name={node.label} open={callersOpen} onClick={() => onCallers(node)} k={k} />
+          // Left of the name: the callers of the callee this frame nests. Its box opens to the left.
+          <CallersButton x={labelAt(node)} y={y + (NEST_HEAD - CALLERS_BTN_H) / 2} name={node.label} open={callersOpen} onClick={() => onCallers(node)} k={k} />
         )}
       </g>
     </g>

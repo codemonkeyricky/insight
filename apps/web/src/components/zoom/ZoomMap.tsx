@@ -1888,13 +1888,13 @@ export function BoxShape({
         <g className="zm-pop" style={{ ["--d" as string]: `${popDelay(rank)}ms` }}>
           <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={12} className="zm-box-body" />
           {name !== null && (
-            <text x={rect.x + 12} y={rect.y + rect.h / 2} dominantBaseline="central" className="zm-label">
+            <text x={rect.x + 12 + (showCallers ? (compactCallers ? CALLERS_COMPACT_W : CALLERS_BTN_W) - 4 + 6 : 0)} y={rect.y + rect.h / 2} dominantBaseline="central" className="zm-label">
               <tspan className="zm-card-glyph">ƒ</tspan>{" "}{name}
             </text>
           )}
         </g>
         {showCallers && (
-          <CallersButton x={rect.x + rect.w - CALLERS_BTN_W - 8} y={rect.y + 6} name={shown} open={callersOpen} onClick={onCallers} k={k} compact={compactCallers} />
+          <CallersButton x={rect.x + 8} y={rect.y + 6} name={shown} open={callersOpen} onClick={onCallers} k={k} compact={compactCallers} />
         )}
       </g>
     );

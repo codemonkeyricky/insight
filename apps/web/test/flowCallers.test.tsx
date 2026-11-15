@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { layoutFunction, relayout, type FunctionFlow, type Rect } from "@insight/flow";
+import { CHART_PAD, layoutFunction, relayout, type FunctionFlow, type Rect } from "@insight/flow";
 import type { RefRow } from "@insight/model";
 import { FlowChart } from "../src/components/FlowChart";
 import { ExpansionShape } from "../src/components/zoom/Expansion";
@@ -88,32 +88,33 @@ describe("merging callers", () => {
 });
 
 describe("callers box placement", () => {
-  it("opens to the right of a function box and reflow keeps it there", () => {
+  it("opens to the left of a function box and reflow keeps it there", () => {
     const list = openCallers([], "A", boxAnchor, "A", 3, view);
     const c = find(list, callersKey("A"));
     expect(c.kind).toBe("callers");
-    expect(c.x).toBeGreaterThanOrEqual(box.x + box.w + EXPAND_GAP);
+    expect(c.x + c.w).toBe(box.x - EXPAND_GAP);
+    expect(c.side).toBe("left");
     expect(c.w).toBe(CALLERS_W);
     expect(reflow(list, view).find((e) => e.fnId === callersKey("A"))?.x).toBe(c.x);
   });
 
-  it("hangs a callers box from a chart's header to the chart's right", () => {
+  it("hangs a callers box from a chart's header to the chart's left", () => {
     const parent = openExpansion([], "A", boxAnchor, chart("A", 300, 200), view);
     const p = find(parent, "A");
     const list = openCallers(parent, "A", headerAnchor(p), "A", 2, view);
     const c = find(list, callersKey("A"));
-    expect(c.x).toBe(p.x + p.w + EXPAND_GAP);
+    expect(c.x).toBe(p.x - c.w - EXPAND_GAP);
     expect(c.y).toBe(p.y);
   });
 
-  it("follows a resized parent: the callers box keeps its place right of the parent's new edge", () => {
+  it("follows a resized parent: the callers box keeps its place left of the parent, and the anchor stays at the header's left edge", () => {
     const parent = openExpansion([], "A", boxAnchor, chart("A", 300, 200), view);
     const list = openCallers(parent, "A", headerAnchor(find(parent, "A")), "A", 2, view);
     const p = find(list, "A");
     const grown = reflow(list.map((e) => (e.fnId === "A" ? { ...e, w: p.w + 200 } : e)), view);
     const c = find(grown, callersKey("A"));
-    expect(c.x).toBe(p.x + p.w + 200 + EXPAND_GAP);
-    expect(c.x).toBeGreaterThanOrEqual(p.x + p.w + 200 + EXPAND_GAP);
+    expect(c.x).toBe(p.x - c.w - EXPAND_GAP);
+    expect(c.anchor).toMatchObject({ kind: "step", stepId: HEADER_STEP, rect: { x: -CHART_PAD } });
   });
 
   it("closing the parent closes the callers box and a caller's chart opened from its row", () => {
@@ -166,7 +167,7 @@ describe("one right-hand child per chart", () => {
     const all = two.filter((e) => e.anchor.kind === "step" && e.anchor.fnId === "P");
     expect(all).toHaveLength(1);
     for (const a of two) for (const b of two) if (a !== b) expect(overlaps(a, b)).toBe(false);
-    expect(p.x).toBeLessThan(find(two, callersKey("Y")).x);
+    expect(find(two, callersKey("Y")).x + find(two, callersKey("Y")).w).toBeLessThan(p.x);
   });
 });
 
@@ -179,9 +180,10 @@ describe("a card's chart over its callers box", () => {
     const head = find(withRow, "A");
     const c = find(withRow, callersKey("A"));
     expect(c.anchor).toMatchObject({ kind: "step", fnId: "A", stepId: HEADER_STEP });
-    expect(c.x).toBe(head.x + head.w + EXPAND_GAP);
+    expect(c.x).toBe(head.x - c.w - EXPAND_GAP);
     expect(withRow.map((e) => e.fnId)).toEqual(expect.arrayContaining(["A", callersKey("A"), "B"]));
-    expect(find(withRow, "B").x).toBeGreaterThanOrEqual(c.x + c.w + EXPAND_GAP);
+    expect(find(withRow, "B").side).toBe("left");
+    expect(find(withRow, "B").x + find(withRow, "B").w + EXPAND_GAP).toBeLessThanOrEqual(c.x);
   });
 });
 
