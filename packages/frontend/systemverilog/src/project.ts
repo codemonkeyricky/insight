@@ -9,6 +9,9 @@ export const SV_RE = /\.(?:v|sv|svh|vh)$/i;
 /** Most candidates an edge names. Past this the set is cut. */
 export const MAX_CANDIDATES = 32;
 
+/** How many file-level includes deep a scope's includes are followed. */
+export const MAX_INCLUDE_DEPTH = 16;
+
 export const nodeKey = (n: SyntaxNode): string => `${n.startIndex}:${n.endIndex}:${n.type}`;
 
 /** nodeKey scoped to one file. Byte offsets repeat across files, so the idOf map must include the file. */
@@ -81,13 +84,52 @@ export interface Unit {
   scanned: ScannedDef[];
   /** Declared type name per scope (module, class, package or "" at file level), then per variable. Null when declarations disagree. */
   varTypes: Map<string, Map<string, string | null>>;
-  /** Files this file includes from inside a package, with the package. Resolved to project files after the index pass. */
-  includes: Array<{ text: string; pkg: string }>;
+  /**
+   * Every `include directive of this file, with the scope it sits in. Resolved to project files after the index pass.
+   * A directive at file level has scopeKey "" and kind "file".
+   */
+  includes: IncludeSite[];
   /**
    * Message of the error that stopped the index pass on this file, when one was thrown. The file keeps whatever
    * was indexed before the error, and the emitter reports the failure as a warning finding on the file.
    */
   indexError?: string;
+}
+
+/** The kind of scope an include sits in. "file" is file level, which gives the included file no scope. */
+export type IncludeKind = "package" | "module" | "class" | "file";
+
+/** An `include directive as written in a file: the text, the scope it sits in, and the enclosing scopes, innermost first. */
+export interface IncludeSite {
+  text: string;
+  scopeKey: string;
+  kind: IncludeKind;
+  name: string;
+  chain: ScopeRef[];
+}
+
+/**
+ * One way a file reaches a scope: a direct include, or an include through the file-level includes of another
+ * included file. `from` is the file that directly includes the file; `scopeFile` is the file that declares the scope.
+ */
+export interface Inclusion {
+  scopeKey: string;
+  kind: IncludeKind;
+  name: string;
+  from: string;
+  scopeFile: string;
+  /**
+   * The scopes the include sits in, innermost first, across files: the include's own scopes, then the file-level
+   * scope of the file holding it, then that file's own enclosing scopes. Each link names the file that declares it.
+   */
+  chain: ChainLink[];
+}
+
+/** A scope or file level along an include's chain, with the file that declares it. */
+export interface ChainLink {
+  key: string;
+  kind: ScopeRef["kind"] | "file";
+  file: string;
 }
 
 /** The imports one scope makes: wildcard packages (sorted), and explicitly named items with their package. */
@@ -125,11 +167,11 @@ export interface Project {
   /** The node id of each declaration and function, keyed by nodeKey. The emitter reads these so the two passes agree. */
   idOf: Map<string, NodeId>;
   /**
-   * A file that a package includes, mapped to that package and to the including file. One level deep: a file
-   * included by another included file gets no entry. When several files match an include, the one in the including
-   * file's directory is preferred. The first including file in sorted order wins.
+   * Each file's includers, sorted by `from` then scopeKey. A file included in a scope gets one entry per way it is
+   * reached, including through the file-level includes of other included files (up to MAX_INCLUDE_DEPTH). When
+   * several files match an include, the one in the including file's directory is preferred.
    */
-  includedIn: Map<string, { pkg: string; from: string }>;
+  includedIn: Map<string, Inclusion[]>;
 }
 
 /** Node id of a function or task, before the per-file uniqueness suffix. */
@@ -229,13 +271,22 @@ interface FileImports {
 function collectDecls(unit: Unit, root: SyntaxNode, p: Project, imports: Map<string, FileImports>): void {
   const rel = unit.rel;
   // The package each item sits in, when it is directly inside a package (not a class or module within one).
-  type Item = [SyntaxNode, string | undefined, string | undefined, string[], string | undefined];
+  // The chain is the enclosing scopes that can see names, innermost first, as extract.ts builds them.
+  type Item = [SyntaxNode, string | undefined, string | undefined, string[], string | undefined, ScopeRef[]];
   // Explicit stack in place of recursion. Children are queued in reverse, so they run in source order, each before its later siblings.
   const work: Item[] = [];
-  const children = (kids: SyntaxNode[], scope: string | undefined, key: string | undefined, gen: string[], pkg: string | undefined): void => {
-    for (let i = kids.length - 1; i >= 0; i--) work.push([kids[i] as SyntaxNode, scope, key, gen, pkg]);
+  const children = (kids: SyntaxNode[], scope: string | undefined, key: string | undefined, gen: string[], pkg: string | undefined, chain: ScopeRef[]): void => {
+    for (let i = kids.length - 1; i >= 0; i--) work.push([kids[i] as SyntaxNode, scope, key, gen, pkg, chain]);
   };
-  const visit = (n: SyntaxNode, scope: string | undefined, key: string | undefined, gen: string[], pkg: string | undefined): void => {
+  /** Records an include directive with the scope it sits in. Directives outside any scope are recorded at file level. */
+  const recordInclude = (n: SyntaxNode, scope: string | undefined, chain: ScopeRef[]): void => {
+    const m = /"([^"]*)"/.exec(n.text);
+    if (!m) return;
+    const top = chain[0];
+    const kind: IncludeKind = top === undefined ? "file" : top.kind === "class" ? "class" : top.kind === "package" ? "package" : "module";
+    unit.includes.push({ text: m[1] ?? "", scopeKey: top?.key ?? "", kind, name: top === undefined ? "" : (scope ?? ""), chain });
+  };
+  const visit = (n: SyntaxNode, scope: string | undefined, key: string | undefined, gen: string[], pkg: string | undefined, chain: ScopeRef[]): void => {
     const hdl = DECL_HDL[n.type];
     if (hdl !== undefined) {
       const name = declName(n);
@@ -251,7 +302,8 @@ function collectDecls(unit: Unit, root: SyntaxNode, p: Project, imports: Map<str
         }
         // Modules, interfaces and programs key their functions by declaration id. Classes and packages key by name.
         const childKey = hdl === "class" || hdl === "package" ? name : id;
-        children(n.namedChildren, name, childKey, [], hdl === "package" ? name : undefined);
+        const kind: ScopeRef["kind"] = hdl === "class" ? "class" : hdl === "package" ? "package" : "hdl";
+        children(n.namedChildren, name, childKey, [], hdl === "package" ? name : undefined, [{ key: childKey, kind }, ...chain]);
         return;
       }
     }
@@ -267,6 +319,9 @@ function collectDecls(unit: Unit, root: SyntaxNode, p: Project, imports: Map<str
         addFn(p, k ?? "", ref);
         if (pkg !== undefined && sub.scope === undefined) p.pkgFnsByName.set(sub.name, [...(p.pkgFnsByName.get(sub.name) ?? []), ref]);
       }
+      // A body cannot declare functions, but it can hold an include of statements. Only includes are taken from it.
+      const bodyChain = sub?.scope !== undefined ? [{ key: sub.scope, kind: "class" as const }, ...chain] : chain;
+      for (const inc of n.descendantsOfType("include_compiler_directive")) recordInclude(inc, sub?.scope ?? scope, bodyChain);
       return;
     }
     if (n.type === "dpi_import_export") {
@@ -305,20 +360,19 @@ function collectDecls(unit: Unit, root: SyntaxNode, p: Project, imports: Map<str
     }
     if (n.type === "generate_block") {
       const g = genNameOf(n);
-      children(n.namedChildren, scope, key, g ? [...gen, g] : gen, pkg);
+      children(n.namedChildren, scope, key, g ? [...gen, g] : gen, pkg, chain);
       return;
     }
     if (n.type === "include_compiler_directive") {
-      const m = /"([^"]*)"/.exec(n.text);
-      if (m && pkg !== undefined) unit.includes.push({ text: m[1] ?? "", pkg });
+      recordInclude(n, scope, chain);
       return;
     }
-    children(n.namedChildren, scope, key, gen, pkg);
+    children(n.namedChildren, scope, key, gen, pkg, chain);
   };
-  work.push([root, undefined, undefined, [], undefined]);
+  work.push([root, undefined, undefined, [], undefined, []]);
   while (work.length > 0) {
-    const [n, scope, key, gen, pkg] = work.pop() as Item;
-    visit(n, scope, key, gen, pkg);
+    const [n, scope, key, gen, pkg, chain] = work.pop() as Item;
+    visit(n, scope, key, gen, pkg, chain);
   }
 }
 
@@ -506,10 +560,68 @@ const dirOf = (rel: string): string => rel.slice(0, rel.lastIndexOf("/") + 1);
 function linkIncludes(p: Project): void {
   const rels = [...p.units.keys()].sort();
   const known = new Set(rels);
+  // Each include resolved to its project file, per including file, in source order.
+  const resolved = new Map<string, Array<{ site: IncludeSite; target: string }>>();
   for (const unit of p.units.values()) {
-    for (const inc of unit.includes) {
-      const target = includeTarget(known, rels, unit.rel, inc.text);
-      if (target !== undefined && target !== unit.rel && !p.includedIn.has(target)) p.includedIn.set(target, { pkg: inc.pkg, from: unit.rel });
+    const list: Array<{ site: IncludeSite; target: string }> = [];
+    for (const site of unit.includes) {
+      const target = includeTarget(known, rels, unit.rel, site.text);
+      if (target !== undefined && target !== unit.rel) list.push({ site, target });
+    }
+    resolved.set(unit.rel, list);
+  }
+  // Where each entry's include is written: the file and the site, so the chain can be built from the site.
+  const origin = new Map<Inclusion, { file: string; site: IncludeSite }>();
+  const addEntry = (target: string, e: Inclusion, o: { file: string; site: IncludeSite }): boolean => {
+    const list = p.includedIn.get(target) ?? [];
+    if (list.some((x) => x.scopeKey === e.scopeKey && x.scopeFile === e.scopeFile && x.from === e.from)) return false;
+    list.push(e);
+    p.includedIn.set(target, list);
+    origin.set(e, o);
+    return true;
+  };
+  // A file's entry reaches the files it includes at file level, so a scope that includes a file gets that file's includes too.
+  const flow = (entry: Inclusion, file: string, path: string[], depth: number): void => {
+    if (depth >= MAX_INCLUDE_DEPTH) return;
+    const o = origin.get(entry);
+    if (o === undefined) return;
+    for (const { site, target } of resolved.get(file) ?? []) {
+      if (site.scopeKey !== "" || path.includes(target)) continue;
+      const e: Inclusion = { ...entry, from: file, chain: [] };
+      if (addEntry(target, e, o)) flow(e, target, [...path, target], depth + 1);
+    }
+  };
+  for (const [from, list] of resolved) {
+    for (const { site, target } of list) {
+      const entry: Inclusion = { scopeKey: site.scopeKey, kind: site.kind, name: site.name, from, scopeFile: from, chain: [] };
+      if (addEntry(target, entry, { file: from, site })) flow(entry, target, [from, target], 0);
+    }
+  }
+  for (const list of p.includedIn.values()) {
+    list.sort((a, b) => (a.from < b.from ? -1 : a.from > b.from ? 1 : a.scopeKey < b.scopeKey ? -1 : a.scopeKey > b.scopeKey ? 1 : a.scopeFile < b.scopeFile ? -1 : a.scopeFile > b.scopeFile ? 1 : 0));
+  }
+  // The enclosing chain of a file is the chain of its first scope entry, which is the one lookups use.
+  const enclosingMemo = new Map<string, ChainLink[]>();
+  const originChain = (o: { file: string; site: IncludeSite }, depth: number): ChainLink[] => [
+    ...o.site.chain.map((s) => ({ key: s.key, kind: s.kind, file: o.file })),
+    { key: "", kind: "file" as const, file: o.file },
+    ...enclosing(o.file, depth + 1),
+  ];
+  const enclosing = (file: string, depth: number): ChainLink[] => {
+    if (depth >= MAX_INCLUDE_DEPTH) return [];
+    const hit = enclosingMemo.get(file);
+    if (hit !== undefined) return hit;
+    enclosingMemo.set(file, []); // a cycle of includes stops here
+    const first = (p.includedIn.get(file) ?? []).find((e) => e.scopeKey !== "");
+    const o = first === undefined ? undefined : origin.get(first);
+    const chain = o === undefined ? [] : originChain(o, depth);
+    enclosingMemo.set(file, chain);
+    return chain;
+  };
+  for (const list of p.includedIn.values()) {
+    for (const e of list) {
+      const o = origin.get(e);
+      if (e.scopeKey !== "" && o !== undefined) e.chain = originChain(o, 0);
     }
   }
 }
@@ -530,15 +642,18 @@ function includeTarget(known: Set<string>, rels: string[], from: string, text: s
 function adoptIncludedFunctions(p: Project): void {
   const top = p.fnsByScope.get("");
   if (!top) return;
-  for (const [file, { pkg }] of p.includedIn) {
+  for (const [file, entries] of p.includedIn) {
+    // One table entry per including scope. A file included only at file level keeps its functions at file level.
+    const scopes = [...new Map(entries.filter((e) => e.scopeKey !== "").map((e) => [e.scopeKey, e])).values()];
+    if (scopes.length === 0) continue;
+    const inPackage = scopes.some((e) => e.kind === "package");
     for (const [name, refs] of [...top]) {
       const mine = refs.filter((r) => r.file === file);
       if (mine.length === 0) continue;
       top.set(name, refs.filter((r) => r.file !== file));
-      for (const r of mine) {
-        addFn(p, pkg, r);
-        p.pkgFnsByName.set(name, [...(p.pkgFnsByName.get(name) ?? []), r]);
-      }
+      for (const e of scopes) for (const r of mine) addFn(p, e.scopeKey, r);
+      // The package lookup finds a function once, however many packages include the file.
+      if (inPackage) for (const r of mine) p.pkgFnsByName.set(name, [...(p.pkgFnsByName.get(name) ?? []), r]);
     }
   }
 }
@@ -696,7 +811,9 @@ function importStep(p: Project, file: string, key: string, name: string, gen: st
 }
 
 /** One enclosing scope: its own functions first, then the imports it makes. */
-function scopeStep(p: Project, rel: string, file: string, scope: ScopeRef, name: string, gen: string[]): Step | undefined {
+function scopeStep(p: Project, rel: string, file: string, scope: ChainLink, name: string, gen: string[]): Step | undefined {
+  // A file level only holds imports: its own functions are the `$unit` ones, looked up after the scopes.
+  if (scope.kind === "file") return importStep(p, file, "", name, gen);
   const own = scope.kind === "class" ? chainLookup(p, scope.key, name) : lookup(p, scope.key, name);
   if (own.length > 0) return { callee: pick(own, rel, gen) };
   return importStep(p, file, scope.key, name, gen);
@@ -722,9 +839,10 @@ export function resolveCallee(p: Project, rel: string, at: CallSite, name: strin
     case "plain": {
       // The enclosing scopes, innermost first. A file a package includes sits inside that package, so the package
       // comes just outside the file's own scopes.
-      const steps: Array<{ scope: ScopeRef; file: string }> = (at.chain ?? []).map((scope) => ({ scope, file: rel }));
-      const inc = p.includedIn.get(rel);
-      if (inc) steps.push({ scope: { key: inc.pkg, kind: "package" }, file: inc.from });
+      const steps: Array<{ scope: ChainLink; file: string }> = (at.chain ?? []).map((scope) => ({ scope: { ...scope, file: rel }, file: rel }));
+      // The first includer that sits in a scope. Its chain runs out through the scopes and files that hold the include.
+      const inc = (p.includedIn.get(rel) ?? []).find((e) => e.scopeKey !== "");
+      if (inc) for (const link of inc.chain) steps.push({ scope: link, file: link.file });
       for (const { scope, file } of steps) {
         const step = scopeStep(p, rel, file, scope, name, gen);
         if (step !== undefined) return step.callee;

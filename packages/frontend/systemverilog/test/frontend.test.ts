@@ -782,6 +782,35 @@ describe("name resolution by scope", () => {
   });
 });
 
+describe("includes in any scope", () => {
+  const fx = (name: string) => join(fixturesDir, name);
+  const calleeOf = (batches: IRBatch[], callee: string): IREdge | undefined =>
+    edgesOf(allRecords(batches)).find((e) => e.kind === "calls.call" && e.attrs?.callee === callee);
+
+  it("one file included by two packages gives both packages its functions", async () => {
+    const batches = await extractDir(fx("include_two_packages"), ["h.svh", "p1.sv", "p2.sv", "t.sv"]);
+    expect(calleeOf(batches, "p1::g")?.to).toBe("h.svh#g");
+    expect(calleeOf(batches, "p2::g")?.to).toBe("h.svh#g");
+  });
+
+  it("a file included by an included file is a function of the package that includes both", async () => {
+    const batches = await extractDir(fx("include_nested_pkg"), ["a.svh", "b.svh", "p.sv", "t.sv"]);
+    expect(calleeOf(batches, "p::g")?.to).toBe("b.svh#g");
+  });
+
+  it("a file included in a module gives the module its functions, not the file-level one of the same name", async () => {
+    const batches = await extractDir(fx("include_in_module"), ["h2.svh", "m.sv", "o.sv"]);
+    const call = calleeOf(batches, "g2");
+    expect(call?.to).toBe("h2.svh#g2");
+    expect(call?.provenance?.confidence).toBe("inferred");
+  });
+
+  it("a file included in a class gives the class its functions", async () => {
+    const batches = await extractDir(fx("include_in_class"), ["k.sv", "kbody.svh"]);
+    expect(calleeOf(batches, "kf")?.to).toBe("kbody.svh#kf");
+  });
+});
+
 describe("include matching", () => {
   const dir = join(fixturesDir, "include_match");
   const files = ["pkg.sv", "h.svh", "other/h.svh", "t.sv", "rtl/pk2.sv", "rtl/a/defs.svh", "rtl/b/defs.svh", "rtl/t2.sv", "rtl/pk3.sv", "inc/x.svh", "rtl/t3.sv"];
