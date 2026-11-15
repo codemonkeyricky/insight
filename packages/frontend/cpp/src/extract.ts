@@ -299,6 +299,8 @@ export function emitUnit(project: Project, rel: string): IRBatch {
   const exitTests = new Set<string>();
   const emittedTests = new Set<string>();
   const armIds = new Map<string, string>();
+  // A scoped lock guard variable (`std::unique_lock lk(m)`) to the lock it holds, per function: `lk.unlock()` gives up m.
+  const guardMutex = new Map<string, string>();
   const shadowCache = new Map<string, Set<string>>();
   const records: IRRecord[] = [];
   const deps = new Set<string>(project.macroDeps.get(rel) ?? []);
@@ -491,7 +493,8 @@ export function emitUnit(project: Project, rel: string): IRBatch {
         const method = fnNode.childForFieldName("field")?.text;
         const recv = fnNode.childForFieldName("argument")?.text;
         if (recv !== undefined && (method === "lock" || method === "unlock")) {
-          const lock = lockIdentity(recv, cls, project.members);
+          // A guard variable (`lk` in `std::unique_lock lk(m)`) names the mutex it holds, not itself.
+          const lock = guardMutex.get(`${fn?.id ?? ""}|${recv}`) ?? lockIdentity(recv, cls, project.members);
           node({
             id: ids.take(`${rel}@${method}:${call.startPosition.row}:${call.startPosition.column}`),
             facet: "sync",
@@ -587,6 +590,9 @@ export function emitUnit(project: Project, rel: string): IRBatch {
     // An out-of-line definition (void Store::put) has no class in its scope; its name carries it.
     const cls = scopeOf(decl).cls ?? fn?.cls;
     const locks = declArgs(decl).filter((p) => !NO_LOCK_ARGS.has(norm(p.text)));
+    const guardName = declarator.childForFieldName("declarator")?.text;
+    const firstLock = locks[0];
+    if (guardName !== undefined && firstLock !== undefined) guardMutex.set(`${fn?.id ?? ""}|${guardName}`, lockIdentity(firstLock.text, cls, project.members));
     locks.forEach((arg, i) => {
       const lock = lockIdentity(arg.text, cls, project.members);
       // A shared_mutex taken by any guard is a read-write lock: shared for shared_lock, exclusive otherwise. It is

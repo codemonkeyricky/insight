@@ -42,8 +42,9 @@ function resourceOf(node: FlowNode): { kind: "lock" | "channel"; name: string; o
   return undefined;
 }
 
-/** The peer text of one sync row, or undefined when the row has no peer. */
+/** The peer text of one sync row, or undefined when the row has no peer. Only acquire and wait rows get peers; a release does not. */
 function peerText(node: FlowNode, fnId: string, model: ExecModel, threads: ReadonlyMap<string, string[]>): string | undefined {
+  if (node.label.startsWith("🔓")) return undefined;
   const r = resourceOf(node);
   if (r === undefined) return undefined;
   const res = model.resources?.find((x) => x.kind === r.kind && x.name === r.name);

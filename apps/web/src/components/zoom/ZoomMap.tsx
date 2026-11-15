@@ -67,6 +67,18 @@ const TILE_LABEL_PX = 16;
  * The room the status pill takes at the bottom of a desktop stage: its measured height (or the fallback) and a gap. Nothing
  * when the pill is not shown (a phone hides it).
  */
+/**
+ * Annotates a chart (MapSource.annotateChart: its messages, its resource peers). An annotation that throws leaves the chart
+ * as it is, so the chart still shows.
+ */
+function annotateOrKeep(chart: FunctionFlow, annotate: () => FunctionFlow): FunctionFlow {
+  try {
+    return annotate();
+  } catch {
+    return chart;
+  }
+}
+
 function pillRoomOf(): number {
   const pill = document.querySelector<HTMLElement>(".sh-sheet .sh-title");
   if (pill === null || getComputedStyle(pill).display === "none") return 0;
@@ -644,13 +656,9 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
       const f = await loadFunctionChart(charts.store, fnId);
       if (f === undefined || f.tooLarge || f.nodes.length === 0) return undefined;
       const b = buildRef.current;
-      if (b === undefined || source.annotateChart === undefined) return f;
-      // An annotation that throws leaves the chart as it is, so the chart still shows.
-      try {
-        return source.annotateChart(b, fnId, f);
-      } catch {
-        return f;
-      }
+      const annotate = source.annotateChart;
+      if (b === undefined || annotate === undefined) return f;
+      return annotateOrKeep(f, () => annotate(b, fnId, f));
     } catch {
       return undefined;
     }
@@ -997,13 +1005,9 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     // The unfolded chart gets the same annotations as a loaded one: its messages, then its resource peers.
     const finish = (chart: FunctionFlow): FunctionFlow => {
       const withMessages = store?.messagesOf(fnId, chart) ?? chart;
-      if (source.annotateChart === undefined) return withMessages;
-      // An annotation that throws leaves the chart as it is, so the unfold still opens (as loadChart does).
-      try {
-        return source.annotateChart(cur, fnId, withMessages);
-      } catch {
-        return withMessages;
-      }
+      const annotate = source.annotateChart;
+      if (annotate === undefined) return withMessages;
+      return annotateOrKeep(withMessages, () => annotate(cur, fnId, withMessages));
     };
     setExp(toggleFold(placeAll(cur, expRef.current), fnId, foldId, chartSource, placeView(cur), flow.coupling, finish));
   };
