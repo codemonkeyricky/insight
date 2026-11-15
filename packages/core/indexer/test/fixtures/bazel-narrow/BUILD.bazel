@@ -1,0 +1,17 @@
+cc_library(
+    name = "common",
+    srcs = ["common/common.cc"],
+    hdrs = ["common/common.h"],
+)
+
+cc_binary(
+    name = "a",
+    srcs = ["a/main.cc", "a/init.cc"],
+    deps = [":common"],
+)
+
+cc_binary(
+    name = "b",
+    srcs = ["b/main.cc", "b/init.cc"],
+    deps = [":common"],
+)

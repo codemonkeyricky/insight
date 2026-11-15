@@ -20,6 +20,8 @@ export interface LoadedResolver {
   manifest: PluginManifest;
   dir: string;
   resolver: Resolver;
+  /** From the manifest's `fallback`: the resolver makes syntactic guesses and yields to build-system resolvers. */
+  fallback: boolean;
 }
 
 export interface LoadedLens {
@@ -201,7 +203,12 @@ export async function loadPlugins(opts: LoadOptions): Promise<LoadedPlugins> {
         if (resolver.scheme !== manifest.roles.resolver.scheme) {
           throw new Error(`resolver scheme "${resolver.scheme}" does not match manifest scheme "${manifest.roles.resolver.scheme}"`);
         }
-        resolvers.push({ manifest, dir, resolver: { ...resolver, priority: manifest.roles.resolver.priority } });
+        resolvers.push({
+          manifest,
+          dir,
+          resolver: { ...resolver, priority: manifest.roles.resolver.priority },
+          fallback: manifest.roles.resolver.fallback === true,
+        });
       }
       if (manifest.roles.lens !== undefined) {
         const mod = await importEntry(dir, manifest.roles.lens);

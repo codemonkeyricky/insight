@@ -162,7 +162,8 @@ function programEntryAttr(v: unknown): ExecProgramEntry | undefined {
 }
 
 /**
- * A program: a build target that links an executable (targetKind `add_executable` or a `*_binary` rule). Tests and
+ * A program: a build target that links an executable (`output` "executable", or, when a frontend sends no `output`, the
+ * targetKind `add_executable` or a `*_binary` rule). Tests and
  * libraries are not programs. Only targets with a file inside the scope are listed.
  */
 export interface ExecProgram {
@@ -409,6 +410,16 @@ function reachBy(roots: readonly string[], next: (id: string) => readonly string
     }
   }
   return seen;
+}
+
+/**
+ * Whether a build target is a program. A frontend's `output` decides it when it sends one, whatever the rule is called.
+ * Without `output`, the rule name decides: `add_executable` (CMake) or a `*_binary` rule (Bazel and others).
+ */
+function isProgramTarget(attrs: IRNode["attrs"], targetKind: string): boolean {
+  const output = strAttr(attrs, "output");
+  if (output !== undefined) return output === "executable";
+  return targetKind === "add_executable" || targetKind.endsWith("_binary");
 }
 
 /** A plan's body, which no scope changes: the functions the thread reaches, and its coroutines. */
@@ -689,10 +700,11 @@ function buildPlans(nodes: readonly IRNode[], edges: readonly IREdge[], fold: bo
   }
   const mainFns = [...fns.values()].filter((f) => f.name === "main" && f.file !== undefined);
   const programRecords: ProgramRecord[] = [];
+  const targetLabel = new Map<string, string>();
   for (const n of nodes) {
     if (n.kind !== "packaging.build-target") continue;
     const targetKind = strAttr(n.attrs, "targetKind");
-    if (targetKind === undefined || !(targetKind === "add_executable" || targetKind.endsWith("_binary"))) continue;
+    if (targetKind === undefined || !isProgramTarget(n.attrs, targetKind)) continue;
     const files = [...(contains.get(n.id) ?? [])].sort(byText);
     const inFiles = new Set(files);
     const main = mainFns
@@ -710,6 +722,7 @@ function buildPlans(nodes: readonly IRNode[], edges: readonly IREdge[], fold: bo
         threads: [],
       },
     });
+    targetLabel.set(n.id, strAttr(n.attrs, "label") ?? n.id);
   }
   // Entry programs. A TS project has no build targets, so its programs come from its entries. Every index.html script is
   // a page script of ONE browser program, and each Node script that no project file imports is a program of its own. A
@@ -777,6 +790,13 @@ function buildPlans(nodes: readonly IRNode[], edges: readonly IREdge[], fold: bo
         ...(entry !== undefined ? { entry } : {}),
       },
     });
+  }
+  // Two build targets can share a name ("//tools/a:main" and "//tools/b:main"). Such a program is named by its label, which is unique.
+  const nameCount = new Map<string, number>();
+  for (const r of programRecords) nameCount.set(r.prog.name, (nameCount.get(r.prog.name) ?? 0) + 1);
+  for (const r of programRecords) {
+    const label = targetLabel.get(r.prog.id);
+    if (label !== undefined && (nameCount.get(r.prog.name) ?? 0) > 1) r.prog.name = label;
   }
   programRecords.sort((a, b) => byText(a.prog.id, b.prog.id));
 

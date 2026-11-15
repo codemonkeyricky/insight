@@ -1,6 +1,6 @@
 {
   "id": "frontend-cpp",
-  "version": "0.1.4",
+  "version": "0.1.6",
   "description": "C and C++: structure, includes, calls, control flow, known system effects, threads and standard locks. Syntactic (tree-sitter), no compiler.",
   "irVersion": "^1.0",
   "detect": [
@@ -40,7 +40,8 @@
     "resolver": {
       "scheme": "cpp.include",
       "entry": "dist/resolve.js",
-      "priority": 10
+      "priority": 10,
+      "fallback": true
     }
   }
 }

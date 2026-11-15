@@ -11,6 +11,7 @@ import {
   lockIdentity,
   nodeKey,
   norm,
+  normName,
   scopeOf,
   stripTemplates,
   type FnDecl,
@@ -135,9 +136,23 @@ interface Resolved {
   confidence: Confidence;
 }
 
-/** The candidates, or undefined when there are none or too many to be useful. Several candidates are never more than heuristic. */
+/** A constructor is a function named by the last scope segment of its qualified name, `X::X`. */
+const isConstructor = (fn: FnDecl): boolean => {
+  const segments = fn.qname.split("::");
+  return segments.length >= 2 && segments[segments.length - 2] === fn.simple;
+};
+
+/**
+ * The candidates, or undefined when there are none or too many to be useful. Overloads are one function to a caller,
+ * so the cap is bypassed only when every candidate has the same qualified name and is defined in the same file, as a
+ * real overload set is. Candidates spread across files, such as `operator<<`, stay capped.
+ * Several candidates are never more than heuristic.
+ */
 function candidatesOf(targets: FnDecl[], confidence: Confidence): Resolved | undefined {
-  if (targets.length === 0 || targets.length > MAX_CANDIDATES) return undefined;
+  if (targets.length === 0) return undefined;
+  const first = targets[0];
+  const overloads = targets.every((t) => t.qname === first?.qname && t.rel === first?.rel);
+  if (targets.length > MAX_CANDIDATES && !overloads) return undefined;
   return { targets, confidence: targets.length > 1 ? "heuristic" : confidence };
 }
 
@@ -158,15 +173,17 @@ function resolveName(project: Project, name: string, qualified: boolean): Resolv
 function resolveCallee(project: Project, fnNode: SyntaxNode): Resolved | undefined {
   switch (fnNode.type) {
     case "identifier":
-      return resolveName(project, stripTemplates(norm(fnNode.text)), false);
+      return resolveName(project, stripTemplates(normName(fnNode.text)), false);
     case "template_function":
-      return resolveName(project, stripTemplates(norm(fnNode.childForFieldName("name")?.text ?? "")), false);
+      return resolveName(project, stripTemplates(normName(fnNode.childForFieldName("name")?.text ?? "")), false);
     case "qualified_identifier":
-      return resolveName(project, stripTemplates(norm(fnNode.text)).replace(/^::/, ""), true);
+      return resolveName(project, stripTemplates(normName(fnNode.text)).replace(/^::/, ""), true);
     case "field_expression": {
-      const simple = fnNode.childForFieldName("field")?.text;
-      if (!simple) return undefined;
-      return candidatesOf((project.bySimple.get(simple) ?? []).filter((d) => d.cls !== undefined), "heuristic");
+      const field = fnNode.childForFieldName("field")?.text;
+      if (!field) return undefined;
+      const simple = normName(field);
+      // A member call is never a constructor call, so constructors are not candidates.
+      return candidatesOf((project.bySimple.get(simple) ?? []).filter((d) => d.cls !== undefined && !isConstructor(d)), "heuristic");
     }
     default:
       return undefined;
@@ -250,7 +267,7 @@ function resolveSpawnTarget(project: Project, rel: string, arg: SyntaxNode): { n
     const bound = boundLambda(project, rel, name);
     if (bound) return { name, resolved: { targets: [bound.decl], confidence: bound.confidence } };
   }
-  const resolved = resolveName(project, stripTemplates(norm(name.text)).replace(/^::/, ""), name.type === "qualified_identifier");
+  const resolved = resolveName(project, stripTemplates(normName(name.text)).replace(/^::/, ""), name.type === "qualified_identifier");
   return resolved ? { name, resolved } : undefined;
 }
 
@@ -284,7 +301,7 @@ export function emitUnit(project: Project, rel: string): IRBatch {
   const armIds = new Map<string, string>();
   const shadowCache = new Map<string, Set<string>>();
   const records: IRRecord[] = [];
-  const deps = new Set<string>();
+  const deps = new Set<string>(project.macroDeps.get(rel) ?? []);
   const node = (n: IRNode) => records.push({ node: n });
   const edge = (e: IREdge) => records.push({ edge: e });
   const coroutines = new Set<NodeId>();
@@ -454,7 +471,7 @@ export function emitUnit(project: Project, rel: string): IRBatch {
   const handleCall = (call: SyntaxNode, container: NodeId, fn: FnDecl | undefined) => {
     const fnNode = call.childForFieldName("function");
     if (!fnNode) return;
-    const callee = stripTemplates(norm(fnNode.text)).replace(/^::/, "");
+    const callee = stripTemplates(normName(fnNode.text)).replace(/^::/, "");
     const args = argsOf(call);
     const cls = classAt(project, rel, call);
 

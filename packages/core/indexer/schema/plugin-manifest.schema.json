@@ -14,6 +14,7 @@
     "detect": { "description": "Globs. The plugin applies when any project file matches.", "type": "array", "items": { "type": "string", "minLength": 1 } },
     "files": { "description": "Globs of files a frontend extracts one by one. Defaults to detect.", "type": "array", "items": { "type": "string", "minLength": 1 } },
     "inputs": { "description": "Extra input globs. Editing a matching file marks every shard of this plugin dirty.", "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "inputListing": { "description": "Globs whose matching files contribute only their paths to the inputs hash. Adding or removing a matching file marks every shard of this plugin dirty, editing one does not.", "type": "array", "items": { "type": "string", "minLength": 1 } },
     "provides": {
       "type": "array",
       "items": { "type": "string", "pattern": "^(structure|packaging|flow|calls|concurrency|sync|effects|state|x-[a-z0-9-]+)$" },
@@ -36,7 +37,8 @@
           "properties": {
             "scheme": { "type": "string", "pattern": "^[a-z][a-z0-9.-]*$" },
             "entry": { "type": "string", "minLength": 1 },
-            "priority": { "type": "integer" }
+            "priority": { "type": "integer" },
+            "fallback": { "type": "boolean" }
           }
         }
       }
