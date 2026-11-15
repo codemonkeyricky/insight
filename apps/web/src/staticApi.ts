@@ -205,7 +205,7 @@ export function makeStaticApi(baseFor: (projectId: string) => string | Promise<s
    * The architecture of a project with no package.json files, as archModel answers it. The layers are the lens
    * package's DEFAULT_LAYERS, written out here so the web build does not import that package at run time.
    */
-  const EMPTY_ARCH: ArchModel = { layers: ["project", "frontend", "ir", "lens", "app"], packages: [], edges: [], unresolved: [], externals: [], violations: [], files: [], fileImports: [] };
+  const EMPTY_ARCH: ArchModel = { layers: ["project", "frontend", "ir", "lens", "app"], packages: [], edges: [], unresolved: [], externals: [], externalPackages: [], violations: [], files: [], fileImports: [] };
 
   /** The project's model, loaded once. Scope flows and exec models are computed from it, as the server computes them. */
   const modelOf = async (id: string) => {

@@ -625,6 +625,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
     contains.set(e.from, files);
   }
   const programs: ExecProgram[] = [];
+  const targetLabel = new Map<string, string>();
   for (const n of nodes) {
     if (n.kind !== "packaging.build-target") continue;
     const targetKind = strAttr(n.attrs, "targetKind");
@@ -647,6 +648,7 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       ...(main !== undefined ? { main } : {}),
       threads: [],
     });
+    targetLabel.set(n.id, strAttr(n.attrs, "label") ?? n.id);
   }
   // Entry programs. A TS project has no build targets, so its programs come from its entries. Every index.html script is
   // a page script of ONE browser program, and each Node script that no project file imports is a program of its own. A
@@ -708,6 +710,13 @@ export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], sc
       threads: [],
       ...(entry !== undefined ? { entry } : {}),
     });
+  }
+  // Two build targets can share a name ("//tools/a:main" and "//tools/b:main"). Such a program is named by its label, which is unique.
+  const nameCount = new Map<string, number>();
+  for (const p of programs) nameCount.set(p.name, (nameCount.get(p.name) ?? 0) + 1);
+  for (const p of programs) {
+    const label = targetLabel.get(p.id);
+    if (label !== undefined && (nameCount.get(p.name) ?? 0) > 1) p.name = label;
   }
   programs.sort((a, b) => byText(a.id, b.id));
   const programMains = new Set(programs.flatMap((p) => (p.main !== undefined ? [p.main] : [])));
