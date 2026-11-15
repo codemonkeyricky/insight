@@ -223,19 +223,27 @@ export function externalIdOf(repo: string, externals: Externals): string | undef
 }
 
 /**
- * The apparent name by which a BUILD label reaches the main repository besides `@//` and `@@//`. It is the root
- * module()'s repo_name when it sets one, which replaces the module name, else the module name. So with
+ * The apparent names by which a BUILD label reaches the main repository besides `@//` and `@@//`. From
+ * MODULE.bazel it is the root module()'s repo_name when it sets one, which replaces the module name, else the
+ * module name. From WORKSPACE or WORKSPACE.bazel it is the workspace() name. A repo with both files gets both
+ * names, de-duplicated, because WORKSPACE names are still honoured in hybrid mode. So with
  * module(name = "me", repo_name = "my_repo"), `@my_repo//a:b` is `//a:b` and `@me//a:b` is not.
+ * Callers pass every file that exists among MODULE.bazel, WORKSPACE and WORKSPACE.bazel.
  */
 export function mainRepoNames(texts: Map<string, string>): string[] {
-  const text = texts.get("MODULE.bazel");
-  if (text === undefined) return [];
-  for (const call of topLevelCalls(tokenize(text))) {
-    if (call.name !== "module") continue;
-    const repo = str(call, "repo_name");
-    if (repo !== undefined) return [repo];
-    const name = str(call, "name");
-    return name === undefined ? [] : [name];
+  const names: string[] = [];
+  const moduleText = texts.get("MODULE.bazel");
+  if (moduleText !== undefined) {
+    const call = topLevelCalls(tokenize(moduleText)).find((c) => c.name === "module");
+    const name = call === undefined ? undefined : (str(call, "repo_name") ?? str(call, "name"));
+    if (name !== undefined) names.push(name);
   }
-  return [];
+  for (const file of ["WORKSPACE", "WORKSPACE.bazel"]) {
+    const text = texts.get(file);
+    if (text === undefined) continue;
+    const call = topLevelCalls(tokenize(text)).find((c) => c.name === "workspace");
+    const name = call === undefined ? undefined : str(call, "name");
+    if (name !== undefined) names.push(name);
+  }
+  return [...new Set(names)];
 }

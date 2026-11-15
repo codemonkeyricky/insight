@@ -33,7 +33,7 @@ function memoPerRun<T>(ctx: ResolveContext, key: string, load: () => Promise<T>)
   return pending;
 }
 
-/** Reads every BUILD file (and MODULE.bazel for the main repo's names) and builds the model. Once per link run when the run has a runCache. */
+/** Reads every BUILD file (and MODULE.bazel and WORKSPACE for the main repo's names) and builds the model. Once per link run when the run has a runCache. */
 function loadModel(ctx: ResolveContext): Promise<BazelModel> {
   return memoPerRun(ctx, "frontend-bazel:model", async () => {
     const files = ctx.listFiles();
@@ -41,9 +41,11 @@ function loadModel(ctx: ResolveContext): Promise<BazelModel> {
     for (const f of files) {
       if (isBuildFile(f)) texts.set(f, await readFile(join(ctx.root.path, f), "utf8"));
     }
-    const moduleTexts = new Map<string, string>();
-    if (files.includes("MODULE.bazel")) moduleTexts.set("MODULE.bazel", await readFile(join(ctx.root.path, "MODULE.bazel"), "utf8"));
-    return buildModel(texts, files, mainRepoNames(moduleTexts));
+    const rootTexts = new Map<string, string>();
+    for (const f of ["MODULE.bazel", "WORKSPACE", "WORKSPACE.bazel"]) {
+      if (files.includes(f)) rootTexts.set(f, await readFile(join(ctx.root.path, f), "utf8"));
+    }
+    return buildModel(texts, files, mainRepoNames(rootTexts));
   });
 }
 
