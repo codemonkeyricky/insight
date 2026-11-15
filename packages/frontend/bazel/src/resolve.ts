@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join, posix } from "node:path";
 import { externalsForInclude, type CppExternal, type ResolveAnswer, type ResolveContext, type Resolver } from "@insight/sdk";
 import { buildModel, closureOf, isBuildFile, joinPath, ownersOf, type BazelModel, type BazelTarget } from "./model.js";
-import { EXTERNAL_FILES, externalIdOf, parseExternals, repoOf, type Externals } from "./externals.js";
+import { EXTERNAL_FILES, externalIdOf, mainRepoNames, parseExternals, repoOf, type Externals } from "./externals.js";
 
 /** An external repository, by id, with the name and repo_name that an include path can match. */
 export type ExternalName = CppExternal;
@@ -22,7 +22,9 @@ async function loadModel(ctx: ResolveContext): Promise<BazelModel> {
   for (const f of ctx.listFiles()) {
     if (isBuildFile(f)) texts.set(f, await readFile(join(ctx.root.path, f), "utf8"));
   }
-  return buildModel(texts, ctx.listFiles());
+  const moduleTexts = new Map<string, string>();
+  if (ctx.listFiles().includes("MODULE.bazel")) moduleTexts.set("MODULE.bazel", await readFile(join(ctx.root.path, "MODULE.bazel"), "utf8"));
+  return buildModel(texts, ctx.listFiles(), mainRepoNames(moduleTexts));
 }
 
 /** Reads the declarations of the external repositories, as the frontend does. */
@@ -38,11 +40,14 @@ async function loadExternals(ctx: ResolveContext): Promise<Externals> {
 /**
  * The header a target exposes under an include path, through strip_include_prefix and include_prefix. Without
  * strip_include_prefix a header keeps its workspace-relative path (absl/base/config.h stays absl/base/config.h),
- * because the workspace root is on the include path. It is not made relative to the package.
+ * because the workspace root is on the include path. The exception: with include_prefix and no
+ * strip_include_prefix, Bazel strips the package directory first (CcCompilationHelper defaults the strip to the
+ * package), so third_party/z/x.h with include_prefix "zlib" is exposed as zlib/x.h.
  */
 function exposedAs(t: BazelTarget, header: string): string {
+  const strip = t.stripPrefix ?? (t.includePrefix !== undefined ? t.pkg : undefined);
   let rel = header;
-  if (t.stripPrefix !== undefined && header.startsWith(`${t.stripPrefix}/`)) rel = header.slice(t.stripPrefix.length + 1);
+  if (strip !== undefined && strip !== "" && header.startsWith(`${strip}/`)) rel = header.slice(strip.length + 1);
   return joinPath(t.includePrefix ?? "", rel);
 }
 

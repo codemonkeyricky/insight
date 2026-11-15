@@ -13,7 +13,9 @@
     "WORKSPACE",
     "WORKSPACE.bazel",
     "**/*.bzl",
-    "**/*.{c,cc,cpp,cxx,c++,h,hh,hpp,hxx,inc,ipp,tcc,S,s}"
+    "**/*.{c,cc,cpp,cxx,c++,h,hh,hpp,hxx,inc,inl,ipp,tcc,S,s}",
+    "**/*.{py,java,go,proto,rs,ts,tsx,js,jsx,mjs,cjs}",
+    "**/*.lock"
   ],
   "provides": ["packaging", "structure"],
   "roles": {

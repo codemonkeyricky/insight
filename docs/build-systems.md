@@ -33,8 +33,8 @@ sets `"fallback": true`, so its guesses are used only when no build-system resol
 
 | File | Used for |
 |---|---|
-| `BUILD`, `BUILD.bazel` | Packages (one per file) and the targets they declare |
-| `MODULE.bazel` | `bazel_dep` (external modules), `use_repo` (repositories an extension makes), the `*_override` calls, `package(default_visibility)` |
+| `BUILD`, `BUILD.bazel` | Packages (one per file), the targets they declare, and `package(default_visibility)` |
+| `MODULE.bazel` | `bazel_dep` (external modules), `use_repo` (repositories an extension makes), the `*_override` calls |
 | `MODULE.bazel.lock` | The exact resolved version of each module (a JSON file). When it names a version, it wins over `MODULE.bazel` |
 | `WORKSPACE`, `WORKSPACE.bazel` | Repository rules at the top level: `http_archive`, `git_repository`, `local_repository` and their `new_*` forms |
 | `*.bzl` | Not parsed. A macro defined there is seen only through its calls in a BUILD file |

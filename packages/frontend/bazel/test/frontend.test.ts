@@ -8,8 +8,8 @@ import { createCoreRegistry } from "@insight/ir/node";
 import { runFrontendConformance, type IRBatch, type ProjectRoot } from "@insight/sdk";
 import frontend from "../src/index.js";
 import { externalMatches, resolver, type ExternalName } from "../src/resolve.js";
-import { buildModel, globRegex, labelOf, outputOf, parseBuildFile } from "../src/model.js";
-import { externalIdOf, parseExternals, repoOf } from "../src/externals.js";
+import { buildModel, globRegex, labelOf, moduleVariables, outputOf, parseBuildFile } from "../src/model.js";
+import { externalIdOf, mainRepoNames, parseExternals, repoOf } from "../src/externals.js";
 import { globsIn, labelsIn, stringsIn, tokenize, topLevelCalls } from "../src/starlark.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -445,7 +445,8 @@ describe("WORKSPACE externals", () => {
 describe("canonical labels and dependency edges to externals", () => {
   it("reads the repo of canonical and apparent labels", () => {
     expect(repoOf("@@abseil-cpp+//absl/strings")).toBe("abseil-cpp");
-    expect(repoOf("@@rules_cc~0.1.5~cc~cc_toolchain//:x")).toBe("rules_cc");
+    expect(repoOf("@@rules_cc~0.1.5~cc~cc_toolchain//:x")).toBe("cc_toolchain");
+    expect(repoOf("@@rules_cc~0.1.5//:x")).toBe("rules_cc");
     expect(repoOf("@@googletest//:gtest")).toBe("googletest");
     expect(repoOf("@googletest")).toBe("googletest");
     expect(repoOf("//lib:core")).toBeUndefined();
@@ -705,5 +706,141 @@ describe("glob patterns", () => {
     expect(kw[0]?.srcs).toEqual(["gt/include/sub/y.h", "gt/include/x.h", "gt/src/a.cc"]);
     const positional = parseBuildFile("gt/BUILD", 'cc_library(name = "gt", srcs = glob(["src/*.cc"]))', files, new Set(["gt"]));
     expect(positional[0]?.srcs).toEqual(["gt/src/a.cc", "gt/src/b.cc"]);
+  });
+});
+
+/** Writes a small tree into a temp directory and asks the resolver one include, from one file. */
+async function answerIn(tree: Record<string, string>, fromFile: string, include: string) {
+  const dir = mkdtempSync(join(tmpdir(), "bazel-case-"));
+  const all = Object.keys(tree);
+  for (const [rel, text] of Object.entries(tree)) {
+    mkdirSync(join(dir, dirname(rel)), { recursive: true });
+    writeFileSync(join(dir, rel), text);
+  }
+  const ctx = {
+    root: { path: dir, name: "t", allowBuildTools: false },
+    fromFile,
+    hasFile: (p: string) => all.includes(p),
+    hasNode: () => true,
+    listFiles: () => [...all],
+  };
+  try {
+    return await resolver.resolve({ scheme: "cpp.include", text: include }, ctx);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+describe("include_prefix strips the package directory first", () => {
+  const consumer = { "app/BUILD": 'cc_binary(name = "app", srcs = ["main.cc"], deps = ["//third_party/z:z"])', "app/main.cc": "" };
+
+  it("exposes a header under include_prefix alone with the package directory stripped", async () => {
+    const tree = {
+      ...consumer,
+      "third_party/z/BUILD": 'cc_library(name = "z", hdrs = ["x.h"], include_prefix = "zlib")',
+      "third_party/z/x.h": "",
+    };
+    expect(await answerIn(tree, "app/main.cc", "zlib/x.h")).toMatchObject({ targets: ["third_party/z/x.h"], confidence: "inferred" });
+    expect(await answerIn(tree, "app/main.cc", "zlib/third_party/z/x.h")).toBeNull();
+  });
+
+  it("keeps include_prefix over an explicit strip_include_prefix", async () => {
+    const tree = {
+      ...consumer,
+      "third_party/z/BUILD": 'cc_library(name = "z", hdrs = ["inc/x.h"], strip_include_prefix = "inc", include_prefix = "zlib")',
+      "third_party/z/inc/x.h": "",
+    };
+    expect(await answerIn(tree, "app/main.cc", "zlib/x.h")).toMatchObject({ targets: ["third_party/z/inc/x.h"] });
+  });
+
+  it("keeps the workspace-relative path when neither strip_include_prefix nor include_prefix is set", async () => {
+    const tree = {
+      ...consumer,
+      "third_party/z/BUILD": 'cc_library(name = "z", hdrs = ["x.h"])',
+      "third_party/z/x.h": "",
+    };
+    expect(await answerIn(tree, "app/main.cc", "third_party/z/x.h")).toMatchObject({ targets: ["third_party/z/x.h"] });
+    expect(await answerIn(tree, "app/main.cc", "x.h")).toBeNull();
+  });
+});
+
+describe("canonical labels after the lock pins a module", () => {
+  const moduleFile = 'module(name = "sample")\nbazel_dep(name = "googletest", version = "1.14.0", repo_name = "com_google_googletest")';
+  const lock = JSON.stringify({ moduleDepGraph: { "googletest@1.14.0": { name: "googletest", version: "1.14.0" } } });
+  const build = 'cc_library(name = "a", srcs = [], deps = ["@@googletest+//:gtest"])';
+
+  it("matches a canonical name by module name without a lock, and with a lock that sets source to lockfile", () => {
+    expect(externalIdOf("googletest", externalsOf({ "MODULE.bazel": moduleFile }))).toBe("@com_google_googletest");
+    const locked = externalsOf({ "MODULE.bazel": moduleFile, "MODULE.bazel.lock": lock });
+    expect(locked.entries.get("@com_google_googletest")?.attrs.source).toBe("lockfile");
+    expect(externalIdOf("googletest", locked)).toBe("@com_google_googletest");
+  });
+
+  it("points a dep-edge at the declared external with a lock, as without one", async () => {
+    for (const texts of [{ "MODULE.bazel": moduleFile, "BUILD": build }, { "MODULE.bazel": moduleFile, "MODULE.bazel.lock": lock, "BUILD": build }]) {
+      const deps = edgesOf(await extractFiles(texts)).filter((e) => e.kind === "packaging.dep-edge" && e.from === "//:a");
+      expect(deps.map((e) => e.to)).toEqual(["@com_google_googletest"]);
+    }
+  });
+});
+
+describe("visibility variables reassigned with += or in a block", () => {
+  const vis = (build: string) => parseBuildFile("absl/random/internal/BUILD", build, [], new Set(["absl/random/internal"])).find((t) => t.name === "x");
+
+  it("makes a variable unknown after += , so visibility is omitted rather than the first value", () => {
+    expect(vis('VIS = ["//a:__pkg__"]\nVIS += ["//b:__pkg__"]\ncc_library(name = "x", visibility = VIS)')).not.toHaveProperty("visibility");
+    expect(moduleVariables(tokenize('VIS = ["//a:__pkg__"]\nVIS += ["//b:__pkg__"]')).get("VIS")).toBeUndefined();
+  });
+
+  it("makes a variable unknown when it is assigned inside a block", () => {
+    const build = 'VIS = ["//a:__pkg__"]\nif True:\n    VIS = ["//b:__pkg__"]\ncc_library(name = "x", visibility = VIS)';
+    expect(vis(build)).not.toHaveProperty("visibility");
+  });
+
+  it("still reads a single module-level assignment", () => {
+    expect(vis('VIS = ["//a:__pkg__"]\ncc_library(name = "x", visibility = VIS)')?.visibility).toEqual(["//a:__pkg__"]);
+  });
+});
+
+describe("main-repository labels and label forms", () => {
+  it("reads @//p:t and @@//p:t as in-repository labels, and @root//p:t for the root module name", () => {
+    expect(labelOf("@//pkg:t", "p")).toEqual({ id: "//pkg:t" });
+    expect(labelOf("@@//pkg:t", "p")).toEqual({ id: "//pkg:t" });
+    expect(labelOf("@sample//pkg:t", "p", ["sample"])).toEqual({ id: "//pkg:t" });
+    expect(labelOf("@sample//pkg:t", "p")).toEqual({ external: "@sample//pkg:t" });
+    expect(labelOf("@repo//pkg:t", "p")).toEqual({ external: "@repo//pkg:t" });
+  });
+
+  it("reads //pkg, //pkg:pkg and :local as the same or package-relative target ids", () => {
+    expect(labelOf("//pkg", "")).toEqual({ id: "//pkg:pkg" });
+    expect(labelOf("//pkg:pkg", "")).toEqual({ id: "//pkg:pkg" });
+    expect(labelOf(":local", "p")).toEqual({ id: "//p:local" });
+  });
+
+  it("gives no repository for a main-repository label, and the apparent name for each canonical form", () => {
+    expect(repoOf("@//pkg:t")).toBeUndefined();
+    expect(repoOf("@@//pkg:t")).toBeUndefined();
+    expect(repoOf("@repo//pkg:t")).toBe("repo");
+    expect(repoOf("@@name+//p")).toBe("name");
+    expect(repoOf("@@rules_cc++ext+foo//:x")).toBe("foo");
+    expect(repoOf("@@+ext+foo//...")).toBe("foo");
+  });
+
+  it("reads the root module name from module(name = ...)", () => {
+    expect(mainRepoNames(new Map([["MODULE.bazel", 'module(name = "sample", version = "0.1")']]))).toEqual(["sample"]);
+    expect(mainRepoNames(new Map())).toEqual([]);
+  });
+
+  it("drops main-repository deps from the external list and records them as in-repository targets", () => {
+    const targets = parseBuildFile("app/BUILD", 'cc_binary(name = "app", srcs = [], deps = ["@sample//lib:core", "@@//lib:core", "@//lib:core", "@repo//lib:core"])', [], new Set(["app"]), ["sample"]);
+    expect(targets[0]?.deps).toEqual(["//lib:core", "//lib:core", "//lib:core"]);
+    expect(targets[0]?.externalDeps).toEqual(["@repo//lib:core"]);
+  });
+
+  it("resolves an extension canonical name to the external its use_repo declares", async () => {
+    const moduleFile = 'module(name = "sample")\next = use_extension("//:deps.bzl", "e")\nuse_repo(ext, "foo")';
+    const ext = externalsOf({ "MODULE.bazel": moduleFile });
+    expect(externalIdOf(repoOf("@@rules_cc++ext+foo//:x") ?? "", ext)).toBe("@foo");
+    expect(externalIdOf(repoOf("@@+ext+foo//p") ?? "", ext)).toBe("@foo");
   });
 });
