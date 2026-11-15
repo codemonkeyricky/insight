@@ -7,6 +7,7 @@ import { type IRRecord, type IREdge, type IRNode, validateIR } from "@insight/ir
 import { createCoreRegistry } from "@insight/ir/node";
 import { runFrontendConformance, type IRBatch, type ProjectRoot } from "@insight/sdk";
 import frontend, { extractFiles, resolver } from "../src/index.js";
+import { resolveStats } from "../src/resolve.js";
 import { buildProject, Ids, indexStats, isHdlText, releaseProject } from "../src/project.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -853,6 +854,17 @@ describe("include matching", () => {
   it("an include that climbs out of its directory links by the suffix of the file it names, without the ../ segments", async () => {
     const batches = await extractDir(join(fixturesDir, "include_updir"), ["rtl/p.sv", "rtl/t.sv", "vendor/inc/y.svh"]);
     expect(edgesOf(allRecords(batches)).find((e) => e.kind === "calls.call" && e.attrs?.callee === "p::fy")?.to).toBe("vendor/inc/y.svh#fy");
+  });
+});
+
+describe("the resolver's include index", () => {
+  it("two resolve calls over the same file list build the index once", async () => {
+    const list = ["rtl/p.sv", "vendor/x.svh"];
+    const ctx = { root: { path: "/", name: "x", allowBuildTools: false }, fromFile: "rtl/p.sv", hasFile: () => false, hasNode: () => false, listFiles: () => list };
+    const before = resolveStats.indexBuilds;
+    await resolver.resolve({ scheme: "sv.include", text: "x.svh" } as never, ctx as never);
+    await resolver.resolve({ scheme: "sv.include", text: "p.sv" } as never, ctx as never);
+    expect(resolveStats.indexBuilds - before).toBe(1);
   });
 });
 
