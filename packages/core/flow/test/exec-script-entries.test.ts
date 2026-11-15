@@ -53,25 +53,39 @@ side();
 
 run();
 `,
+  // Its only top-level work is an awaited declaration: a program.
+  "scripts/vawait.ts": `async function main(): Promise<number> {
+  return 1;
+}
+const n = await main();
+export { n };
+`,
+  // Page code under a nested scripts/ folder, loaded by a bundler: not a Node program.
+  "web/src/scripts/theme.ts": `const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+document.documentElement.dataset.theme = dark ? "dark" : "light";
+`,
 };
 const CHECK = "entry:node:scripts/check.ts";
 const DEEP = "entry:node:tools/scripts/deep.ts";
 const RUN = "entry:node:scripts/run.ts";
+const VAWAIT = "entry:node:scripts/vawait.ts";
 
 let model: ExecModel;
+/** The same files under a private monorepo root: a package.json with scripts and no name. */
+let unnamed: ExecModel;
 
-beforeAll(async () => {
+async function modelOf(files: Record<string, string>): Promise<ExecModel> {
   const dir = mkdtempSync(join(tmpdir(), "insight-script-entries-"));
   try {
-    for (const [file, text] of Object.entries(FILES)) {
+    for (const [file, text] of Object.entries(files)) {
       mkdirSync(dirname(join(dir, file)), { recursive: true });
       writeFileSync(join(dir, file), text);
     }
     const ctx = {
       root: { path: dir, name: "script-entries-sample", allowBuildTools: false },
-      files: Object.keys(FILES),
-      listFiles: () => Object.keys(FILES),
-      readFile: async (rel: string) => FILES[rel] ?? "",
+      files: Object.keys(files),
+      listFiles: () => Object.keys(files),
+      readFile: async (rel: string) => files[rel] ?? "",
       log: () => undefined,
     };
     const nodes: IRNode[] = [];
@@ -82,16 +96,21 @@ beforeAll(async () => {
         else if ("edge" in r) edges.push(r.edge);
       }
     }
-    model = execModel(nodes, edges, "");
+    return execModel(nodes, edges, "");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+beforeAll(async () => {
+  model = await modelOf(FILES);
+  unnamed = await modelOf({ ...FILES, "package.json": JSON.stringify({ private: true, type: "module", scripts: { start: "tsx scripts/run.ts" } }) });
 });
 
 describe("Node script programs", () => {
   it("makes a program for each script that runs on load, and for the one package.json names", () => {
     const node = model.programs.filter((p) => p.kind === "node").map((p) => p.id);
-    expect(node.sort()).toEqual([CHECK, DEEP, RUN].sort());
+    expect(node.sort()).toEqual([CHECK, DEEP, RUN, VAWAIT].sort());
   });
 
   it("makes a program for a script under a nested scripts/ folder", () => {
@@ -108,5 +127,14 @@ describe("Node script programs", () => {
     expect(ids.some((id) => id.includes("scripts/use.ts"))).toBe(false);
     expect(ids.some((id) => id.includes("x.test.ts"))).toBe(false);
     expect(ids.some((id) => id.includes("src/side.ts"))).toBe(false);
+  });
+
+  it("does not make page code under a nested scripts/ folder a program", () => {
+    expect(model.programs.some((p) => p.id.includes("theme.ts"))).toBe(false);
+  });
+
+  it("keeps an imported script that an unnamed root package.json names", () => {
+    const node = unnamed.programs.filter((p) => p.kind === "node").map((p) => p.id);
+    expect(node.sort()).toEqual([CHECK, DEEP, RUN, VAWAIT].sort());
   });
 });

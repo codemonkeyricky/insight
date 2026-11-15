@@ -215,7 +215,7 @@ function moduleSpan(rel: string, sf: ts.SourceFile): Span {
 }
 
 /** Assigns IDs to every declaration in a file: <file>#<qualified name>, with ~N for repeats. */
-function assignDecls(rel: string, sf: ts.SourceFile, out: Map<ts.Node, Decl>, htmlEntry: boolean, nodeEntry: boolean, programEntry: ProgramEntry | undefined): void {
+function assignDecls(rel: string, sf: ts.SourceFile, out: Map<ts.Node, Decl>, htmlEntry: boolean, nodeEntry: boolean, programEntry: ProgramEntry | undefined, manifestNamed = false): void {
   // The module entry is keyed by the source file itself. Its name is not a container, so declarations keep their ids.
   if (runsAtLoad(sf)) {
     const entity: Entity = {
@@ -228,7 +228,9 @@ function assignDecls(rel: string, sf: ts.SourceFile, out: Map<ts.Node, Decl>, ht
       module: true,
       ...(htmlEntry ? { htmlEntry: true as const } : {}),
       ...(nodeEntry ? { nodeEntry: true as const } : {}),
-      ...(programEntry !== undefined ? { packageEntry: true as const, programEntry } : {}),
+      // A file a package.json names is a program even when imported: a workspace package's, with what names it, or one an
+      // unnamed manifest (a private monorepo root) names, which has no package to label it by.
+      ...(programEntry !== undefined ? { packageEntry: true as const, programEntry } : manifestNamed ? { packageEntry: true as const } : {}),
     };
     out.set(sf, { id: `${rel}#${MODULE_NAME}`, rel, qname: MODULE_NAME, entity, node: sf });
   }
@@ -334,16 +336,27 @@ const RUNNING_STATEMENTS = new Set<ts.SyntaxKind>([
 /**
  * True when a top-level statement runs code on load: a call, `new`, `await` or assignment outside any function body.
  * Declarations, imports and exports alone do not count, so a library that only exports and builds constants is not an
- * entry.
+ * entry. A declaration with a top-level `await` does count (`const n = await main()`): a library does not wait on load.
  */
 function runsTopLevelStatement(sf: ts.SourceFile): boolean {
-  const runs = (node: ts.Node): boolean => {
+  const has = (node: ts.Node, hit: (n: ts.Node) => boolean): boolean => {
     if (ts.isFunctionLike(node)) return false;
-    if (ts.isCallExpression(node) || ts.isNewExpression(node) || ts.isAwaitExpression(node)) return true;
-    if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) return true;
-    return ts.forEachChild(node, (child) => (runs(child) ? true : undefined)) === true;
+    if (hit(node)) return true;
+    return ts.forEachChild(node, (child) => (has(child, hit) ? true : undefined)) === true;
   };
-  return sf.statements.some((s) => RUNNING_STATEMENTS.has(s.kind) && runs(s));
+  const runs = (n: ts.Node): boolean =>
+    ts.isCallExpression(n) || ts.isNewExpression(n) || ts.isAwaitExpression(n) || (ts.isBinaryExpression(n) && n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && n.operatorToken.kind <= ts.SyntaxKind.LastAssignment);
+  return sf.statements.some((s) => (RUNNING_STATEMENTS.has(s.kind) && has(s, runs)) || (ts.isVariableStatement(s) && has(s, ts.isAwaitExpression)));
+}
+
+/** Browser globals: a file that touches them is page code, even under a scripts/ folder. */
+const DOM_GLOBAL = /\b(?:document|window|navigator|localStorage)\s*\.|\bcustomElements\.define\b/;
+
+/** The files a package.json "bin" or "scripts" entry names directly, by project path (see manifestScripts). */
+function manifestNamedFiles(manifests: Map<string, string>): Set<string> {
+  const named = new Set<string>();
+  for (const text of manifests.values()) for (const f of manifestScripts(text)) named.add(f);
+  return named;
 }
 
 /**
@@ -360,8 +373,7 @@ function nodeEntryFiles(
   packageEntries: ReadonlySet<string>,
   sourceOf: (rel: string) => ts.SourceFile | undefined,
 ): Set<string> {
-  const named = new Set<string>();
-  for (const text of manifests.values()) for (const f of manifestScripts(text)) named.add(f);
+  const named = manifestNamedFiles(manifests);
   // Every workspace package's bin and script targets, mapped from build output to source (see workspaceProgramEntries).
   for (const f of packageEntries) named.add(f);
   const out = new Set<string>();
@@ -378,8 +390,9 @@ function nodeEntryFiles(
         out.add(rel);
         continue;
       }
+      // Code that runs on load is a Node script unless it is page code (a bundler may load a scripts/ file into a page).
       const sf = sourceOf(rel);
-      if (sf !== undefined && runsTopLevelStatement(sf)) out.add(rel);
+      if (sf !== undefined && !DOM_GLOBAL.test(text) && runsTopLevelStatement(sf)) out.add(rel);
     }
   }
   return out;
@@ -495,10 +508,11 @@ export function buildProject(
   const htmlEntries = htmlScriptEntries(html, relSet);
   // The programs the workspace packages name, as source files. A test or declaration file is never a program.
   const packageEntries = new Map([...workspaceProgramEntries(packageJsons, relSet)].filter(([f]) => !TEST_PATH.test(f) && !f.endsWith(".d.ts")));
+  const manifestNamed = manifestNamedFiles(manifests);
   const nodeEntries = nodeEntryFiles(root, rels, texts, manifests, new Set(packageEntries.keys()), (rel) => program.getSourceFile(abs(rel)));
   for (const rel of rels) {
     const sf = program.getSourceFile(abs(rel));
-    if (sf) assignDecls(rel, sf, decls, htmlEntries.has(rel), nodeEntries.has(rel), packageEntries.get(rel));
+    if (sf) assignDecls(rel, sf, decls, htmlEntries.has(rel), nodeEntries.has(rel), packageEntries.get(rel), nodeEntries.has(rel) && manifestNamed.has(rel));
   }
   const moduleIds = new Map<string, NodeId>();
   for (const d of decls.values()) {
@@ -1120,85 +1134,99 @@ function enclosingClass(node: ts.Node): ts.ClassLikeDeclaration | undefined {
   return undefined;
 }
 
+/** An assignment that may store its right side: `=`, `??=` and `||=`. */
+const ASSIGNS = new Set([ts.SyntaxKind.EqualsToken, ts.SyntaxKind.QuestionQuestionEqualsToken, ts.SyntaxKind.BarBarEqualsToken]);
+
 /**
- * The `new Worker(...)` constructors (browser Workers) an expression may hold. Follows a const's initializer, a class
- * field assigned from anywhere in its class, and the return values of a function it calls. A parameter holds none.
+ * The `new Worker(...)` constructors (browser Workers) an expression may hold, each once. Follows a const's initializer, a
+ * `let` or `var` assigned anywhere in its scope (`=`, `??=`, `||=`), a class field assigned from anywhere in its class, the
+ * sides of `?:`, `??` and `||`, and the return values of a function it calls. A parameter holds none. Each variable and field
+ * is expanded once per query and depth, so a self-referencing lazy init (`w = w ?? new Worker(…)`) costs one scan of its scope.
  */
-function workerCtors(project: Project, expr: ts.Expression, depth = 0): ts.NewExpression[] {
-  if (depth > 6) return [];
+function workerCtors(project: Project, expr: ts.Expression): ts.NewExpression[] {
+  const seen = new Map<unknown, number>();
+  const found = new Set<ts.NewExpression>();
+  walkWorkerCtors(project, expr, 0, seen, found);
+  return [...found];
+}
+
+function walkWorkerCtors(project: Project, expr: ts.Expression, depth: number, seen: Map<unknown, number>, found: Set<ts.NewExpression>): void {
+  if (depth > 6) return;
+  const walk = (x: ts.Expression): void => walkWorkerCtors(project, x, depth + 1, seen, found);
+  // Whether to expand a variable, field or function here: not when it was already expanded at this depth or nearer the top.
+  const first = (k: unknown): boolean => {
+    const at = seen.get(k);
+    if (at !== undefined && at <= depth) return false;
+    seen.set(k, depth);
+    return true;
+  };
   const e = unwrapAll(expr);
   if (ts.isNewExpression(e)) {
     const sf = e.getSourceFile();
-    return matchWorker(e, importBindings(sf), workerEnvFor(project, sf))?.api === "Worker" ? [e] : [];
+    if (matchWorker(e, importBindings(sf), workerEnvFor(project, sf))?.api === "Worker") found.add(e);
+    return;
   }
   // `c ? a : b`, `a ?? b` and `a || b` may hold either side's worker.
-  if (ts.isConditionalExpression(e)) return [...workerCtors(project, e.whenTrue, depth + 1), ...workerCtors(project, e.whenFalse, depth + 1)];
+  if (ts.isConditionalExpression(e)) {
+    walk(e.whenTrue);
+    walk(e.whenFalse);
+    return;
+  }
   if (ts.isBinaryExpression(e) && (e.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken || e.operatorToken.kind === ts.SyntaxKind.BarBarToken)) {
-    return [...workerCtors(project, e.left, depth + 1), ...workerCtors(project, e.right, depth + 1)];
+    walk(e.left);
+    walk(e.right);
+    return;
   }
   if (ts.isIdentifier(e)) {
     const symbol = project.checker.getSymbolAtLocation(e);
     const d = symbol?.valueDeclaration;
-    if (symbol === undefined || d === undefined || !ts.isVariableDeclaration(d)) return [];
-    const out: ts.NewExpression[] = [];
-    if (d.initializer !== undefined) out.push(...workerCtors(project, d.initializer, depth + 1));
-    // A `let` or `var` may be assigned after its declaration: every `name = expr` in the declaring scope counts.
-    if ((ts.getCombinedNodeFlags(d) & ts.NodeFlags.Const) === 0) {
+    if (symbol === undefined || d === undefined || !ts.isVariableDeclaration(d) || !first(symbol)) return;
+    if (d.initializer !== undefined) walk(d.initializer);
+    // A `let` or `var` may be assigned after its declaration: every `name = expr`, `name ??= expr` and `name ||= expr` in the
+    // declaring scope counts. A `let` is scoped to its block, a `var` to its function or file.
+    const flags = ts.getCombinedNodeFlags(d);
+    if ((flags & ts.NodeFlags.Const) === 0) {
+      const blockScoped = (flags & ts.NodeFlags.BlockScoped) !== 0;
       let scope: ts.Node = d;
-      while (scope.parent !== undefined && !(ts.isSourceFile(scope) || ts.isFunctionLike(scope) || ts.isBlock(scope) || ts.isModuleBlock(scope))) {
+      while (scope.parent !== undefined && !(ts.isSourceFile(scope) || ts.isFunctionLike(scope) || (blockScoped && (ts.isBlock(scope) || ts.isModuleBlock(scope))))) {
         scope = scope.parent;
       }
       const scan = (n: ts.Node): void => {
-        if (
-          ts.isBinaryExpression(n) &&
-          n.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-          ts.isIdentifier(n.left) &&
-          project.checker.getSymbolAtLocation(n.left) === symbol
-        ) {
-          out.push(...workerCtors(project, n.right, depth + 1));
-        }
+        if (ts.isBinaryExpression(n) && ASSIGNS.has(n.operatorToken.kind) && ts.isIdentifier(n.left) && project.checker.getSymbolAtLocation(n.left) === symbol) walk(n.right);
         ts.forEachChild(n, scan);
       };
       scan(scope);
     }
-    return out;
+    return;
   }
   if (ts.isPropertyAccessExpression(e) && e.expression.kind === ts.SyntaxKind.ThisKeyword) {
     const cls = enclosingClass(e);
-    const out: ts.NewExpression[] = [];
-    if (cls === undefined) return out;
+    if (cls === undefined) return;
     const name = e.name.text;
+    const key = `${cls.pos}:${cls.getSourceFile().fileName}#${name}`;
+    if (!first(key)) return;
     const scan = (n: ts.Node): void => {
-      if (
-        ts.isBinaryExpression(n) &&
-        n.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-        ts.isPropertyAccessExpression(n.left) &&
-        n.left.expression.kind === ts.SyntaxKind.ThisKeyword &&
-        n.left.name.text === name
-      ) {
-        out.push(...workerCtors(project, n.right, depth + 1));
+      if (ts.isBinaryExpression(n) && ASSIGNS.has(n.operatorToken.kind) && ts.isPropertyAccessExpression(n.left) && n.left.expression.kind === ts.SyntaxKind.ThisKeyword && n.left.name.text === name) {
+        walk(n.right);
       } else if (ts.isPropertyDeclaration(n) && n.initializer !== undefined && ts.isIdentifier(n.name) && n.name.text === name) {
-        out.push(...workerCtors(project, n.initializer, depth + 1));
+        walk(n.initializer);
       }
       ts.forEachChild(n, scan);
     };
     scan(cls);
-    return out;
+    return;
   }
   if (ts.isCallExpression(e)) {
     const node = declOf(project, project.checker.getSymbolAtLocation(nameOf(e.expression)))?.node;
-    if (node === undefined || !(ts.isMethodDeclaration(node) || ts.isFunctionDeclaration(node)) || node.body === undefined) return [];
+    if (node === undefined || !(ts.isMethodDeclaration(node) || ts.isFunctionDeclaration(node)) || node.body === undefined || !first(node)) return;
     const body = node.body;
-    const out: ts.NewExpression[] = [];
     const scan = (n: ts.Node): void => {
-      if (ts.isReturnStatement(n) && n.expression !== undefined) out.push(...workerCtors(project, n.expression, depth + 1));
+      if (ts.isReturnStatement(n) && n.expression !== undefined) walk(n.expression);
       if (n !== body && ts.isFunctionLike(n)) return;
       ts.forEachChild(n, scan);
     };
     scan(body);
-    return out;
   }
-  return [];
 }
 
 /** Every browser worker a project constructs, with the file that constructs it and the handlers on its object. */
@@ -1521,27 +1549,18 @@ export function emitFile(project: Project, rel: string): IRBatch {
       const callee = call.expression;
       const sym = project.checker.getSymbolAtLocation(nameOf(callee));
       const target = declOf(project, sym);
-      // A call through a fixed registry runs whichever of its functions the key picks, so every one is a candidate. It takes
-      // precedence over the single function the checker names for it, such as one member of an untyped table.
-      const registry = registryFor(project, call, dependOn);
-      if (registry !== undefined) {
-        const kept = registry.slice(0, MAX_DISPATCH_TARGETS).map((t) => t.id);
-        const [first, ...rest] = kept as [NodeId, ...NodeId[]];
-        const truncated = registry.length > MAX_DISPATCH_TARGETS;
-        pushEdge({
-          from: fn,
-          to: { candidates: [first, ...rest] },
-          facet: "calls",
-          kind: "calls.call",
-          attrs: { callee: callee.getText(sf).slice(0, 200), how: "registry", ...(truncated ? { truncated: true } : {}) },
-          span: spanOf(rel, sf, callee),
-          provenance: { frontend: FRONTEND_ID, confidence: "heuristic" },
-        });
-        for (const t of registry) dependOn(t.rel);
-      } else if (target?.entity.type === "function") {
+      // A call through a fixed registry runs whichever of its functions the key picks, so every one is a candidate. The registry
+      // is asked only when the checker names no single function: no function target, or a member symbol of several
+      // declarations (a union of the registry's literals, whose first declaration is only one of them). A call the checker
+      // resolves directly keeps its direct edge. A registry key fixed to one entry is a direct call to that entry.
+      const direct = target?.entity.type === "function" ? target : undefined;
+      const ambiguous = direct === undefined || (sym?.declarations?.length ?? 0) >= 2;
+      const registry = ambiguous ? registryFor(project, call, dependOn) : undefined;
+      const callTarget = registry === undefined ? direct : registry.exact ? registry.targets[0] : undefined;
+      if (callTarget !== undefined) {
         const callEdge: IREdge = {
           from: fn,
-          to: target.id,
+          to: callTarget.id,
           facet: "calls",
           kind: "calls.call",
           attrs: { callee: callee.getText(sf).slice(0, 200), callEnd: pos(sf, call.getEnd()) },
@@ -1550,7 +1569,21 @@ export function emitFile(project: Project, rel: string): IRBatch {
         };
         callEdges.set(call, callEdge);
         pushEdge(callEdge);
-        dependOn(target.rel);
+        dependOn(callTarget.rel);
+      } else if (registry !== undefined) {
+        const kept = registry.targets.slice(0, MAX_DISPATCH_TARGETS).map((t) => t.id);
+        const [first, ...rest] = kept as [NodeId, ...NodeId[]];
+        const truncated = registry.targets.length > MAX_DISPATCH_TARGETS;
+        pushEdge({
+          from: fn,
+          to: { candidates: [first, ...rest] },
+          facet: "calls",
+          kind: "calls.call",
+          attrs: { callee: callee.getText(sf).slice(0, 200), how: "registry", callEnd: pos(sf, call.getEnd()), ...(truncated ? { truncated: true } : {}) },
+          span: spanOf(rel, sf, callee),
+          provenance: { frontend: FRONTEND_ID, confidence: "heuristic" },
+        });
+        for (const t of registry.targets) dependOn(t.rel);
       } else {
         // A call through an interface or abstract member: every implementation the project declares is a candidate.
         const dispatch = dispatchFor(project, sym, ts.isPropertyAccessExpression(callee) ? callee.expression : undefined);
@@ -1614,8 +1647,8 @@ export function emitFile(project: Project, rel: string): IRBatch {
       }
       // A call to a wrapper (one level): the URL the caller passes for the wrapper's parameter, read with the caller's own names.
       // The node is owned by this caller and says which wrapper it went through. An unresolved argument emits nothing here.
-      if (!effect && target?.entity.type === "function") {
-        const fn = fnNodeOf(target.node);
+      if (!effect && callTarget !== undefined) {
+        const fn = fnNodeOf(callTarget.node);
         const wrapper = fn === undefined ? undefined : wrapperOf(project, fn);
         if (fn !== undefined && wrapper !== undefined && callSiteCount(project, fn) <= MAX_WRAPPER_SITES) {
           let unresolved = false;
@@ -1649,7 +1682,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
           const wrapperEnv = workerEnvFor(project, wrapper.sf);
           const m = matchFetch(wrapper.fetch, importBindings(wrapper.sf), wrapperEnv, hooks);
           if (m !== undefined && !unresolved) {
-            const attrs = { ...m.attrs, via: target.entity.name };
+            const attrs = { ...m.attrs, via: callTarget.entity.name };
             push({
               id: uniqueId(`effect:${pos(sf, call.getStart(sf)).join(":")}`),
               facet: "effects",
@@ -1659,7 +1692,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
               span: spanOf(rel, sf, call),
               provenance: PROV,
             });
-            dependOn(target.rel);
+            dependOn(callTarget.rel);
           }
         }
       }

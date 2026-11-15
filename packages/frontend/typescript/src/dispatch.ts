@@ -281,14 +281,22 @@ function memberDecl(project: Project, m: ts.ObjectLiteralElementLike): Decl | un
   return undefined;
 }
 
+/** The function-valued members of each object literal, per project: a large registry is read once, not once per call site. */
+const membersCache = new WeakMap<Project, WeakMap<ts.ObjectLiteralExpression, Map<string, Decl>>>();
+
 /** The function-valued members of an object literal, by name: its methods and its function-valued properties. */
 export function functionMembersOf(project: Project, literal: ts.ObjectLiteralExpression): Map<string, Decl> {
+  let byLiteral = membersCache.get(project);
+  if (byLiteral === undefined) membersCache.set(project, (byLiteral = new WeakMap()));
+  const cached = byLiteral.get(literal);
+  if (cached !== undefined) return cached;
   const out = new Map<string, Decl>();
   for (const m of literal.properties) {
     if (m.name === undefined) continue;
     const decl = memberDecl(project, m);
     if (decl?.entity.type === "function") out.set(propName(m.name), decl);
   }
+  byLiteral.set(literal, out);
   return out;
 }
 
@@ -314,12 +322,41 @@ function literalOf(project: Project, expr: ts.Expression): ts.ObjectLiteralExpre
   return ts.isObjectLiteralExpression(e) || ts.isArrayLiteralExpression(e) ? e : undefined;
 }
 
-/** The value expressions a literal holds: each property's initializer, or each array element. */
-function valuesOf(lit: ts.ObjectLiteralExpression | ts.ArrayLiteralExpression): ts.Expression[] {
-  if (ts.isArrayLiteralExpression(lit)) return [...lit.elements];
-  const out: ts.Expression[] = [];
-  for (const m of lit.properties) if (ts.isPropertyAssignment(m)) out.push(m.initializer);
+/**
+ * The entries of a registry literal, by key: each property of an object (its name), or each element of an array (its index).
+ * Undefined when a key is not fixed: a spread, or a computed name, so the entries may not be all the registry holds.
+ */
+function entriesOf(lit: ts.ObjectLiteralExpression | ts.ArrayLiteralExpression): Array<{ key: string; node: ts.Node; value?: ts.Expression }> | undefined {
+  const out: Array<{ key: string; node: ts.Node; value?: ts.Expression }> = [];
+  if (ts.isArrayLiteralExpression(lit)) {
+    for (const [i, el] of lit.elements.entries()) {
+      if (ts.isSpreadElement(el) || ts.isOmittedExpression(el)) return undefined;
+      out.push({ key: String(i), node: el, value: el });
+    }
+    return out;
+  }
+  for (const m of lit.properties) {
+    if (m.name === undefined || ts.isComputedPropertyName(m.name)) return undefined;
+    const value = ts.isPropertyAssignment(m) ? m.initializer : ts.isShorthandPropertyAssignment(m) ? m.name : undefined;
+    out.push({ key: propName(m.name), node: m, ...(value !== undefined ? { value } : {}) });
+  }
   return out;
+}
+
+/**
+ * The keys a lookup's key expression can take, when its type fixes them: a string or number literal, or a union of them, as
+ * in `X["json"]`, `X[0]` or `X[k]` with `k: "a" | "b"`. Undefined when the key is any string or number.
+ */
+function literalKeys(checker: ts.TypeChecker, key: ts.Expression): Set<string> | undefined {
+  const type = checker.getTypeAtLocation(key);
+  const parts = type.isUnion() ? type.types : [type];
+  const out = new Set<string>();
+  for (const t of parts) {
+    if (t.isStringLiteral()) out.add(t.value);
+    else if (t.isNumberLiteral()) out.add(String(t.value));
+    else return undefined;
+  }
+  return out.size > 0 ? out : undefined;
 }
 
 /** Keeps the first declaration of each id, sorted by id. */
@@ -329,46 +366,60 @@ function uniqueSorted(decls: Decl[]): Decl[] {
   return [...byKey.values()].sort(byId);
 }
 
+/** The functions a registry call can run. `exact` when its key is fixed to one entry, so the call runs that one function. */
+export interface Registry {
+  targets: Decl[];
+  exact: boolean;
+}
+
 /**
  * The functions a registry lookup can run, for a call whose callee is a lookup into a fixed registry. Forms:
  *  - `X[k](…)`: each function member of the const literal X (or each function element of an array X);
  *  - `X[k].m(…)`: the member `m` of each literal that X holds.
- * Undefined when the callee is neither.
+ * A key whose type is a literal, or a union of literals, keeps only those entries. Undefined when the callee is neither form,
+ * or when an entry the key can pick is not known: a spread, a computed key, a value that is not a function the project
+ * declares (or, for `.m`, not an object literal that declares `m`). A partial list would read as the whole registry.
  */
-function lookupTargets(project: Project, callee: ts.Expression, dependOn?: (rel: string) => void): Decl[] | undefined {
+function lookupTargets(project: Project, callee: ts.Expression, dependOn?: (rel: string) => void): Registry | undefined {
   const e = unwrap(callee);
-  let registry: ts.Expression;
+  let access: ts.ElementAccessExpression;
   let member: string | undefined;
   if (ts.isElementAccessExpression(e)) {
-    registry = e.expression;
+    access = e;
   } else if (ts.isPropertyAccessExpression(e) && ts.isElementAccessExpression(unwrap(e.expression))) {
-    registry = (unwrap(e.expression) as ts.ElementAccessExpression).expression;
+    access = unwrap(e.expression) as ts.ElementAccessExpression;
     member = e.name.text;
   } else {
     return undefined;
   }
-  const lit = literalOf(project, registry);
+  const lit = literalOf(project, access.expression);
   if (lit === undefined) return undefined;
+  // The answer, a bail-out included, is read from these files: a change to them can change it.
+  const litRel = relOf(project, lit);
+  if (litRel !== undefined) dependOn?.(litRel);
+  const entries = entriesOf(lit);
+  if (entries === undefined) return undefined;
+  const keys = literalKeys(project.checker, access.argumentExpression);
+  const picked = keys === undefined ? entries : entries.filter((x) => keys.has(x.key));
+  if (picked.length === 0 || (keys !== undefined && picked.length < keys.size)) return undefined;
   const out: Decl[] = [];
-  if (member === undefined) {
-    if (ts.isObjectLiteralExpression(lit)) out.push(...functionMembersOf(project, lit).values());
-    else for (const el of lit.elements) {
-      const fn = functionOf(project, el);
-      if (fn) out.push(fn);
-    }
-  } else {
-    for (const v of valuesOf(lit)) {
-      const inner = literalOf(project, v);
-      if (inner === undefined || !ts.isObjectLiteralExpression(inner)) continue;
-      const fn = functionMembersOf(project, inner).get(member);
-      if (fn) out.push(fn);
+  for (const entry of picked) {
+    let fn: Decl | undefined;
+    if (member === undefined) {
+      fn = ts.isObjectLiteralExpression(lit) ? functionMembersOf(project, lit).get(entry.key) : entry.value === undefined ? undefined : functionOf(project, entry.value);
+    } else {
+      const inner = entry.value === undefined ? undefined : literalOf(project, entry.value);
+      if (inner === undefined || !ts.isObjectLiteralExpression(inner)) return undefined;
       const rel = relOf(project, inner);
       if (rel !== undefined) dependOn?.(rel);
+      if (entriesOf(inner) === undefined) return undefined;
+      fn = functionMembersOf(project, inner).get(member);
     }
+    if (fn === undefined) return undefined;
+    out.push(fn);
   }
-  const rel = relOf(project, lit);
-  if (rel !== undefined) dependOn?.(rel);
-  return out.length > 0 ? uniqueSorted(out) : undefined;
+  const targets = uniqueSorted(out);
+  return { targets, exact: keys !== undefined && keys.size === 1 && targets.length === 1 };
 }
 
 /**
@@ -377,8 +428,12 @@ function lookupTargets(project: Project, callee: ts.Expression, dependOn?: (rel:
  * bound to either, or a member name that several object literals in the project all declare, such as `t.parse()` over
  * `Object.values(T)` of an untyped table. Undefined for any other call. `dependOn` receives each project file the answer
  * was read from.
+ *
+ * The caller asks only when the checker names no single function for the call (see extract.ts emitCall), so a registry never
+ * replaces a direct call the checker resolves. The member-name form relies on the checker keeping a union of the literals'
+ * types: a union TypeScript reduces (an array literal of same-shaped objects, `?:`) names one member, and stays a direct call.
  */
-export function registryFor(project: Project, call: ts.CallExpression, dependOn?: (rel: string) => void): Decl[] | undefined {
+export function registryFor(project: Project, call: ts.CallExpression, dependOn?: (rel: string) => void): Registry | undefined {
   const callee = unwrap(call.expression);
   // A const bound to a lookup: `const run = impl[k] as F; run(…)`.
   if (ts.isIdentifier(callee)) {
@@ -400,9 +455,11 @@ export function registryFor(project: Project, call: ts.CallExpression, dependOn?
     if (rel === undefined) return undefined;
     dependOn?.(rel);
     const fn = memberDecl(project, d);
-    if (fn?.entity.type === "function") out.push(fn);
+    // A declaration that is not a function the project declares: the list would be partial.
+    if (fn?.entity.type !== "function") return undefined;
+    out.push(fn);
   }
-  return out.length > 0 ? uniqueSorted(out) : undefined;
+  return { targets: uniqueSorted(out), exact: false };
 }
 
 const hierarchies = new WeakMap<Project, Hierarchy>();

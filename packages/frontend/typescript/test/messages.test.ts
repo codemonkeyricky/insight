@@ -56,6 +56,18 @@ describe("worker messages", () => {
     expect(edges).toContain("src/letworker.ts#nullishPick -> src/worker.ts#λ7:17");
   });
 
+  it("follows a worker stored by ??= or ||=, and a var assigned after the block that declares it", async () => {
+    const edges = await messageEdges();
+    expect(edges).toContain("src/letworker.ts#lazyNullish -> src/worker.ts#λ7:17");
+    expect(edges).toContain("src/letworker.ts#lazyOrAssign -> src/worker.ts#λ7:17");
+    expect(edges).toContain("src/letworker.ts#varInBlock -> src/worker.ts#λ7:17");
+  });
+
+  it("follows a self-referencing lazy init (`w = w ?? new Worker(…)`) from many posts", async () => {
+    const edges = await messageEdges();
+    expect(edges).toContain("src/letworker.ts#useShared -> src/worker.ts#λ7:17");
+  });
+
   it("emits nothing for a postMessage on a Worker that arrives as a parameter", async () => {
     const edges = await messageEdges();
     expect(edges.some((e) => e.startsWith("src/page.ts#sendVia "))).toBe(false);
