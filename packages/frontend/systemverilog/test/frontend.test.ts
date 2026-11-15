@@ -2,7 +2,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { type IRRecord, type IREdge, type IRNode, validateIR } from "@insight/ir";
 import { createCoreRegistry } from "@insight/ir/node";
 import { runFrontendConformance, type IRBatch, type ProjectRoot } from "@insight/sdk";
@@ -15,6 +15,17 @@ const fixtureRoot = join(fixturesDir, "basic");
 const goldenFile = join(here, "golden", "basic.ndjson");
 const kindsFile = join(here, "..", "data", "kinds.json");
 const files = readdirSync(fixtureRoot).filter((f) => /\.(sv|svh)$/.test(f)).sort();
+
+/** Temp directories the tests make. They are removed when the file's tests finish. */
+const tempDirs: string[] = [];
+const makeTemp = (prefix: string): string => {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+};
+afterAll(() => {
+  for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+});
 
 const root: ProjectRoot = { path: fixtureRoot, name: "basic", allowBuildTools: false };
 const readFile = async (rel: string) => readFileSync(join(fixtureRoot, rel), "utf8");
@@ -128,12 +139,12 @@ describe("frontend-systemverilog", () => {
   });
 
   it("detects a source file five directories down, and ignores one only under node_modules", async () => {
-    const deep = mkdtempSync(join(tmpdir(), "sv-detect-"));
+    const deep = makeTemp("sv-detect-");
     mkdirSync(join(deep, "a", "b", "c", "d", "e"), { recursive: true });
     writeFileSync(join(deep, "a", "b", "c", "d", "e", "x.sv"), "module x;\nendmodule\n");
     expect(await frontend.detect({ path: deep, name: "deep", allowBuildTools: false })).toEqual({ reason: "found a/b/c/d/e/x.sv" });
 
-    const vendored = mkdtempSync(join(tmpdir(), "sv-detect-"));
+    const vendored = makeTemp("sv-detect-");
     mkdirSync(join(vendored, "node_modules", "pkg"), { recursive: true });
     writeFileSync(join(vendored, "node_modules", "pkg", "x.sv"), "module x;\nendmodule\n");
     expect(await frontend.detect({ path: vendored, name: "vendored", allowBuildTools: false })).toBeNull();
@@ -578,7 +589,7 @@ describe("index cache and retries", () => {
 });
 
 describe("deeply nested sources", () => {
-  const fresh = (): string => mkdtempSync(join(tmpdir(), "sv-deep-"));
+  const fresh = (): string => makeTemp("sv-deep-");
   const findingsOf = (records: IRRecord[]) => records.flatMap((r) => ("finding" in r ? [r.finding] : []));
 
   it("a 5000-term expression does not fail its neighbours", async () => {
@@ -854,7 +865,7 @@ describe("package declared in several files", () => {
   });
 
   it("an import of a package that more than 32 files declare is cut to 32 candidates and marked truncated", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "sv-many-pkgs-"));
+    const dir = makeTemp("sv-many-pkgs-");
     const rels: string[] = [];
     for (let i = 0; i <= 32; i++) {
       writeFileSync(join(dir, `pk${i}.sv`), "package pk;\nendpackage\n");
@@ -912,20 +923,16 @@ describe("node id allocation", () => {
   });
 
   it("a 20,000-arm case extracts in under 10 seconds, with one flow arm per label", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "sv-arms-"));
-    try {
-      const arms = Array.from({ length: 20000 }, (_, i) => `${i}: y = ${i};`).join("\n");
-      writeFileSync(join(dir, "big.sv"), `module big(input logic [14:0] s, output logic [14:0] y);\nalways_comb\n case (s)\n${arms}\n endcase\nendmodule\n`);
-      const started = performance.now();
-      const batches = await extractDir(dir, ["big.sv"]);
-      const ms = performance.now() - started;
-      console.log(`20,000-arm case extracted in ${Math.round(ms)} ms`);
-      expect(ms).toBeLessThan(10000);
-      expect(nodesOf(allRecords(batches)).filter((n) => n.kind === "flow.branch-arm")).toHaveLength(20000);
-      expect(duplicateIds(allRecords(batches))).toEqual([]);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    const dir = makeTemp("sv-arms-");
+    const arms = Array.from({ length: 20000 }, (_, i) => `${i}: y = ${i};`).join("\n");
+    writeFileSync(join(dir, "big.sv"), `module big(input logic [14:0] s, output logic [14:0] y);\nalways_comb\n case (s)\n${arms}\n endcase\nendmodule\n`);
+    const started = performance.now();
+    const batches = await extractDir(dir, ["big.sv"]);
+    const ms = performance.now() - started;
+    console.log(`20,000-arm case extracted in ${Math.round(ms)} ms`);
+    expect(ms).toBeLessThan(10000);
+    expect(nodesOf(allRecords(batches)).filter((n) => n.kind === "flow.branch-arm")).toHaveLength(20000);
+    expect(duplicateIds(allRecords(batches))).toEqual([]);
   }, 60000);
 });
 
