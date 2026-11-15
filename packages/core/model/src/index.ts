@@ -47,3 +47,4 @@ export {
   type ArchFileImport,
 } from "./arch/arch.js";
 export { pipelineModel, type PipelineEdge, type PipelineModel, type PipelineOptions, type PipelinePoint } from "./pipeline.js";
+export { MIN_STAGES, sequencePipelines, type PipelineSequence, type PipelineStage } from "./sequence.js";

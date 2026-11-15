@@ -1544,7 +1544,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
           to: target.id,
           facet: "calls",
           kind: "calls.call",
-          attrs: { callee: callee.getText(sf).slice(0, 200) },
+          attrs: { callee: callee.getText(sf).slice(0, 200), callEnd: pos(sf, call.getEnd()) },
           span: spanOf(rel, sf, callee),
           provenance: PROV,
         };
@@ -1563,7 +1563,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
             to: { candidates: [first, ...rest] },
             facet: "calls",
             kind: "calls.call",
-            attrs: { callee: callee.getText(sf).slice(0, 200), how: "interface", ...(truncated ? { truncated: true } : {}) },
+            attrs: { callee: callee.getText(sf).slice(0, 200), how: "interface", callEnd: pos(sf, call.getEnd()), ...(truncated ? { truncated: true } : {}) },
             span: spanOf(rel, sf, callee),
             provenance: { frontend: FRONTEND_ID, confidence: "heuristic" },
           });
