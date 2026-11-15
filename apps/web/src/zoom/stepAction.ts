@@ -4,7 +4,7 @@ import type { FlowNode } from "@insight/flow";
 import type { StepRuntime } from "../flowTargets";
 
 export type StepGesture = "click" | "open";
-export type StepActionKind = "select" | "inline" | "fold" | "fork" | "lambda" | "none";
+export type StepActionKind = "select" | "inline" | "fold" | "fork" | "lambda" | "unfold" | "none";
 
 /** The facts about a row the decision needs. */
 export interface StepContext {
@@ -18,8 +18,10 @@ export interface StepContext {
   selectable?: boolean;
 }
 
-export function stepAction(node: Pick<FlowNode, "shape" | "handler">, gesture: StepGesture, ctx: StepContext): StepActionKind {
+export function stepAction(node: Pick<FlowNode, "shape" | "handler" | "foldId">, gesture: StepGesture, ctx: StepContext): StepActionKind {
   if (gesture === "click") return ctx.selectable === false ? "none" : "select";
+  // A `⋯ n local` fold row opens to show the rows it folds (the coupling view).
+  if (node.foldId !== undefined) return "unfold";
   if (node.shape === "nest" || node.shape === "fork") return "fold";
   if (!ctx.hasCallee) return "none";
   // A handler (`ctx.onmessage = (e) => …`) is how a worker processes its messages: it opens, even as a folded lambda.

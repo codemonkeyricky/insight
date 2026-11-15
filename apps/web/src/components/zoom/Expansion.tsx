@@ -88,7 +88,7 @@ export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClic
   const label = fitLabel(runtime === undefined ? own : runtime.label.endsWith(own) ? runtime.label : `${runtime.label} · ${own}`, labelChars((w - headRoom) * k));
   return (
     <g className={`zm-expansion${runtime !== undefined ? " is-runtime" : ""}`} role="group" aria-label={`Detail ${detailLetter(expansion.index)}: ${chart.name}`}>
-      <title>{chart.name}</title>
+      <title>{chart.coupling !== undefined ? `${chart.name}\n${chart.coupling.summary}` : chart.name}</title>
       <rect x={x} y={y} width={w} height={h} rx={14} className="zm-expansion-body" />
       <rect x={x} y={y + CALLOUT_INSET} width={3} height={Math.max(0, h - 2 * CALLOUT_INSET)} rx={1.5} className="zm-expansion-accent" />
       <g className="zm-expansion-title" onClick={onSelect}>

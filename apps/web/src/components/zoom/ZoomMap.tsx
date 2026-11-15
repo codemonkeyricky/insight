@@ -11,7 +11,7 @@ import { CHART_FIT_MAX_K, CHART_HEAD, MORE_SUFFIX, ZOOM_SIZE, fitCamera, fitChar
 import { nameOfId, runtimeLabel, stepRuntime } from "../../flowTargets";
 import { hrefView } from "../../router";
 import { CHART_MIN_PX } from "../../zoom/chart";
-import { anchoredTo, CALLERS_CAP, callerRowRect, callersAt, chainHas, hangCallersFrom, hangsFromCallers, expandCamera, headerAnchor, isInPlace, calloutOf, closeExpansion, footprintOf, isNested, loadFunctionChart, NARROW_VIEW_PX, openExpansion, ownerOf, REVEAL_MIN_K, refresh, refusedCallersPlan, resizeCallers, revealCamera, rootBoxOf, sameFootprint, sceneCamera, setInline, SLOT_PAD, shiftAt, stepRect, stillOpen, syncCallerRows, toggleCallers, type Expansion, type ExpandAnchor } from "../../zoom/expand";
+import { anchoredTo, CALLERS_CAP, callerRowRect, callersAt, chainHas, hangCallersFrom, hangsFromCallers, expandCamera, headerAnchor, isInPlace, calloutOf, closeExpansion, footprintOf, isNested, loadFunctionChart, NARROW_VIEW_PX, openExpansion, ownerOf, REVEAL_MIN_K, refresh, refusedCallersPlan, resizeCallers, revealCamera, rootBoxOf, sameFootprint, sceneCamera, setInline, SLOT_PAD, shiftAt, stepRect, stillOpen, syncCallerRows, toggleCallers, toggleFold, type Expansion, type ExpandAnchor } from "../../zoom/expand";
 import { callersKey, isCallersKey, refOfCallersKey, type CallerRow } from "../../zoom/callers";
 import { LatestLoad } from "../../zoom/latestLoad";
 import { CallersBox } from "./CallersBox";
@@ -942,6 +942,10 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   const chartOpen = (fnId: string, node: FlowNode): boolean => {
     stageRef.current?.focus({ preventScroll: true });
     const action = stepAction(node, "open", stepContext(fnId, node));
+    if (action === "unfold") {
+      void unfoldStep(fnId, node);
+      return true;
+    }
     const callee = node.target ?? "";
     if (action === "fold") void inlineStep(fnId, node, callee);
     else if (action === "lambda") void highlightLambda(fnId, node, callee);
@@ -951,6 +955,22 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
       void inlineStep(fnId, node, callee, kind === "same" ? undefined : kind);
     }
     return action !== "none";
+  };
+
+  /**
+   * Opens a `⋯ n local` fold of a box's coupling chart: the fold is replaced by the rows it folds (and folds back when it is
+   * opened again). Only a fold of the box's own chart opens. A fold inside a nested callee's frame stays closed: it is drawn
+   * but inert, since its rows belong to the callee's chart.
+   */
+  const unfoldStep = async (fnId: string, node: FlowNode) => {
+    const b = buildRef.current;
+    const foldId = node.foldId;
+    if (!b || foldId === undefined) return;
+    const e = expRef.current.find((x) => x.fnId === fnId);
+    if (e === undefined || ownerOf(e, node.id) !== fnId) return;
+    const source = (await loadChart(fnId))?.coupling?.chart;
+    if (source === undefined) return;
+    setExp(toggleFold(placeAll(b, expRef.current), fnId, foldId, source, placeView(b)));
   };
 
   /**

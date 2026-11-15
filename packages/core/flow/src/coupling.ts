@@ -1,5 +1,7 @@
 import type { IREdge, IRNode } from "@insight/ir";
 import { factsForFile, type Arm, type FunctionFacts, type Item } from "./build.js";
+import { layoutFunction } from "./layout.js";
+import type { FunctionFlow } from "./types.js";
 import { moduleMap, type ModuleMap } from "./modules.js";
 import type { CouplingClass } from "./types.js";
 
@@ -135,7 +137,7 @@ function keepItem(item: Item, caught: boolean, ctx: Ctx, st: { next: number }): 
       return {
         ...item,
         ...(info.coupling !== undefined ? { coupling: info.coupling } : {}),
-        ...(info.hoisted !== undefined ? { hoisted: info.hoisted } : {}),
+        ...(info.hoisted !== undefined ? { hoisted: info.hoisted, label: `${item.label} ⇢ ${info.hoisted}` } : {}),
         ...(local ? { title: `${item.title ?? item.label} ⇢ ${info.hoisted}` } : {}),
       };
     }
@@ -306,6 +308,16 @@ export function unfold(items: readonly Item[], open: ReadonlySet<string>): Item[
     if (item.t === "loop") return [{ ...item, body: unfold(item.body, open) }];
     return [item];
   });
+}
+
+/**
+ * The coupling chart with every fold in `open` replaced by the rows it folds, laid out again. The chart keeps its coupling
+ * (`coupling`). A flow without its pre-layout items (too large to draw) is returned as it is.
+ */
+export function unfoldChart(flow: FunctionFlow, open: ReadonlySet<string>): FunctionFlow {
+  if (flow.items === undefined) return flow;
+  const out = layoutFunction({ id: flow.id, name: flow.name, async: flow.async, ...(flow.span ? { span: flow.span } : {}), items: unfold(flow.items, open) });
+  return flow.coupling === undefined ? out : { ...out, coupling: flow.coupling };
 }
 
 /** The module map, every function's chart with call sites that resolve, and every footprint, for a set of IR records. */

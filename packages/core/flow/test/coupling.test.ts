@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import type { IREdge, IRNode } from "@insight/ir";
-import { couplingChart, couplingFacts, footprintSummary, unfold, type CouplingFootprint, type FootprintEntry, type Item, type ModuleMap } from "../src/index.js";
+import { couplingChart, couplingFacts, footprintSummary, layoutFunction, unfold, unfoldChart, type CouplingFootprint, type FootprintEntry, type FunctionFlow, type Item, type ModuleMap } from "../src/index.js";
 import type { FunctionFacts } from "../src/build.js";
 import { indexFixture } from "./coupling-fixture.js";
 
@@ -164,6 +164,8 @@ describe("coupling pass over a package fixture", () => {
     expect(row.hoisted).toContain("fs.write");
     expect(row.title).toContain("⇢");
     expect(row.title).toContain("fs.write");
+    expect(row.label).toContain(" ⇢ ");
+    expect(row.label).toContain("fs.write");
     expect(info.summary).toContain("fs 1");
     expect(info.footprint.modules).toEqual([]);
   });
@@ -298,7 +300,8 @@ describe("coupling pass over a package fixture", () => {
 /** The sequence of rows of a chart, with their roles, labels and spans; nested rows follow their parent. */
 function flat(items: readonly Item[]): string[] {
   return items.flatMap((i): string[] => {
-    if (i.t === "step") return [`step:${i.role}:${i.label}:${JSON.stringify(i.span ?? null)}`];
+    // The hoisted suffix (` ⇢ fs.write`) is the coupling view's, not the original row's: compare the label before it.
+    if (i.t === "step") return [`step:${i.role}:${i.label.split(" ⇢ ")[0]}:${JSON.stringify(i.span ?? null)}`];
     if (i.t === "term") return [`term:${i.role}:${JSON.stringify(i.span ?? null)}`];
     if (i.t === "fork") return [`fork:${i.role}:${JSON.stringify(i.span ?? null)}`, ...i.arms.flatMap((a) => [`arm:${a.label}`, ...flat(a.body)])];
     return [`loop:${JSON.stringify(i.span ?? null)}`, ...flat(i.body)];
@@ -339,5 +342,33 @@ describe("footprintSummary", () => {
     const two: CouplingFootprint = { entries: [], modules: ["a", "b"], escape: false };
     expect(footprintSummary(two)).toBe("⇄ 2 modules");
     expect(footprintSummary({ entries: [], modules: [], escape: false })).toBe("no coupling");
+  });
+});
+
+describe("unfoldChart", () => {
+  /** The laid-out coupling chart of one function, with its coupling (as the file flow serves it). */
+  function flowOf(ix: Indexed, id: string): FunctionFlow {
+    const f = ix.facts.get(id);
+    if (!f) throw new Error(`no function ${id}`);
+    const { items, info } = couplingChart(id, f.items, ix.modules, ix.footprints);
+    const chart = layoutFunction({ id, name: f.name, async: f.async, ...(f.span ? { span: f.span } : {}), items });
+    return { ...chart, coupling: { ...info, chart, rows: { all: 0, coupling: chart.nodes.length } } };
+  }
+
+  it("opening a fold replaces it with its rows and keeps the coupling", () => {
+    const id = fid("pkgs/a/src/pure.ts", "chain");
+    const folded = flowOf(pkgs, id);
+    const foldId = folded.items?.find((i) => i.t === "step" && i.foldId !== undefined);
+    if (foldId?.t !== "step" || foldId.foldId === undefined) throw new Error("expected a fold row");
+    const open = unfoldChart(folded, new Set([foldId.foldId]));
+    expect(open.nodes.some((n) => n.foldId !== undefined)).toBe(false);
+    expect(open.nodes.length).toBeGreaterThanOrEqual(folded.nodes.length);
+    expect(open.coupling).toBe(folded.coupling);
+    expect(unfoldChart(folded, new Set()).nodes).toEqual(folded.nodes);
+  });
+
+  it("returns a flow with no items as it is", () => {
+    const bare: FunctionFlow = { id: "x", name: "x", async: false, stats: { steps: 0, decisions: 0, loops: 0, tries: 0, exits: 0, depth: 0 }, width: 0, height: 0, nodes: [], edges: [], tooLarge: true };
+    expect(unfoldChart(bare, new Set(["f0"]))).toBe(bare);
   });
 });

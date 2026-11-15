@@ -42,6 +42,49 @@ export function runsLine(s: MapSelected): string {
   return s.runtime === "coroutine" ? `${thread} in coroutine ${s.coroutine ?? ""}` : thread;
 }
 
+type CouplingInfo = NonNullable<FunctionFlow["coupling"]>;
+type FootprintEntry = CouplingInfo["footprint"]["entries"][number];
+
+const CLASS_ORDER: FootprintEntry["cls"][] = ["cross", "io", "state", "conc", "escape"];
+const CLASS_HEAD: Record<FootprintEntry["cls"], string> = {
+  cross: "Calls into other modules",
+  io: "Does I/O",
+  state: "Touches shared state",
+  conc: "Spawns or awaits work",
+  escape: "May throw out",
+};
+
+/** The function's coupling: its module, the one-line summary, and its footprint entries grouped by class. Cross entries link to their target. */
+export function CouplingSection({ base, info }: { base: ListBase; info: CouplingInfo }) {
+  const { footprint, module, summary } = info;
+  const groups = CLASS_ORDER.map((cls) => [cls, footprint.entries.filter((e) => e.cls === cls)] as const).filter(([, es]) => es.length > 0);
+  return (
+    <section className="exec-coupling" aria-label="Coupling">
+      <h3>Coupling</h3>
+      <p className="small">Module {module}</p>
+      <p className="muted small">{summary}</p>
+      {groups.length === 0 && <p className="muted small">Nothing outside its own module.</p>}
+      {groups.map(([cls, es]) => (
+        <div key={cls}>
+          <p className="small">{CLASS_HEAD[cls]}</p>
+          <ul>
+            {es.map((e, i) => (
+              <li key={`${e.label}\0${e.target ?? ""}\0${i}`}>
+                {cls === "cross" && e.target !== undefined ? (
+                  <a href={hrefView(base.id, "flow", { scope: base.scope, fn: e.target, roots: base.roots })}>{e.label}</a>
+                ) : (
+                  e.label
+                )}
+                {e.module !== undefined && e.module !== "" && <span className="muted small"> {e.module}</span>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </section>
+  );
+}
+
 export function ExecFunctionPanel({ id, scope, roots, store, index, nodeId, selected, onOpen }: Props) {
   const ref = selected.ref;
   const [chart, setChart] = useState<ChartState>();
@@ -108,6 +151,7 @@ export function ExecFunctionPanel({ id, scope, roots, store, index, nodeId, sele
         <p className="muted small">The control-flow chart is drawn in an expansion to the right of the function's box on the map. Click a step in it to see its source.</p>
       )}
       {fn !== undefined && <FunctionDetail id={id} fn={fn} scope={scope} />}
+      {fn?.coupling !== undefined && <CouplingSection base={base} info={fn.coupling} />}
       <CallLists base={base} lists={lists} />
     </section>
   );

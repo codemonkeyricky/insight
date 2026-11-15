@@ -11,6 +11,8 @@ export interface LayerState {
   motion: boolean;
   /** The roots-only view's runtime boxes: process and thread frames around the roots. On by default. */
   runtime: boolean;
+  /** Detail: the coupling chart of each function (on by default), or the full control-flow chart (off). */
+  coupling: boolean;
 }
 
 interface Props {
@@ -59,6 +61,17 @@ export function LayersPanel({ shown, findingCount, onChange, onClose, roots }: P
       <label className="sh-check">
         <input type="checkbox" checked={shown.runtime} onChange={(e) => onChange("runtime", e.target.checked)} /> Runtime boxes
       </label>
+      <label className="sh-check">
+        <input type="checkbox" checked={shown.coupling} onChange={(e) => onChange("coupling", e.target.checked)} /> Coupling only
+      </label>
+      <div className="sh-coupling-legend" aria-label="Coupling legend">
+        <div><span className="cp-key cp-cross" /> cross module</div>
+        <div><span className="cp-key cp-io" /> IO (disk strongest)</div>
+        <div><span className="cp-key cp-conc" /> concurrency</div>
+        <div><span className="cp-key cp-escape" /> throws ↑</div>
+        <div><span className="cp-key cp-fold" /> ⋯ n local (open to show)</div>
+        <p className="muted">Throw statements only; promise rejections are not modelled.</p>
+      </div>
       {roots !== undefined && <div className="sh-layers-roots">{roots}</div>}
       <details className="sh-keys">
         <summary>? Keyboard and mouse</summary>

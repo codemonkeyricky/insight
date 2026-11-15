@@ -3,7 +3,7 @@
 // layout never depends on expansions (a function box keeps its compact size), so everything here is placement: where
 // each expansion goes, how a chain follows its parent, what closes with what, and how the camera shows a new one. Pure,
 // so these rules are unit tested (test/expand.test.ts).
-import { CHART_FIT_MAX_K, CHART_HEAD, CHART_PAD, relayout, type Camera, type FunctionFlow, type InlineEntry, type InlineTree, type Rect } from "@insight/flow";
+import { CHART_FIT_MAX_K, CHART_HEAD, CHART_PAD, relayout, unfoldChart, type Camera, type FunctionFlow, type InlineEntry, type InlineTree, type Rect } from "@insight/flow";
 import { zoneLetter } from "./zones";
 import { callersKey, isCallersKey } from "./callers";
 
@@ -93,6 +93,8 @@ export interface Expansion {
   base?: FunctionFlow;
   /** The calls drawn nested in this box's chart, as a tree by step id (see relayout). */
   inline?: InlineTree;
+  /** The `⋯ n local` folds the reader opened in this box's coupling chart (see toggleFold). Absent when none was opened. */
+  folds?: string[];
   /** Set when the box runs on another thread or in another process than the box it was opened from. */
   runtime?: ExpansionRuntime;
   /** The top-left corner and size of the box, in world units. */
@@ -438,6 +440,31 @@ export function ownerOf(e: Expansion | undefined, nodeId: string): string {
 /** Whether the call step `nodeId` of an expansion's chart is drawn nested. */
 export function isNested(e: Expansion, nodeId: string): boolean {
   return e.chart.nodes.some((n) => n.id === nodeId && (n.shape === "nest" || n.shape === "fork"));
+}
+
+/**
+ * The list after the `⋯ n local` fold `foldId` of `fnId`'s coupling chart is opened (replaced by the rows it folds) or, when
+ * it is already open, folded back. `source` is the coupling chart before any fold is opened (`FunctionFlow.coupling.chart`).
+ * The box takes the new chart's size. Nested callees are cleared: a fold changes the ids of the rows, so an inline frame's ids
+ * would no longer match, and the boxes anchored into them close. Returns `list` itself when `fnId` is not open.
+ */
+export function toggleFold(list: readonly Expansion[], fnId: string, foldId: string, source: FunctionFlow, view: Rect | undefined): Expansion[] {
+  const e = list.find((x) => x.fnId === fnId);
+  if (e === undefined) return list as Expansion[];
+  const open = e.folds ?? [];
+  const folds = open.includes(foldId) ? open.filter((f) => f !== foldId) : [...open, foldId];
+  const chart = unfoldChart(source, new Set(folds));
+  const resized: Expansion = { ...e, folds, base: chart, chart, inline: undefined, ...expansionSize(chart) };
+  let out = list.map((x) => (x === e ? resized : x));
+  // A box opened from a step of this chart follows the step; one whose step is gone closes with its chain.
+  for (const x of out) {
+    if (x.anchor.kind !== "step" || x.anchor.fnId !== fnId || x.anchor.stepId === undefined || x.anchor.stepId === HEADER_STEP) continue;
+    const id = x.anchor.stepId;
+    const n = chart.nodes.find((c) => c.id === id);
+    if (n === undefined) out = closeExpansion(out, x.fnId);
+    else out = out.map((y) => (y === x ? { ...y, anchor: { ...x.anchor, rect: { x: n.x, y: n.y, w: n.w, h: n.h } } } : y));
+  }
+  return reflow(out, view);
 }
 
 /**
