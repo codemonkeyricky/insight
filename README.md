@@ -51,7 +51,7 @@ pnpm insight index /path/to/project [--state <dir>] [--full] [--allow-build-tool
 
 ## Supported languages
 
-TypeScript and JavaScript, C and C++, Bazel (`BUILD`, `.bzl`), and CMake.
+TypeScript and JavaScript, C and C++, Bazel (`BUILD`, `.bzl`), CMake, and SystemVerilog and Verilog (`.sv`, `.svh`, `.v`, `.vh`).
 
 ## Demo
 

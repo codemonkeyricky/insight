@@ -1,0 +1,31 @@
+[
+  {
+    "kind": "x-sv.instance",
+    "facet": "structure",
+    "on": "node",
+    "description": "A module, interface or program instance inside its container. Generate-block instances carry their generate path. A bind instance is written in its container and carries the bind target it belongs to.",
+    "attrs": {
+      "type": "object",
+      "required": ["name", "module"],
+      "properties": {
+        "name": { "type": "string" },
+        "module": { "type": "string" },
+        "generate": { "type": "string" },
+        "bind": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "kind": "x-sv.instantiates",
+    "facet": "structure",
+    "on": "edge",
+    "description": "An instance's container links to the module it instantiates. Unresolved when the module is not in the project.",
+    "attrs": {
+      "type": "object",
+      "required": ["instance"],
+      "properties": { "instance": { "type": "string" } },
+      "additionalProperties": false
+    }
+  }
+]

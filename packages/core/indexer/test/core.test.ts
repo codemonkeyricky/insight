@@ -227,4 +227,42 @@ describe("pipeline with a fake frontend", () => {
     expect(report.findings).toBeGreaterThanOrEqual(1);
     expect(existsSync(join(project, ".insight"))).toBe(true);
   });
+
+  it("re-extracts an unchanged file when a sibling matching the plugin's inputs is added", async () => {
+    const project = join(SCRATCH, "inputs-project");
+    const plugins = join(SCRATCH, "inputs-plugins");
+    write(project, "ok.txt", "fine\n");
+    write(project, "a.dep", "one\n");
+    write(plugins, "dep/insight-plugin.json", JSON.stringify({
+      id: "dep",
+      version: "0.1.0",
+      irVersion: "^1.0",
+      files: ["**/*.txt"],
+      inputs: ["**/*.dep"],
+      provides: ["structure"],
+      roles: { frontend: "index.mjs" },
+    }));
+    write(plugins, "dep/index.mjs", `export default {
+  id: "dep",
+  version: "0.1.0",
+  provides: ["structure"],
+  async detect() { return { reason: "txt files" }; },
+  async *extract(ctx) {
+    for (const file of ctx.files) yield { file, records: [] };
+  },
+};
+`);
+    const run = () => runIndex({
+      projectPath: project,
+      builtinRoot: join(SCRATCH, "no-builtins"),
+      userPluginDir: join(SCRATCH, "no-user-plugins"),
+      extraDirs: [plugins],
+    });
+    await run();
+    const unchanged = await run();
+    expect(unchanged.extracted.map((e) => e.file)).not.toContain("ok.txt");
+    write(project, "b.dep", "two\n");
+    const added = await run();
+    expect(added.extracted.map((e) => e.file)).toContain("ok.txt");
+  });
 });
