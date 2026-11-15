@@ -9,21 +9,58 @@ export const SV_RE = /\.(?:v|sv|svh|vh)$/i;
 
 /** A whole word that ends a Verilog or SystemVerilog definition. Anywhere in the text, it makes the text HDL. */
 const HDL_END_RE = /\b(?:endmodule|endfunction|endtask|endprimitive|endpackage|endinterface|endprogram|endclass|endgenerate|endconfig|endtable|endspecify|endchecker|endclocking|endcase|endproperty|endsequence|endgroup)\b/;
-/** Comments in Verilog (line and block) and in Coq. A marker inside one does not count. Line breaks are kept. */
-const COMMENT_RE = /\/\*[\s\S]*?\*\/|\(\*[\s\S]*?\*\)|\/\/[^\n]*/g;
 /** A Coq marker at a line start. Verilog fragments that are included into a module body have none of these. */
 const COQ_START_RE = /^[ \t]*(?:(?:Require|From\s+\S+\s+Require|Definition|Lemma|Theorem|Inductive|Fixpoint|CoInductive|Section|Instance|Record|Ltac|Notation|Axiom|Hypothesis|Variable|Class|Context|Arguments|Set\s+Implicit)\b|Module [A-Z]|Proof\.|Qed\.|Defined\.)/m;
+
+/**
+ * The text with its comments blanked to spaces, line breaks kept. Comments are line comments (to the end of the line),
+ * block comments, and Coq's paren-star comments. A comment that never closes runs to the end of the text. An opener
+ * right after an `@` is not a comment: it is the `@(*)` event list. One pass over the text, so the cost grows with its length.
+ */
+function blankComments(text: string): string {
+  const parts: string[] = [];
+  const n = text.length;
+  let copied = 0;
+  let last = "";
+  let i = 0;
+  while (i < n) {
+    const ch = text[i] ?? "";
+    const next = text[i + 1];
+    let end = -1;
+    if (ch === "/" && next === "/") {
+      const e = text.indexOf("\n", i);
+      end = e === -1 ? n : e;
+    } else if (ch === "/" && next === "*") {
+      const e = text.indexOf("*/", i + 2);
+      end = e === -1 ? n : e + 2;
+    } else if (ch === "(" && next === "*" && last !== "@") {
+      const e = text.indexOf("*)", i + 2);
+      end = e === -1 ? n : e + 2;
+    }
+    if (end !== -1) {
+      parts.push(text.slice(copied, i), text.slice(i, end).replace(/[^\n]/g, " "));
+      copied = end;
+      i = end;
+      continue;
+    }
+    if (ch !== " " && ch !== "\t" && ch !== "\n" && ch !== "\r") last = ch;
+    i++;
+  }
+  parts.push(text.slice(copied));
+  return parts.join("");
+}
 
 /**
  * True when a project file is Verilog or SystemVerilog, and so is indexed and emitted. Only `.v` is ambiguous (Coq
  * also uses it), so only `.v` is judged by its text. A `.v` file is not HDL only when it has a Coq line start and no
  * HDL end keyword anywhere. Everything else is HDL, including an empty file and a file of only parameters or wires.
+ * The comments are blanked only when the raw text has a Coq marker and no end keyword, so the common case is one test.
  */
 export function isHdlText(rel: string, text: string): boolean {
   if (!/\.v$/i.test(rel)) return true;
   const body = text.replace(/^\uFEFF/, "");
-  const code = body.replace(COMMENT_RE, (c) => c.replace(/[^\n]/g, " "));
-  return !(COQ_START_RE.test(code) && !HDL_END_RE.test(body));
+  if (HDL_END_RE.test(body) || !COQ_START_RE.test(body)) return true;
+  return !COQ_START_RE.test(blankComments(body));
 }
 
 /** Most candidates an edge names. Past this the set is cut. */

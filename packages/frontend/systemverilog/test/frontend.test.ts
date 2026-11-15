@@ -1164,6 +1164,37 @@ describe("which .v files are Verilog", () => {
   });
 });
 
+describe("comment stripping in the .v rule is linear", () => {
+  const coq = "Require Import Coq.Lists.List.\n";
+  const timed = (text: string): { hdl: boolean; ms: number } => {
+    const t0 = performance.now();
+    const hdl = isHdlText("big.v", text);
+    return { hdl, ms: performance.now() - t0 };
+  };
+
+  it("a 1 MiB .v of unclosed `(*` after a Coq marker is judged in under 500 ms, and is Coq", () => {
+    const { hdl, ms } = timed(coq + "(*".repeat(512 * 1024));
+    expect(hdl).toBe(false);
+    expect(ms).toBeLessThan(500);
+  });
+
+  it("a 1 MiB .v of unclosed `/*` after a Coq marker is judged in under 500 ms, and is Coq", () => {
+    const { hdl, ms } = timed(coq + "/* x ".repeat(200 * 1024));
+    expect(hdl).toBe(false);
+    expect(ms).toBeLessThan(500);
+  });
+
+  it("an `@(*)` event list does not open a comment, so the Coq line after it still counts", () => {
+    expect(isHdlText("sens.v", "always @(*) y = a;\n" + coq)).toBe(false);
+  });
+
+  it("endproperty, endsequence and endgroup are HDL end keywords: a Coq-looking file with one is HDL", () => {
+    expect(isHdlText("prop.v", coq + "property p;\nendproperty\n")).toBe(true);
+    expect(isHdlText("seq.v", coq + "sequence s;\nendsequence\n")).toBe(true);
+    expect(isHdlText("grp.v", coq + "covergroup g;\nendgroup\n")).toBe(true);
+  });
+});
+
 describe("extern module prototypes", () => {
   const dir = join(fixturesDir, "extern_module");
 
