@@ -429,27 +429,27 @@ describe("default collapse, 0-fn slices and the grid", () => {
     };
   };
 
-  it("keeps up to GROUP_MIN coroutines as frames", () => {
-    const l = layoutSystemFrames(many(GROUP_MIN));
-    expect((l.frames as SysFrame[]).filter((f) => f.kind === "coroutine")).toHaveLength(GROUP_MIN);
+  it("never folds coroutines by default: every coroutine is an expanded frame, however many there are", () => {
+    for (const n of [GROUP_MIN, GROUP_MIN + 1, 30]) {
+      const l = layoutSystemFrames(many(n));
+      const co = (l.frames as SysFrame[]).filter((f) => f.kind === "coroutine");
+      expect(co).toHaveLength(n);
+      expect(co.every((f) => !f.collapsed && f.openKey === undefined)).toBe(true);
+      expect((l.frames as SysFrame[]).find((f) => f.id === TW)?.coGroup).toEqual(n > GROUP_MIN ? { count: n, open: true } : undefined);
+    }
   });
 
-  it("draws one summary row for more than GROUP_MIN coroutines, and re-attaches their edges to it", () => {
-    const l = layoutSystemFrames(many(GROUP_MIN + 1));
+  it("draws one summary row for the coroutines of a thread the user grouped, and re-attaches their edges to it", () => {
+    const l = layoutSystemFrames(many(GROUP_MIN + 1), { open: new Set([`group:${TW}`]) });
     const co = (l.frames as SysFrame[]).filter((f) => f.kind === "coroutine");
     expect(co).toHaveLength(1);
     const g = co[0] as SysFrame;
     expect(g.title).toBe(`${GROUP_MIN + 1} coroutines`);
     expect(g.collapsed).toBe(true);
-    expect(g.openKey).toBe(TW);
+    expect(g.openKey).toBe(`group:${TW}`);
+    expect((l.frames as SysFrame[]).find((f) => f.id === TW)?.coGroup).toEqual({ count: GROUP_MIN + 1, open: false });
     const a = l.arrows.find((x) => x.edge.from === `coroutine:c0|${C}`) as SysArrow;
     expect(a.from).toBe(g.id);
-  });
-
-  it("draws the coroutines one by one once the thread is opened", () => {
-    const l = layoutSystemFrames(many(GROUP_MIN + 2), { open: new Set([TW]) });
-    expect((l.frames as SysFrame[]).filter((f) => f.kind === "coroutine")).toHaveLength(GROUP_MIN + 2);
-    expect((l.frames as SysFrame[]).find((f) => f.id === TW)?.coGroup).toEqual({ count: GROUP_MIN + 2, open: true });
   });
 
   it("collapses a big unthreaded frame by default, and opens it on request", () => {

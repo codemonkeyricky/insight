@@ -4,7 +4,7 @@ import type { LayoutOptions } from "../../arch/system-layout";
 import { api } from "../../api";
 import { fileTarget, useCodeTarget } from "../../codeTarget";
 import { layoutSystem, pillText, routeText, type SysArrow, type SysBox, type SysFrame, type SysLayout } from "../../arch/system-layout";
-import { layoutSystemFrames } from "../../arch/system-frames";
+import { frameHeaderText, layoutSystemFrames } from "../../arch/system-frames";
 import { hrefView } from "../../router";
 import { PipelineSummary } from "./PipelineSummary";
 
@@ -95,7 +95,7 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
   // The Pipeline view keeps its own layout; the System view draws frames, strips and the kernel band.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const [widened, setWidened] = useState<ReadonlySet<string>>(() => new Set());
-  /** Auto-collapsed groups the user opened (a thread's coroutine summary, a big unthreaded frame). */
+  /** Folds the user toggled: an opened big unthreaded frame, or "group:<holder>" for a coroutine summary row. */
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
   // A new model starts with everything folded the default way. Reset while rendering (not in an effect), so the first layout
   // of the new model is already the default one and the auto-fit below measures it.
@@ -116,8 +116,9 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
     });
   }, []);
   const toggleFrame = useCallback((id: string) => {
-    // "open:<thread>" groups or ungroups a thread's coroutines; an auto-collapsed frame opens its group instead of collapsing.
-    if (id.startsWith("open:")) return toggleOpen(id.slice(5));
+    // "open:<thread>" groups or ungroups a thread's coroutines (coroutines are never grouped by default); the big unthreaded
+    // frame, collapsed by default, opens instead of collapsing.
+    if (id.startsWith("open:")) return toggleOpen(`group:${id.slice(5)}`);
     const key = (layout.frames ?? []).find((f) => f.id === id)?.openKey;
     if (key !== undefined) return toggleOpen(key);
     setCollapsed((c) => {
@@ -409,6 +410,7 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
                 {layout.frames?.map((f) => {
                   const dim = lit !== null && !lit.nodes.has(f.id);
                   const picked = sel?.kind === "node" && sel.id === f.id;
+                  const hdr = frameHeaderText(f.title, f.sub, f.w, f.collapsed);
                   const cls = ["sysv-frame", f.kind, f.collapsed && "collapsed", dim && "dim", picked && "picked", lit?.nodes.has(f.id) && "lit"].filter(Boolean).join(" ");
                   return (
                     <g
@@ -430,11 +432,12 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
                     >
                       <rect className="sysv-frame-body" x={f.x} y={f.y} width={f.w} height={f.h} rx={14} />
                       <rect className="sysv-frame-hdr" x={f.x} y={f.y} width={f.w} height={f.hdrH} rx={14} />
+                      <title>{`${hdr.titleFull} — ${hdr.subFull}`}</title>
                       <text className="sysv-frame-title" x={f.x + 14} y={f.y + 22}>
-                        {f.title}
+                        {hdr.title}
                       </text>
                       <text className="sysv-frame-sub" x={f.x + f.w - 14} y={f.y + 22} textAnchor="end">
-                        {`${f.collapsed ? "▸" : "▾"} ${f.sub}`}
+                        {hdr.sub}
                       </text>
                     </g>
                   );
