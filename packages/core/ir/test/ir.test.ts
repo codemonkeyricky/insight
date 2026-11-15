@@ -133,3 +133,31 @@ describe("calls.reference how", () => {
     expect(report.errors.some((e) => e.message.includes("how must be equal to one of the allowed values"))).toBe(true);
   });
 });
+
+describe("packaging.external and build-target visibility", () => {
+  const lines = (...records: unknown[]) => records.map((r) => JSON.stringify(r)).join("\n");
+  const external = (attrs: Record<string, unknown>) => ({
+    node: { id: "@abseil-cpp", facet: "packaging", kind: "packaging.external", attrs, provenance: { frontend: "frontend-bazel", confidence: "exact" } },
+  });
+
+  it("validates a bzlmod external package", () => {
+    const report = validateIR(lines(external({ name: "abseil-cpp", version: "20240116.2", source: "bzlmod" })), createCoreRegistry());
+    expect(report.errors).toEqual([]);
+    expect(report.ok).toBe(true);
+  });
+
+  it("rejects an external package without source", () => {
+    const report = validateIR(lines(external({ name: "abseil-cpp", version: "20240116.2" })), createCoreRegistry());
+    expect(report.ok).toBe(false);
+    expect(report.errors.some((e) => e.message.includes("must have required property 'source'"))).toBe(true);
+  });
+
+  it("validates a build target with visibility", () => {
+    const target = {
+      node: { id: "//app:main", facet: "packaging", kind: "packaging.build-target", attrs: { name: "main", source: "tool", visibility: ["//visibility:public"] }, provenance: { frontend: "frontend-bazel", confidence: "exact" } },
+    };
+    const report = validateIR(lines(target), createCoreRegistry());
+    expect(report.errors).toEqual([]);
+    expect(report.ok).toBe(true);
+  });
+});

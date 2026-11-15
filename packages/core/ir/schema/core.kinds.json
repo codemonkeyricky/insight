@@ -189,6 +189,15 @@
     }
   },
   {
+    "kind": "packaging.external",
+    "facet": "packaging",
+    "on": "node",
+    "description": "A third-party package the project depends on, such as a Bazel module or repository.",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/packaging.json#/$defs/PackagingExternal"
+    }
+  },
+  {
     "kind": "calls.call-site",
     "facet": "calls",
     "on": "node",

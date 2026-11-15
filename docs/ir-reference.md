@@ -81,6 +81,7 @@ Base kinds shipped by the core:
 | `packaging.include` | packaging | edge | – |  |
 | `packaging.dep-edge` | packaging | edge | – | A build-level dependency between targets or packages. |
 | `packaging.target-contains` | packaging | edge | – | A build target contains a file. |
+| `packaging.external` | packaging | node | – | A third-party package the project depends on, such as a Bazel module or repository. `attrs` are `name` and `source` (required: `bzlmod`, `workspace` or `lockfile`), plus `version`, `repoName`, `registry`, `url`, `sha256`, `dev` and `override`. |
 | `calls.call-site` | calls | node | – |  |
 | `calls.dynamic-dispatch` | calls | node | – |  |
 | `calls.callback-registration` | calls | node | – |  |
