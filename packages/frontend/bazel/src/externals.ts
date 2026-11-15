@@ -223,14 +223,17 @@ export function externalIdOf(repo: string, externals: Externals): string | undef
 }
 
 /**
- * The names by which a BUILD label reaches the main repository besides `@//` and `@@//`: the root module's name
- * from MODULE.bazel's module(name = ...), so `@sample//lib:x` is `//lib:x` in the sample module.
+ * The apparent name by which a BUILD label reaches the main repository besides `@//` and `@@//`. It is the root
+ * module()'s repo_name when it sets one, which replaces the module name, else the module name. So with
+ * module(name = "me", repo_name = "my_repo"), `@my_repo//a:b` is `//a:b` and `@me//a:b` is not.
  */
 export function mainRepoNames(texts: Map<string, string>): string[] {
   const text = texts.get("MODULE.bazel");
   if (text === undefined) return [];
   for (const call of topLevelCalls(tokenize(text))) {
     if (call.name !== "module") continue;
+    const repo = str(call, "repo_name");
+    if (repo !== undefined) return [repo];
     const name = str(call, "name");
     return name === undefined ? [] : [name];
   }
