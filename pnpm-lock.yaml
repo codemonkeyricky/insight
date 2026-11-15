@@ -315,6 +315,15 @@ importers:
         specifier: 0.27.2
         version: 0.27.2
 
+  packages/frontend/jsonschema:
+    dependencies:
+      '@insight/ir':
+        specifier: workspace:*
+        version: link:../../core/ir
+      '@insight/sdk':
+        specifier: workspace:*
+        version: link:../../core/sdk
+
   packages/frontend/systemverilog:
     dependencies:
       '@insight/ir':
@@ -405,6 +414,15 @@ importers:
         version: link:../../core/sdk
 
   packages/lens/flow-complexity:
+    dependencies:
+      '@insight/ir':
+        specifier: workspace:*
+        version: link:../../core/ir
+      '@insight/sdk':
+        specifier: workspace:*
+        version: link:../../core/sdk
+
+  packages/lens/ir-schema:
     dependencies:
       '@insight/ir':
         specifier: workspace:*

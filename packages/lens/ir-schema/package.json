@@ -1,0 +1,24 @@
+{
+  "name": "@insight/lens-ir-schema",
+  "version": "0.1.0",
+  "description": "Insight lens (POC): the IR's own kinds, their attrs, emitters and readers, and the $ref graph of the core schema",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "insight-plugin.json"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@insight/ir": "workspace:*",
+    "@insight/sdk": "workspace:*"
+  }
+}

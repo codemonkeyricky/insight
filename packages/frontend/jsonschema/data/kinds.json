@@ -1,0 +1,84 @@
+[
+  {
+    "kind": "x-schema.def",
+    "facet": "structure",
+    "on": "node",
+    "extends": "structure.type",
+    "description": "A definition in an IR JSON Schema file: one $defs entry, or the document root.",
+    "attrs": {
+      "type": "object",
+      "required": ["name", "typeKind"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "typeKind": { "enum": ["struct"] },
+        "schemaId": { "type": "string" },
+        "description": { "type": "string" }
+      }
+    }
+  },
+  {
+    "kind": "x-schema.property",
+    "facet": "structure",
+    "on": "node",
+    "description": "A property of a schema definition.",
+    "attrs": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "type": { "type": "string" },
+        "required": { "type": "boolean" },
+        "description": { "type": "string" }
+      }
+    }
+  },
+  {
+    "kind": "x-schema.kind",
+    "facet": "structure",
+    "on": "node",
+    "extends": "structure.type",
+    "description": "A kind declared in a kinds file (core or plugin).",
+    "attrs": {
+      "type": "object",
+      "required": ["name", "typeKind"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "typeKind": { "enum": ["struct"] },
+        "facet": { "type": "string" },
+        "on": { "type": "string" },
+        "description": { "type": "string" }
+      }
+    }
+  },
+  {
+    "kind": "x-schema.ref",
+    "facet": "x-schema",
+    "on": "edge",
+    "description": "A definition or property whose schema $refs another definition."
+  },
+  {
+    "kind": "x-schema.attrs",
+    "facet": "x-schema",
+    "on": "edge",
+    "description": "A kind whose attrs schema is a definition."
+  },
+  {
+    "kind": "x-schema.extends",
+    "facet": "x-schema",
+    "on": "edge",
+    "description": "A kind and the kind it extends."
+  },
+  {
+    "kind": "x-schema.uses-kind",
+    "facet": "x-schema",
+    "on": "edge",
+    "description": "A TypeScript file that names a kind as a string: emit (in a kind: position) or read.",
+    "attrs": {
+      "type": "object",
+      "required": ["how"],
+      "properties": {
+        "how": { "enum": ["emit", "read"] }
+      }
+    }
+  }
+]

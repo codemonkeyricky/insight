@@ -1,0 +1,13 @@
+{
+  "id": "frontend-jsonschema",
+  "version": "0.1.0",
+  "description": "POC: indexes Insight's IR JSON Schema files (defs, properties, $ref links, kind declarations) and which TypeScript files emit or read each kind",
+  "irVersion": "^1.0",
+  "detect": ["packages/core/ir/schema/**/*.json", "packages/frontend/*/data/kinds.json"],
+  "files": ["packages/core/ir/schema/**/*.json", "packages/frontend/*/data/kinds.json"],
+  "provides": ["structure", "packaging", "x-schema"],
+  "kinds": "data/kinds.json",
+  "roles": {
+    "frontend": "dist/index.js"
+  }
+}
