@@ -107,6 +107,8 @@ export interface ArchExternalPackage {
   name: string;
   version?: string;
   source: string;
+  /** The package manager that declares it ("bzlmod", "npm"), from the node's attrs. Absent when the node names none. */
+  manager?: string;
   dev?: boolean;
   override?: string;
   registry?: string;
@@ -405,6 +407,8 @@ export function archModel(view: IRView, options: ArchOptions = {}): ArchModel {
     const ext: ArchExternalPackage = { id: node.id, name: optStr(a.name) ?? node.id, source: optStr(a.source) ?? "" };
     const version = optStr(a.version);
     if (version !== undefined) ext.version = version;
+    const manager = optStr(a.manager);
+    if (manager !== undefined) ext.manager = manager;
     if (typeof a.dev === "boolean") ext.dev = a.dev;
     const override = optStr(a.override);
     if (override !== undefined) ext.override = override;

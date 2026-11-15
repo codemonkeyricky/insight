@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { api, type ArchModel, type Span } from "../../api";
 import { usePanZoom } from "./usePanZoom";
 import { diagramModel, FOLDER_GRID, type DiagramModel } from "../../arch/folders";
-import { ARCH_HEADER_H, ARCH_PAD, archLayout, arrowKey, arrowLabel, type ArchBox } from "../../arch/layout";
+import { ARCH_HEADER_H, ARCH_PAD, archLayout, arrowKey, arrowLabel, declaredNote, type ArchBox } from "../../arch/layout";
 import { bandPerRow, IMPORTED_BY, IMPORTS, scopedView, withoutCodeText, type ScopedDiagram } from "../../arch/scoped";
 import { hrefFile, hrefView } from "../../router";
 
@@ -182,6 +182,11 @@ function ArchDiagram({ id, scope, model: whole }: { id: string; scope: string; m
             <marker id="arch-head-error" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
               <path className="arch-head error" d="M0 0 L10 5 L0 10 z" />
             </marker>
+            {layout.arrows.some((a) => a.undeclared) && (
+              <marker id="arch-head-warn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path className="arch-head warn" d="M0 0 L10 5 L0 10 z" />
+              </marker>
+            )}
           </defs>
           <g transform={`translate(${cam.x} ${cam.y}) scale(${cam.k})`}>
           {/* Clicking the empty diagram clears the selection. Boxes and arrows stop the click before it gets here. */}
@@ -203,7 +208,18 @@ function ArchDiagram({ id, scope, model: whole }: { id: string; scope: string; m
           {arrows.map((a) => {
             const on = arrowLit(a.key);
             const dim = sel !== null && !on;
-            const cls = ["arch-arrow", on && "lit", dim && "dim", a.violation && "violation", a.dashed && "dashed"].filter(Boolean).join(" ");
+            const cls = [
+              "arch-arrow",
+              on && "lit",
+              dim && "dim",
+              a.violation && "violation",
+              a.dashed && "dashed",
+              a.declaredOnly && "declared-only",
+              a.undeclared && "undeclared",
+            ]
+              .filter(Boolean)
+              .join(" ");
+            const marker = a.violation ? "url(#arch-head-error)" : a.undeclared ? "url(#arch-head-warn)" : "url(#arch-head)";
             const pick = (e: { stopPropagation: () => void }) => {
               e.stopPropagation();
               if (pz.moved()) return;
@@ -211,9 +227,9 @@ function ArchDiagram({ id, scope, model: whole }: { id: string; scope: string; m
             };
             return (
               <g key={a.key}>
-                <path className={cls} d={a.d} strokeWidth={a.width} markerEnd={a.violation ? "url(#arch-head-error)" : "url(#arch-head)"} />
+                <path className={cls} d={a.d} strokeWidth={a.width} markerEnd={marker} />
                 <path className="arch-hit" d={a.d} onClick={pick}>
-                  <title>{`${a.from} -> ${a.to}: ${plural(a.edge.imports, "import")}, ${plural(a.edge.calls, "call")}`}</title>
+                  <title>{`${a.from} -> ${a.to}: ${plural(a.edge.imports, "import")}, ${plural(a.edge.calls, "call")}${declaredNote(a.edge)}`}</title>
                 </path>
                 <text className={`arch-count${dim ? " dim" : ""}`} x={a.label.x} y={a.label.y} textAnchor="middle" dy="0.35em" onClick={pick}>
                   {arrowLabel(a.edge)}
@@ -279,7 +295,11 @@ function ArchDiagram({ id, scope, model: whole }: { id: string; scope: string; m
   );
 }
 
-function Panel({ id, model, sel, externalsOf }: { id: string; model: ArchModel; sel: Selection; externalsOf?: string }) {
+export function Panel({ id, model, sel, externalsOf }: { id: string; model: ArchModel; sel: Selection; externalsOf?: string }) {
+  // The build's notes on arrows are said only when the model carries them (a project with build-target dependencies).
+  const buildNote = model.edges.some((e) => e.declared !== undefined)
+    ? " Dotted arrows are declared in the build with no import or call; orange arrows are used but not declared in the build."
+    : "";
   return (
     <aside className="arch-panel">
       {sel === null ? (
@@ -288,20 +308,55 @@ function Panel({ id, model, sel, externalsOf }: { id: string; model: ArchModel; 
           <p className="muted small">
             Click a card to open it: a folder or package in Arch, a file in Source. Select an arrow to see its import sites. An
             arrow&apos;s number counts imports; &quot;c&quot; means calls only. Dashed arrows are inferred, for example a workspace
-            import matched by package name.
+            import matched by package name.{buildNote}
           </p>
         </>
       ) : (
         <ArrowDetail id={id} model={model} arrow={sel.key} />
       )}
-      {externalsOf !== undefined && <Externals name={externalsOf} rows={model.externals} />}
+      {model.externalPackages.length > 0 && <ExternalPackages packages={model.externalPackages} />}
+      {externalsOf !== undefined && <Externals name={externalsOf} rows={model.externals} packages={model.externalPackages} />}
       <Unresolved id={id} model={model} />
     </aside>
   );
 }
 
-/** The external packages a scope's package imports, with their import counts. Only drawn for a scoped view. */
-function Externals({ name, rows }: { name: string; rows: ArchModel["externals"] }) {
+type ExternalRow = ArchModel["externals"][number];
+type ExternalPackage = ArchModel["externalPackages"][number];
+
+/** The manager a group heading names when a declared package names none. */
+const OTHER_MANAGER = "other";
+
+/** One import row: the name, the version as a chip, a "declared" mark, then the import count. */
+function ExternalRowItem({ x }: { x: ExternalRow }) {
+  return (
+    <li>
+      <span className="mono small">{x.name}</span>
+      {x.version !== undefined && <span className="arch-chip mono small">{x.version}</span>}
+      {x.declared === true && <span className="arch-badge small">declared</span>}
+      {" "}
+      {plural(x.imports, "import")}
+    </li>
+  );
+}
+
+/**
+ * The external packages a scope's package imports, with their import counts. Only drawn for a scoped view. When the project
+ * declares external packages, the rows with a build id group under their manager; rows without an id keep the plain list.
+ */
+export function Externals({ name, rows, packages = [] }: { name: string; rows: ArchModel["externals"]; packages?: ExternalPackage[] }) {
+  const managerOf = new Map(packages.map((p) => [p.id, p.manager ?? OTHER_MANAGER]));
+  const plain = packages.length === 0 ? rows : rows.filter((x) => x.id === undefined);
+  const groups = new Map<string, ExternalRow[]>();
+  if (packages.length > 0) {
+    for (const x of rows) {
+      if (x.id === undefined) continue;
+      const manager = managerOf.get(x.id) ?? OTHER_MANAGER;
+      const list = groups.get(manager);
+      if (list) list.push(x);
+      else groups.set(manager, [x]);
+    }
+  }
   return (
     <details className="arch-unresolved">
       <summary>
@@ -312,15 +367,65 @@ function Externals({ name, rows }: { name: string; rows: ArchModel["externals"] 
       {rows.length === 0 ? (
         <p className="muted small">No external packages.</p>
       ) : (
-        <ul className="arch-list">
-          {rows.map((x) => (
-            <li key={x.name}>
-              <span className="mono small">{x.name}</span> {plural(x.imports, "import")}
-            </li>
-          ))}
-        </ul>
+        <>
+          {plain.length > 0 && (
+            <ul className="arch-list">
+              {plain.map((x) => (
+                <ExternalRowItem key={`${x.id ?? ""}\0${x.name}`} x={x} />
+              ))}
+            </ul>
+          )}
+          {[...groups.keys()]
+            .sort((a, b) => a.localeCompare(b))
+            .map((manager) => (
+              <div key={manager} className="arch-group">
+                <h3 className="small muted">{manager}</h3>
+                <ul className="arch-list">
+                  {(groups.get(manager) ?? []).map((x) => (
+                    <ExternalRowItem key={`${x.id ?? ""}\0${x.name}`} x={x} />
+                  ))}
+                </ul>
+              </div>
+            ))}
+        </>
       )}
     </details>
+  );
+}
+
+/** Every external package the build declares, grouped by manager, one row per package, sorted by name. */
+function ExternalPackages({ packages }: { packages: ExternalPackage[] }) {
+  const groups = new Map<string, ExternalPackage[]>();
+  for (const p of packages) {
+    const manager = p.manager ?? OTHER_MANAGER;
+    const list = groups.get(manager);
+    if (list) list.push(p);
+    else groups.set(manager, [p]);
+  }
+  const managers = [...groups.keys()].sort((a, b) => a.localeCompare(b));
+  return (
+    <section className="arch-externals">
+      <h2>External packages ({packages.length})</h2>
+      {managers.map((manager) => (
+        <div key={manager} className="arch-group">
+          <h3 className="small muted">{manager}</h3>
+          <ul className="arch-list">
+            {(groups.get(manager) ?? [])
+              .slice()
+              .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+              .map((p) => (
+                <li key={p.id} className="arch-pkg">
+                  <span className="mono small">{p.name}</span>
+                  {p.version !== undefined && <span className="arch-chip mono small">{p.version}</span>}
+                  {p.dev === true && <span className="arch-badge small">dev</span>}
+                  {p.override !== undefined && <span className="arch-badge small">override: {p.override}</span>}
+                  {p.source !== "" && <span className="arch-badge small">{p.source}</span>}
+                </li>
+              ))}
+          </ul>
+        </div>
+      ))}
+    </section>
   );
 }
 

@@ -51,6 +51,10 @@ export interface ArchArrow {
   dashed: boolean;
   /** True when a rule violation runs along this arrow. */
   violation: boolean;
+  /** True when a build target declares the pair and the IR sees no import or call across it: drawn dotted. */
+  declaredOnly: boolean;
+  /** True when the code uses the pair but no build target declares it: drawn in the warning colour. */
+  undeclared: boolean;
 }
 
 export interface ArchLayout {
@@ -74,6 +78,18 @@ export interface ArchLayoutOptions {
 
 /** The key of the arrow from one package to another. */
 export const arrowKey = (from: string, to: string): string => `${from}\0${to}`;
+
+/** An edge a build target declares, with no import or call the IR sees across it. */
+export const isDeclaredOnly = (edge: { declared?: boolean; imports: number; calls: number }): boolean =>
+  edge.declared === true && edge.imports === 0 && edge.calls === 0;
+
+/** An edge the code uses but no build target declares. Edges with no `declared` field (no build deps) are neither. */
+export const isUndeclared = (edge: { declared?: boolean }): boolean => edge.declared === false;
+
+/** The tooltip note on an arrow about the build: empty when the model does not say. */
+export function declaredNote(edge: { declared?: boolean }): string {
+  return edge.declared === true ? ", declared" : edge.declared === false ? ", not declared in the build" : "";
+}
 
 /** The number on an arrow: its imports, or its calls with a "c" when it has no import the IR could see. */
 export function arrowLabel(edge: { imports: number; calls: number }): string {
@@ -114,6 +130,8 @@ export function archLayout(model: ArchModel, options: ArchLayoutOptions = {}): A
       width: arrowWidth(edge.imports > 0 ? edge.imports : edge.calls),
       dashed: edge.confidence !== "exact",
       violation: violating.has(key),
+      declaredOnly: isDeclaredOnly(edge),
+      undeclared: isUndeclared(edge),
     });
   }
 

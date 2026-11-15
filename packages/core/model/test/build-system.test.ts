@@ -82,6 +82,17 @@ describe("archModel build-system externals", () => {
     ]);
   });
 
+  it("carries a packaging.external's manager as manager, and leaves it off when the node names none", () => {
+    const model = archModel(
+      fx.view({ nodes: [external("@zlib", { name: "zlib", manager: "bzlmod" }), external("@abseil-cpp", { name: "abseil-cpp" })] }),
+    );
+    expect(model.externalPackages).toEqual([
+      { id: "@abseil-cpp", name: "abseil-cpp", source: "bzlmod" },
+      { id: "@zlib", name: "zlib", source: "bzlmod", manager: "bzlmod" },
+    ]);
+    expect(model.externalPackages[0]).not.toHaveProperty("manager");
+  });
+
   it("gives externalPackages an empty list when the project declares none", () => {
     expect(archModel(fx.view({ nodes: [file("src/a.ts")] })).externalPackages).toEqual([]);
   });
