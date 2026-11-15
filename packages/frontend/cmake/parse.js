@@ -19,6 +19,11 @@ const SET_STOP = new Set(["CACHE", "PARENT_SCOPE"]);
 const MAX_CALL_DEPTH = 16;
 /** Most macro and function calls one file may run, against a recursion that branches at every level. */
 const MAX_INVOCATIONS = 10000;
+/** Link items that are system libraries rather than targets (compared in lower case). Flags start with "-". */
+const SYSTEM_LIBS = new Set(["pthread", "m", "dl", "rt", "c", "stdc++", "atomic", "ws2_32", "shlwapi"]);
+/** Test executables by convention, from their name. */
+const TEST_NAME = /(^|_)tests?$|^test_/;
+const VERSION = /^\d+(\.\d+)*$/;
 
 export function isCMakeFile(path) {
   return posix.basename(path) === "CMakeLists.txt";
@@ -256,12 +261,62 @@ function runCommands(cmds, vars, ctx, depth) {
         vars.set(nameOf(args[1], vars), [...matches].sort());
         break;
       }
+      case "project": {
+        const name = args.length > 0 ? nameOf(args[0], vars) : "";
+        if (ctx.out.project === undefined && name !== "") ctx.out.project = name;
+        break;
+      }
+      case "add_test": {
+        // add_test(NAME x COMMAND target ...) or add_test(x target ...), with the arguments of a macro expanded.
+        const list = expand(args, vars);
+        const upper = list.map((v) => v.toUpperCase());
+        const ci = upper.indexOf("COMMAND");
+        const command = ci >= 0 ? list[ci + 1] : upper[0] === "NAME" ? undefined : list[1];
+        if (command !== undefined) ctx.out.tests.push(command);
+        break;
+      }
+      case "find_package": {
+        const list = expand(args, vars);
+        const pkg = list[0];
+        if (pkg === undefined) break;
+        const version = list[1] !== undefined && VERSION.test(list[1]) ? list[1] : undefined;
+        ctx.out.externals.push({ id: `cmake:pkg:${pkg}`, name: pkg, source: "find_package", version, span: cmd.span });
+        break;
+      }
+      case "fetchcontent_declare": {
+        const list = expand(args, vars);
+        const name = list[0];
+        if (name === undefined) break;
+        // The value after a keyword, read from the first occurrence after the name.
+        const opt = (key) => {
+          const i = list.findIndex((v, k) => k > 0 && v.toUpperCase() === key);
+          return i >= 0 ? list[i + 1] : undefined;
+        };
+        const hash = opt("URL_HASH");
+        const sha256 = hash !== undefined && hash.toUpperCase().startsWith("SHA256=") ? hash.slice("SHA256=".length) : undefined;
+        ctx.out.externals.push({
+          id: `cmake:pkg:${name}`,
+          name,
+          source: "FetchContent",
+          version: opt("GIT_TAG"),
+          url: opt("GIT_REPOSITORY") ?? opt("URL"),
+          sha256,
+          span: cmd.span,
+        });
+        break;
+      }
       case "add_library":
       case "add_executable": {
         const name = nameOf(args[0], vars);
         const rest = expand(args.slice(1), vars);
         const upper = rest.map((v) => v.toUpperCase());
-        if (name === "" || upper.includes("ALIAS") || upper.includes("IMPORTED")) break;
+        if (name === "") break;
+        // add_library(<alias> ALIAS <real>) names the real target that the alias stands for.
+        if (upper[0] === "ALIAS") {
+          if (rest[1] !== undefined) ctx.out.aliases.push({ name, real: rest[1] });
+          break;
+        }
+        if (upper.includes("IMPORTED")) break;
         const sources = rest
           .filter((v) => !TARGET_KEYWORDS.has(v) && !TARGET_KEYWORDS.has(v.toUpperCase()) && !v.startsWith("$<"))
           .map((p) => resolvePath(p, ctx.dir));
@@ -300,6 +355,7 @@ function runCommands(cmds, vars, ctx, depth) {
             continue;
           }
           if (["LINK_PUBLIC", "LINK_PRIVATE", "LINK_INTERFACE_LIBRARIES", "DEBUG", "OPTIMIZED", "GENERAL"].includes(u)) continue;
+          if (v.startsWith("-") || SYSTEM_LIBS.has(v.toLowerCase())) continue;
           ctx.out.ops.push({ op: "link", name, propagates: scope !== "PRIVATE", items: [v] });
         }
         break;
@@ -357,37 +413,118 @@ function readFile(dir, buildFile, text, files) {
     ["CMAKE_SOURCE_DIR", ["/"]],
     ["PROJECT_SOURCE_DIR", ["/"]],
   ]);
-  const out = { defs: [], ops: [] };
+  const out = { defs: [], ops: [], externals: [], aliases: [], tests: [], project: undefined };
   const ctx = { dir, buildFile, files, out, callables: new Map(), invocations: 0 };
   runCommands(parseCommands(text), vars, ctx, 0);
   return out;
 }
 
+/** Follows add_library(<alias> ALIAS <real>) links until a name that is not an alias. Cycle-safe. */
+export function followAlias(aliases, name) {
+  let cur = name;
+  const seen = new Set();
+  while (aliases.has(cur) && !seen.has(cur)) {
+    seen.add(cur);
+    cur = aliases.get(cur);
+  }
+  return cur;
+}
+
+/** The local target a link item names, after alias resolution. */
+export function targetOf(model, name) {
+  return model.targets.get(followAlias(model.aliases, name));
+}
+
+/**
+ * What a link item names: a local target ({kind: "target", id}) or a third-party package whose name is the
+ * part before :: ({kind: "external", id}). Undefined when neither is declared.
+ */
+export function resolveLink(model, name) {
+  const real = followAlias(model.aliases, name);
+  const t = model.targets.get(real);
+  if (t !== undefined) return { kind: "target", id: t.id };
+  const sep = real.indexOf("::");
+  if (sep > 0) {
+    const ns = real.slice(0, sep).toLowerCase();
+    for (const e of model.externals.values()) if (e.name.toLowerCase() === ns) return { kind: "external", id: e.id };
+  }
+  return undefined;
+}
+
+/** The targets reachable from the owners through their links, the owners included. */
+export function closureOf(model, owners) {
+  const seen = new Map();
+  const stack = [...owners];
+  while (stack.length > 0) {
+    const t = stack.pop();
+    if (seen.has(t.name)) continue;
+    seen.set(t.name, t);
+    for (const link of t.links) {
+      const d = targetOf(model, link.name);
+      if (d !== undefined) stack.push(d);
+    }
+  }
+  return [...seen.values()];
+}
+
+/** The output kind of a build target: a test executable is one registered with add_test or named like one. */
+export function outputOfTarget(t) {
+  if (t.kind === "add_library") return "library";
+  if (t.kind === "add_executable") return t.isTest || TEST_NAME.test(t.name) ? "test" : "executable";
+  return "other";
+}
+
+/** The package of the CMakeLists.txt in `dir`: the root is "." and named by project() when it has one. */
+function packageOf(dir, project) {
+  const root = dir === "" ? "." : dir;
+  return { id: `cmake:${root}`, root, name: dir === "" ? (project ?? ".") : dir };
+}
+
 /**
  * Every CMakeLists.txt in the project, read into one model keyed by target name. A name declared in
- * two places keeps its first definition. Target ids are cmake://<directory>:<name>.
+ * two places keeps its first definition. Target ids are cmake://<directory>:<name>. The model also holds
+ * the external packages (keyed by id), the aliases, and the package of each file that declares targets.
  */
 export function buildCmakeModel(texts, files) {
   const targets = new Map();
+  const externals = new Map();
+  const aliases = new Map();
+  const projects = new Map();
+  const testCommands = [];
   const allOps = [];
   for (const file of [...texts.keys()].sort()) {
-    const { defs, ops } = readFile(dirOf(file), file, texts.get(file), files);
-    for (const d of defs) {
+    const out = readFile(dirOf(file), file, texts.get(file), files);
+    if (out.project !== undefined) projects.set(file, out.project);
+    for (const d of out.defs) {
       if (targets.has(d.name)) continue;
       targets.set(d.name, {
         name: d.name,
         id: `cmake://${d.dir}:${d.name}`,
         kind: d.kind,
+        dir: d.dir,
         buildFile: d.buildFile,
         span: d.span,
         sources: [...d.sources],
         publicDirs: [],
         privateDirs: [],
         links: [],
+        isTest: false,
       });
     }
-    allOps.push(...ops);
+    for (const e of out.externals) if (!externals.has(e.id)) externals.set(e.id, { ...e, file });
+    for (const a of out.aliases) if (!aliases.has(a.name)) aliases.set(a.name, a.real);
+    testCommands.push(...out.tests);
+    allOps.push(...out.ops);
   }
+  const model = { targets, externals, aliases, packages: new Map() };
+  for (const t of targets.values()) {
+    if (!model.packages.has(t.buildFile)) model.packages.set(t.buildFile, packageOf(t.dir, projects.get(t.buildFile)));
+  }
+  for (const name of testCommands) {
+    const t = targetOf(model, name);
+    if (t !== undefined) t.isTest = true;
+  }
+  for (const t of targets.values()) t.output = outputOfTarget(t);
   for (const op of allOps) {
     const t = targets.get(op.name);
     if (!t) continue;
@@ -399,7 +536,7 @@ export function buildCmakeModel(texts, files) {
       for (const name of op.items) t.links.push({ name, propagates: op.propagates });
     }
   }
-  return { targets };
+  return model;
 }
 
 /** Include directories a target's own sources see: its own, plus what the libraries it links export. */
@@ -410,9 +547,9 @@ export function includeDirsOf(model, owner) {
 }
 
 function usageDirs(model, name, seen) {
-  const t = model.targets.get(name);
-  if (!t || seen.has(name)) return [];
-  seen.add(name);
+  const t = targetOf(model, name);
+  if (!t || seen.has(t.name)) return [];
+  seen.add(t.name);
   const out = [...t.publicDirs];
   for (const link of t.links) if (link.propagates) out.push(...usageDirs(model, link.name, seen));
   return out;

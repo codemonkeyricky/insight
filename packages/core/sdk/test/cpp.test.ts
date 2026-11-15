@@ -64,3 +64,40 @@ describe("externalForInclude", () => {
     ]);
   });
 });
+
+// CMake package names (find_package and FetchContent names) differ from the Bazel module names.
+describe("CMake package names", () => {
+  const cmake: CppExternal[] = [
+    { id: "cmake:pkg:GTest", name: "GTest" },
+    { id: "cmake:pkg:benchmark", name: "benchmark" },
+    { id: "cmake:pkg:Protobuf", name: "Protobuf" },
+    { id: "cmake:pkg:gRPC", name: "gRPC" },
+    { id: "cmake:pkg:Boost", name: "Boost" },
+    { id: "cmake:pkg:nlohmann_json", name: "nlohmann_json" },
+    { id: "cmake:pkg:absl", name: "absl" },
+  ];
+
+  it("matches gtest and gmock includes to GTest", () => {
+    expect(externalForInclude("gtest/gtest.h", cmake)).toEqual({ id: "cmake:pkg:GTest", via: "alias" });
+    expect(externalForInclude("gmock/gmock.h", cmake)).toEqual({ id: "cmake:pkg:GTest", via: "alias" });
+  });
+
+  it("matches the CMake names of the other well-known packages", () => {
+    expect(externalForInclude("benchmark/benchmark.h", cmake)).toEqual({ id: "cmake:pkg:benchmark", via: "alias" });
+    expect(externalForInclude("google/protobuf/message.h", cmake)).toEqual({ id: "cmake:pkg:Protobuf", via: "alias" });
+    expect(externalForInclude("grpcpp/grpcpp.h", cmake)).toEqual({ id: "cmake:pkg:gRPC", via: "alias" });
+    expect(externalForInclude("boost/asio.hpp", cmake)).toEqual({ id: "cmake:pkg:Boost", via: "alias" });
+    expect(externalForInclude("nlohmann/json.hpp", cmake)).toEqual({ id: "cmake:pkg:nlohmann_json", via: "alias" });
+    expect(externalForInclude("absl/strings/str_cat.h", cmake)).toEqual({ id: "cmake:pkg:absl", via: "alias" });
+  });
+
+  it("compares names case-insensitively", () => {
+    expect(externalsForInclude("GTest/x.h", [{ id: "x", name: "gtest" }])).toEqual([{ id: "x", via: "name" }]);
+    expect(externalsForInclude("Zlib/zlib.h", [{ id: "@zlib", name: "zlib" }])).toEqual([{ id: "@zlib", via: "name" }]);
+  });
+
+  it("keeps the Bazel name mapping for every alias", () => {
+    expect(CPP_INCLUDE_ALIASES.get("gtest")).toBe("googletest");
+    expect(CPP_INCLUDE_ALIASES.get("nlohmann")).toBe("nlohmann_json");
+  });
+});

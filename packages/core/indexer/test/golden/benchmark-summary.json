@@ -67,22 +67,23 @@
         "frontend-cpp"
       ],
       "filesScanned": 130,
-      "filesWithRecords": 126,
+      "filesWithRecords": 127,
       "filesWithErrors": 0,
-      "nodes": 72,
-      "edges": 1175
+      "nodes": 76,
+      "edges": 1173
     },
     {
       "facet": "structure",
       "providers": [
         "core",
         "frontend-bazel",
+        "frontend-cmake",
         "frontend-cpp"
       ],
       "filesScanned": 225,
       "filesWithRecords": 225,
       "filesWithErrors": 0,
-      "nodes": 1582,
+      "nodes": 1584,
       "edges": 0
     },
     {
@@ -163,14 +164,14 @@
     "flow.throw": 8,
     "flow.try": 1,
     "packaging.build-target": 64,
-    "packaging.dep-edge": 100,
-    "packaging.external": 8,
+    "packaging.dep-edge": 98,
+    "packaging.external": 12,
     "packaging.include": 889,
     "packaging.target-contains": 186,
     "structure.file": 225,
     "structure.function": 1038,
     "structure.namespace": 191,
-    "structure.package": 4,
+    "structure.package": 6,
     "structure.type": 124,
     "sync.lock-acquire": 4,
     "sync.lock-release": 5,

@@ -1,7 +1,9 @@
-// Resolver: answers a C++ include with the headers found through a target's include directories.
+// Resolver: answers a C++ include with the headers found through a target's include directories, and, when no
+// in-repository header explains it, with the external package the target's dependencies declare.
 import { readFile } from "node:fs/promises";
 import { join, posix } from "node:path";
-import { buildCmakeModel, includeDirsOf, isCMakeFile, ownersOf } from "./parse.js";
+import { externalsForInclude } from "@insight/sdk";
+import { buildCmakeModel, closureOf, includeDirsOf, isCMakeFile, ownersOf, resolveLink } from "./parse.js";
 
 async function loadModel(ctx) {
   const texts = new Map();
@@ -11,13 +13,24 @@ async function loadModel(ctx) {
   return buildCmakeModel(texts, ctx.listFiles());
 }
 
+/** The external packages the closure's links name, by id. */
+function externalsOfClosure(model, closure) {
+  const ids = new Set();
+  for (const t of closure) {
+    for (const link of t.links) {
+      const r = resolveLink(model, link.name);
+      if (r !== undefined && r.kind === "external") ids.add(r.id);
+    }
+  }
+  return ids;
+}
+
 export default {
   scheme: "cpp.include",
   priority: 80,
   async resolve(ref, ctx) {
     const model = await loadModel(ctx);
     const owners = ownersOf(model, ctx.fromFile);
-    if (owners.length === 0) return null;
     const text = ref.text.replace(/^\.\//, "");
     const matches = new Set();
     for (const owner of owners) {
@@ -26,7 +39,25 @@ export default {
         if (ctx.hasFile(candidate)) matches.add(candidate);
       }
     }
-    if (matches.size === 0) return null;
-    return { targets: [...matches].sort(), confidence: "inferred", note: "via CMake include directories" };
+    if (matches.size > 0) return { targets: [...matches].sort(), confidence: "inferred", note: "via CMake include directories" };
+
+    // No owner target: every declared external is a candidate. Otherwise, only those the owners' closure depends on.
+    const scope =
+      owners.length === 0 ? [...model.externals.keys()] : [...externalsOfClosure(model, closureOf(model, owners))];
+    const candidates = [];
+    for (const id of scope) {
+      const ext = model.externals.get(id);
+      if (ext === undefined || !ctx.hasNode(id)) continue;
+      candidates.push({ id, name: ext.name });
+    }
+    const ids = externalsForInclude(text, candidates).map((m) => m.id);
+    if (ids.length === 0) return null;
+    // Through an owner's dependency closure the external is declared as a dependency: inferred. With no owner,
+    // any declared external may match, which is only a guess: heuristic.
+    return {
+      targets: ids,
+      confidence: owners.length === 0 ? "heuristic" : "inferred",
+      note: `external package: ${ids.join(", ")}`,
+    };
   },
 };

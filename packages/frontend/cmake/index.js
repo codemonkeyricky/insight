@@ -1,9 +1,11 @@
-// Frontend: one packaging.build-target per cmake target, its sources, and its links.
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+// Frontend: packages (one per directory with targets), one packaging.build-target per cmake target with its
+// output kind, its sources, its links, and the third-party packages (find_package, FetchContent) it declares.
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { buildCmakeModel, isCMakeFile } from "./parse.js";
+import { buildCmakeModel, isCMakeFile, outputOfTarget, resolveLink } from "./parse.js";
 
 const FRONTEND_ID = "frontend-cmake";
+const BUILD_SYSTEM = "cmake";
 const PROV = { frontend: FRONTEND_ID, confidence: "exact" };
 const SKIP_DIRS = new Set(["node_modules", ".git", ".insight", "build"]);
 
@@ -22,6 +24,18 @@ function findCMake(dir, depth) {
 
 function batchFor(file, model, fileSet) {
   const records = [];
+  const pkg = model.packages.get(file);
+  if (pkg !== undefined) {
+    records.push({
+      node: {
+        id: pkg.id,
+        facet: "structure",
+        kind: "structure.package",
+        attrs: { name: pkg.name, root: pkg.root, buildSystem: BUILD_SYSTEM },
+        provenance: PROV,
+      },
+    });
+  }
   for (const t of model.targets.values()) {
     if (t.buildFile !== file) continue;
     records.push({
@@ -29,7 +43,8 @@ function batchFor(file, model, fileSet) {
         id: t.id,
         facet: "packaging",
         kind: "packaging.build-target",
-        attrs: { name: t.name, label: t.id, targetKind: t.kind, source: "static" },
+        parent: pkg.id,
+        attrs: { name: t.name, label: t.id, targetKind: t.kind, output: outputOfTarget(t), source: "static" },
         span: { file, start: t.span.start, end: t.span.end },
         provenance: PROV,
       },
@@ -38,11 +53,32 @@ function batchFor(file, model, fileSet) {
       if (!fileSet.has(f)) continue;
       records.push({ edge: { from: t.id, to: f, facet: "packaging", kind: "packaging.target-contains", provenance: PROV } });
     }
+    const seen = new Set();
     for (const link of t.links) {
-      const dep = model.targets.get(link.name);
-      const to = dep ? dep.id : { unresolved: { scheme: "cmake.target", text: link.name } };
+      const r = resolveLink(model, link.name);
+      const to = r !== undefined ? r.id : { unresolved: { scheme: "cmake.target", text: link.name } };
+      const key = typeof to === "string" ? to : `?${link.name}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
       records.push({ edge: { from: t.id, to, facet: "packaging", kind: "packaging.dep-edge", provenance: PROV } });
     }
+  }
+  for (const ext of model.externals.values()) {
+    if (ext.file !== file) continue;
+    const attrs = { name: ext.name, manager: BUILD_SYSTEM, source: ext.source };
+    if (ext.version !== undefined) attrs.version = ext.version;
+    if (ext.url !== undefined) attrs.url = ext.url;
+    if (ext.sha256 !== undefined) attrs.sha256 = ext.sha256;
+    records.push({
+      node: {
+        id: ext.id,
+        facet: "packaging",
+        kind: "packaging.external",
+        attrs,
+        span: { file, start: ext.span.start, end: ext.span.end },
+        provenance: PROV,
+      },
+    });
   }
   return { file, records };
 }
@@ -50,8 +86,8 @@ function batchFor(file, model, fileSet) {
 /** @type {import("@insight/sdk").Frontend} */
 const frontend = {
   id: FRONTEND_ID,
-  version: "0.1.0",
-  provides: ["packaging"],
+  version: "0.2.0",
+  provides: ["packaging", "structure"],
 
   async detect(root) {
     const hit = findCMake(root.path, 3);
