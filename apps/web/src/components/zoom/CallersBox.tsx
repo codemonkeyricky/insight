@@ -99,7 +99,8 @@ export function CallersBox({ id, scope, expansion, k, closing = false, inChain, 
   const o = { x: x + CHART_PAD, y: y + CHART_HEAD + CHART_PAD };
   const rowW = CALLERS_W - 2 * CHART_PAD;
   const name = displayName(expansion.chart.name, ref);
-  const label = fitLabel(`Callers of ${name}`, labelChars((w - 2 * 14) * k));
+  // The title starts 14 in and keeps clear of the close × at the right (CHART_HEAD square).
+  const label = fitLabel(`Callers of ${name}`, labelChars((w - 14 - CHART_HEAD - 4) * k));
   const shownRows = rows === undefined ? [] : rows.slice(0, CALLERS_CAP);
   const hidden = rows === undefined ? 0 : rows.length - shownRows.length;
   return (
@@ -140,24 +141,24 @@ export function CallersBox({ id, scope, expansion, k, closing = false, inChain, 
       </g>
       <g transform={`translate(${o.x} ${o.y})`}>
         {!closing && rows === undefined && (
-          <CallersNote y={0} rowW={rowW} k={k} text={shown?.error !== undefined ? `Callers are not available: ${shown.error}` : "Loading callers…"} />
+          <CallersNote y={0} rowW={rowW} text={shown?.error !== undefined ? `Callers are not available: ${shown.error}` : "Loading callers…"} />
         )}
         {rows !== undefined && rows.length === 0 && (
-          <CallersNote y={0} rowW={rowW} k={k} text="No callers found" note="Entry point, or called from outside the index." />
+          <CallersNote y={0} rowW={rowW} text="No callers found" note="Entry point, or called from outside the index." />
         )}
         {shownRows.map((r, i) => (
-          <CallerLine key={r.id} row={r} index={i} rowW={rowW} k={k} chained={inChain(r.id)} onOpen={onOpen} onSelect={onSelect} />
+          <CallerLine key={r.id} row={r} index={i} rowW={rowW} chained={inChain(r.id)} onOpen={onOpen} onSelect={onSelect} />
         ))}
-        {hidden > 0 && <CallersNote y={shownRows.length * CALLER_ROW_H} rowW={rowW} k={k} text={`+${hidden} more`} />}
+        {hidden > 0 && <CallersNote y={shownRows.length * CALLER_ROW_H} rowW={rowW} text={`+${hidden} more`} />}
       </g>
     </g>
   );
 }
 
 /** A row that says something in place of callers (loading, none found, failed, or the "+N more" count). */
-function CallersNote({ y, rowW, k, text, note }: { y: number; rowW: number; k: number; text: string; note?: string }) {
-  const line = fitLabel(text, labelChars(rowW * k, 7, 14));
-  const sub = note === undefined ? null : fitLabel(note, labelChars(rowW * k, 6, 14));
+function CallersNote({ y, rowW, text, note }: { y: number; rowW: number; text: string; note?: string }) {
+  const line = fitLabel(text, labelChars(rowW, NAME_CHAR_W, 14));
+  const sub = note === undefined ? null : fitLabel(note, labelChars(rowW, FILE_CHAR_W, 14));
   const ry = y + CALLER_ROW_H / 2;
   return (
     <g className="zm-callers-note">
@@ -175,6 +176,13 @@ function CallersNote({ y, rowW, k, text, note }: { y: number; rowW: number; k: n
   );
 }
 
+/**
+ * The width of one character of a row's name (12 px code font) and of its file line (10.5 px), in world units. The rows'
+ * type is sized in world units (it zooms with the map, see styles.css), so a row is fitted to its world width at any scale.
+ */
+const NAME_CHAR_W = 7.4;
+const FILE_CHAR_W = 6.5;
+
 /** The width a "possible" tag takes, in world units, at the row's small type. */
 const POSSIBLE_W = 8 * "possible".length + 10;
 
@@ -182,16 +190,16 @@ const POSSIBLE_W = 8 * "possible".length + 10;
  * One caller row: a hit area that selects it, its name and file, its edge kinds, a muted "possible" tag for a candidate
  * caller, and at the end a ▸ that opens its chart (or ↺ when it is already open above, which selects it).
  */
-function CallerLine({ row, index, rowW, k, chained, onOpen, onSelect }: { row: CallerRow; index: number; rowW: number; k: number; chained: boolean; onOpen: (row: CallerRow, index: number) => void; onSelect: (row: CallerRow) => void }) {
+function CallerLine({ row, index, rowW, chained, onOpen, onSelect }: { row: CallerRow; index: number; rowW: number; chained: boolean; onOpen: (row: CallerRow, index: number) => void; onSelect: (row: CallerRow) => void }) {
   const r = callerRowRect(index);
   const badges = row.kinds.join(" · ");
   // A function row keeps room for its ▸ at the end; the tags sit left of that room.
   const edge = row.isFunction ? 30 : 8;
   const possibleW = row.candidate ? POSSIBLE_W : 0;
   const kindsW = badges === "" ? 0 : 8 * badges.length + 10;
-  const name = fitLabel(row.name, labelChars((rowW - edge - possibleW - kindsW) * k, 7, 14));
+  const name = fitLabel(row.name, labelChars(rowW - edge - possibleW - kindsW, NAME_CHAR_W, 14));
   const where = row.line > 0 ? `${row.file}:${row.line}` : row.file;
-  const file = fitLabel(where, labelChars(rowW * k, 6, 14));
+  const file = fitLabel(where, labelChars(rowW, FILE_CHAR_W, 14));
   const top = r.y;
   const kindsEnd = r.x + rowW - edge - possibleW;
   return (

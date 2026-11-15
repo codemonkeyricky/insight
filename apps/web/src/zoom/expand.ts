@@ -462,7 +462,8 @@ export function setInline(list: readonly Expansion[], fnId: string, nodeId: stri
     if (x.anchor.kind !== "step" || x.anchor.fnId !== fnId || x.anchor.stepId === undefined || x.anchor.stepId === HEADER_STEP) continue;
     const id = x.anchor.stepId;
     const n = chart.nodes.find((c) => c.id === id);
-    if (n === undefined) out = closeExpansion(out, x.fnId);
+    // A callers box hung from a nested frame closes when the frame folds back to a plain step: its button was the frame's.
+    if (n === undefined || (x.kind === "callers" && n.shape !== "nest" && n.shape !== "fork")) out = closeExpansion(out, x.fnId);
     else out = out.map((y) => (y === x ? { ...y, anchor: { ...x.anchor, rect: { x: n.x, y: n.y, w: n.w, h: n.h } } } : y));
   }
   return reflow(out, view);

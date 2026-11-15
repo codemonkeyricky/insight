@@ -16,7 +16,7 @@ import { callersKey, isCallersKey, refOfCallersKey, type CallerRow } from "../..
 import { LatestLoad } from "../../zoom/latestLoad";
 import { CallersBox } from "./CallersBox";
 import { fileTarget, useCodeTarget } from "../../codeTarget";
-import { CALLERS_BTN_H, CALLERS_BTN_W, CallersButton } from "./CallersControl";
+import { CALLERS_BTN_H, CALLERS_BTN_W, CALLERS_COMPACT_W, CallersButton, FULL_K, GLYPH_K } from "./CallersControl";
 import { calloutD } from "../../zoom/connector";
 import { popDelay } from "../../zoom/pop";
 import { displayName } from "../../zoom/names";
@@ -1840,9 +1840,13 @@ export function BoxShape({
   if (card && !small && !bare) {
     // A card: its name alone, centred vertically, fitted to the card's width on screen.
     // Two characters of the budget go to the leading function glyph (ƒ), so the name stays inside the card.
-    // A card tall enough for it takes a Callers button at its top-right, and its name keeps clear of the button.
-    const showCallers = onCallers !== undefined && rect.h >= CALLERS_BTN_H + 12;
-    const name = fitLabel(shown, Math.max(1, labelChars((rect.w - (showCallers ? CALLERS_BTN_W + 12 : 0)) * k, 8, 20) - 2));
+    // A card tall enough for it takes a Callers button at its top-right, and its name keeps clear of the button. The name
+    // comes first: when it would not fit whole beside the full button, the button is compact (the ◂ alone).
+    const showCallers = onCallers !== undefined && rect.h >= CALLERS_BTN_H + 12 && k >= GLYPH_K;
+    const nameIn = (room: number) => fitLabel(shown, Math.max(1, labelChars((rect.w - room) * k, 8, 20) - 2));
+    const fullName = nameIn(showCallers ? CALLERS_BTN_W + 12 : 0);
+    const compactCallers = showCallers && (fullName !== shown || k < FULL_K);
+    const name = compactCallers ? nameIn(CALLERS_COMPACT_W + 12) : fullName;
     return (
       <g className={`zm-box zm-${node.kind} zm-card ${lineClass(line)}${holdsChart ? " zm-has-chart" : ""}${chartOpen ? " expanded" : ""}`} data-sx={rect.x} data-fid={item.id} onClick={() => onOpen(item.id)}>
         <title>{node.detail !== undefined ? `${node.label} (${node.detail})` : node.title || node.label}</title>
@@ -1856,7 +1860,7 @@ export function BoxShape({
           )}
         </g>
         {showCallers && (
-          <CallersButton x={rect.x + rect.w - CALLERS_BTN_W - 8} y={rect.y + 6} name={shown} open={callersOpen} onClick={onCallers} k={k} />
+          <CallersButton x={rect.x + rect.w - CALLERS_BTN_W - 8} y={rect.y + 6} name={shown} open={callersOpen} onClick={onCallers} k={k} compact={compactCallers} />
         )}
       </g>
     );

@@ -4,6 +4,7 @@ import { layoutFunction, relayout, type FunctionFlow, type Rect } from "@insight
 import type { RefRow } from "@insight/model";
 import { FlowChart } from "../src/components/FlowChart";
 import { ExpansionShape } from "../src/components/zoom/Expansion";
+import { BoxShape } from "../src/components/zoom/ZoomMap";
 import { callersKey as keyOf, isCallersKey, mergeCallers, refOfCallersKey } from "../src/zoom/callers";
 import { LatestLoad } from "../src/zoom/latestLoad";
 import {
@@ -24,6 +25,7 @@ import {
   refusedCallersPlan,
   openExpansion,
   reflow,
+  setInline,
   stillOpen,
   resizeCallers,
   toggleCallers,
@@ -429,5 +431,69 @@ describe("reflow of a header-hung box", () => {
     const list = openCallers(parent, "A", headerAnchor(find(parent, "A")), "A", 2, view);
     const again = reflow(list, view);
     expect(find(again, callersKey("A")).anchor).toBe(find(list, callersKey("A")).anchor);
+  });
+});
+
+describe("a callers box on a nested frame", () => {
+  it("closes when its frame folds back to a plain step, since its button was the frame's (review 5)", () => {
+    const leaf = layoutFunction({ id: "f#leaf", name: "leaf", async: false, items: [{ t: "step", role: "call", label: "a()" }] });
+    const root = layoutFunction({ id: "f#root", name: "root", async: false, items: [{ t: "step", role: "call", label: "leaf()", target: "f#leaf" }] });
+    const stepId = root.nodes.find((n) => n.label === "leaf()")!.id;
+    const opened = openExpansion([], "f#root", boxAnchor, root, view);
+    const nested = setInline(opened, "f#root", stepId, leaf, view);
+    const frame = find(nested, "f#root").chart.nodes.find((n) => n.id === stepId)!;
+    expect(frame.shape).toBe("nest");
+    const withBox = openCallers(nested, "f#leaf", { kind: "step", fnId: "f#root", stepId, rect: { x: frame.x, y: frame.y, w: frame.w, h: frame.h } }, "leaf", 3, view);
+    expect(withBox.some((e) => e.fnId === callersKey("f#leaf"))).toBe(true);
+    const folded = setInline(withBox, "f#root", stepId, undefined, view);
+    expect(folded.some((e) => e.fnId === callersKey("f#leaf"))).toBe(false);
+    expect(folded.some((e) => e.fnId === "f#root")).toBe(true);
+  });
+
+  it("cuts a long frame label to the room left of the Callers button, and keeps it whole without one", () => {
+    // A frame's header names its callee.
+    const long = "aVeryLongCalleeNameThatRunsUnderTheButton";
+    const leaf = layoutFunction({ id: "f#leaf", name: long, async: false, items: [{ t: "step", role: "call", label: "a()" }] });
+    const root = layoutFunction({ id: "f#root", name: "root", async: false, items: [{ t: "step", role: "call", label: "leaf()", target: "f#leaf" }] });
+    const nodeId = root.nodes.find((n) => n.label === "leaf()")!.id;
+    const nested = relayout(root, new Map([[nodeId, { flow: leaf }]]));
+    const labelOf = (html: string) => html.match(/flow-nest-label">([^<]*)<\/text>/)?.[1];
+    const cut = labelOf(renderToStaticMarkup(<FlowChart id="p" fn={nested} scope="" onCallers={() => {}} />));
+    expect(cut).toMatch(/…$/);
+    expect(cut!.length).toBeLessThan(long.length);
+    expect(labelOf(renderToStaticMarkup(<FlowChart id="p" fn={nested} scope="" />))).toBe(long);
+  });
+});
+
+describe("the Callers chip on a roots-only card", () => {
+  const card = (label: string, k: number, w = 160) =>
+    renderToStaticMarkup(
+      <svg>
+        <BoxShape
+          item={{ id: "n", kind: "box", rect: { x: 0, y: 0, w, h: 56 }, depth: 1 }}
+          node={{ id: "n", kind: "function", label, ref: "f#x" }}
+          line="none"
+          k={k}
+          onOpen={() => undefined}
+          chartOpen={false}
+          card
+          onCallers={() => undefined}
+        />
+      </svg>,
+    );
+  const nameOf = (html: string) => html.match(/zm-card-glyph">ƒ<\/tspan> ([^<]*)<\/text>/)?.[1];
+
+  it("keeps a card's name readable: a name that would not fit beside the full chip gets a compact ◂ chip", () => {
+    const html = card("buildExecScene", 1);
+    expect(nameOf(html)).toBeDefined();
+    expect(nameOf(html)!.length).toBeGreaterThanOrEqual(8);
+    expect(html).toMatch(/zm-callers-btn[^]*>◂<\/text>/);
+    expect(html).not.toContain("◂ callers");
+  });
+
+  it("a wide card whose name fits beside it keeps the full chip", () => {
+    const html = card("run", 1, 300);
+    expect(nameOf(html)).toBe("run");
+    expect(html).toContain("◂ callers");
   });
 });

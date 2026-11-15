@@ -32,11 +32,18 @@ describe("pickBox", () => {
 });
 
 describe("zoomTakes", () => {
-  const inChart = { closest: (sel: string) => (sel === "svg.flow" ? {} : null) };
+  const inChart = { closest: (sel: string) => (sel.split(", ").includes("svg.flow") ? {} : null) };
   const onMap = { closest: () => null };
 
   it("leaves a double-click on a chart row to the row (d3 would zoom and swallow it)", () => {
     expect(zoomTakes({ type: "dblclick", target: inChart })).toBe(false);
+  });
+
+  it("leaves a double-click on a map control (a Callers button, a callers box, a close ×) to the control", () => {
+    for (const control of [".zm-callers-btn", ".zm-callers", ".zm-expansion-close"]) {
+      const target = { closest: (sel: string) => (sel.split(", ").includes(control) ? {} : null) };
+      expect(zoomTakes({ type: "dblclick", target })).toBe(false);
+    }
   });
 
   it("still zooms on a double-click elsewhere on the map", () => {

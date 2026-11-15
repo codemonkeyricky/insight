@@ -6,7 +6,10 @@ import { hrefFile, hrefView } from "../router";
 import { backEdgeFlags, prefersReducedMotion, useOnScreen, usePageVisible } from "../zoom/flowMotion";
 import { runFlowToken, useTokenSlot } from "../zoom/flowToken";
 import { popDelay } from "../zoom/pop";
-import { CALLERS_BTN_H, CALLERS_BTN_W, CallersButton } from "./zoom/CallersControl";
+import { CALLERS_BTN_H, CALLERS_BTN_W, CallersButton, GLYPH_K } from "./zoom/CallersControl";
+
+/** The width of one character of a step's label, in chart units: the label's 12 px code font. */
+const NEST_CHAR_W = 7.3;
 
 /** A step's click, when a caller takes it over. Return true to handle it: the link (if any) is then not followed. */
 export type FlowNodeClick = (node: FlowNode) => boolean;
@@ -163,6 +166,12 @@ function NestFrame({ node, onNodeClick, onNodeOpen, onCallers, callersOpen, k, s
   const lane = laneOf((node.lane ?? 0) + 1);
   const lc = laneOf(node.lane);
   const [cx, cy] = station(node);
+  // With a Callers button in the header, the label is cut to the room left of it (the full name stays in the tooltip).
+  const callers = onCallers !== undefined && node.target !== undefined && k >= GLYPH_K;
+  const room = x + w - CHEV_INSET - CHEV_HIT - 4 - CALLERS_BTN_W - 6 - labelAt(node);
+  const tagChars = node.tag !== undefined ? node.tag.length + 1 : 0;
+  const maxChars = Math.max(1, Math.floor(room / NEST_CHAR_W) - tagChars);
+  const label = callers && node.label.length > maxChars ? `${node.label.slice(0, Math.max(0, maxChars - 1))}…` : node.label;
   return (
     <g className={`flow-nest c${lc}${selected ? " selected" : ""}`} data-node={node.id} data-nest="" style={delayStyle(delay)}>
       <title>{node.title ?? node.label}</title>
@@ -179,7 +188,7 @@ function NestFrame({ node, onNodeClick, onNodeOpen, onCallers, callersOpen, k, s
         <CallStation cx={cx} cy={cy} />
         <text x={labelAt(node)} y={cy} dominantBaseline="central" className="flow-text flow-nest-label">
           {node.tag !== undefined && <tspan className="flow-kw">{node.tag} </tspan>}
-          {node.label}
+          {label}
         </text>
         <Chevron node={node} x={x + w - CHEV_INSET - CHEV_HIT / 2} y={y} fold onNodeOpen={onNodeOpen} />
         {onCallers !== undefined && node.target !== undefined && (
