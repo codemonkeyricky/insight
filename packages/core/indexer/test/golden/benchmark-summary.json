@@ -2,7 +2,7 @@
   "frontends": [
     {
       "id": "frontend-bazel",
-      "files": 4
+      "files": 6
     },
     {
       "id": "frontend-cmake",
@@ -66,22 +66,23 @@
         "frontend-cmake",
         "frontend-cpp"
       ],
-      "filesScanned": 128,
-      "filesWithRecords": 124,
+      "filesScanned": 130,
+      "filesWithRecords": 125,
       "filesWithErrors": 0,
-      "nodes": 63,
+      "nodes": 71,
       "edges": 1173
     },
     {
       "facet": "structure",
       "providers": [
         "core",
+        "frontend-bazel",
         "frontend-cpp"
       ],
       "filesScanned": 225,
       "filesWithRecords": 225,
       "filesWithErrors": 0,
-      "nodes": 1578,
+      "nodes": 1582,
       "edges": 0
     },
     {
@@ -163,11 +164,13 @@
     "flow.try": 1,
     "packaging.build-target": 63,
     "packaging.dep-edge": 99,
+    "packaging.external": 8,
     "packaging.include": 889,
     "packaging.target-contains": 185,
     "structure.file": 225,
     "structure.function": 1038,
     "structure.namespace": 191,
+    "structure.package": 4,
     "structure.type": 124,
     "sync.lock-acquire": 4,
     "sync.lock-release": 5,

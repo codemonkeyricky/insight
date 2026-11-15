@@ -1,0 +1,9 @@
+module(name = "sample", version = "0.1.0")
+
+bazel_dep(name = "abseil-cpp", version = "20240116.2")
+bazel_dep(name = "googletest", version = "1.14.0", repo_name = "com_google_googletest", dev_dependency = True)
+
+single_version_override(module_name = "abseil-cpp", version = "20240116.2")
+
+ext = use_extension("//:deps.bzl", "sample_deps")
+use_repo(ext, "sample_helper", alias = "remote_helper")

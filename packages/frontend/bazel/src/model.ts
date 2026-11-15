@@ -1,6 +1,6 @@
 import { posix } from "node:path";
 import type { Span } from "@insight/ir";
-import { globsIn, labelsIn, stringsIn, topLevelCalls, tokenize, type Tok } from "./starlark.js";
+import { globsIn, labelsIn, stringsIn, topLevelCalls, tokenize, type Arg, type Tok } from "./starlark.js";
 
 /** Rules whose names start with cc_ are C++ targets: cc_library, cc_binary, cc_test, and so on. */
 const CC_PREFIX = "cc_";
@@ -40,6 +40,8 @@ export interface BazelTarget {
   stripPrefix?: string;
   /** Prefix added to header paths when they are exposed to includes. */
   includePrefix?: string;
+  /** Absolute visibility labels: the target's own `visibility`, else its package's `default_visibility`. Absent when neither is set. */
+  visibility?: string[];
 }
 
 export interface BazelModel {
@@ -108,6 +110,16 @@ function fileOf(text: string, pkg: string): string | undefined {
   return joinPath(pkg, text);
 }
 
+/** Absolute form of a visibility label: ":__subpackages__" in package p becomes "//p:__subpackages__". */
+function visibilityOf(args: Arg[], key: string, pkg: string): string[] | undefined {
+  const arg = args.find((a) => a.key === key);
+  if (arg === undefined) return undefined;
+  return stringsIn(arg.tokens).map((text) => {
+    const target = labelOf(text, pkg);
+    return "external" in target ? target.external : target.id;
+  });
+}
+
 function fileList(toks: Tok[], pkg: string, files: string[], subpackages: Set<string>): string[] {
   const out = new Set<string>();
   for (const text of stringsIn(toks)) {
@@ -135,7 +147,10 @@ function fileList(toks: Tok[], pkg: string, files: string[], subpackages: Set<st
 export function parseBuildFile(buildFile: string, text: string, files: string[], subpackages: Set<string>): BazelTarget[] {
   const pkg = packageOf(buildFile);
   const targets: BazelTarget[] = [];
-  for (const call of topLevelCalls(tokenize(text))) {
+  const calls = topLevelCalls(tokenize(text));
+  const pkgCall = calls.find((c) => c.name === "package");
+  const defaultVisibility = pkgCall === undefined ? undefined : visibilityOf(pkgCall.args, "default_visibility", pkg);
+  for (const call of calls) {
     if (!isModelledRule(call.name)) continue;
     const cc = isCcRule(call.name);
     const arg = (key: string): Tok[] => call.args.find((a) => a.key === key)?.tokens ?? [];
@@ -156,6 +171,7 @@ export function parseBuildFile(buildFile: string, text: string, files: string[],
     const mainFile = main === undefined ? undefined : fileOf(main, pkg);
     const srcs = fileList(arg("srcs"), pkg, files, subpackages);
     if (mainFile !== undefined && !srcs.includes(mainFile)) srcs.push(mainFile);
+    const ownVisibility = visibilityOf(call.args, "visibility", pkg) ?? defaultVisibility;
     targets.push({
       id: `//${pkg}:${name}`,
       name,
@@ -174,6 +190,7 @@ export function parseBuildFile(buildFile: string, text: string, files: string[],
       includes: cc ? stringsIn(arg("includes")).map((d) => joinPath(pkg, d)) : [],
       ...(strip !== undefined ? { stripPrefix: strip.startsWith("/") ? strip.slice(1) : joinPath(pkg, strip) } : {}),
       ...(prefix !== undefined ? { includePrefix: prefix.replace(/^\/+|\/+$/g, "") } : {}),
+      ...(ownVisibility !== undefined ? { visibility: ownVisibility } : {}),
     });
   }
   return targets;
