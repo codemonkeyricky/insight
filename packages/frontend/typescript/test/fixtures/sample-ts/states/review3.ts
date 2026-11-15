@@ -119,3 +119,23 @@ export abstract class I6 {
     this.s = S.B;
   }
 }
+
+/** Deferred callbacks do not run in the method that creates them. */
+export class Defer {
+  s: S = S.Idle;
+  t: { onclose?: () => void } = {};
+  async start() {
+    try {
+      this.wire();
+      await a();
+    } catch {
+      this.s = S.F;
+    }
+  }
+  wire() {
+    this.t.onclose = () => this.stop();
+  }
+  stop() {
+    this.s = S.D;
+  }
+}

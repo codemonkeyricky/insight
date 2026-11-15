@@ -1011,6 +1011,8 @@ export function emitState(h: StateHelpers): StateOutput {
     const seen = new Set<ts.Node>([root]);
     const visit = (fn: ts.FunctionLikeDeclaration): void => {
       const walk = (n: ts.Node): void => {
+        // Deferred code (callbacks, nested classes, object-literal methods) does not run in this body.
+        if (isFnLike(n) || ts.isClassDeclaration(n) || ts.isClassExpression(n)) return;
         if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
           const l = stripAll(n.left);
           if (ts.isPropertyAccessExpression(l) && l.expression.kind === ts.SyntaxKind.ThisKeyword) {
@@ -1035,7 +1037,7 @@ export function emitState(h: StateHelpers): StateOutput {
         }
         ts.forEachChild(n, walk);
       };
-      if (fn.body) walk(fn.body);
+      if (fn.body) for (const c of ts.isBlock(fn.body) ? fn.body.statements : [fn.body]) walk(c);
     };
     visit(root);
     writtenCache.set(root, out);

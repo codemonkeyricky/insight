@@ -320,4 +320,8 @@ describe("review round 3", () => {
     const [w] = await wr("I6.go");
     expect(w!.attrs.fromEntry).toBeUndefined();
   });
+  it("deferred: a callback created by a called method does not invalidate the holder", async () => {
+    const [w] = await wr("Defer.start");
+    expect(w!.attrs).toMatchObject({ fromEntry: true, stale: true });
+  });
 });
