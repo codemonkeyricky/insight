@@ -8,7 +8,7 @@ import { frameHeaderText, layoutSystemFrames } from "../../arch/system-frames";
 import { hrefView } from "../../router";
 import { PipelineSummary } from "./PipelineSummary";
 
-const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
+export const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
 
 /** What is selected in the diagram: a card or one edge, by id. */
 type Selection = { kind: "node" | "edge"; id: string } | null;
@@ -44,7 +44,7 @@ export function fitCamera(layout: Pick<SysLayout, "width" | "height"> & { focusY
   return { k, x: cx, y: cyy };
 }
 
-const dirname = (file: string): string => (file.includes("/") ? file.slice(0, file.lastIndexOf("/")) : "");
+export const dirname = (file: string): string => (file.includes("/") ? file.slice(0, file.lastIndexOf("/")) : "");
 const fnName = (fn: string): string => fn.slice(fn.lastIndexOf("#") + 1);
 
 /**
