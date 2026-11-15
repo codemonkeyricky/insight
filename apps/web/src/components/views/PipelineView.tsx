@@ -3,6 +3,7 @@ import type { PipelineModel } from "@insight/model";
 import { api } from "../../api";
 import { pipelineSystem } from "../../arch/pipeline-layout";
 import { SystemDiagram } from "./SystemView";
+import { PipelineSequences } from "./PipelineSequences";
 
 /**
  * The Pipeline view of the explorer scope: the processing stages of its extension points, drawn with the System view's diagram.
@@ -34,5 +35,12 @@ export function PipelineView({ id, scope }: { id: string; scope: string }) {
 /** The diagram of one Pipeline model: its System-shaped layout with the column titles, and the Pipeline side panel. */
 export function PipelineDiagram({ id, pipeline, tests, onTests, stale = false }: { id: string; pipeline: PipelineModel; tests: boolean; onTests: (on: boolean) => void; stale?: boolean }) {
   const { sys, layout } = useMemo(() => pipelineSystem(pipeline), [pipeline]);
-  return <SystemDiagram id={id} sys={sys} layoutOptions={layout} pipeline={pipeline} tests={tests} onTests={onTests} stale={stale} />;
+  // Sequences without extension points: the strip is the whole view (no "no extension points" empty state).
+  if (pipeline.points.length === 0 && pipeline.sequences.length > 0) return <PipelineSequences id={id} sequences={pipeline.sequences} />;
+  return (
+    <>
+      <PipelineSequences id={id} sequences={pipeline.sequences} />
+      <SystemDiagram id={id} sys={sys} layoutOptions={layout} pipeline={pipeline} tests={tests} onTests={onTests} stale={stale} />
+    </>
+  );
 }
