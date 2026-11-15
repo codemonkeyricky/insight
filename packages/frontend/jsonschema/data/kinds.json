@@ -57,6 +57,19 @@
     "description": "A definition or property whose schema $refs another definition."
   },
   {
+    "kind": "x-schema.validated-by",
+    "facet": "x-schema",
+    "on": "edge",
+    "description": "A data file that follows a JSON Schema, named by its $schema or by a well-known file name. Points at the schema's root definition.",
+    "attrs": {
+      "type": "object",
+      "required": ["via"],
+      "properties": {
+        "via": { "enum": ["$schema", "filename"] }
+      }
+    }
+  },
+  {
     "kind": "x-schema.attrs",
     "facet": "x-schema",
     "on": "edge",

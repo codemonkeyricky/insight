@@ -232,6 +232,8 @@ export interface SchemaEntity {
   role: "record" | "node-kind" | "edge-kind";
   extends?: string;
   description?: string;
+  /** A short extra line shown at the foot of the card, e.g. "validated by: 14 files". */
+  note?: string;
   span?: Span;
   fields: SchemaField[];
 }

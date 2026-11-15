@@ -5,7 +5,7 @@ const LENS_ID = "lens-ir-schema";
 const KIND = "x-schema.kind";
 const DEF = "x-schema.def";
 const PROP = "x-schema.property";
-const CORE_FILE = "packages/core/ir/schema/core.schema.json";
+const VALIDATED = "x-schema.validated-by";
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 const nameOf = (n: IRNode | undefined): string => str(n?.attrs.name);
@@ -39,6 +39,7 @@ export const lensIrSchema: Lens = {
     const extendsEdges = ir.edges({ kind: "x-schema.extends" });
     const usesEdges = ir.edges({ kind: "x-schema.uses-kind" });
     const refEdges = ir.edges({ kind: "x-schema.ref" });
+    const validatedEdges = ir.edges({ kind: VALIDATED });
 
     const nodeName = (id: string): string => nameOf(ir.node(id));
     const targetOf = (e: IREdge): string | undefined => edgeTargets(e).nodes[0];
@@ -150,25 +151,43 @@ export const lensIrSchema: Lens = {
       links: kindLinks,
     };
 
-    // Diagram 2: the core schema's definitions and the $refs between them.
-    const coreDefs = defs.filter((d) => d.id.startsWith(`${CORE_FILE}#def:`));
-    const coreIds = new Set(coreDefs.map((d) => d.id));
+    // Instances: data files that follow a schema, keyed by the schema's root def.
+    const instancesOf = new Map<string, Set<string>>();
+    for (const e of validatedEdges) {
+      const t = targetOf(e);
+      if (t === undefined) continue;
+      const set = instancesOf.get(t) ?? new Set<string>();
+      set.add(e.from);
+      instancesOf.set(t, set);
+    }
+    const fileOfDef = (d: IRNode): string => (d.id.split("#def:")[0] ?? d.id);
+    const isRoot = (d: IRNode): boolean => d.id.endsWith("#def:$root");
+
+    // Diagram 2: every schema file's definitions as cards, one frame per file, and the $refs between them.
+    const schemaDefs = [...defs].sort((a, b) => a.id.localeCompare(b.id));
+    const schemaFiles = [...new Set(schemaDefs.map(fileOfDef))].sort((a, b) => a.localeCompare(b));
+    const baseName = (f: string): string => f.split("/").pop() ?? f;
+    const baseCount = new Map<string, number>();
+    for (const f of schemaFiles) baseCount.set(baseName(f), (baseCount.get(baseName(f)) ?? 0) + 1);
+    const fileLabel = (f: string): string => ((baseCount.get(baseName(f)) ?? 0) > 1 ? f : baseName(f));
+    const defIds = new Set(schemaDefs.map((d) => d.id));
     const refTargets = (id: string): string[] => {
       const out: string[] = [];
       for (const e of refEdges) {
         if (e.from !== id) continue;
         const t = targetOf(e);
-        if (t !== undefined && coreIds.has(t) && !out.includes(t)) out.push(t);
+        if (t !== undefined && defIds.has(t) && !out.includes(t)) out.push(t);
       }
       return out;
     };
     const recLinks: SchemaDiagramView["links"] = [];
-    const recEntities: SchemaEntity[] = coreDefs.map((d) => {
+    const recEntities: SchemaEntity[] = schemaDefs.map((d) => {
       const props2 = ir.children(d.id, { kind: PROP });
       let fields: SchemaField[];
       if (props2.length > 0) {
+        const all = propFields(d.id);
         fields = props2.map((p) => {
-          const f = propFields(d.id).find((x) => x.name === nameOf(p)) as SchemaField;
+          const f = all.find((x) => x.name === nameOf(p)) as SchemaField;
           const target = refTargets(p.id)[0];
           if (target !== undefined) {
             recLinks.push({ from: d.id, field: f.name, to: target, kind: "ref" });
@@ -183,12 +202,14 @@ export const lensIrSchema: Lens = {
         });
       }
       const description = str(d.attrs.description);
+      const n = instancesOf.get(d.id)?.size ?? 0;
       return {
         id: d.id,
         label: nameOf(d),
-        group: "records",
+        group: fileOfDef(d),
         role: "record",
         ...(description ? { description } : {}),
+        ...(n > 0 && isRoot(d) ? { note: `validated by: ${n} file${n === 1 ? "" : "s"}` } : {}),
         ...(d.span ? { span: d.span } : {}),
         fields,
       };
@@ -197,10 +218,24 @@ export const lensIrSchema: Lens = {
       type: "schema-diagram",
       id: "records-diagram",
       title: "Records",
-      groups: [{ id: "records", label: "records" }],
+      groups: schemaFiles.map((f) => ({ id: f, label: fileLabel(f) })),
       entities: recEntities,
       links: recLinks,
     };
+
+    // Table: one row per schema file.
+    const fileCols = ["schema file", "title", "$id", "defs", "instances", "instance files"];
+    const fileRows: TableView["rows"] = [];
+    const fileSpans: (ViewSpan | null)[] = [];
+    for (const f of schemaFiles) {
+      const root = schemaDefs.find((d) => d.id === `${f}#def:$root`);
+      const inst = [...(instancesOf.get(`${f}#def:$root`) ?? [])].sort();
+      const shown = inst.slice(0, 5).join(", ") + (inst.length > 5 ? ", …" : "");
+      const title = root !== undefined && nameOf(root) !== baseName(f) ? nameOf(root) : null;
+      fileRows.push([f, title, str(root?.attrs.schemaId) || null, schemaDefs.filter((d) => fileOfDef(d) === f && !isRoot(d)).length, inst.length, inst.length > 0 ? shown : null]);
+      fileSpans.push(root?.span ?? null);
+    }
+    const filesTable: TableView = { type: "table", id: "schema-files", title: "Schema files", columns: fileCols, rows: fileRows, spans: fileSpans };
 
     // Findings.
     const findings: LensFinding[] = [];
@@ -236,7 +271,7 @@ export const lensIrSchema: Lens = {
       });
     }
 
-    const views: LensView[] = [kindsDiagram, recordsDiagram, table];
+    const views: LensView[] = [...(kinds.length > 0 ? [kindsDiagram] : []), ...(defs.length > 0 ? [recordsDiagram] : []), ...(kinds.length > 0 ? [table] : []), ...(schemaFiles.length > 0 ? [filesTable] : [])];
     const emitted = kinds.filter((k) => emitBy.has(k.id)).length;
     const metrics = {
       kinds: kinds.length,
@@ -246,6 +281,8 @@ export const lensIrSchema: Lens = {
       emitted,
       neverEmitted: kinds.length - emitted,
       readers: kinds.filter((k) => readBy.has(k.id)).length,
+      schemaFiles: schemaFiles.length,
+      instances: new Set(validatedEdges.map((e) => e.from)).size,
     };
     return { findings, views, metrics };
   },

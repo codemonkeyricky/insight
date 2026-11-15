@@ -5,7 +5,7 @@ import "d3-transition";
 import type { SchemaDiagramView, SchemaEntity, Span } from "../api";
 import { solveInWorker } from "../states/elkClient";
 import { withTimeout, type Solve } from "../states/layout";
-import { CARD_W, HEADER_H, ROW_H, VALUES_H, cardMetrics, extendsPath, layoutKinds, layoutRecords, refPath, type CardBox, type SchemaLayout } from "./layout";
+import { CARD_PAD, CARD_W, HEADER_H, NOTE_H, ROW_H, VALUES_H, cardMetrics, extendsPath, layoutKinds, layoutRecords, refPath, type CardBox, type SchemaLayout } from "./layout";
 
 export interface SchemaPick {
   span?: Span;
@@ -18,6 +18,7 @@ const clip = (s: string, n: number): string => (s.length <= n ? s : `${s.slice(0
 export function groupColor(view: SchemaDiagramView, group: string): string {
   const FACETS = ["structure", "packaging", "flow", "calls", "concurrency", "sync", "effects", "state"];
   if (group === "records") return "var(--sd-rec)";
+  if (view.groups.length > 1 && view.entities.every((e) => e.role === "record")) return `var(--sd-${Math.max(0, view.groups.findIndex((g) => g.id === group)) % 8})`;
   const i = FACETS.indexOf(group);
   return i >= 0 ? `var(--sd-${i})` : "var(--sd-x)";
 }
@@ -79,6 +80,11 @@ const Card = memo(function Card({ e, box, color, state, refLabel, onHot, onPick 
           no attributes
         </text>
       )}
+      {e.note && (
+        <text className="sd-note" x={12} y={cardMetrics(e).h - CARD_PAD - NOTE_H / 2 + 1} dominantBaseline="central">
+          {clip(e.note, 38)}
+        </text>
+      )}
       {e.fields.map((f, i) => {
         const y = rowMid[i] ?? 0;
         const arrays = f.type.endsWith("[]");
@@ -128,7 +134,7 @@ export function SchemaDiagram({ view, onPick, solve = solveInWorker }: SchemaDia
   const lastFrame = useRef<string | null>(null);
 
   const byId = useMemo(() => new Map(view.entities.map((e) => [e.id, e])), [view]);
-  const isKinds = view.groups.length > 1 || view.entities.some((e) => e.role !== "record");
+  const isKinds = view.entities.some((e) => e.role !== "record");
 
   useEffect(() => {
     setError(null);
@@ -247,7 +253,7 @@ export function SchemaDiagram({ view, onPick, solve = solveInWorker }: SchemaDia
   return (
     <div className="sd-wrap" ref={wrapRef} onScroll={(ev) => ev.currentTarget.scrollTo(0, 0)}>
       <div className="sd-tools">
-        <span className="muted small">scroll to zoom, drag to pan{isKinds ? ", click a frame title to zoom to it (shift-click adds the last one)" : ""}</span>
+        <span className="muted small">scroll to zoom, drag to pan{isKinds ? ", click a frame title to zoom to it (shift-click adds the last one)" : view.groups.length > 1 ? ", click a frame title to zoom to it" : ""}</span>
         <button type="button" onClick={() => layout && fitBox({ x: 0, y: 0, w: layout.width, h: layout.height }, true)}>
           Fit
         </button>

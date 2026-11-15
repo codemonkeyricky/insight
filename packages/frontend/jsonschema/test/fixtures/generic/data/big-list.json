@@ -1,0 +1,5 @@
+[
+  { "id": 1, "label": "one", "tags": ["a"] },
+  { "id": 2, "label": "two", "tags": [] },
+  { "id": 3, "label": "three", "tags": ["b", "c"] }
+]

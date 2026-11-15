@@ -9,6 +9,7 @@ export const HEADER_H = 32;
 export const ROW_H = 20;
 export const VALUES_H = 14;
 export const CARD_PAD = 6;
+export const NOTE_H = 18;
 const GAP = 14;
 const COL_GAP = 32;
 const FRAME_PAD = 14;
@@ -42,14 +43,15 @@ export interface SchemaLayout {
 
 /** The height of a card and the y of the middle of each field row, relative to the card top. */
 export function cardMetrics(e: SchemaEntity): { h: number; rowMid: number[] } {
-  if (e.fields.length === 0) return { h: HEADER_H + ROW_H + CARD_PAD, rowMid: [] };
+  const note = e.note ? NOTE_H : 0;
+  if (e.fields.length === 0) return { h: HEADER_H + ROW_H + CARD_PAD + note, rowMid: [] };
   let y = HEADER_H + 2;
   const rowMid: number[] = [];
   for (const f of e.fields) {
     rowMid.push(y + ROW_H / 2);
     y += ROW_H + (f.values && f.values.length > 0 ? VALUES_H : 0);
   }
-  return { h: y + CARD_PAD, rowMid };
+  return { h: y + CARD_PAD + note, rowMid };
 }
 
 /** Frames in a masonry grid, cards in columns inside each frame. */
@@ -108,42 +110,78 @@ export function layoutKinds(view: SchemaDiagramView, frameColumns = 4): SchemaLa
   return { width: x - FRAME_GAP + MARGIN, height: totalH + MARGIN, frames, cards };
 }
 
-/** Layered left-to-right layout of the records; the solver places the cards. */
+/** Layered left-to-right layout of the records; the solver places the cards. With several groups, each group is laid out on its own and framed, and the frames are shelf-packed. */
 export async function layoutRecords(view: SchemaDiagramView, solve: Solve, signal?: AbortSignal): Promise<SchemaLayout> {
   const ids = new Set(view.entities.map((e) => e.id));
-  const seen = new Set<string>();
-  const edges: { id: string; sources: string[]; targets: string[] }[] = [];
-  for (const l of view.links) {
-    if (l.kind !== "ref" || l.from === l.to || !ids.has(l.from) || !ids.has(l.to)) continue;
-    const key = `${l.from}>${l.to}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    edges.push({ id: `e${edges.length}`, sources: [l.from], targets: [l.to] });
+  const groups = view.groups.filter((g) => view.entities.some((e) => e.group === g.id));
+  const framed = groups.length > 1;
+  const solveGroup = async (members: SchemaEntity[], pad: number): Promise<{ cards: Map<string, CardBox>; w: number; h: number }> => {
+    const own = new Set(members.map((e) => e.id));
+    const seen = new Set<string>();
+    const edges: { id: string; sources: string[]; targets: string[] }[] = [];
+    for (const l of view.links) {
+      if (l.kind !== "ref" || l.from === l.to || !ids.has(l.from) || !ids.has(l.to) || !own.has(l.from) || !own.has(l.to)) continue;
+      const key = `${l.from}>${l.to}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      edges.push({ id: `e${edges.length}`, sources: [l.from], targets: [l.to] });
+    }
+    const graph: ElkNode = {
+      id: "root",
+      layoutOptions: {
+        "elk.algorithm": "layered",
+        "elk.direction": "RIGHT",
+        "elk.layered.spacing.nodeNodeBetweenLayers": "120",
+        "elk.spacing.nodeNode": "32",
+        "elk.layered.crossingMinimization.strategy": "LAYER_SWEEP",
+        "elk.layered.layering.strategy": "LONGEST_PATH_SOURCE",
+        "elk.padding": `[top=${pad},left=${pad},bottom=${pad},right=${pad}]`,
+      },
+      children: members.map((e) => ({ id: e.id, width: CARD_W, height: cardMetrics(e).h })),
+      edges,
+    } as ElkNode;
+    const out = await solve(graph, signal);
+    const cards = new Map<string, CardBox>();
+    let w = 0;
+    let h = 0;
+    for (const c of out.children ?? []) {
+      const box = { id: c.id, x: c.x ?? 0, y: c.y ?? 0, w: c.width ?? CARD_W, h: c.height ?? 0 };
+      cards.set(c.id, box);
+      w = Math.max(w, box.x + box.w);
+      h = Math.max(h, box.y + box.h);
+    }
+    return { cards, w: w + pad, h: h + pad };
+  };
+  if (!framed) {
+    const r = await solveGroup(view.entities, MARGIN);
+    return { width: r.w + MARGIN, height: r.h + MARGIN, frames: [], cards: r.cards };
   }
-  const graph: ElkNode = {
-    id: "root",
-    layoutOptions: {
-      "elk.algorithm": "layered",
-      "elk.direction": "RIGHT",
-      "elk.layered.spacing.nodeNodeBetweenLayers": "120",
-      "elk.spacing.nodeNode": "32",
-      "elk.layered.crossingMinimization.strategy": "LAYER_SWEEP",
-      "elk.layered.layering.strategy": "LONGEST_PATH_SOURCE",
-      "elk.padding": `[top=${MARGIN},left=${MARGIN},bottom=${MARGIN},right=${MARGIN}]`,
-    },
-    children: view.entities.map((e) => ({ id: e.id, width: CARD_W, height: cardMetrics(e).h })),
-    edges,
-  } as ElkNode;
-  const out = await solve(graph, signal);
+  const solved = await Promise.all(groups.map((g) => solveGroup(view.entities.filter((e) => e.group === g.id), 0)));
+  const sizes = solved.map((r) => ({ w: r.w + FRAME_PAD * 2, h: r.h + FRAME_PAD * 2 + FRAME_TITLE_H }));
+  // Shelf packing: fill rows up to a target width, widest frames first within reading order kept by group order.
+  const area = sizes.reduce((a, z) => a + z.w * z.h, 0);
+  const rowMax = Math.max(Math.max(...sizes.map((z) => z.w)), Math.sqrt(area * 2.2));
   const cards = new Map<string, CardBox>();
-  for (const c of out.children ?? []) cards.set(c.id, { id: c.id, x: c.x ?? 0, y: c.y ?? 0, w: c.width ?? CARD_W, h: c.height ?? 0 });
+  const frames: FrameBox[] = [];
+  let x = MARGIN;
+  let y = MARGIN;
+  let rowH = 0;
   let width = 0;
-  let height = 0;
-  for (const c of cards.values()) {
-    width = Math.max(width, c.x + c.w);
-    height = Math.max(height, c.y + c.h);
-  }
-  return { width: width + MARGIN, height: height + MARGIN, frames: [], cards };
+  groups.forEach((g, i) => {
+    const z = sizes[i] as { w: number; h: number };
+    const r = solved[i] as { cards: Map<string, CardBox> };
+    if (x > MARGIN && x - MARGIN + z.w > rowMax) {
+      x = MARGIN;
+      y += rowH + FRAME_GAP;
+      rowH = 0;
+    }
+    frames.push({ id: g.id, label: g.label, x, y, w: z.w, h: z.h });
+    for (const c of r.cards.values()) cards.set(c.id, { ...c, x: c.x + x + FRAME_PAD, y: c.y + y + FRAME_TITLE_H + FRAME_PAD });
+    x += z.w + FRAME_GAP;
+    width = Math.max(width, x - FRAME_GAP);
+    rowH = Math.max(rowH, z.h);
+  });
+  return { width: width + MARGIN, height: y + rowH + MARGIN, frames, cards };
 }
 
 export interface LinkPath {
