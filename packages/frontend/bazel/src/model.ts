@@ -125,14 +125,28 @@ export function globRegex(pattern: string): RegExp {
   return new RegExp(`^${re}$`);
 }
 
+/** A label's leading `@` or `@@`, the repository name after it, and the rest (`//p:t`, `:t`, or nothing). */
+const LABEL_PARTS = /^@(@?)([^/:]*)(.*)$/;
+
 /**
- * A label that names the main repository, `@//p:t` or `@@//p:t`, or `@root//p:t` where root is one of
- * `mainRepos`, is the in-repository label `//p:t`. Any other label is returned as it is.
+ * The one place that decides whether a label names the main repository, and writes every label in a form the
+ * rest of the frontend reads. The main repository is `@//p:t` and `@@//p:t` (the empty name), or, with a single
+ * `@`, the apparent name in `mainRepos` (the root module's repo_name, or its module name when it has none):
+ * `@root//p:t` is `//p:t`, and the shorthand `@root` is `//:root`. `@@root//p:t` is a canonical external
+ * label, never the main repository. An external shorthand `@foo` is written `@foo//:foo`.
  */
 export function normalizeMainLabel(text: string, mainRepos: readonly string[] = []): string {
-  const m = /^@@?([^/]*)(\/\/.*)$/.exec(text);
-  if (m && (m[1] === "" || mainRepos.includes(m[1] ?? ""))) return m[2] ?? text;
-  return text;
+  const m = LABEL_PARTS.exec(text);
+  if (m === null) return text;
+  const canonical = m[1] === "@";
+  const repo = m[2] ?? "";
+  let rest = m[3] ?? "";
+  if (repo === "" && rest === "") return text;
+  const isMain = repo === "" || (!canonical && mainRepos.includes(repo));
+  if (rest === "") rest = `//:${repo}`;
+  else if (rest.startsWith(":")) rest = `//${rest}`;
+  if (isMain) return rest.startsWith("//") ? rest : text;
+  return `@${canonical ? "@" : ""}${repo}${rest}`;
 }
 
 /** A label to a target id, or to an external repository when it starts with @. */

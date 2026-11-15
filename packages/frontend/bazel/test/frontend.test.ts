@@ -844,3 +844,47 @@ describe("main-repository labels and label forms", () => {
     expect(externalIdOf(repoOf("@@+ext+foo//p") ?? "", ext)).toBe("@foo");
   });
 });
+
+describe("main-repository names and label shorthand", () => {
+  const withRepoName = 'module(name = "me", repo_name = "my_repo")';
+  const withoutRepoName = 'module(name = "me")';
+
+  it("takes the repo_name over the module name as the main repository's apparent name", () => {
+    expect(mainRepoNames(new Map([["MODULE.bazel", withRepoName]]))).toEqual(["my_repo"]);
+    expect(mainRepoNames(new Map([["MODULE.bazel", withoutRepoName]]))).toEqual(["me"]);
+  });
+
+  it("resolves @my_repo//a:b to //a:b, and does not treat @me//a:b as the main repository when repo_name is set", () => {
+    const mains = mainRepoNames(new Map([["MODULE.bazel", withRepoName]]));
+    expect(labelOf("@my_repo//a:b", "p", mains)).toEqual({ id: "//a:b" });
+    expect(labelOf("@me//a:b", "p", mains)).toEqual({ external: "@me//a:b" });
+  });
+
+  it("without repo_name, resolves @me//a:b to //a:b and the shorthand @me to //:me", () => {
+    const mains = mainRepoNames(new Map([["MODULE.bazel", withoutRepoName]]));
+    expect(labelOf("@me//a:b", "p", mains)).toEqual({ id: "//a:b" });
+    expect(labelOf("@me", "p", mains)).toEqual({ id: "//:me" });
+  });
+
+  it("resolves @@//a:b to //a:b", () => {
+    expect(labelOf("@@//a:b", "p")).toEqual({ id: "//a:b" });
+  });
+
+  it("does not resolve @@me//a:b as the main repository, even when me is the main repository name", () => {
+    expect(labelOf("@@me//a:b", "p", ["me"])).toEqual({ external: "@@me//a:b" });
+    const targets = parseBuildFile("app/BUILD", 'cc_binary(name = "app", srcs = [], deps = ["@@me//a:b"])', [], new Set(["app"]), ["me"]);
+    expect(targets[0]?.deps).toEqual([]);
+    expect(targets[0]?.externalDeps).toEqual(["@@me//a:b"]);
+  });
+
+  it("writes the external shorthand @foo as @foo//:foo, which maps to the bazel_dep foo", async () => {
+    expect(labelOf("@foo", "p")).toEqual({ external: "@foo//:foo" });
+    const ext = externalsOf({ "MODULE.bazel": 'module(name = "me")\nbazel_dep(name = "foo", version = "1.0")' });
+    expect(externalIdOf(repoOf("@foo") ?? "", ext)).toBe("@foo");
+    const deps = edgesOf(await extractFiles({
+      "MODULE.bazel": 'module(name = "me")\nbazel_dep(name = "foo", version = "1.0")',
+      "BUILD": 'cc_library(name = "a", srcs = [], deps = ["@foo"])',
+    })).filter((e) => e.kind === "packaging.dep-edge" && e.from === "//:a");
+    expect(deps.map((e) => e.to)).toEqual(["@foo"]);
+  });
+});
