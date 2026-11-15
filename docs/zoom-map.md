@@ -69,6 +69,20 @@ The Flow tab draws the execution canvas of the scope: program, threads, coroutin
 - For a folder or the project, the table of files sits below the canvas.
 - A focus carries its scope: `execFocus(scope, nodeId)` in `apps/web/src/zoom/execMap.ts`. A node id is unique only
   within one scope's scene. `MapSource.focusOf` turns a clicked node id into a focus.
+- Callers: a `◂ callers` button (`zm-callers-btn`, `components/zoom/CallersControl.tsx`) sits in a chart box's header
+  (left of its ×), in a nested frame's header (left of its ▾), and on a roots-only function card (top-right, when the
+  card has no chart open). It opens a callers box to the right of its source: a box listing one row per caller
+  (`mergeCallers` in `zoom/callers.ts` merges a call and a dispatch of one caller into one row, with its kind as a
+  badge). Each row's ▸ opens that caller's chart to the right of the row, with a beam, and that chart has its own
+  Callers button, so the chain walks up. The box is keyed `callers:<fnRef>` (`kind: "callers"` in `zoom/expand.ts`),
+  placed, reflowed and closed like a chart expansion; closing a box closes what hangs from it. The rows are fetched
+  with `api.getRefs` when the box opens, and the box grows to hold up to 12 rows plus a "+N more" row. A chart has
+  one right-hand child: the callers box hung from its header and a call step's callee replace each other, and two rows'
+  charts never sit side by side. Opening a card's chart moves the callers box hung from that card to the chart's
+  header (so closing the chart closes it too), unless the chart already has a box open to its right (a callee, or a
+  nested frame's callers box): the chart keeps it and the card's box closes. A box hung from a nested frame closes when the frame folds. A caller's chart
+  gets no async frame. Below about 0.8× the button shows only ◂, and below about 0.45× it is hidden. Not persisted
+  in the URL.
 - Retired: the Hierarchy and Entry points views, and the Execution lens tab. An old `lens-execution` link (under
   `view/` or `lenses/`) redirects to the flow tab for the same scope (`redirectFor` in `router.ts`). The lens itself
   stays for the CLI.

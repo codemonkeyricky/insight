@@ -11,7 +11,12 @@ import { CHART_FIT_MAX_K, CHART_HEAD, MORE_SUFFIX, ZOOM_SIZE, fitCamera, fitChar
 import { nameOfId, runtimeLabel, stepRuntime } from "../../flowTargets";
 import { hrefView } from "../../router";
 import { CHART_MIN_PX } from "../../zoom/chart";
-import { anchoredTo, expandCamera, isInPlace, calloutOf, closeExpansion, footprintOf, isNested, NARROW_VIEW_PX, openExpansion, ownerOf, REVEAL_MIN_K, refresh, revealCamera, rootBoxOf, sameFootprint, sceneCamera, setInline, SLOT_PAD, shiftAt, stepRect, type Expansion, type ExpandAnchor } from "../../zoom/expand";
+import { anchoredTo, CALLERS_CAP, callerRowRect, callersAt, chainHas, hangCallersFrom, hangsFromCallers, expandCamera, headerAnchor, isInPlace, calloutOf, closeExpansion, footprintOf, isNested, loadFunctionChart, NARROW_VIEW_PX, openExpansion, ownerOf, REVEAL_MIN_K, refresh, refusedCallersPlan, resizeCallers, revealCamera, rootBoxOf, sameFootprint, sceneCamera, setInline, SLOT_PAD, shiftAt, stepRect, stillOpen, syncCallerRows, toggleCallers, type Expansion, type ExpandAnchor } from "../../zoom/expand";
+import { callersKey, isCallersKey, refOfCallersKey, type CallerRow } from "../../zoom/callers";
+import { LatestLoad } from "../../zoom/latestLoad";
+import { CallersBox } from "./CallersBox";
+import { fileTarget, useCodeTarget } from "../../codeTarget";
+import { CALLERS_BTN_H, CALLERS_BTN_W, CALLERS_COMPACT_W, CallersButton, FULL_K, GLYPH_K } from "./CallersControl";
 import { calloutD } from "../../zoom/connector";
 import { popDelay } from "../../zoom/pop";
 import { displayName } from "../../zoom/names";
@@ -255,6 +260,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   const expRef = useRef<readonly Expansion[]>([]);
   /** The construct picked in an expansion's chart. */
   const [construct, setConstruct] = useState<Construct>();
+  /** Opens a file at a line in the Code pane: a callers box's module ("top level") row. */
+  const { showCode } = useCodeTarget();
   /** The off-map selection, when the reader selected a function the map does not draw (see selectFunction). */
   const [offMap, setOffMapState] = useState<OffMap>();
   /** The same selection, for the handlers and the async selects, which read it when they run. */
@@ -274,12 +281,24 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   const cameraRef = useRef<Camera>({ k: 1, x: 0, y: 0 });
   /** The selection's build. Its `nodeId` is the node the focus stands for. */
   const buildRef = useRef<MapBuild | undefined>(undefined);
+  /** The project and scope the map shows. A chart that loads after a click opens only while these still hold. */
+  const contextRef = useRef("");
+  const context = `${id}\u0001${charts?.scope ?? scope}`;
+  useEffect(() => {
+    contextRef.current = context;
+  }, [context]);
   /** The build as drawn (see `view`). Its placed boxes are what the pointer looks at. */
   const viewRef = useRef<MapBuild | undefined>(undefined);
   /** The focus the map shows (the selection). Its build's `nodeId` is the node it stands for. */
   const focusRef = useRef<string | undefined>(undefined);
   const boxesRef = useRef<{ id: string; x: number; y: number; w: number; h: number }[]>([]);
   const seqRef = useRef(0);
+  /** The latest chart load per parent (a chart's call steps, or a callers box's rows): a superseded load opens nothing. */
+  const loadsRef = useRef(new LatestLoad());
+  /** Set when an update removes boxes while the focus is in the map: after the commit, a lost focus goes to the stage. */
+  const refocusRef = useRef(false);
+  /** The callers each callers box shows, by its key, as it last reported them (see sizeCallers). */
+  const rowIdsRef = useRef(new Map<string, readonly string[]>());
   const miniDragRef = useRef(false);
   /** The side shift's state (see ShiftState). The spring starts at rest on the shift of the open details. */
   const shiftRef = useRef<ShiftState>({ base: () => 0, to: [], p: 1 });
@@ -382,6 +401,10 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
       }
     }
     const gone = expRef.current.filter((e) => !list.some((x) => x.fnId === e.fnId));
+    // A control of a box that closes (its ×, a row, a ▸, or a control of a box chained from it) unmounts with the box, and
+    // the focus would fall to the page, where the map's keys no longer reach. Whether the focus is in the map is noted now,
+    // before the box goes; the stage takes it back after the commit (see refocusIfLost).
+    if (gone.length > 0 && focusInMap()) refocusRef.current = true;
     expRef.current = list;
     setExpansions(list);
     retargetShift(list);
@@ -390,6 +413,22 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
       setLeaving((prev) => [...prev.filter((p) => !gone.some((g) => g.fnId === p.fnId)), ...gone]);
       window.setTimeout(() => setLeaving((prev) => prev.filter((p) => !gone.includes(p))), EXIT_CLOSE_MS);
     }
+  };
+
+  /** Whether the focus is on a control in the map (not the stage itself, not the Code pane or an input). */
+  const focusInMap = (): boolean => {
+    const stage = stageRef.current;
+    const active = typeof document === "undefined" ? null : document.activeElement;
+    return stage !== null && active !== null && active !== stage && stage.contains(active);
+  };
+
+  /**
+   * Gives the focus back to the stage when the control that had it was removed (the focus fell to the page), so the map's
+   * keys still reach it. Called after a commit, only when the focus was in the map just before.
+   */
+  const refocusIfLost = () => {
+    const now = document.activeElement;
+    if (now === null || now === document.body || !now.isConnected) stageRef.current?.focus({ preventScroll: true });
   };
 
   const setOffMap = (v: OffMap | undefined) => {
@@ -599,7 +638,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   const loadChart = async (fnId: string): Promise<FunctionFlow | undefined> => {
     if (charts === undefined) return undefined;
     try {
-      const f = await charts.store.chartOf(fnId);
+      const f = await loadFunctionChart(charts.store, fnId);
       return f === undefined || f.tooLarge || f.nodes.length === 0 ? undefined : f;
     } catch {
       return undefined;
@@ -656,6 +695,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
         if (chart !== undefined) {
           list = placeAll(b, expRef.current);
           list = openExpansion(list, ref, { kind: "box", nodeId: b.nodeId, rect: boxRect, inPlace: b.slotted === true }, chart, placeView(b));
+          // The callers box the card had open moves to the new chart's header: its rows and their charts follow it.
+          list = hangCallersFrom(list, ref, b.nodeId, placeView(b));
         }
       }
     }
@@ -713,20 +754,29 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
    * Opens the expansion of a call step's callee to the right of the step, and shows it. The step's rect is in the parent
    * expansion's chart units. Nothing else moves: the focus stays where it is.
    */
-  const openStep = async (fnId: string, node: FlowNode, callee: string, runtimeKind?: "thread" | "process") => {
+  const openStep = async (fnId: string, node: FlowNode, callee: string, runtimeKind?: "thread" | "process", started?: number) => {
     const b = buildRef.current;
     if (!b || !expRef.current.some((e) => e.fnId === fnId)) return;
+    const ctx = contextRef.current;
+    // A step opened from inlineStep carries the load it started (the click's); any other opening starts its own.
+    const token = started ?? loadsRef.current.start(fnId);
     const chart = await loadChart(callee);
-    if (chart === undefined) return;
-    // The step's callee replaces what is right of its function: the calls it had open are closed, except this one.
-    let list = placeAll(b, expRef.current);
-    for (const e of list) {
-      if (e.anchor.kind === "step" && e.anchor.fnId === fnId && e.fnId !== callee) list = closeExpansion(list, e.fnId);
-    }
+    // A later click on this chart (another step, or its Callers button) supersedes this load.
+    if (!loadsRef.current.isLatest(fnId, token)) return;
+    // The chart loads meanwhile: a project or scope that changed, a map laid out again for another focus, or a chart that
+    // closed, opens nothing. A relayout alone (a new build of the same focus) does not count.
+    const cur = buildRef.current;
+    if (chart === undefined || cur === undefined || !stillOpen(expRef.current, fnId, { context: ctx, path: b.path }, { context: contextRef.current, path: cur.path })) return;
+    // The step's callee replaces what is right of its function: openExpansion closes the calls it had open, except this one.
+    const list = placeAll(cur, expRef.current);
     const anchor: ExpandAnchor = { kind: "step", fnId, stepId: node.id, rect: { x: node.x, y: node.y, w: node.w, h: node.h } };
     const runtime = runtimeKind === undefined ? undefined : { kind: runtimeKind, label: runtimeLabel(runtimeKind, callee, displayName(chart.name, chart.id)) };
-    const next = openExpansion(list, callee, anchor, chart, placeView(b), runtime);
-    if (next === list) return;
+    const next = openExpansion(list, callee, anchor, chart, placeView(cur), runtime);
+    // Refused only when the callee is already open above this step (a cycle): it is revealed and selected, not ignored.
+    if (next === list) {
+      revealOpen(callee);
+      return;
+    }
     setExp(next);
     // The new detail is panned into view when it is off the stage (the camera zooms only for a detail too narrow to read).
     // It is read from the placed list: setExp may have laid the build out again (see there).
@@ -734,6 +784,102 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     if (opened !== undefined) moveTo(revealOf(cameraRef.current, opened, 0), true);
     // The code pane follows the chain: the callee is the last function clicked.
     if (opened !== undefined) void selectFunction(callee);
+  };
+
+  /** Moves the camera to an open expansion, by its id, and nothing else: a callers box is revealed this way without selecting it. */
+  const revealBox = (id: string) => {
+    const open = expRef.current.find((e) => e.fnId === id);
+    if (open !== undefined) moveTo(revealOf(cameraRef.current, open, 0), true);
+  };
+
+  /** Reveals an open expansion (the camera moves to it) and selects its function. For a function's own expansion only. */
+  const revealOpen = (fnId: string) => {
+    revealBox(fnId);
+    void selectFunction(fnId);
+  };
+
+  /**
+   * Opens the callers box of `ref` at `anchor` (a function box's right edge, or a chart's header, or a nested frame). A box
+   * already hung from this anchor closes (with what hangs from it). A box open at another anchor moves here, and does not
+   * close. A box that opens or moves is revealed, as a callee's expansion is. Nothing else moves: the focus stays. A move
+   * that would cycle (this anchor lies in the box's own chain) leaves the box where it is, reveals it and selects its function.
+   */
+  const toggleCallersOf = (ref: string, anchor: ExpandAnchor) => {
+    const b = buildRef.current;
+    if (!b) return;
+    const key = callersKey(ref);
+    const list = placeAll(b, expRef.current);
+    const wasAt = callersAt(list, ref, anchor);
+    const next = toggleCallers(list, ref, anchor, nameOfId(ref), placeView(b));
+    // Refused only for a cycle: the box is open above this anchor. It is revealed and its function selected.
+    if (next === list) {
+      // The box is revealed by its key; only its function is ever selected (a callers key is no function).
+      const plan = refusedCallersPlan(ref);
+      revealBox(plan.box);
+      void selectFunction(plan.select);
+      return;
+    }
+    // A box that opens or moves onto a chart replaces what is right of it: a callee still loading there would close the box,
+    // so that load is dropped. A box that closes, or a refused toggle, leaves the chart's loads alone.
+    if (!wasAt && anchor.kind === "step") loadsRef.current.start(anchor.fnId);
+    setExp(next);
+    if (!wasAt) {
+      const opened = expRef.current.find((e) => e.fnId === key);
+      if (opened !== undefined) moveTo(revealOf(cameraRef.current, opened, 0), true);
+    }
+  };
+
+  /**
+   * A callers box learned how many rows it lays out, and which callers they show (`ids`, undefined while they load): the box
+   * grows or shrinks to hold them, and the charts opened from its rows follow their callers' rows (see syncCallerRows).
+   */
+  const sizeCallers = (ref: string, lines: number, ids: readonly string[] | undefined) => {
+    if (ids !== undefined) rowIdsRef.current.set(callersKey(ref), ids);
+    const b = buildRef.current;
+    if (!b) return;
+    const resized = resizeCallers(expRef.current, ref, lines, placeView(b));
+    const next = ids === undefined ? resized : syncCallerRows(resized, ref, ids, placeView(b));
+    if (next !== expRef.current) setExp(next);
+  };
+
+  /**
+   * Opens the chart of a caller, from its row in a callers box: to the right of the row, with a beam from it. The other rows'
+   * charts of the box close, as a call step's callees do (openExpansion). A caller already open above the box (a recursion) is
+   * not opened again: its chart is revealed and its function selected. Its own Callers button continues the chain.
+   */
+  const openCallerChart = async (ref: string, row: CallerRow, index: number) => {
+    const b = buildRef.current;
+    const key = callersKey(ref);
+    if (!b || !expRef.current.some((e) => e.fnId === key)) return;
+    if (chainHas(expRef.current, key, row.id)) {
+      revealOpen(row.id);
+      return;
+    }
+    const ctx = contextRef.current;
+    const token = loadsRef.current.start(key);
+    const chart = await loadChart(row.id);
+    // A later click on another row of this box supersedes this load: the row clicked last opens, whichever loads last.
+    if (!loadsRef.current.isLatest(key, token)) return;
+    // The chart loads meanwhile: a project or scope that changed, a map laid out again for another focus, or a box that
+    // closed, opens and selects nothing.
+    const cur = buildRef.current;
+    if (chart === undefined || cur === undefined || !stillOpen(expRef.current, key, { context: ctx, path: b.path }, { context: contextRef.current, path: cur.path })) return;
+    // The rows may have changed while the chart loaded (a box that reopened shows its last rows, then the fresh ones): the
+    // chart opens at its caller's row as the box shows it now, and not at all when the row is gone.
+    const ids = rowIdsRef.current.get(key);
+    const at = ids === undefined ? index : ids.slice(0, CALLERS_CAP).indexOf(row.id);
+    if (at < 0) return;
+    const list = placeAll(cur, expRef.current);
+    const anchor: ExpandAnchor = { kind: "step", fnId: key, stepId: row.id, rect: callerRowRect(at) };
+    const next = openExpansion(list, row.id, anchor, chart, placeView(cur));
+    if (next === list) {
+      revealOpen(row.id);
+      return;
+    }
+    setExp(next);
+    const opened = expRef.current.find((e) => e.fnId === row.id);
+    if (opened !== undefined) moveTo(revealOf(cameraRef.current, opened, 0), true);
+    void selectFunction(row.id);
   };
 
   /**
@@ -746,6 +892,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   const selectFunction = async (fnId: string) => {
     const b = buildRef.current;
     if (!b) return;
+    // A callers box is no function: nothing places it, loads it or selects it.
+    if (isCallersKey(fnId)) return;
     const node = source.placeFunction?.(b, fnId);
     if (node !== undefined) {
       if (node === b.nodeId && offMapRef.current === undefined) return;
@@ -756,7 +904,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     const seq = ++seqRef.current;
     let fn: FunctionFlow | undefined;
     try {
-      fn = await charts.store.chartOf(fnId);
+      fn = await loadFunctionChart(charts.store, fnId);
     } catch {
       return;
     }
@@ -818,13 +966,15 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
       setExp(setInline(placeAll(b, expRef.current), fnId, node.id, undefined, placeView(b)));
       return;
     }
+    // A later click on this chart (another step, or its Callers button) supersedes this load: the click made last wins.
+    const token = loadsRef.current.start(fnId);
     const chart = await loadChart(callee);
-    if (chart === undefined) return;
+    if (chart === undefined || !loadsRef.current.isLatest(fnId, token)) return;
     const list = placeAll(b, expRef.current);
     const runtime = runtimeKind === undefined ? undefined : { kind: runtimeKind, label: runtimeLabel(runtimeKind, callee, displayName(chart.name, chart.id)) };
     const next = setInline(list, fnId, node.id, chart, placeView(b), runtime);
     if (next === list) {
-      if (chart.items === undefined || runtime !== undefined) void openStep(fnId, node, callee, runtimeKind);
+      if (chart.items === undefined || runtime !== undefined) void openStep(fnId, node, callee, runtimeKind, token);
       return;
     }
     setExp(next);
@@ -952,6 +1102,13 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   };
 
   // The side shift is written after each render, so the items React just drew take the shift they should have now.
+  // After the commit that removed the boxes setExp noted (see there): a focus that fell to the page goes back to the stage.
+  useLayoutEffect(() => {
+    if (!refocusRef.current) return;
+    refocusRef.current = false;
+    refocusIfLost();
+  }, [expansions]);
+
   useLayoutEffect(() => {
     const root = worldRef.current;
     if (root) writeShift(root, shiftRef.current);
@@ -1146,10 +1303,12 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
         // function is the callee of a chained expansion, the selection returns to the expansion it hangs from.
         const selectedRef = offMapRef.current?.selected.ref ?? b.node(b.nodeId)?.ref;
         setExp(closeExpansion(list, last.fnId));
-        if (last.anchor.kind === "box" && last.anchor.nodeId === b.nodeId && parent !== undefined) {
+        // A callers box is no detail of the selection: it closes alone, and the map does not go up a level.
+        if (last.kind !== "callers" && last.anchor.kind === "box" && last.anchor.nodeId === b.nodeId && parent !== undefined) {
           void show(source.focusOf?.(b, parent) ?? parent, true, true);
         } else if (last.anchor.kind === "step" && selectedRef === last.fnId) {
-          void selectFunction(last.anchor.fnId);
+          // A chart opened from a callers box returns the selection to the function whose callers they are.
+          void selectFunction(refOfCallersKey(last.anchor.fnId));
         }
         break;
       }
@@ -1314,6 +1473,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     view === undefined
       ? []
       : expansions.filter((e) => {
+          // A callers box, and a caller's chart opened from its row, are not part of the root box's thread.
+          if (e.kind === "callers" || hangsFromCallers(expansions, e)) return false;
           const root = rootBoxOf(expansions, e);
           return root !== undefined && source.asyncOf?.(view, e.fnId, root) === true;
         }).map((e) => e.fnId),
@@ -1428,6 +1589,12 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
                   small={mid}
                   card={flat}
                   rank={cardRank.get(it.id) ?? 0}
+                  {...(node.ref !== undefined && anchoredTo(expansions, it.id) === undefined
+                    ? {
+                        onCallers: () => toggleCallersOf(node.ref as string, { kind: "box", nodeId: it.id, rect: it.rect }),
+                        callersOpen: callersAt(expansions, node.ref as string, { kind: "box", nodeId: it.id }),
+                      }
+                    : {})}
                 />
               );
             })}
@@ -1454,18 +1621,43 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
                   {/* The entrance plays on this wrapper, not the group: the group carries the side shift as its transform. */}
                   <g className={isInPlace(e) ? "zm-expansion-motion is-inplace" : "zm-expansion-motion"}>
                     {asyncFns.has(e.fnId) && <AsyncFrame expansion={e} k={labelScale} />}
-                    <ExpansionShape
-                      id={id}
-                      scope={charts?.scope ?? scope}
-                      expansion={e}
-                      k={labelScale}
-                      selectedId={construct !== undefined && construct.ref === e.fnId ? construct.nodeId : undefined}
-                      onNodeClick={(n) => chartStep(e.fnId, n)}
-                      onNodeOpen={(n) => chartOpen(e.fnId, n)}
-                      onSelect={() => void selectFunction(e.fnId)}
-                      onClose={() => setExp(closeExpansion(expRef.current, e.fnId))}
-                      motion={motion}
-                    />
+                    {e.kind === "callers" ? (
+                      <CallersBox
+                        id={id}
+                        scope={charts?.scope ?? scope}
+                        expansion={e}
+                        k={labelScale}
+                        inChain={(fnId) => chainHas(expansions, e.fnId, fnId)}
+                        onClose={() => setExp(closeExpansion(expRef.current, e.fnId))}
+                        onOpen={(row, index) => void openCallerChart(refOfCallersKey(e.fnId), row, index)}
+                        onSelect={(row) => {
+                          // A function row selects its function; a module row opens its file at the line in the code pane.
+                          if (row.isFunction) void selectFunction(row.id);
+                          else showCode(fileTarget(row.file, row.line));
+                        }}
+                        onLines={(lines, ids) => sizeCallers(refOfCallersKey(e.fnId), lines, ids)}
+                        onFocusLost={refocusIfLost}
+                      />
+                    ) : (
+                      <ExpansionShape
+                        id={id}
+                        scope={charts?.scope ?? scope}
+                        expansion={e}
+                        k={labelScale}
+                        selectedId={construct !== undefined && construct.ref === e.fnId ? construct.nodeId : undefined}
+                        onNodeClick={(n) => chartStep(e.fnId, n)}
+                        onNodeOpen={(n) => chartOpen(e.fnId, n)}
+                        onSelect={() => void selectFunction(e.fnId)}
+                        onClose={() => setExp(closeExpansion(expRef.current, e.fnId))}
+                        onCallers={() => toggleCallersOf(e.fnId, headerAnchor(e))}
+                        callersOpen={callersAt(expansions, e.fnId, headerAnchor(e))}
+                        onNodeCallers={(n) => {
+                          if (n.target !== undefined) toggleCallersOf(n.target, { kind: "step", fnId: e.fnId, stepId: n.id, rect: { x: n.x, y: n.y, w: n.w, h: n.h } });
+                        }}
+                        callersOpenOf={(n) => n.target !== undefined && callersAt(expansions, n.target, { kind: "step", fnId: e.fnId, stepId: n.id })}
+                        motion={motion}
+                      />
+                    )}
                   </g>
                 </g>
               );
@@ -1473,7 +1665,11 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
             {leaving.map((e) => (
               <g key={`leave-${e.fnId}`} className="zm-expansion-group is-leaving" data-sx={e.pivot} aria-hidden="true">
                 <g className={isInPlace(e) ? "zm-expansion-motion is-inplace" : "zm-expansion-motion"}>
-                  <ExpansionShape id={id} scope={charts?.scope ?? scope} expansion={e} k={labelScale} selectedId={undefined} onNodeClick={() => false} onSelect={() => undefined} onClose={() => undefined} motion={false} />
+                  {e.kind === "callers" ? (
+                    <CallersBox id={id} scope={charts?.scope ?? scope} expansion={e} k={labelScale} closing inChain={() => false} onClose={() => undefined} onOpen={() => undefined} onSelect={() => undefined} onLines={() => undefined} />
+                  ) : (
+                    <ExpansionShape id={id} scope={charts?.scope ?? scope} expansion={e} k={labelScale} selectedId={undefined} onNodeClick={() => false} onSelect={() => undefined} onClose={() => undefined} motion={false} />
+                  )}
                 </g>
               </g>
             ))}
@@ -1620,6 +1816,8 @@ export function BoxShape({
   small = false,
   card = false,
   rank = 0,
+  onCallers,
+  callersOpen = false,
 }: {
   item: PlacedItem;
   node: MapNode;
@@ -1635,6 +1833,9 @@ export function BoxShape({
   card?: boolean;
   /** The card's place in reading order, which sets its pop-in delay (see zoom/pop.ts). */
   rank?: number;
+  /** Opens or closes the callers box of the card's function: a Callers button at its top-right. Absent, no button. */
+  onCallers?: () => void;
+  callersOpen?: boolean;
 }) {
   const { rect } = item;
   // The function's display name on the map (the full name stays in the tooltip).
@@ -1670,7 +1871,16 @@ export function BoxShape({
   if (card && !small && !bare) {
     // A card: its name alone, centred vertically, fitted to the card's width on screen.
     // Two characters of the budget go to the leading function glyph (ƒ), so the name stays inside the card.
-    const name = fitLabel(shown, Math.max(1, labelChars(rect.w * k, 8, 20) - 2));
+    // A card tall enough for it takes a Callers button at its top-right, and its name keeps clear of the button. The name
+    // comes first: when it would not fit whole beside the full button, the button is compact (the ◂ alone).
+    const showCallers = onCallers !== undefined && rect.h >= CALLERS_BTN_H + 12 && k >= GLYPH_K;
+    // The name's font is 13 px on screen until 11 world units grow past it (above about 1.2×), and a character takes about
+    // 0.6 of the font: the fit follows the font as it grows with the zoom.
+    const charPx = Math.max(8, 6.8 * k);
+    const nameIn = (room: number) => fitLabel(shown, Math.max(1, labelChars((rect.w - room) * k, charPx, 20) - 2));
+    const fullName = nameIn(showCallers ? CALLERS_BTN_W + 12 : 0);
+    const compactCallers = showCallers && (fullName !== shown || k < FULL_K);
+    const name = compactCallers ? nameIn(CALLERS_COMPACT_W + 12) : fullName;
     return (
       <g className={`zm-box zm-${node.kind} zm-card ${lineClass(line)}${holdsChart ? " zm-has-chart" : ""}${chartOpen ? " expanded" : ""}`} data-sx={rect.x} data-fid={item.id} onClick={() => onOpen(item.id)}>
         <title>{node.detail !== undefined ? `${node.label} (${node.detail})` : node.title || node.label}</title>
@@ -1683,6 +1893,9 @@ export function BoxShape({
             </text>
           )}
         </g>
+        {showCallers && (
+          <CallersButton x={rect.x + rect.w - CALLERS_BTN_W - 8} y={rect.y + 6} name={shown} open={callersOpen} onClick={onCallers} k={k} compact={compactCallers} />
+        )}
       </g>
     );
   }

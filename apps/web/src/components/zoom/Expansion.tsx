@@ -10,7 +10,9 @@ import { connectorClass } from "../../zoom/flowMotion";
 import { CALLOUT_INSET, detailLetter, type CalloutGeometry, type Expansion } from "../../zoom/expand";
 import { displayName } from "../../zoom/names";
 import { fitLabel, labelChars } from "../../zoom/lod";
-import { FlowChart } from "../FlowChart";
+import { FlowChart, type FlowNodeCallers } from "../FlowChart";
+import { CALLERS_BTN_H, CALLERS_BTN_W, CallersButton, callersChipW } from "./CallersControl";
+import { keyActivates } from "./keys";
 
 interface Props {
   /** The project, for the chart's links. */
@@ -29,6 +31,14 @@ interface Props {
   /** Selects the expansion's function: a click on its header. */
   onSelect: () => void;
   onClose: () => void;
+  /** Opens or closes the callers box of the function: the header's Callers button. Absent, the button is not drawn. */
+  onCallers?: () => void;
+  /** Whether the callers box of the function is open (the button shows it). */
+  callersOpen?: boolean;
+  /** Opens or closes the callers of a nested frame's callee (see FlowChart). */
+  onNodeCallers?: FlowNodeCallers;
+  /** Whether the callers box of a nested frame's callee is open. */
+  callersOpenOf?: (node: FlowNode) => boolean;
   /** Whether the chart's edges march and pulse (the Flow motion choice; see FlowChart). */
   motion?: boolean;
 }
@@ -65,14 +75,17 @@ export function CalloutShape({ ends, closing = false, reduced = false }: { ends:
   );
 }
 
-export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClick, onNodeOpen, onSelect, onClose, motion = true }: Props) {
+export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClick, onNodeOpen, onSelect, onClose, onCallers, callersOpen = false, onNodeCallers, callersOpenOf, motion = true }: Props) {
   const { chart, x, y, w, h } = expansion;
   // The title is the function's display name; the tooltip and the accessible name keep the full name. The detail's letter
   // stays in the accessible name only.
   const runtime = expansion.runtime;
   // A box on another thread or in another process names its runtime first: "Worker · print.worker", then the function.
   const own = displayName(chart.name, chart.id);
-  const label = fitLabel(runtime === undefined ? own : runtime.label.endsWith(own) ? runtime.label : `${runtime.label} · ${own}`, labelChars(w * k));
+  // The header's Callers button takes the room left of the close × (CHART_HEAD square), so the name is fitted to what is left.
+  const chipW = onCallers !== undefined ? callersChipW(k) : 0;
+  const headRoom = onCallers !== undefined ? CHART_HEAD + 4 + (chipW > 0 ? chipW + 8 : 0) : 0;
+  const label = fitLabel(runtime === undefined ? own : runtime.label.endsWith(own) ? runtime.label : `${runtime.label} · ${own}`, labelChars((w - headRoom) * k));
   return (
     <g className={`zm-expansion${runtime !== undefined ? " is-runtime" : ""}`} role="group" aria-label={`Detail ${detailLetter(expansion.index)}: ${chart.name}`}>
       <title>{chart.name}</title>
@@ -87,12 +100,22 @@ export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClic
           </text>
         )}
       </g>
+      {onCallers !== undefined && (
+        <CallersButton x={x + w - CHART_HEAD - 4 - CALLERS_BTN_W} y={y + (CHART_HEAD - CALLERS_BTN_H) / 2} name={chart.name} open={callersOpen} onClick={onCallers} k={k} />
+      )}
       <g
         className="zm-expansion-close"
         role="button"
+        tabIndex={0}
         aria-label={`Close the chart of ${chart.name}`}
         onClick={(ev) => {
           ev.stopPropagation();
+          onClose();
+        }}
+        onKeyDown={(ev) => {
+          if (!keyActivates(ev.key)) return;
+          ev.stopPropagation();
+          ev.preventDefault();
           onClose();
         }}
       >
@@ -104,7 +127,7 @@ export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClic
       </g>
       {chartShown(chart.width * k) && (
         <g transform={`translate(${x + CHART_PAD} ${y + CHART_HEAD + CHART_PAD})`} onClick={(ev) => ev.stopPropagation()}>
-          <FlowChart id={id} fn={chart} scope={scope} onNodeClick={onNodeClick} onNodeOpen={onNodeOpen} selectedId={selectedId} motion={motion} />
+          <FlowChart id={id} fn={chart} scope={scope} onNodeClick={onNodeClick} onNodeOpen={onNodeOpen} onCallers={onNodeCallers} callersOpenOf={callersOpenOf} k={k} selectedId={selectedId} motion={motion} />
         </g>
       )}
     </g>
