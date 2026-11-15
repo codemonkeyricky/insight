@@ -1,4 +1,5 @@
-import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -562,6 +563,50 @@ describe("index cache across retries", () => {
     expect(Math.max(...strings.map((s) => s.length))).toBeLessThan(longest);
     expect([...index.units.values()].every((u) => !("text" in u))).toBe(true);
   });
+});
+
+describe("deeply nested sources", () => {
+  const fresh = (): string => mkdtempSync(join(tmpdir(), "sv-deep-"));
+  const findingsOf = (records: IRRecord[]) => records.flatMap((r) => ("finding" in r ? [r.finding] : []));
+
+  it("a 5000-term expression does not fail its neighbours", async () => {
+    releaseProject();
+    const dir = fresh();
+    writeFileSync(join(dir, "deep.sv"), `module deep(input logic a, output logic x);\n  assign x = ${Array(5000).fill("a").join(" | ")};\nendmodule\n`);
+    writeFileSync(join(dir, "ok.sv"), `module ok;\nendmodule\n`);
+    const before = indexStats.builds;
+    const batches = await extractDir(dir, ["deep.sv", "ok.sv"]);
+    expect(indexStats.builds - before).toBe(1);
+    const byFile = new Map(batches.map((b) => [b.file, b.records]));
+    expect(byFile.has("deep.sv")).toBe(true);
+    expect(byFile.has("ok.sv")).toBe(true);
+    expect(nodesOf(byFile.get("ok.sv") ?? []).some((n) => n.id === "ok.sv#ok")).toBe(true);
+    expect(nodesOf(byFile.get("deep.sv") ?? []).some((n) => n.id === "deep.sv#deep")).toBe(true);
+    // The index-pass guard must not fire for a file that parses.
+    expect(findingsOf(allRecords(batches)).filter((f) => f.message.includes("index pass failed"))).toEqual([]);
+  }, 120_000);
+
+  it("a 1000-arm else-if chain emits one branch per arm", async () => {
+    releaseProject();
+    const dir = fresh();
+    let src = "module chain(input logic [10:0] s, output logic [10:0] y);\n  always_comb begin\n    if (s == 0) y = 0;\n";
+    for (let i = 1; i < 1000; i++) src += `    else if (s == ${i}) y = ${i};\n`;
+    src += "    else y = 0;\n  end\nendmodule\n";
+    writeFileSync(join(dir, "chain.sv"), src);
+    const batches = await extractDir(dir, ["chain.sv"]);
+    const branches = allRecords(batches).flatMap((r) => ("node" in r && r.node.kind === "flow.branch" ? [r.node] : []));
+    expect(branches.length).toBeGreaterThanOrEqual(1000);
+  }, 120_000);
+
+  it("a 1500-arm conditional-operator chain parses and emits", async () => {
+    releaseProject();
+    const dir = fresh();
+    let expr = "0";
+    for (let i = 1499; i >= 0; i--) expr = `s == ${i} ? ${i} : ${expr}`;
+    writeFileSync(join(dir, "ternary.sv"), `module ternary(input logic [11:0] s, output logic [11:0] y);\n  assign y = ${expr};\nendmodule\n`);
+    const batches = await extractDir(dir, ["ternary.sv"]);
+    expect(nodesOf(allRecords(batches)).some((n) => n.id === "ternary.sv#ternary")).toBe(true);
+  }, 120_000);
 });
 
 /** Walks the whole corpus through the frontend and returns the records. Used by the corpus checks. */

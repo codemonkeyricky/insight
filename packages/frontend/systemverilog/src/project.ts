@@ -78,6 +78,11 @@ export interface Unit {
   scanned: ScannedDef[];
   /** Declared type name per scope (module, class, package or "" at file level), then per variable. Null when declarations disagree. */
   varTypes: Map<string, Map<string, string | null>>;
+  /**
+   * Message of the error that stopped the index pass on this file, when one was thrown. The file keeps whatever
+   * was indexed before the error, and the emitter reports the failure as a warning finding on the file.
+   */
+  indexError?: string;
 }
 
 export interface Project {
@@ -159,18 +164,20 @@ function baseOf(n: SyntaxNode): BaseRef | undefined {
 /** ERROR and MISSING nodes under a tree that has errors. Each one is returned once, at its top. */
 export function errorNodes(root: SyntaxNode): SyntaxNode[] {
   const out: SyntaxNode[] = [];
-  const visit = (n: SyntaxNode): void => {
+  // Explicit stack, so a deep tree does not overflow the call stack. Children are pushed in reverse, so they pop in source order.
+  const work: SyntaxNode[] = [root];
+  while (work.length > 0) {
+    const n = work.pop() as SyntaxNode;
     if (n.type === "ERROR" || n.isMissing) {
       out.push(n);
-      return;
+      continue;
     }
-    if (!n.hasError) return;
-    for (let i = 0; i < n.childCount; i++) {
+    if (!n.hasError) continue;
+    for (let i = n.childCount - 1; i >= 0; i--) {
       const c = n.child(i);
-      if (c) visit(c);
+      if (c) work.push(c);
     }
-  };
-  visit(root);
+  }
   return out;
 }
 
@@ -183,6 +190,11 @@ const addFn = (p: Project, scope: string, ref: FnRef): void => {
 /** Indexes the definitions, functions, DPI imports, class bases and per-file ids of one unit. */
 function collectDecls(unit: Unit, root: SyntaxNode, p: Project, imports: Set<string>): void {
   const rel = unit.rel;
+  // Explicit stack in place of recursion. Children are queued in reverse, so they run in source order, each before its later siblings.
+  const work: Array<[SyntaxNode, string | undefined, string[], boolean]> = [];
+  const children = (kids: SyntaxNode[], scope: string | undefined, gen: string[], inPackage: boolean): void => {
+    for (let i = kids.length - 1; i >= 0; i--) work.push([kids[i] as SyntaxNode, scope, gen, inPackage]);
+  };
   const visit = (n: SyntaxNode, scope: string | undefined, gen: string[], inPackage: boolean): void => {
     const hdl = DECL_HDL[n.type];
     if (hdl !== undefined) {
@@ -197,7 +209,7 @@ function collectDecls(unit: Unit, root: SyntaxNode, p: Project, imports: Set<str
           const base = baseOf(n);
           if (base && !p.bases.has(name)) p.bases.set(name, base);
         }
-        for (const c of n.namedChildren) visit(c, name, [], hdl === "package");
+        children(n.namedChildren, name, [], hdl === "package");
         return;
       }
     }
@@ -236,12 +248,16 @@ function collectDecls(unit: Unit, root: SyntaxNode, p: Project, imports: Set<str
     }
     if (n.type === "generate_block") {
       const g = genNameOf(n);
-      for (const c of n.namedChildren) visit(c, scope, g ? [...gen, g] : gen, inPackage);
+      children(n.namedChildren, scope, g ? [...gen, g] : gen, inPackage);
       return;
     }
-    for (const c of n.namedChildren) visit(c, scope, gen, inPackage);
+    children(n.namedChildren, scope, gen, inPackage);
   };
-  visit(root, undefined, [], false);
+  work.push([root, undefined, [], false]);
+  while (work.length > 0) {
+    const [n, scope, gen, inPackage] = work.pop() as [SyntaxNode, string | undefined, string[], boolean];
+    visit(n, scope, gen, inPackage);
+  }
 }
 
 /**
@@ -263,19 +279,24 @@ function collectVars(unit: Unit, root: SyntaxNode): void {
     const m = dt && /^(?:virtual\s+)?(?:interface\s+)?(?:\w+::)?(\w+)/.exec(dt.text.trim());
     return m?.[1] ?? null;
   };
+  // Explicit stack in place of recursion, queued in reverse so the walk stays in source order.
+  const work: Array<[SyntaxNode, string]> = [];
+  const children = (kids: SyntaxNode[], scope: string): void => {
+    for (let i = kids.length - 1; i >= 0; i--) work.push([kids[i] as SyntaxNode, scope]);
+  };
   const visit = (n: SyntaxNode, scope: string): void => {
     const hdl = DECL_HDL[n.type];
     if (hdl !== undefined) {
       const name = declName(n);
       if (name) {
-        for (const c of n.namedChildren) visit(c, name);
+        children(n.namedChildren, name);
         return;
       }
     }
     if (SUBROUTINE_TYPES.has(n.type)) {
       const sub = subroutineOf(n);
       const s = sub?.scope ?? scope;
-      for (const c of n.namedChildren) visit(c, s);
+      children(n.namedChildren, s);
       return;
     }
     if (n.type === "data_declaration") {
@@ -303,9 +324,13 @@ function collectVars(unit: Unit, root: SyntaxNode): void {
       }
       return;
     }
-    for (const c of n.namedChildren) visit(c, scope);
+    children(n.namedChildren, scope);
   };
-  visit(root, "");
+  work.push([root, ""]);
+  while (work.length > 0) {
+    const [n, scope] = work.pop() as [SyntaxNode, string];
+    visit(n, scope);
+  }
 }
 
 /** A definition line found by scanning the text of a file the grammar could not parse. */
@@ -386,10 +411,15 @@ export async function indexProject(texts: Map<string, string>): Promise<Project>
     const root = tree.rootNode;
     const unit: Unit = { rel, errorCount: root.hasError ? errorNodes(root).length : 0, ids: new Ids(), scanned: [], varTypes: new Map() };
     try {
-      const imports = new Set<string>();
-      collectDecls(unit, root, p, imports);
-      collectVars(unit, root);
-      p.importsByFile.set(rel, [...imports].sort());
+      // A failure in one file must not fail the project: the error is recorded on its unit and the next file is indexed.
+      try {
+        const imports = new Set<string>();
+        collectDecls(unit, root, p, imports);
+        collectVars(unit, root);
+        p.importsByFile.set(rel, [...imports].sort());
+      } catch (e) {
+        unit.indexError = e instanceof Error ? e.message : String(e);
+      }
     } finally {
       tree.delete();
     }

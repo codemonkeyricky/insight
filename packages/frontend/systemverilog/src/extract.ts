@@ -62,15 +62,17 @@ function hasSuperNewTokens(n: SyntaxNode): boolean {
 /** The processes directly owned by a module: those not inside a nested definition. */
 function ownProcesses(n: SyntaxNode): SyntaxNode[] {
   const out: SyntaxNode[] = [];
-  const visit = (c: SyntaxNode): void => {
+  // Explicit stack in place of recursion. Children are queued in reverse, so the processes come out in source order.
+  const work: SyntaxNode[] = [...n.namedChildren].reverse();
+  while (work.length > 0) {
+    const c = work.pop() as SyntaxNode;
     if (PROCESS_TYPES.includes(c.type)) {
       out.push(c);
-      return;
+      continue;
     }
-    if (OWNER_TYPES.has(c.type)) return;
-    for (const k of c.namedChildren) visit(k);
-  };
-  for (const k of n.namedChildren) visit(k);
+    if (OWNER_TYPES.has(c.type)) continue;
+    for (const k of [...c.namedChildren].reverse()) work.push(k);
+  }
   return out;
 }
 
@@ -398,8 +400,11 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
     }
   };
 
+  // The walk is an explicit stack, not recursion, so a deeply nested tree does not overflow the call stack.
+  // visitChildren queues a node's children in reverse, so they pop in source order, each before its later siblings.
+  const work: Array<[SyntaxNode, Frame]> = [];
   const visitChildren = (n: SyntaxNode, f: Frame): void => {
-    for (const c of n.namedChildren) visit(c, f);
+    for (const c of [...n.namedChildren].reverse()) work.push([c, f]);
   };
 
   const visit = (n: SyntaxNode, f: Frame): void => {
@@ -723,7 +728,22 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
     }
   }
 
-  visit(root, { container: rel, gen: [] });
+  work.push([root, { container: rel, gen: [] }]);
+  while (work.length > 0) {
+    const [n, f] = work.pop() as [SyntaxNode, Frame];
+    visit(n, f);
+  }
+
+  // The index pass failed on this file. Its facts are partial, so the run says so rather than failing.
+  if (unit.indexError !== undefined) {
+    records.push({
+      finding: {
+        severity: "warning",
+        message: `index pass failed: ${unit.indexError}`,
+        provenance: { frontend: FRONTEND_ID, confidence: "exact" },
+      },
+    });
+  }
 
   if (errors.length > 0) {
     const first = errors[0];
