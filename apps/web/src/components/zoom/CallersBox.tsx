@@ -3,11 +3,13 @@
 // kinds of its edges, and a ▸ that opens the caller's chart to the right of the row (see ZoomMap.openCallerChart). A caller
 // already open above it (a recursion) shows ↺ instead: its ▸ selects that chart rather than opening it again. The rows are
 // fetched when the box opens; the box reports how many rows it shows, so the box grows to hold them. Every control is a
-// keyboard control too (Tab, then Enter or Space).
+// keyboard control too (Tab, then Enter or Space). A caller is a call, dispatch, spawn, or a reference that invokes the
+// function (new, JSX, handler). When no caller is listed but the function is passed as a value somewhere, the box says
+// it is called through, and how many places pass it (valueRefCount).
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { CHART_HEAD, CHART_PAD } from "@insight/flow";
 import { CALLOUT_INSET, callerRowRect, callersLines, CALLERS_CAP, CALLER_ROW_H, CALLERS_W, type Expansion } from "../../zoom/expand";
-import { mergeCallers, refOfCallersKey, type CallerRow } from "../../zoom/callers";
+import { mergeCallers, refOfCallersKey, valueRefCount, type CallerRow } from "../../zoom/callers";
 import { readLambdas } from "../../zoom/lambdaPref";
 import { displayName } from "../../zoom/names";
 import { fitLabel, labelChars } from "../../zoom/lod";
@@ -40,7 +42,8 @@ interface Props {
   onFocusLost?: () => void;
 }
 
-type Loaded = { key: string; rows?: CallerRow[]; error?: string };
+/** `valueRefs` is how many places pass the function as a value (not counted in `rows`), shown when no caller is listed. */
+type Loaded = { key: string; rows?: CallerRow[]; valueRefs?: number; error?: string };
 
 /**
  * What each box last showed, by project, scope, function and the Lambdas choice: its rows, its error, or that it was
@@ -78,7 +81,7 @@ export function CallersBox({ id, scope, expansion, k, closing = false, inChain, 
     let cancelled = false;
     api.getRefs(id, scope, ref).then(
       (refs) => {
-        if (!cancelled) setLoaded({ key, rows: mergeCallers(refs.calledBy, lambdas) });
+        if (!cancelled) setLoaded({ key, rows: mergeCallers(refs.calledBy, lambdas), valueRefs: valueRefCount(refs.calledBy, lambdas) });
       },
       (e: unknown) => {
         if (!cancelled) setLoaded({ key, error: e instanceof Error ? e.message : String(e) });
@@ -94,8 +97,9 @@ export function CallersBox({ id, scope, expansion, k, closing = false, inChain, 
   const shown: Loaded = closing ? (lastShown.get(key) ?? { key }) : loaded?.key === key ? loaded : (recall(key) ?? { key });
   useEffect(() => {
     if (!closing) remember(key, shown);
-  }, [closing, key, shown.rows, shown.error]);
+  }, [closing, key, shown.rows, shown.valueRefs, shown.error]);
   const rows = shown.rows;
+  const valueRefs = shown.valueRefs ?? 0;
   const lines = callersLines(rows?.length);
   const ids = rows?.map((r) => r.id);
   const idsKey = ids?.join("\0");
@@ -162,7 +166,10 @@ export function CallersBox({ id, scope, expansion, k, closing = false, inChain, 
         {rows === undefined && (
           <CallersNote y={0} rowW={rowW} text={shown.error !== undefined ? `Callers are not available: ${shown.error}` : "Loading callers…"} />
         )}
-        {rows !== undefined && rows.length === 0 && (
+        {rows !== undefined && rows.length === 0 && valueRefs > 0 && (
+          <CallersNote y={0} rowW={rowW} text="No direct callers" note={`Passed as a value from ${valueRefs} place${valueRefs === 1 ? "" : "s"}; called through it.`} />
+        )}
+        {rows !== undefined && rows.length === 0 && valueRefs === 0 && (
           <CallersNote y={0} rowW={rowW} text="No callers found" note="Entry point, or called from outside the index." />
         )}
         {shownRows.map((r, i) => (
