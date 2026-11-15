@@ -682,7 +682,7 @@ export function execModelLegacy(nodes: readonly IRNode[], edges: readonly IREdge
   );
   const browserFns = entryFns.filter((f) => f.htmlEntry);
   const nodeFns = entryFns
-    .filter((f) => !f.htmlEntry && f.nodeEntry && !importedFiles.has(f.file ?? ""))
+    .filter((f) => !f.htmlEntry && f.nodeEntry && (f.packageEntry || !importedFiles.has(f.file ?? "")))
     .sort((a, b) => byText(a.file ?? "", b.file ?? ""));
   const entryMode = browserFns.length > 0 || nodeFns.length > 0;
   const closureOf = (start: readonly string[]): string[] => [...reachBy(start, (f) => importsOf.get(f) ?? [])].sort(byText);
