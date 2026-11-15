@@ -32,9 +32,9 @@
         "frontend-cpp"
       ],
       "filesScanned": 121,
-      "filesWithRecords": 4,
+      "filesWithRecords": 5,
       "filesWithErrors": 0,
-      "nodes": 5,
+      "nodes": 6,
       "edges": 3
     },
     {
@@ -43,9 +43,9 @@
         "frontend-cpp"
       ],
       "filesScanned": 121,
-      "filesWithRecords": 8,
+      "filesWithRecords": 10,
       "filesWithErrors": 0,
-      "nodes": 22,
+      "nodes": 45,
       "edges": 0
     },
     {
@@ -56,7 +56,7 @@
       "filesScanned": 121,
       "filesWithRecords": 84,
       "filesWithErrors": 0,
-      "nodes": 923,
+      "nodes": 1517,
       "edges": 0
     },
     {
@@ -71,6 +71,17 @@
       "filesWithErrors": 0,
       "nodes": 76,
       "edges": 1185
+    },
+    {
+      "facet": "state",
+      "providers": [
+        "frontend-cpp"
+      ],
+      "filesScanned": 121,
+      "filesWithRecords": 15,
+      "filesWithErrors": 0,
+      "nodes": 56,
+      "edges": 0
     },
     {
       "facet": "structure",
@@ -133,6 +144,11 @@
       "id": "lens-lock-order",
       "status": "ok",
       "findings": 0
+    },
+    {
+      "id": "lens-states",
+      "status": "ok",
+      "findings": 0
     }
   ],
   "lockOrder": {
@@ -144,21 +160,25 @@
   "concurrency": {
     "asyncFunctions": 0,
     "awaits": 0,
-    "spawns": 5,
+    "spawns": 6,
     "channelOps": 0,
     "asyncWithoutAwait": 0
   },
   "recordsByKind": {
     "calls.call": 1840,
     "calls.reference": 71,
+    "concurrency.spawn-process": 1,
     "concurrency.spawn-thread": 5,
     "concurrency.spawns": 3,
     "effects.clock.read": 12,
     "effects.env.read": 7,
-    "effects.fs.write": 1,
+    "effects.fs.read": 8,
+    "effects.fs.write": 2,
+    "effects.os.call": 14,
     "effects.proc.exec": 2,
     "finding": 21,
     "flow.branch": 536,
+    "flow.branch-arm": 594,
     "flow.loop": 366,
     "flow.switch": 12,
     "flow.throw": 8,
@@ -168,6 +188,9 @@
     "packaging.external": 12,
     "packaging.include": 889,
     "packaging.target-contains": 199,
+    "state.holder": 21,
+    "state.test": 3,
+    "state.write": 32,
     "structure.file": 225,
     "structure.function": 1067,
     "structure.namespace": 191,
