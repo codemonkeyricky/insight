@@ -170,7 +170,9 @@ run("pnpm", ["--filter", "@insight/web", "exec", "vite", "build", "--outDir", st
 // 3. One pnpm deploy of @insight/hosted (production dependencies, hoisted, no symlinks), then copied into each function.
 const deployDir = mkdtempSync(join(tmpdir(), "insight-hosted-deploy-"));
 try {
-  run("pnpm", ["--filter", "@insight/hosted", "deploy", "--prod", "--config.node-linker=hoisted", deployDir]);
+  // force-legacy-deploy: pnpm 10 refuses a deploy without injected workspace packages, and its legacy deploy still installs
+  // the lockfile's versions. (pnpm 9 re-resolves, which can pull a release that needs require(esm), as cookie 2 does.)
+  run("pnpm", ["--filter", "@insight/hosted", "deploy", "--prod", "--config.node-linker=hoisted", "--config.force-legacy-deploy=true", deployDir]);
   const modules = join(deployDir, "node_modules");
   // Every .bin folder, nested ones included: a Function runs no package binaries, and they are symlinks into this temporary
   // folder. cpSync's dereference does not reach nested links on every Node version, so they would dangle in the bundle.
@@ -230,6 +232,8 @@ for (const fn of FUNCTIONS) {
   const checks = [
     ["handler import", ["--input-type=module", "-e", `await import(${JSON.stringify(pathToFileURL(join(dest, "handler.mjs")).href)})`]],
     ["fastify require", ["-e", `require(${JSON.stringify(join(dest, "node_modules", "fastify"))})`]],
+    // fastify loads light-my-request only when a request is injected, so a broken copy passes the require above.
+    ["light-my-request require", ["-e", `require(${JSON.stringify(join(dest, "node_modules", "light-my-request"))})`]],
   ];
   for (const [label, args] of checks) {
     try {
@@ -238,7 +242,7 @@ for (const fn of FUNCTIONS) {
       fail(`runtime guard failed (${label}) for ${fn.dir}: the Function does not load under the Vercel Node runtime. Check for an ESM-only dependency (require(esm) is disabled there).`);
     }
   }
-  console.log(`runtime guard ok: ${fn.dir} (handler import, fastify require with require(esm) disabled)`);
+  console.log(`runtime guard ok: ${fn.dir} (handler import, fastify and light-my-request require with require(esm) disabled)`);
 }
 
 // 4. The routing: real files first, then the API rewrites (each sends its route name as ?route=, so the Function does not
