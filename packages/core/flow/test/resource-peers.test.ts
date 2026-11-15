@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ExecModel, ExecResource, ExecThread } from "../src/exec-model.js";
+import { threadLabelOf } from "../src/exec-scene.js";
 import { withResourcePeers } from "../src/resource-peers.js";
 import type { FlowNode, FunctionFlow } from "../src/types.js";
 
@@ -71,3 +72,31 @@ describe("withResourcePeers", () => {
     expect(withResourcePeers(chart, "src/a.ts#worker", model([]))).toBe(chart);
   });
 });
+
+describe("withResourcePeers: the resource and the thread label", () => {
+  it("finds a lock's peers from its resource, though its label is clipped and its name is long", () => {
+    const name = "q".repeat(70);
+    const m = model([res("lock", name, [site("src/a.ts#consume", "acquire", 6), site("src/a.ts#worker", "acquire", 2)])]);
+    const row = { ...node("1", "sync", `🔒 ${name.slice(0, 45)}…`), title: `🔒 ${name}`, resource: { kind: "lock" as const, name } } as FlowNode;
+    const out = withResourcePeers(chartOf([row]), "src/a.ts#worker", m);
+    expect(out.nodes[0]?.title).toBe(`🔒 ${name} · also taken on: Thread · consume`);
+  });
+
+  it("falls back to the title, not the label, when a row has no resource", () => {
+    const name = "q".repeat(70);
+    const m = model([res("lock", name, [site("src/a.ts#consume", "acquire", 6), site("src/a.ts#worker", "acquire", 2)])]);
+    const row = { ...node("1", "sync", `🔒 ${name.slice(0, 45)}…`), title: `🔒 ${name}` } as FlowNode;
+    const out = withResourcePeers(chartOf([row]), "src/a.ts#worker", m);
+    expect(out.nodes[0]?.title).toBe(`🔒 ${name} · also taken on: Thread · consume`);
+  });
+
+  it("labels a Worker thread the same in the scene and on its peers' rows", () => {
+    const worker = { ...thread("spawn:1", "thread", ["src/a.ts#consume"]), spawn: { script: "src/worker.js", api: "Worker" } } as unknown as ExecThread;
+    const m = { ...model([res("lock", "q", [site("src/a.ts#consume", "acquire", 6), site("src/a.ts#worker", "acquire", 2)])]), threads: [thread("main:a", "main", ["src/a.ts#worker"]), worker] } as unknown as ExecModel;
+    const fns = new Map((m.functions ?? []).map((f) => [f.id, f] as const));
+    expect(threadLabelOf(worker, fns)).toBe("Worker");
+    const out = withResourcePeers(chartOf([node("1", "sync", "🔒 q")]), "src/a.ts#worker", m);
+    expect(out.nodes[0]?.title).toBe("🔒 q · also taken on: Worker");
+  });
+});
+

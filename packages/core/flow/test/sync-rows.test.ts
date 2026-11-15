@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { IREdge, IRNode } from "@insight/ir";
 import { couplingChart, couplingFacts, type Item } from "../src/index.js";
+import { measure } from "../src/layout.js";
 
 // Synchronisation and channel rows, lock frames, and their conc coupling. The IR is built by hand (no frontend): one file,
 // functions as `structure.function` nodes, their facts as children of those functions, and calls as `calls.call` edges.
@@ -214,3 +215,56 @@ describe("sync rows and lock frames", () => {
     expect(aw?.t === "step" && aw.title).toBe("await (other coroutines may run here)");
   });
 });
+
+describe("lock frames that cross, and what they count", () => {
+  it("frames no pair of locks that cross, and keeps both as plain rows in source order", () => {
+    const nodes: IRNode[] = [
+      fn("cross", 10, 20),
+      lockAcquire("cross", 11, "a"),
+      lockAcquire("cross", 12, "b"),
+      write("cross", 13, "x"),
+      lockRelease("cross", 14, "a"),
+      write("cross", 15, "y"),
+      lockRelease("cross", 16, "b"),
+    ];
+    const items = itemsOf(nodes, [], "cross");
+    expect(items.some((i) => i.t === "fork")).toBe(false);
+    expect(labels(items)).toEqual(["🔒 a", "🔒 b", "write · x", "🔓 a", "write · y", "🔓 b"]);
+  });
+
+  it("still frames locks that nest, with the inner one inside the outer", () => {
+    const nodes: IRNode[] = [
+      fn("nest", 10, 20),
+      lockAcquire("nest", 11, "a"),
+      lockAcquire("nest", 12, "b"),
+      write("nest", 13, "x"),
+      lockRelease("nest", 14, "b"),
+      lockRelease("nest", 15, "a"),
+    ];
+    const outer = forkOf(itemsOf(nodes, [], "nest"), 0);
+    expect(outer.role).toBe("lock");
+    expect(labels(outer.arms[0]?.body ?? [])).toEqual(["fork:lock", "🔓 a"]);
+  });
+
+  it("does not count a function's lock frame as a try", () => {
+    const nodes: IRNode[] = [fn("hold", 10, 20), lockAcquire("hold", 11, "m"), write("hold", 12, "x"), lockRelease("hold", 13, "m")];
+    const items = itemsOf(nodes, [], "hold");
+    expect(items.some((i) => i.t === "fork" && i.role === "lock")).toBe(true);
+    expect(measure(items).tries).toBe(0);
+  });
+
+  it("keeps the (shared) suffix on a lock frame's footprint entry, as a lone acquire row keeps it", () => {
+    const nodes: IRNode[] = [
+      fn("hold", 10, 20),
+      fact("hold:acq", fid("hold"), "sync", "sync.lock-acquire", 11, { lock: "queue_mu", mode: "shared" }),
+      write("hold", 12, "push_back"),
+      lockRelease("hold", 14, "queue_mu"),
+    ];
+    const ix = couplingFacts(nodes, []);
+    const f = ix.facts.get(fid("hold"));
+    if (!f) throw new Error("no facts for hold");
+    const { info } = couplingChart(fid("hold"), f.items, ix.modules, ix.footprints);
+    expect(info.footprint.entries.map((e) => e.label)).toContain("lock queue_mu (shared)");
+  });
+});
+

@@ -390,8 +390,9 @@ const OP_SITES: ReadonlySet<string> = new Set(["sync.condvar", "sync.semaphore",
 
 /**
  * The resources one IR node touches. A lock or channel names its resource in one attribute. A condvar or semaphore is
- * named by `name`, else `api`; one with a `lock` attribute also operates on that lock. An atomic is named by `lock`,
- * else `api`, and is skipped when neither is set. A node with no resource identity gives nothing.
+ * named by `name`, else `api`; one with a `lock` attribute also operates on that lock. An atomic is named by `lock`
+ * alone: with none it is `<dynamic>`, listed but never paired, since an unnamed atomic shares nothing it can prove.
+ * A node with no resource identity gives nothing.
  */
 function sitePartsOf(n: IRNode): SitePart[] {
   const api = strAttr(n.attrs, "api");
@@ -405,8 +406,8 @@ function sitePartsOf(n: IRNode): SitePart[] {
   const op = pick(strAttr(n.attrs, "op"), SYNC_OPS);
   if (op === undefined) return [];
   if (n.kind === "sync.atomic-op") {
-    const name = nonEmpty(strAttr(n.attrs, "lock")) ?? nonEmpty(api);
-    return name === undefined ? [] : [withApi({ kind: "atomic", name, op })];
+    const name = nonEmpty(strAttr(n.attrs, "lock")) ?? DYNAMIC_NAME;
+    return [withApi({ kind: "atomic", name, op })];
   }
   const name = nonEmpty(strAttr(n.attrs, "name")) ?? nonEmpty(api);
   if (name === undefined) return [];
@@ -415,6 +416,9 @@ function sitePartsOf(n: IRNode): SitePart[] {
   if (lock !== undefined) parts.push(withApi({ kind: "lock", name: lock, op }));
   return parts;
 }
+
+/** The name of a resource the IR could not resolve. Scene edges never pair it, as for an unresolved channel. */
+const DYNAMIC_NAME = "<dynamic>";
 
 const nonEmpty = (s: string | undefined): string | undefined => (s === undefined || s === "" ? undefined : s);
 

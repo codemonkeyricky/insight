@@ -52,17 +52,17 @@ describe("execModel: condvars, semaphores and atomics", () => {
     expect(model.stats).toMatchObject({ condvars: 1, semaphores: 0, atomics: 0 });
   });
 
-  it("makes a semaphore and an atomic resources, and skips an atomic with neither a lock nor an api", () => {
+  it("makes a semaphore and an atomic resources, and names an atomic with no lock <dynamic>", () => {
     const nodes = [
       fnNode("src/m.ts", "main", 0),
       syncNode("src/m.ts", 1, "src/m.ts#main", "sync.semaphore", { op: "acquire", name: "slots" }),
       syncNode("src/m.ts", 2, "src/m.ts#main", "sync.atomic-op", { op: "op", lock: "ctr" }),
       syncNode("src/m.ts", 3, "src/m.ts#main", "sync.atomic-op", { op: "op" }),
-      syncNode("src/m.ts", 4, "src/m.ts#main", "sync.atomic-op", { op: "wait", api: "Atomics.wait" }),
+      syncNode("src/m.ts", 4, "src/m.ts#main", "sync.atomic-op", { op: "op", api: "std::atomic::fetch_add" }),
     ];
     const model = execModel(nodes, [], "src");
     expect(model.resources.map((r) => [r.id, r.kind])).toEqual([
-      ["atomic:Atomics.wait", "atomic"],
+      ["atomic:<dynamic>", "atomic"],
       ["atomic:ctr", "atomic"],
       ["semaphore:slots", "semaphore"],
     ]);
@@ -243,5 +243,29 @@ describe("buildExecScene: named sync edges", () => {
     const cut = keepScene(scene, new Set(["prog:P>z"]));
     expect(cut.nodes.has("prog:P")).toBe(true);
     expect(cut.edges).toEqual([]);
+  });
+});
+
+describe("buildExecScene: atomics pair only by the variable they name", () => {
+  /** A fetch_add on a variable (`lock`), or on one with no name when `lock` is undefined. */
+  const atomicOn = (file: string, line: number, parent: string, lock: string | undefined) =>
+    syncNode(file, line, parent, "sync.atomic-op", { op: "op", api: "std::atomic::fetch_add", ...(lock !== undefined ? { lock } : {}) });
+  /** Main does a fetch_add on `mine`, then spawns a worker that does one on `theirs`. */
+  const twoThreads = (mine: string | undefined, theirs: string | undefined) => {
+    const nodes = [fnNode("src/m.ts", "main", 0), atomicOn("src/m.ts", 1, "src/m.ts#main", mine), spawnNode("src/m.ts", 3, "src/m.ts#main"), fnNode("src/w.ts", "work", 0), atomicOn("src/w.ts", 2, "src/w.ts#work", theirs)];
+    const model = execModel(nodes, [spawnEdge("src/m.ts", 3, "src/w.ts#work")], "src");
+    return syncEdges(buildExecScene(model));
+  };
+
+  it("gives no sync edge between two threads' fetch_add on different variables", () => {
+    expect(twoThreads("x", "y")).toEqual([]);
+  });
+
+  it("gives a sync edge between two threads' fetch_add on the same variable", () => {
+    expect(twoThreads("x", "x")).toHaveLength(1);
+  });
+
+  it("gives no sync edge between two atomics whose variable is unknown", () => {
+    expect(twoThreads(undefined, undefined)).toEqual([]);
   });
 });

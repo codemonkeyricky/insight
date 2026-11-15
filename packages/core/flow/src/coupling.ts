@@ -260,7 +260,7 @@ function collect(list: readonly Item[], caught: boolean, M: string | undefined, 
         break;
       case "fork":
         // A lock frame's head is the acquire it replaces.
-        if (item.role === "lock") add(mine, { cls: "conc", label: `lock ${item.lock ?? ""}`.trim() });
+        if (item.role === "lock") add(mine, { cls: "conc", label: item.text ?? `lock ${item.lock ?? ""}`.trim() });
         for (const a of item.arms) collect(a.body, armCaught(item, a, caught), M, modules, mine, sites);
         break;
       case "loop":

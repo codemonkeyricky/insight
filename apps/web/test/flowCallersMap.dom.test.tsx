@@ -317,6 +317,34 @@ describe("unfolding a coupling fold", () => {
     expect(getRefs).not.toHaveBeenCalled();
   });
 
+  it("keeps a sync row's resource peers after the fold opens", async () => {
+    // The map annotates each chart it loads, as MapSource.annotateChart does: a sync row gets a peer title.
+    const annotated = { ...source, annotateChart: (_b: MapBuild, _id: string, c: FunctionFlow): FunctionFlow => ({ ...c, nodes: c.nodes.map((n) => (n.role === "sync" ? { ...n, title: `${n.label} · also taken on: Thread · G` } : n)) }) };
+    const fold = { t: "step" as const, role: "marker" as const, label: "⋯ 1 local", foldId: "F1", fold: [{ t: "step" as const, role: "call" as const, label: "a()" }] };
+    const items = [{ t: "step" as const, role: "sync" as const, label: "🔒 m" }, fold];
+    const withSync = (): FunctionFlow => {
+      const chart = layoutFunction({ id: "F", name: "F", async: false, items });
+      return { ...chart, coupling: { module: "m", footprint: { entries: [], modules: [], escape: false }, summary: "io 1", chart, rows: { all: 2, coupling: 2 } } };
+    };
+    chartOf.mockImplementation(async () => withSync());
+    render(<ZoomMap id="p" source={annotated} scope="" charts={charts()} flat hint={false} />);
+    await waitFor(() => expect(document.querySelector('[data-fid="nF"]')).not.toBeNull());
+    fireEvent.click(document.querySelector('[data-fid="nF"]')!);
+    await waitFor(() => expect(document.querySelector('[data-fold="F1"]')).not.toBeNull());
+    fireEvent.keyDown(document.querySelector('[data-fold="F1"]')!, { key: "Enter" });
+    await waitFor(() => expect(document.querySelector('[data-fold="F1"].flow-fold-open')).not.toBeNull());
+    expect(document.body.innerHTML).toContain("🔒 m · also taken on: Thread · G");
+  });
+
+  it("still draws the folded chart when annotating it throws", async () => {
+    const throwing = { ...source, annotateChart: (): FunctionFlow => { throw new Error("annotate failed"); } };
+    chartOf.mockImplementation(async () => foldedChart("F", false));
+    render(<ZoomMap id="p" source={throwing} scope="" charts={charts()} flat hint={false} />);
+    await waitFor(() => expect(document.querySelector('[data-fid="nF"]')).not.toBeNull());
+    fireEvent.click(document.querySelector('[data-fid="nF"]')!);
+    await waitFor(() => expect(document.querySelector('[data-fold="F1"]')).not.toBeNull());
+  });
+
   it("requests the references when its chart has a post step (control)", async () => {
     chartOf.mockImplementation(async () => foldedChart("F", true));
     getRefs.mockResolvedValue({ calledBy: [] });
