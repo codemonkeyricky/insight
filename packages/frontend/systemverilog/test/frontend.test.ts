@@ -815,6 +815,13 @@ describe("package declared in several files", () => {
   });
 });
 
+describe("plugin manifest", () => {
+  it("declares the four source globs as its inputs", () => {
+    const manifest = JSON.parse(readFileSync(join(here, "..", "insight-plugin.json"), "utf8")) as { inputs?: unknown };
+    expect(manifest.inputs).toEqual(["**/*.v", "**/*.sv", "**/*.svh", "**/*.vh"]);
+  });
+});
+
 describe("system task effects", () => {
   it("a $fopen whose mode is a variable is a write, marked as an unknown mode", async () => {
     const batches = await extractDir(join(fixturesDir, "fopen"), ["mode.sv"]);
