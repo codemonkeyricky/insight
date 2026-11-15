@@ -8,7 +8,7 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type Keyb
 import { select } from "d3-selection";
 import { zoom, zoomIdentity, type D3ZoomEvent, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
 import { CHART_FIT_MAX_K, CHART_HEAD, MORE_SUFFIX, ZOOM_SIZE, fitCamera, fitChartCamera, visibleWorld, type Camera, type FlowNode, type FlowSpan, type FunctionFlow, type PlacedItem, type Rect } from "@insight/flow";
-import { nameOfId, runtimeLabel, stepRuntime } from "../../flowTargets";
+import { isPostStep, nameOfId, runtimeLabel, stepRuntime } from "../../flowTargets";
 import { hrefView } from "../../router";
 import { CHART_MIN_PX } from "../../zoom/chart";
 import { anchoredTo, CALLERS_CAP, callerRowRect, callersAt, chainHas, hangCallersFrom, hangsFromCallers, expandCamera, headerAnchor, isInPlace, calloutOf, closeExpansion, footprintOf, isNested, loadFunctionChart, NARROW_VIEW_PX, openExpansion, ownerOf, REVEAL_MIN_K, refresh, refusedCallersPlan, resizeCallers, revealCamera, rootBoxOf, sameFootprint, sceneCamera, setInline, SLOT_PAD, shiftAt, stepRect, stillOpen, syncCallerRows, toggleCallers, toggleFold, type Expansion, type ExpandAnchor } from "../../zoom/expand";
@@ -976,7 +976,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     const flow = await loadChart(fnId);
     const source = flow?.coupling?.chart;
     if (flow === undefined || source === undefined) return;
-    await charts?.store.loadMessages(fnId);
+    // Receivers are read only when the function posts messages: a chart with no post step needs no references request.
+    if (flow.nodes.some(isPostStep)) await charts?.store.loadMessages(fnId);
     if (!loadsRef.current.isLatest(fnId, token)) return;
     // The build and the expansions are read now, after the awaits: the folds are those open at this moment.
     const cur = buildRef.current;

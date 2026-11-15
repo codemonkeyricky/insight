@@ -4,13 +4,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { fireEvent, render, screen, cleanup } from "@testing-library/react";
-import { layoutFunction, unfoldChart, type FunctionFlow } from "@insight/flow";
+import { layoutFunction, type FunctionFlow } from "@insight/flow";
 import { stepAction } from "../src/zoom/stepAction";
 import { isPostStep } from "../src/flowTargets";
 import { DETAIL_KEY, readDetail, writeDetail } from "../src/zoom/detailPref";
 import { LayersPanel, type LayerState } from "../src/components/sheet/LayersPanel";
 import { ZoomStore } from "../src/zoom/scene";
-import { foldsAfter, refold, toggleFold, type Expansion } from "../src/zoom/expand";
+import { refold, toggleFold, type Expansion } from "../src/zoom/expand";
 import { FlowChart, couplingClassOf } from "../src/components/FlowChart";
 import { CouplingSection, type ListBase } from "../src/components/zoom/ExecFunctionPanel";
 
@@ -211,10 +211,8 @@ describe("fold re-anchoring and refold", () => {
     const store = new ZoomStore("p", "coupling");
     (store as unknown as { receivers: Map<string, Promise<{ id: string; name: string }[]>> }).receivers.set("m#run", Promise.resolve([{ id: "w#onmsg", name: "onmsg" }]));
     const e = { fnId: "m#run", anchor: { kind: "box", nodeId: "n1", rect: { x: 0, y: 0, w: 10, h: 10 } }, chart: flow, base: flow } as unknown as Expansion;
-    const folds = foldsAfter([e], "m#run", "F1");
-    if (folds === undefined) throw new Error("expected the fold to open");
-    const chart = await store.withMessages("m#run", unfoldChart(source, new Set(folds), flow.coupling));
-    const opened = refold([e], "m#run", folds, chart, undefined);
+    await store.loadMessages("m#run");
+    const opened = toggleFold([e], "m#run", "F1", source, undefined, flow.coupling, (c) => store.messagesOf("m#run", c));
     const post = opened[0]!.chart.nodes.find((n) => isPostStep(n));
     expect(post?.target).toBe("w#onmsg");
     expect(opened[0]!.chart.coupling?.summary).toBe("io 1");
