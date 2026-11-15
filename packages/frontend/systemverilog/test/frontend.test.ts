@@ -856,6 +856,22 @@ describe("include matching", () => {
   });
 });
 
+describe("an include that names a dropped file", () => {
+  const dir = join(fixturesDir, "include_dropped");
+  const rels = ["a/pkg.sv", "a/cfg.v", "a/user.sv", "b/cfg.v"];
+
+  it("pkg's include of a dropped a/cfg.v does not link b/cfg.v, and pkg::f() does not resolve into it", async () => {
+    const texts = new Map(rels.map((r) => [r, readFileSync(join(dir, r), "utf8")]));
+    const project = await buildProject(texts);
+    expect(project.units.has("a/cfg.v")).toBe(false);
+    expect(project.includedIn.get("b/cfg.v") ?? []).toEqual([]);
+    const batches = await extractDir(dir, rels);
+    const callee = edgesOf(allRecords(batches)).find((e) => e.kind === "calls.call" && e.attrs?.callee === "pkg::f");
+    expect(callee).toBeDefined();
+    expect(JSON.stringify(callee?.to)).not.toContain("b/cfg.v");
+  });
+});
+
 describe("package declared in several files", () => {
   it("an import of a package that two files declare is a candidate set of both, heuristic", async () => {
     const edges = edgesOf(allRecords(await extractDir(join(fixturesDir, "package_twice"), ["cfg_a.sv", "cfg_b.sv", "user.sv"])));

@@ -580,7 +580,7 @@ export async function indexProject(texts: Map<string, string>): Promise<Project>
     if (unit.errorCount > 0) scans.set(rel, scanCandidates(text));
   }
   for (const unit of p.units.values()) registerScanned(unit, scans.get(unit.rel) ?? [], p);
-  linkIncludes(p);
+  linkIncludes(p, [...texts.keys()].sort());
   adoptIncludedFunctions(p);
   return p;
 }
@@ -588,18 +588,18 @@ export async function indexProject(texts: Map<string, string>): Promise<Project>
 /**
  * Maps each file a package includes to that package (see Project.includedIn). The include names a file relative to
  * the including file's directory first. Failing that, it names a file whose path ends with its text, but only when
- * exactly one project file does.
+ * exactly one project file does. The match is taken over every SV path, as the resolver sees them. A match that is
+ * not an indexed unit (a file dropped as not HDL) links nothing, and no other file is tried in its place.
  */
-function linkIncludes(p: Project): void {
-  const rels = [...p.units.keys()].sort();
-  const index = indexIncludes(rels);
+function linkIncludes(p: Project, allRels: string[]): void {
+  const index = indexIncludes(allRels);
   // Each include resolved to its project file, per including file, in source order.
   const resolved = new Map<string, Array<{ site: IncludeSite; target: string }>>();
   for (const unit of p.units.values()) {
     const list: Array<{ site: IncludeSite; target: string }> = [];
     for (const site of unit.includes) {
       const target = includeTarget(index, unit.rel, site.text);
-      if (target !== undefined && target !== unit.rel) list.push({ site, target });
+      if (target !== undefined && target !== unit.rel && p.units.has(target)) list.push({ site, target });
     }
     resolved.set(unit.rel, list);
   }
