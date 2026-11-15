@@ -6,7 +6,8 @@ import type { Project } from "./extract.js";
 /**
  * Data facts: module-level variables, globals written through globalThis/window/self, and class statics (data.variable),
  * and the reads and writes of them (data.read, data.write). A reference is matched by the checker's symbol, so a shadowing
- * local never matches. A variable declared in another project file keeps that file's id.
+ * local never matches. A variable declared in another project file keeps that file's id. A global is one project-wide
+ * variable (see GLOBAL_FILE), and a read of one is recorded only when project code writes it.
  */
 
 export interface DataHelpers {
@@ -35,12 +36,20 @@ interface VarInfo {
   storage: "module" | "class-static";
   exported: boolean;
   mutable: boolean;
+  /** A `const` bound to a mutable container. It is mutable only when some function writes it (the flow layer decides). */
+  constBound?: boolean;
 }
 
 /** Names whose property writes count as mutating the receiver. */
 const MUTATORS = new Set(["set", "delete", "clear", "push", "pop", "shift", "unshift", "splice", "sort", "reverse", "fill", "add"]);
 /** Globals whose properties are module-wide state. */
 const GLOBAL_HEADS = new Set(["globalThis", "window", "self"]);
+/**
+ * The file part of a TypeScript global's id. A global is one variable for the whole project: `globalThis.x`, `window.x` and
+ * `self.x` written from any file share the node `<global>#global:x`, which the first file that writes it emits (the linker
+ * keeps the first of duplicate nodes). A global has no owning file or module.
+ */
+const GLOBAL_FILE = "<global>";
 
 const isAssignOp = (k: ts.SyntaxKind) => k >= ts.SyntaxKind.FirstAssignment && k <= ts.SyntaxKind.LastAssignment;
 const isIncDec = (k: ts.SyntaxKind) => k === ts.SyntaxKind.PlusPlusToken || k === ts.SyntaxKind.MinusMinusToken;
@@ -95,7 +104,8 @@ function topLevelVar(d: ts.VariableDeclaration): VarInfo | undefined {
   // A const bound to a function or class is a function, not data.
   if (isConst && isFunctionValue(d.initializer)) return undefined;
   const exported = hasMod(stmt, ts.SyntaxKind.ExportKeyword) || exportedLocals(d.getSourceFile()).has(name);
-  return { name, storage: "module", exported, mutable: isConst ? constIsMutable(d.initializer) : true };
+  const container = isConst && constIsMutable(d.initializer);
+  return { name, storage: "module", exported, mutable: isConst ? container : true, ...(container ? { constBound: true } : {}) };
 }
 
 /** A `static` field of a named class. Undefined otherwise. A static of an exported class counts as exported. */
@@ -115,7 +125,76 @@ function staticVar(p: ts.PropertyDeclaration): VarInfo | undefined {
 
 /** The id of a variable declared in file `rel`. */
 const varId = (rel: string, info: { name: string; className?: string }): string => `${rel}#var:${info.className ? `${info.className}.` : ""}${info.name}`;
-const globalId = (rel: string, name: string): string => `${rel}#global:${name}`;
+const globalId = (name: string): string => `${GLOBAL_FILE}#global:${name}`;
+
+/** The parentheses and type assertions (`as`, `satisfies`, `!`) around an expression, looked through. */
+function unwrapExpr(e: ts.Expression): ts.Expression {
+  let x = e;
+  while (ts.isParenthesizedExpression(x) || ts.isAsExpression(x) || ts.isSatisfiesExpression(x) || ts.isNonNullExpression(x)) x = x.expression;
+  return x;
+}
+
+/** The property name of `globalThis.x`, `window.x` or `self.x` when the head is not a local of this program. Undefined otherwise. */
+function globalPropertyName(ref: ts.PropertyAccessExpression, checker: ts.TypeChecker): string | undefined {
+  const head = unwrapExpr(ref.expression);
+  if (!ts.isIdentifier(head) || !GLOBAL_HEADS.has(head.text)) return undefined;
+  const sym = checker.getSymbolAtLocation(head);
+  if (sym?.declarations?.some((d) => !d.getSourceFile().isDeclarationFile)) return undefined;
+  return ref.name.text;
+}
+
+const writtenGlobalsCache = new WeakMap<Project, Set<string>>();
+/**
+ * The names of every global property that some file writes. A read of a global is recorded only when some file writes it, so
+ * reads of host properties (`window.location`) that no project code writes add no variables.
+ */
+function writtenGlobals(project: Project): Set<string> {
+  const hit = writtenGlobalsCache.get(project);
+  if (hit !== undefined) return hit;
+  const names = new Set<string>();
+  const visit = (n: ts.Node): void => {
+    if (ts.isPropertyAccessExpression(n)) {
+      const name = globalPropertyName(n, project.checker);
+      if (name !== undefined && accessOf(n) !== undefined) names.add(name);
+    }
+    ts.forEachChild(n, visit);
+  };
+  for (const rel of project.rels) {
+    const sf = project.sourceFor(rel);
+    if (sf !== undefined) visit(sf);
+  }
+  writtenGlobalsCache.set(project, names);
+  return names;
+}
+
+/** How a reference is used: a write (with its access kind), or undefined for a read. A write through the reference's own properties or elements writes the reference (`state.cache.set(…)`, `a.b.c = 1`, `x[i].f = v`). */
+function accessOf(ref: ts.Expression): Access | undefined {
+  let node: ts.Node = ref;
+  let p: ts.Node = node.parent;
+  // Set once the reference is a link of a property or element chain: a write to the chain then writes the root.
+  let deep = false;
+  for (;;) {
+    while (ts.isParenthesizedExpression(p) || ts.isAsExpression(p) || ts.isSatisfiesExpression(p) || ts.isNonNullExpression(p)) {
+      node = p;
+      p = p.parent;
+    }
+    if (ts.isBinaryExpression(p) && p.left === node && isAssignOp(p.operatorToken.kind)) {
+      if (deep) return "mutate";
+      return p.operatorToken.kind === ts.SyntaxKind.EqualsToken ? "assign" : "update";
+    }
+    if (!deep && (ts.isForInStatement(p) || ts.isForOfStatement(p)) && p.initializer === node) return "assign";
+    if ((ts.isPrefixUnaryExpression(p) || ts.isPostfixUnaryExpression(p)) && isIncDec(p.operator)) return deep ? "mutate" : "update";
+    if ((ts.isPropertyAccessExpression(p) || ts.isElementAccessExpression(p)) && p.expression === node) {
+      const gp = p.parent;
+      if (ts.isPropertyAccessExpression(p) && ts.isCallExpression(gp) && gp.expression === p && MUTATORS.has(p.name.text)) return "mutate";
+      deep = true;
+      node = p;
+      p = gp;
+      continue;
+    }
+    return undefined;
+  }
+}
 
 export function emitData(h: DataHelpers): DataOutput {
   const { project, rel, sf, provenance } = h;
@@ -157,6 +236,7 @@ export function emitData(h: DataHelpers): DataOutput {
         storage: info.storage,
         exported: info.exported,
         mutable: info.mutable,
+        ...(info.constBound === true ? { constBound: true } : {}),
       },
       span: h.spanOf(decl),
       provenance,
@@ -177,37 +257,6 @@ export function emitData(h: DataHelpers): DataOutput {
       span,
       provenance: how === "mutate" ? { frontend: provenance.frontend, confidence: "heuristic" } : provenance,
     });
-  };
-
-  /** How a reference is used: a write (with its access kind) or a read. */
-  const accessOf = (ref: ts.Expression): Access | undefined => {
-    let node: ts.Node = ref;
-    let p: ts.Node = node.parent;
-    while (ts.isParenthesizedExpression(p)) {
-      node = p;
-      p = p.parent;
-    }
-    if (ts.isBinaryExpression(p) && p.left === node && isAssignOp(p.operatorToken.kind)) {
-      return p.operatorToken.kind === ts.SyntaxKind.EqualsToken ? "assign" : "update";
-    }
-    if ((ts.isForInStatement(p) || ts.isForOfStatement(p)) && p.initializer === node) return "assign";
-    if ((ts.isPrefixUnaryExpression(p) || ts.isPostfixUnaryExpression(p)) && isIncDec(p.operator)) return "update";
-    // A write through the reference's own properties or elements, or a mutating method call on it.
-    if ((ts.isPropertyAccessExpression(p) || ts.isElementAccessExpression(p)) && p.expression === node) {
-      const gp = p.parent;
-      if (ts.isPropertyAccessExpression(p) && ts.isCallExpression(gp) && gp.expression === p && MUTATORS.has(p.name.text)) return "mutate";
-      if (ts.isBinaryExpression(gp) && gp.left === p && isAssignOp(gp.operatorToken.kind)) return "mutate";
-      if ((ts.isPrefixUnaryExpression(gp) || ts.isPostfixUnaryExpression(gp)) && isIncDec(gp.operator)) return "mutate";
-    }
-    return undefined;
-  };
-
-  /** A global property write: globalThis.x, window.x or self.x, when the head is not a local of this program. */
-  const globalWrite = (ref: ts.PropertyAccessExpression): { head: string; name: string } | undefined => {
-    if (!ts.isIdentifier(ref.expression) || !GLOBAL_HEADS.has(ref.expression.text)) return undefined;
-    const sym = checker.getSymbolAtLocation(ref.expression);
-    if (sym?.declarations?.some((d) => !d.getSourceFile().isDeclarationFile)) return undefined;
-    return { head: ref.expression.text, name: ref.name.text };
   };
 
   /** The variable a reference names, by the checker's symbol, when it is a project variable. */
@@ -240,21 +289,24 @@ export function emitData(h: DataHelpers): DataOutput {
     if (ts.isPropertyAccessExpression(ref) && ts.isTypeNode(parent)) return;
 
     if (ts.isPropertyAccessExpression(ref)) {
-      const g = globalWrite(ref);
-      if (g !== undefined) {
+      const name = globalPropertyName(ref, checker);
+      if (name !== undefined) {
         const how = accessOf(ref);
-        if (how === undefined) return;
-        const id = globalId(rel, g.name);
-        pushNode({
-          id,
-          facet: "data",
-          kind: "data.variable",
-          parent: rel,
-          attrs: { name: g.name, qualifiedName: `${g.head}.${g.name}`, storage: "global", exported: true, mutable: true },
-          span: h.spanOf(ref),
-          provenance,
-        });
-        pushEdge(enclosing(ref), id, "data.write", ref, how);
+        // A read of a global counts only when project code writes it (see writtenGlobals).
+        if (how === undefined && !writtenGlobals(project).has(name)) return;
+        const id = globalId(name);
+        if (how !== undefined) {
+          pushNode({
+            id,
+            facet: "data",
+            kind: "data.variable",
+            parent: GLOBAL_FILE,
+            attrs: { name, qualifiedName: `${(unwrapExpr(ref.expression) as ts.Identifier).text}.${name}`, storage: "global", exported: true, mutable: true },
+            span: h.spanOf(ref),
+            provenance,
+          });
+        }
+        pushEdge(enclosing(ref), id, how === undefined ? "data.read" : "data.write", ref, how);
         return;
       }
     }

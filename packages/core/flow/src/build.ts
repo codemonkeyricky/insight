@@ -23,6 +23,11 @@ export interface StateVariable {
   node: IRNode;
   module: string | undefined;
   writers: string[];
+  /**
+   * Whether the variable is mutable. A variable the frontend marks `constBound` (a const bound to a container) is mutable
+   * only when some function writes it, so a never-written const table is not state.
+   */
+  mutable: boolean;
 }
 
 /** The project's data.variable nodes by id. A state row looks its variable up here, so the variable may be in another file. */
@@ -585,7 +590,7 @@ export function factsForFile(file: string, nodes: Iterable<IRNode>, edges: Itera
     if ((e.kind !== "data.read" && e.kind !== "data.write") || e.span?.file !== file || state === undefined) continue;
     const varId = typeof e.to === "string" ? e.to : undefined;
     const sv = varId === undefined ? undefined : state.get(varId);
-    if (varId === undefined || sv === undefined || sv.node.attrs.mutable !== true) continue;
+    if (varId === undefined || sv === undefined || !sv.mutable) continue;
     const parent = e.from === `${file}#(module)` ? file : e.from;
     if (!functions.has(parent) && parent !== file) continue;
     const write = e.kind === "data.write";

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { stepAction, type StepContext } from "../src/zoom/stepAction";
+import { stepAction, stepCallee, type StepContext } from "../src/zoom/stepAction";
 
 const ctx = (c: Partial<StepContext> = {}): StepContext => ({ hasCallee: true, isLambda: false, runtime: "same", ...c });
 const call = { shape: "step" as const };
@@ -31,3 +31,20 @@ describe("stepAction open", () => {
   });
   it("does nothing on a row with no callee", () => expect(stepAction(call, "open", ctx({ hasCallee: false }))).toBe("none"));
 });
+
+describe("stepCallee", () => {
+  it("is the target of a call row, and nothing for a state row, a row with no target, or a call into its own function", () => {
+    expect(stepCallee({ role: "call", target: "src/a.ts#b" }, "src/a.ts#a")).toBe("src/a.ts#b");
+    expect(stepCallee({ role: "state", target: "src/a.ts#var:x" }, "src/a.ts#a")).toBeUndefined();
+    expect(stepCallee({ role: "call" }, "src/a.ts#a")).toBeUndefined();
+    expect(stepCallee({ role: "call", target: "src/a.ts#a" }, "src/a.ts#a")).toBeUndefined();
+  });
+
+  it("a state row opens nothing: no callee, so Enter does not take the lambda, inline or load path", () => {
+    const row = { shape: "step" as const };
+    const noCallee = ctx({ hasCallee: stepCallee({ role: "state", target: "src/b.ts#var:x" }, "src/a.ts#a") !== undefined, isLambda: false });
+    expect(stepAction(row, "open", noCallee)).toBe("none");
+    expect(stepAction(row, "click", noCallee)).toBe("select");
+  });
+});
+

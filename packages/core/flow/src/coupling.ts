@@ -89,14 +89,24 @@ function armCaught(fork: Extract<Item, { t: "fork" }>, arm: Arm, caught: boolean
   return fork.role === "try" && arm.kind === "next" && fork.arms.some((a) => a.kind === "exception") ? true : caught;
 }
 
-/** A local call's footprint as seen from one call site: escapes only count when the site is not caught. */
+/**
+ * A local call's footprint as seen from one call site: escapes only count when the site is not caught, and module-private
+ * state (`hidden`) only when the caller is on the module surface. Off the surface that state is folded, not hoisted.
+ */
 function effective(targets: string[], caught: boolean, ctx: Ctx): FootprintEntry[] {
   const out: FootprintEntry[] = [];
   for (const t of targets) {
     const fp = ctx.footprints.get(t);
     if (fp === undefined) continue;
+    // Past the cap the callee's state entries may be gone: when none is stored, its counts and hidden flag still hoist.
+    // That entry goes first, so the `◆` is not lost past the three labels a row shows.
+    const st = fp.state;
+    if (st !== undefined && st.writes + st.reads > 0 && !fp.entries.some((e) => e.cls === "state") && (!st.hidden || ctx.onSurface)) {
+      out.push({ cls: "state", label: `state ${st.writes}w ${st.reads}r`, ...(st.writes > 0 ? { write: true } : {}), ...(st.hidden ? { hidden: true } : {}) });
+    }
     for (const e of fp.entries) {
       if (e.cls === "escape" && caught) continue;
+      if (e.hidden === true && !ctx.onSurface) continue;
       out.push(e);
     }
     // Past the cap the callee's throw may not be among its entries: its escape flag still hoists `throws`.
@@ -501,17 +511,19 @@ export function unfoldChart(flow: FunctionFlow, open: ReadonlySet<string>, coupl
 
 const ENTRY_FILE = /^index\.(ts|tsx|js|jsx|mjs|cjs)$/;
 
-/** Whether a file is the entry of a package root: `index.*` directly in the root's directory. */
+/** Whether a file is the entry of a package root: `index.*` directly in the root's directory or in its `src` directory. */
 function isEntryFile(file: string, roots: readonly PackageRoot[]): boolean {
   const slash = file.lastIndexOf("/");
   const dir = slash >= 0 ? file.slice(0, slash) : ".";
-  return ENTRY_FILE.test(file.slice(slash + 1)) && roots.some((r) => r.path === dir);
+  return ENTRY_FILE.test(file.slice(slash + 1)) && roots.some((r) => r.path === dir || (r.path === "." ? "src" : `${r.path}/src`) === dir);
 }
 
 /**
  * The module surface: the functions another module reaches (a `calls.call` or `calls.reference` from a different module), plus
- * the exported functions of package entry files (`index.*` at a package root; C++ has none). Plain `exported` alone does not
- * count.
+ * the exported functions of package entry files (`index.*` at a package root or in its `src`; C++ has none). A function a
+ * package entry re-exports (`export * from` or `export { x } from`, followed through re-export chains) counts as exported
+ * from that entry. The IR records a re-export by its file only, so every exported function of a re-exported file counts.
+ * Plain `exported` alone does not count.
  */
 export function moduleSurface(nodes: readonly IRNode[], edges: readonly IREdge[], modules: ModuleMap): Set<string> {
   const surface = new Set<string>();
@@ -524,9 +536,32 @@ export function moduleSurface(nodes: readonly IRNode[], edges: readonly IREdge[]
       if (cm !== undefined && cm !== fromM) surface.add(callee);
     }
   }
+  // Re-exports: from a file to the file it re-exports. The entries are the files that are package entries.
+  const reexports = new Map<string, string[]>();
+  for (const e of edges) {
+    if (e.kind !== "packaging.re-export" || typeof e.to !== "string") continue;
+    const list = reexports.get(e.from);
+    if (list) list.push(e.to);
+    else reexports.set(e.from, [e.to]);
+  }
+  const reached = new Set<string>();
+  const queue: string[] = [];
+  for (const file of [...reexports.keys(), ...nodes.map((n) => n.span?.file ?? "")]) {
+    if (file !== "" && !reached.has(file) && isEntryFile(file, modules.roots)) {
+      reached.add(file);
+      queue.push(file);
+    }
+  }
+  for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
+    for (const to of reexports.get(file) ?? []) {
+      if (reached.has(to)) continue;
+      reached.add(to);
+      queue.push(to);
+    }
+  }
   for (const n of nodes) {
     if (n.kind !== "structure.function" || n.attrs.exported !== true || n.span === undefined) continue;
-    if (isEntryFile(n.span.file, modules.roots)) surface.add(n.id);
+    if (isEntryFile(n.span.file, modules.roots) || reached.has(n.span.file)) surface.add(n.id);
   }
   return surface;
 }
@@ -545,7 +580,16 @@ export function stateIndex(nodes: readonly IRNode[], edges: readonly IREdge[], m
   const out = new Map<string, StateVariable>();
   for (const n of nodes) {
     if (n.kind !== "data.variable") continue;
-    out.set(n.id, { node: n, module: modules.moduleOf(n.id), writers: [...(writers.get(n.id) ?? [])].sort() });
+    const written = writers.get(n.id);
+    // A global is one project-wide variable: it has no owning module. A container bound by const is mutable only if written.
+    const storage = String(n.attrs.storage ?? "");
+    const mutable = n.attrs.mutable === true && (n.attrs.constBound !== true || (written?.size ?? 0) > 0);
+    out.set(n.id, {
+      node: n,
+      module: storage === "global" ? undefined : modules.moduleOf(n.id),
+      writers: [...(written ?? [])].sort(),
+      mutable,
+    });
   }
   return out;
 }

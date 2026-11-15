@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { IREdge, IRNode } from "@insight/ir";
 import * as fx from "@insight/sdk/testing";
 import { couplingChart, couplingFacts, footprintSummary, moduleSurface, type Item } from "../src/index.js";
+import { indexFixture } from "./coupling-fixture.js";
 
 // State rows (phase 3 of the coupling view), on an IR built by hand. Two packages: pkgs/a holds the state and its
 // functions, pkgs/b calls into it. So a pkgs/a function that pkgs/b calls is on the module surface, and one that only
@@ -192,3 +193,53 @@ describe("state rows from the data facet", () => {
     expect(surface.has("pkgs/a/index.ts#entry")).toBe(true);
   });
 });
+
+// Const containers, built from the TypeScript frontend's real output (no hand-written attributes).
+describe("const containers from real frontend output", () => {
+  const FILES: Record<string, string> = {
+    "package.json": JSON.stringify({ name: "root", private: true }),
+    "pkgs/a/package.json": JSON.stringify({ name: "a" }),
+    "pkgs/a/src/tables.ts": `const TABLE = { a: 1, b: 2 };
+const cache = new Map<string, number>();
+export function lookup(k: string): number {
+  return TABLE.a + (cache.get(k) ?? 0);
+}
+export function remember(k: string): void {
+  cache.set(k, 1);
+}
+export function callsLookup(): number {
+  return lookup("a");
+}
+export function readTable(): number {
+  return TABLE.b;
+}
+`,
+  };
+  const T = "pkgs/a/src/tables.ts";
+  let real: Awaited<ReturnType<typeof realIndex>>;
+  async function realIndex() {
+    const { nodes, edges } = await indexFixture(FILES);
+    return { nodes, edges, ...couplingFacts(nodes, edges) };
+  }
+  beforeAll(async () => {
+    real = await realIndex();
+  });
+
+  it("a never-written const table gives no state row, and its function hoists nothing", () => {
+    const items = real.facts.get(`${T}#readTable`)?.items ?? [];
+    expect(stateRows(items)).toEqual([]);
+    expect(real.footprints.get(`${T}#readTable`)?.entries.filter((e) => e.cls === "state")).toEqual([]);
+    expect(real.state.get(`${T}#var:TABLE`)).toMatchObject({ mutable: false, writers: [] });
+  });
+
+  it("reading the written cache from a helper shows one row, and no row for the table", () => {
+    expect(stateRows(real.facts.get(`${T}#lookup`)?.items ?? []).map((r) => r.label)).toEqual(["▽ cache"]);
+  });
+
+  it("a const Map that a method writes gives one state row", () => {
+    const rows = stateRows(real.facts.get(`${T}#remember`)?.items ?? []);
+    expect(rows.map((r) => r.label)).toEqual(["▲ cache"]);
+    expect(rows[0]?.write).toBeUndefined();
+  });
+});
+

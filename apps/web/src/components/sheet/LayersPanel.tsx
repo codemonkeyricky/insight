@@ -68,7 +68,7 @@ export function LayersPanel({ shown, findingCount, onChange, onClose, roots }: P
         <div><span className="cp-key cp-cross" /> cross module</div>
         <div><span className="cp-key cp-io" /> IO (disk strongest)</div>
         <div><span className="cp-key cp-conc" /> concurrency</div>
-        <div><span className="cp-key cp-state" /> shared state (bold: written, ◆ hidden)</div>
+        <div><span className="cp-key cp-state" /> shared state (bold: written, ◆ hidden, underlined: global)</div>
         <div><span className="cp-key cp-escape" /> throws ↑</div>
         <div><span className="cp-key cp-fold" /> ⋯ n local (open to show)</div>
         <p className="muted">Throw statements only; promise rejections are not modelled.</p>

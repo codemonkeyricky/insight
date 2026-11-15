@@ -8,7 +8,7 @@ import frontend from "../src/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "fixtures", "data-ts");
-const files = ["data/counters.ts", "data/registry.ts", "data/meter.ts", "data/globals.ts", "data/state.ts", "data/writer.ts"];
+const files = ["data/counters.ts", "data/registry.ts", "data/meter.ts", "data/globals.ts", "data/state.ts", "data/writer.ts", "data/deep.ts", "data/globals-2.ts"];
 const root: ProjectRoot = { path: fixtureRoot, name: "data-ts", allowBuildTools: false };
 const readFile = async (rel: string) => readFileSync(join(fixtureRoot, rel), "utf8");
 
@@ -68,11 +68,50 @@ describe("frontend-typescript data facts", () => {
     expect(dataNodes(b).find((x) => x.id === "data/meter.ts#var:Meter.LABEL")?.attrs).toMatchObject({ mutable: false });
   });
 
-  it("e: globalThis.flag = true yields a global node and an assign write", async () => {
+  it("e: globalThis.flag = true yields a project-wide global node and an assign write", async () => {
     const b = await extractAll();
-    const g = "data/globals.ts#global:flag";
+    const g = "<global>#global:flag";
     expect(dataNodes(b).find((n) => n.id === g)).toMatchObject({ attrs: { storage: "global", qualifiedName: "globalThis.flag", exported: true, mutable: true } });
     expect(dataEdges(b)).toContainEqual(expect.objectContaining({ from: fnId(b, "setFlag"), to: g, kind: "data.write", attrs: { how: "assign" } }));
+  });
+
+  it("e2: a global written from two files has one id and one set of attrs, and both files' writes target it", async () => {
+    const b = await extractAll();
+    const g = "<global>#global:flag";
+    // Each writing file emits the same node id; the linker keeps the first, so every copy must agree.
+    const copies = dataNodes(b).filter((n) => n.id === g);
+    expect(copies.length).toBeGreaterThan(1);
+    expect(new Set(copies.map((n) => JSON.stringify(n.attrs))).size).toBe(1);
+    expect(dataEdges(b)).toContainEqual(expect.objectContaining({ from: fnId(b, "castFlag"), to: g, kind: "data.write", attrs: { how: "assign" } }));
+    expect(dataEdges(b)).toContainEqual(expect.objectContaining({ from: fnId(b, "setFlag"), to: g, kind: "data.write" }));
+  });
+
+  it("e3: a read of a global that project code writes is a data.read; a host property nobody writes adds nothing", async () => {
+    const b = await extractAll();
+    expect(dataEdges(b)).toContainEqual(expect.objectContaining({ from: fnId(b, "readFlag"), to: "<global>#global:flag", kind: "data.read", attrs: {} }));
+    expect(dataEdges(b).filter((e) => e.from === fnId(b, "where"))).toEqual([]);
+    expect(dataNodes(b).some((n) => n.id === "<global>#global:location")).toBe(false);
+  });
+
+  it("e4: a cast head, (globalThis as T).x = v, is a write of the global", async () => {
+    const b = await extractAll();
+    expect(dataEdges(b)).toContainEqual(expect.objectContaining({ from: fnId(b, "castFlag"), to: "<global>#global:flag", kind: "data.write", attrs: { how: "assign" } }));
+  });
+
+  it("e5: a module const bound to a container is marked constBound, and a frozen one is not", async () => {
+    const b = await extractAll();
+    expect(dataNodes(b).find((n) => n.id === "data/deep.ts#var:state")?.attrs).toMatchObject({ mutable: true, constBound: true });
+    expect(dataNodes(b).find((n) => n.id === "data/registry.ts#var:TABLE")?.attrs).not.toHaveProperty("constBound");
+  });
+
+  it("e6: a write through a chain of properties or elements writes the root variable", async () => {
+    const b = await extractAll();
+    const state = "data/deep.ts#var:state";
+    const rows = "data/deep.ts#var:rows";
+    expect(dataEdges(b)).toContainEqual(expect.objectContaining({ from: fnId(b, "putDeep"), to: state, kind: "data.write", attrs: { how: "mutate" } }));
+    expect(dataEdges(b)).toContainEqual(expect.objectContaining({ from: fnId(b, "setDeep"), to: state, kind: "data.write", attrs: { how: "mutate" } }));
+    expect(dataEdges(b)).toContainEqual(expect.objectContaining({ from: fnId(b, "setElem"), to: rows, kind: "data.write", attrs: { how: "mutate" } }));
+    expect(dataEdges(b)).toContainEqual(expect.objectContaining({ from: fnId(b, "neverWritten"), to: state, kind: "data.read" }));
   });
 
   it("f: a write through a namespace import or a direct import targets the declaring file's variable", async () => {

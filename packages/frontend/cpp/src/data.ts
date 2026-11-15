@@ -1,13 +1,13 @@
 import type { IREdge, IRNode, NodeId, Provenance, Span } from "@insight/ir";
 import type { SyntaxNode } from "./parser.js";
 import { baseTypeOf, functionDeclarator, nodeKey, norm, normName, ownerOf, scopeOf, stripTemplates, type FnDecl, type Project } from "./project.js";
-import { shadowNames } from "./state.js";
 
 /**
  * Data facts: variables with storage (data.variable), and the reads and writes of them (data.read, data.write).
  * A variable is found through a project-wide declaration index, so a use resolves to the definition in another
- * file. A local or parameter with the same name shadows the variable and produces no edge. Writes that are
- * heuristic (a mutating method, a write through a subscript or member, an address taken) carry heuristic provenance.
+ * file. A local or parameter shadows the variable only where it is in scope: in its own block from its declaration on,
+ * or inside its lambda or loop. Writes that are heuristic (a mutating method, a write through a subscript or member,
+ * an address taken) carry heuristic provenance.
  */
 
 export interface DataOutput {
@@ -90,6 +90,64 @@ function isPlainDeclarator(d: SyntaxNode): boolean {
   return true;
 }
 
+/**
+ * `const` on a pointer declarator itself (`* const k`): the declared object cannot change, whatever its type says. The
+ * declarator chain is followed through arrays and functions to the name.
+ */
+function hasDeclaratorConst(d: SyntaxNode): boolean {
+  let c: SyntaxNode | null | undefined = d;
+  while (c && !NAME_TYPES.has(c.type)) {
+    if (c.type === "pointer_declarator" && c.namedChildren.some((x) => x.type === "type_qualifier" && x.text === "const")) return true;
+    c = c.childForFieldName("declarator") ?? c.namedChildren.find((x) => x.type.endsWith("_declarator") || NAME_TYPES.has(x.type)) ?? null;
+  }
+  return false;
+}
+
+/** The name a declarator declares, through pointer, reference, array and function wrappers. */
+function declaredName(d: SyntaxNode | null | undefined): string | undefined {
+  let c: SyntaxNode | null | undefined = d;
+  while (c && !NAME_TYPES.has(c.type)) {
+    c = c.childForFieldName("declarator") ?? (c.type.endsWith("_declarator") ? c.namedChildren.find((x) => x.type.endsWith("_declarator") || NAME_TYPES.has(x.type)) ?? null : null);
+  }
+  return c?.text;
+}
+
+/**
+ * Whether a scope node declares `name` where a use at `before` sees it: a declaration in a block that comes before the use,
+ * a for-loop or range-for variable, a lambda's or function's parameter, or a condition's declaration. A declaration in a
+ * nested block is not seen here.
+ */
+function declaresIn(scope: SyntaxNode, name: string, before: number): boolean {
+  // A static or extern local names a variable of the function's index, not a shadow of the global.
+  const isShadowDecl = (decl: SyntaxNode): boolean => decl.type === "declaration" && !hasStorage(decl, "static") && !hasStorage(decl, "extern");
+  const declaresAmong = (decls: readonly SyntaxNode[]): boolean =>
+    decls.some((decl) => isShadowDecl(decl) && decl.startIndex < before && decl.childrenForFieldName("declarator").some((d) => declaredName(d) === name));
+  const paramsDeclare = (params: SyntaxNode | null | undefined): boolean =>
+    (params?.namedChildren ?? []).some((p) => (p.type === "parameter_declaration" || p.type === "optional_parameter_declaration") && declaredName(p.childForFieldName("declarator")) === name);
+  switch (scope.type) {
+    case "compound_statement":
+      return declaresAmong(scope.namedChildren);
+    case "for_statement": {
+      const init = scope.childForFieldName("initializer");
+      return init !== null && init.type === "declaration" && declaresAmong([init]);
+    }
+    case "for_range_loop":
+      return declaredName(scope.childForFieldName("declarator")) === name;
+    case "lambda_expression":
+      return paramsDeclare(scope.childForFieldName("declarator")?.childForFieldName("parameters"));
+    case "function_definition":
+      return paramsDeclare(functionDeclarator(scope)?.childForFieldName("parameters"));
+    case "if_statement":
+    case "while_statement":
+    case "switch_statement": {
+      const cond = scope.childForFieldName("condition");
+      return cond !== null && cond.namedChildren.some((c) => isShadowDecl(c) && c.startIndex < before && c.childrenForFieldName("declarator").some((d) => declaredName(d) === name));
+    }
+    default:
+      return false;
+  }
+}
+
 /** A declaration at namespace or file scope, not inside a class or function. */
 function isNamespaceScope(decl: SyntaxNode): boolean {
   const p = decl.parent;
@@ -141,7 +199,7 @@ function indexOf(project: Project): DataIndex {
           const nameNode = nameNodeOf(d);
           if (!nameNode) continue;
           const name = nameNode.text;
-          const mutable = !(constQ && isPlainDeclarator(d));
+          const mutable = !((constQ && isPlainDeclarator(d)) || hasDeclaratorConst(d));
           const base = { rel, name, mutable, ...(type !== undefined ? { type } : {}), decl: n };
           if (ns) {
             if (isExtern && !(d.type === "init_declarator")) {
@@ -190,7 +248,7 @@ function indexOf(project: Project): DataIndex {
             name: nameNode.text,
             storage: "class-static",
             exported: !scope.anon,
-            mutable: !(constQ && isPlainDeclarator(d)),
+            mutable: !((constQ && isPlainDeclarator(d)) || hasDeclaratorConst(d)),
             ...(type !== undefined ? { type } : {}),
             parent: `${rel}#${scope.path.join("::")}`,
             decl: n,
@@ -281,48 +339,47 @@ export function emitData(project: Project, rel: string, provenance: Provenance):
     });
   }
 
-  const shadowCache = new Map<string, Set<string>>();
-  const shadowsOf = (fn: SyntaxNode): Set<string> => {
-    const key = nodeKey(fn);
-    let s = shadowCache.get(key);
-    if (!s) {
-      s = shadowNames(fn);
-      shadowCache.set(key, s);
-    }
-    return s;
-  };
-
-  /** How the variable's value is used at this reference: a write (and its kind), a read (undefined). */
+  /**
+   * How the variable's value is used at this reference: a write (and its kind), a read (undefined). A write through the
+   * reference's own elements or members, or a mutating method on them, writes the variable (`state.cache.push_back(x)`,
+   * `a.b.c = 1`, `x[i].f = v`); such a write is heuristic.
+   */
   const accessOf = (ref: SyntaxNode): { how: "assign" | "update" | "mutate" | "address" } | undefined => {
     let node = ref;
     let p = node.parent;
-    while (p?.type === "parenthesized_expression") {
-      node = p;
-      p = p.parent;
-    }
-    if (!p) return undefined;
-    if (p.type === "assignment_expression" && isField(p, "left", node)) {
-      return { how: p.childForFieldName("operator")?.text === "=" ? "assign" : "update" };
-    }
-    if (p.type === "update_expression") return { how: "update" };
-    if (p.type === "pointer_expression" && p.childForFieldName("operator")?.text === "&") return { how: "address" };
-    if (p.type === "argument_list" && p.parent?.type === "call_expression") {
-      const args = p.namedChildren.filter((c) => c.type !== "comment");
-      const at = args.findIndex((a) => sameNode(a, node));
-      const callee = at >= 0 ? calleeOf(project, p.parent) : undefined;
-      if (callee && takesNonConstRef(index, callee, at)) return { how: "address" };
+    // Set once the reference is a link of an element or member chain: a write to the chain then writes the root.
+    let deep = false;
+    for (;;) {
+      while (p?.type === "parenthesized_expression") {
+        node = p;
+        p = p.parent;
+      }
+      if (!p) return undefined;
+      if (p.type === "assignment_expression" && isField(p, "left", node)) {
+        if (deep) return { how: "mutate" };
+        return { how: p.childForFieldName("operator")?.text === "=" ? "assign" : "update" };
+      }
+      if (p.type === "update_expression") return { how: deep ? "mutate" : "update" };
+      if (!deep && p.type === "pointer_expression" && p.childForFieldName("operator")?.text === "&") return { how: "address" };
+      if (!deep && p.type === "argument_list" && p.parent?.type === "call_expression") {
+        const args = p.namedChildren.filter((c) => c.type !== "comment");
+        const at = args.findIndex((a) => sameNode(a, node));
+        const callee = at >= 0 ? calleeOf(project, p.parent) : undefined;
+        if (callee && takesNonConstRef(index, callee, at)) return { how: "address" };
+        return undefined;
+      }
+      if ((p.type === "subscript_expression" || p.type === "field_expression") && isField(p, "argument", node)) {
+        const gp = p.parent;
+        if (p.type === "field_expression" && gp?.type === "call_expression" && isField(gp, "function", p)) {
+          if (MUTATORS.has(p.childForFieldName("field")?.text ?? "")) return { how: "mutate" };
+        }
+        deep = true;
+        node = p;
+        p = gp;
+        continue;
+      }
       return undefined;
     }
-    // A write through the variable's elements or members, or a mutating method called on it.
-    if ((p.type === "subscript_expression" || p.type === "field_expression") && isField(p, "argument", node)) {
-      const gp = p.parent;
-      if (p.type === "field_expression" && gp?.type === "call_expression" && isField(gp, "function", p)) {
-        if (MUTATORS.has(p.childForFieldName("field")?.text ?? "")) return { how: "mutate" };
-      }
-      if (gp?.type === "assignment_expression" && isField(gp, "left", p)) return { how: "mutate" };
-      if (gp?.type === "update_expression") return { how: "mutate" };
-    }
-    return undefined;
   };
 
   /** Whether an identifier or qualified name is a use of a name, not a declaration, a name in a using, or a label. */
@@ -341,12 +398,14 @@ export function emitData(project: Project, rel: string, provenance: Provenance):
     const leadingGlobal = name.startsWith("::");
     const bare = name.replace(/^::/, "");
     if (!leadingGlobal && n.type === "identifier") {
-      // A function-static of an enclosing function is visible; a local of one shadows the global.
+      // Walking outwards: a function-static of an enclosing function is visible, and a local declared in a scope that
+      // holds this use shadows the global. A declaration in a sibling block does not.
       for (let p = n.parent; p; p = p.parent) {
-        if (!FUNCTION_TYPES.has(p.type)) continue;
-        const local = index.byFn.get(`${rel}|${nodeKey(p)}`)?.get(bare);
-        if (local) return local;
-        if (shadowsOf(p).has(bare)) return undefined;
+        if (FUNCTION_TYPES.has(p.type)) {
+          const local = index.byFn.get(`${rel}|${nodeKey(p)}`)?.get(bare);
+          if (local) return local;
+        }
+        if (declaresIn(p, bare, n.startIndex)) return undefined;
       }
     }
     const fn = ownerOf(n, project.fns, rel);

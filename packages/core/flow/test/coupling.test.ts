@@ -123,11 +123,7 @@ export function go(): number {
 `,
 };
 
-interface Indexed {
-  modules: ModuleMap;
-  facts: Map<string, FunctionFacts>;
-  footprints: Map<string, CouplingFootprint>;
-}
+type Indexed = ReturnType<typeof couplingFacts>;
 
 async function load(files: Record<string, string>): Promise<Indexed & { nodes: IRNode[]; edges: IREdge[] }> {
   const { nodes, edges } = await indexFixture(files);
@@ -467,3 +463,192 @@ ${Array.from({ length: 55 }, (_, k) => `  f${k}();`).join("\n")}
     expect(footprintSummary(fp)).toContain("⇄ 1 module");
   });
 });
+
+// Review fixes on the coupling pass: module-private state off the surface, capped hoisting, project-wide globals, and the
+// surface of package entries (`src/index.*`, and what they re-export).
+const surfaceChart = (ix: Indexed & { surface: Set<string> }, id: string) => {
+  const f = ix.facts.get(id);
+  if (!f) throw new Error(`no function ${id}`);
+  return couplingChart(id, f.items, ix.modules, ix.footprints, ix.surface);
+};
+const allSteps = (items: readonly Item[], out: Item[] = []): Item[] => {
+  for (const i of items) {
+    out.push(i);
+    if (i.t === "fork") for (const a of i.arms) allSteps(a.body, out);
+    else if (i.t === "loop") allSteps(i.body, out);
+  }
+  return out;
+};
+const kptRows = (items: readonly Item[]) => allSteps(items).filter((i): i is Step => i.t === "step" && i.foldId === undefined);
+
+describe("module-private state off the surface", () => {
+  const HIDDEN_FILES: Record<string, string> = {
+    "package.json": JSON.stringify({ name: "root", private: true }),
+    "pkgs/a/package.json": JSON.stringify({ name: "a" }),
+    "pkgs/b/package.json": JSON.stringify({ name: "b" }),
+    // bump writes a file-static; inner is off the surface and calls bump; front is on it, called from pkgs/b
+    "pkgs/a/src/hidden.ts": `let hits = 0;
+function bump(): void {
+  hits++;
+}
+function inner(): void {
+  bump();
+}
+export function front(): void {
+  bump();
+}
+`,
+    "pkgs/b/src/use.ts": `import { front } from "../../a/src/hidden.js";
+export function go(): void {
+  front();
+}
+`,
+  };
+  let ix: Awaited<ReturnType<typeof load>>;
+  beforeAll(async () => {
+    ix = await load(HIDDEN_FILES);
+  });
+
+  it("a function off the surface that calls a helper writing a file-static is fully folded", () => {
+    expect(ix.surface.has("pkgs/a/src/hidden.ts#inner")).toBe(false);
+    const { items } = surfaceChart(ix, "pkgs/a/src/hidden.ts#inner");
+    expect(kptRows(items)).toEqual([]);
+    expect(items.every((i) => i.t === "step" && i.foldId !== undefined)).toBe(true);
+  });
+
+  it("a surface function calling the same helper shows the hidden state as ◆ on its call row", () => {
+    expect(ix.surface.has("pkgs/a/src/hidden.ts#front")).toBe(true);
+    const { items } = surfaceChart(ix, "pkgs/a/src/hidden.ts#front");
+    const call = kptRows(items).find((r) => r.role === "call");
+    expect(call).toMatchObject({ coupling: "state" });
+    expect(call?.hoisted).toContain("◆");
+  });
+});
+
+describe("hoisting past the footprint cap", () => {
+  const CAP_FILES: Record<string, string> = {
+    "package.json": JSON.stringify({ name: "root", private: true }),
+    "pkgs/a/package.json": JSON.stringify({ name: "a" }),
+    "pkgs/b/package.json": JSON.stringify({ name: "b" }),
+    "pkgs/b/src/many.ts": Array.from({ length: 55 }, (_, k) => `export function f${k}(): number {\n  return ${k};\n}\n`).join(""),
+    // wide calls 55 functions of pkgs/b, then writes a file-static: the write is past the 50-entry cap
+    "pkgs/a/src/big.ts": `import { ${Array.from({ length: 55 }, (_, k) => `f${k}`).join(", ")} } from "../../b/src/many.js";
+let tail = 0;
+export function wide(): void {
+${Array.from({ length: 55 }, (_, k) => `  f${k}();`).join("\n")}
+  tail++;
+}
+export function caller(): void {
+  wide();
+}
+`,
+    "pkgs/b/src/use.ts": `import { caller } from "../../a/src/big.js";
+export function go(): void {
+  caller();
+}
+`,
+  };
+  let ix: Awaited<ReturnType<typeof load>>;
+  beforeAll(async () => {
+    ix = await load(CAP_FILES);
+  });
+
+  it("the callee keeps at most 50 entries, and its only state entry is past the cap", () => {
+    const fp = ix.footprints.get("pkgs/a/src/big.ts#wide");
+    expect(fp?.entries.length).toBeLessThanOrEqual(50);
+    expect(fp?.entries.some((e) => e.cls === "state")).toBe(false);
+    expect(fp?.state).toEqual({ writes: 1, reads: 0, hidden: true });
+  });
+
+  it("a surface caller of that callee still shows ◆ on its call row", () => {
+    expect(ix.surface.has("pkgs/a/src/big.ts#caller")).toBe(true);
+    const { items } = surfaceChart(ix, "pkgs/a/src/big.ts#caller");
+    const call = kptRows(items).find((r) => r.role === "call");
+    expect(call?.hoisted).toContain("◆");
+  });
+});
+
+describe("TypeScript globals are project-wide", () => {
+  const GLOBAL_FILES: Record<string, string> = {
+    "package.json": JSON.stringify({ name: "root", private: true }),
+    "pkgs/a/package.json": JSON.stringify({ name: "a" }),
+    "pkgs/b/package.json": JSON.stringify({ name: "b" }),
+    "pkgs/a/src/g1.ts": `export function setA(): void {
+  globalThis.gx = 1;
+}
+export function readA(): number {
+  return globalThis.gx;
+}
+`,
+    "pkgs/b/src/g2.ts": `export function setB(): void {
+  (globalThis as Record<string, number>).gx = 2;
+}
+`,
+  };
+  let ix: Awaited<ReturnType<typeof load>>;
+  beforeAll(async () => {
+    ix = await load(GLOBAL_FILES);
+  });
+
+  it("a global written from two modules is one variable with no owning module, and lists the other writer", () => {
+    const id = "<global>#global:gx";
+    const sv = ix.state.get(id);
+    expect(sv).toMatchObject({ module: undefined, writers: ["pkgs/a", "pkgs/b"], mutable: true });
+    const { items } = surfaceChart(ix, "pkgs/a/src/g1.ts#setA");
+    const row = kptRows(items).find((r) => r.role === "state");
+    expect(row).toMatchObject({ coupling: "state", global: true, write: true });
+    expect(row?.title).toContain("written from pkgs/b");
+  });
+
+  it("a read of the global in its own module is kept as a global row", () => {
+    const { items } = surfaceChart(ix, "pkgs/a/src/g1.ts#readA");
+    expect(kptRows(items).find((r) => r.role === "state")).toMatchObject({ global: true });
+  });
+});
+
+describe("package entries and what they re-export", () => {
+  const ENTRY_FILES: Record<string, string> = {
+    "package.json": JSON.stringify({ name: "root", private: true }),
+    "pkgs/a/package.json": JSON.stringify({ name: "a" }),
+    // src/index.ts is the entry; it re-exports api.ts, which re-exports leaf.ts through mid.ts
+    "pkgs/a/src/index.ts": `export * from "./api.js";
+export function entryOwn(): number {
+  return 1;
+}
+`,
+    "pkgs/a/src/api.ts": `export * from "./mid.js";
+export function apiFn(): number {
+  return 2;
+}
+`,
+    "pkgs/a/src/mid.ts": `export * from "./leaf.js";
+`,
+    "pkgs/a/src/leaf.ts": `export function deepFn(): number {
+  return 3;
+}
+`,
+    // not re-exported by any entry: an exported function here is not part of the surface
+    "pkgs/a/src/deep/hidden.ts": `export function plainExport(): number {
+  return 4;
+}
+`,
+  };
+  let ix: Awaited<ReturnType<typeof load>>;
+  beforeAll(async () => {
+    ix = await load(ENTRY_FILES);
+  });
+
+  it("an exported function of a src/index.* entry is on the surface", () => {
+    expect(ix.surface.has("pkgs/a/src/index.ts#entryOwn")).toBe(true);
+  });
+
+  it("functions re-exported from an entry, through re-export chains, are on the surface", () => {
+    expect(ix.surface.has("pkgs/a/src/api.ts#apiFn")).toBe(true);
+    expect(ix.surface.has("pkgs/a/src/leaf.ts#deepFn")).toBe(true);
+  });
+
+  it("an exported function that no entry re-exports is not on the surface", () => {
+    expect(ix.surface.has("pkgs/a/src/deep/hidden.ts#plainExport")).toBe(false);
+  });
+});
+

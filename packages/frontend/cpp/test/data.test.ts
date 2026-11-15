@@ -19,6 +19,14 @@ async function extractAll(): Promise<IRBatch["records"]> {
   return batches.flatMap((b) => b.records);
 }
 
+/** Extracts the data facts of a fixture subset, for files whose names other tests do not share. */
+async function extractFiles(list: string[]): Promise<IRBatch["records"]> {
+  const batches: IRBatch[] = [];
+  const ctx = { root, files: list, listFiles: () => [...list], readFile, log: () => undefined };
+  for await (const batch of frontend.extract(ctx)) batches.push(batch);
+  return batches.flatMap((b) => b.records);
+}
+
 const nodes = (records: Awaited<ReturnType<typeof extractAll>>): IRNode[] => records.flatMap((r) => ("node" in r && r.node.facet === "data" ? [r.node] : []));
 const edges = (records: Awaited<ReturnType<typeof extractAll>>): IREdge[] => records.flatMap((r) => ("edge" in r && r.edge.facet === "data" ? [r.edge] : []));
 const allNodes = (records: Awaited<ReturnType<typeof extractAll>>): IRNode[] => records.flatMap((r) => ("node" in r ? [r.node] : []));
@@ -84,5 +92,39 @@ describe("frontend-cpp data facts", () => {
   it("h: passing &g to a function is an address write", async () => {
     const r = await extractAll();
     expect(edges(r)).toContainEqual(expect.objectContaining({ from: "src/a.cc#addr", to: "src/a.cc#var:g", kind: "data.write", attrs: { how: "address" }, provenance: { frontend: "frontend-cpp", confidence: "heuristic" } }));
+  });
+
+  it("i: a local in a block shadows the global only inside that block", async () => {
+    const r = await extractFiles(["src/scope.cc"]);
+    const total = "src/scope.cc#var:total";
+    expect(edges(r)).toContainEqual(expect.objectContaining({ from: "src/scope.cc#block", to: total, kind: "data.write", attrs: { how: "update" } }));
+    expect(edges(r).filter((e) => e.from === "src/scope.cc#block" && e.to === total && e.kind === "data.write")).toHaveLength(1);
+  });
+
+  it("j: a lambda's parameter shadows the global only inside the lambda", async () => {
+    const r = await extractFiles(["src/scope.cc"]);
+    const hits = "src/scope.cc#var:hits";
+    expect(edges(r)).toContainEqual(expect.objectContaining({ from: "src/scope.cc#lam", to: hits, kind: "data.write", attrs: { how: "update" } }));
+    expect(edges(r).filter((e) => e.from === "src/scope.cc#lam" && e.to === hits)).toHaveLength(1);
+  });
+
+  it("k: a range-for variable shadows the global in the loop, so no write reaches it", async () => {
+    const r = await extractFiles(["src/scope.cc"]);
+    expect(edges(r).filter((e) => e.from === "src/scope.cc#ranged" && e.to === "src/scope.cc#var:total")).toEqual([]);
+  });
+
+  it("l: an element or member chain write writes the root variable", async () => {
+    const r = await extractFiles(["src/deep.cc"]);
+    expect(edges(r)).toContainEqual(expect.objectContaining({ from: "src/deep.cc#deep_set", to: "src/deep.cc#var:state", kind: "data.write", attrs: { how: "mutate" } }));
+    expect(edges(r)).toContainEqual(expect.objectContaining({ from: "src/deep.cc#deep_cache", to: "src/deep.cc#var:state", kind: "data.write", attrs: { how: "mutate" } }));
+    expect(edges(r)).toContainEqual(expect.objectContaining({ from: "src/deep.cc#deep_log", to: "src/deep.cc#var:state", kind: "data.write", attrs: { how: "mutate" } }));
+    expect(edges(r)).toContainEqual(expect.objectContaining({ from: "src/deep.cc#deep_row", to: "src/deep.cc#var:rows", kind: "data.write", attrs: { how: "mutate" } }));
+  });
+
+  it("m: a const pointer declarator is immutable; a plain array of pointers to const stays mutable", async () => {
+    const r = await extractFiles(["src/deep.cc"]);
+    expect(nodes(r).find((n) => n.id === "src/deep.cc#var:kNames")?.attrs).toMatchObject({ mutable: false });
+    expect(nodes(r).find((n) => n.id === "src/deep.cc#var:names")?.attrs).toMatchObject({ mutable: true });
+    expect(edges(r)).toContainEqual(expect.objectContaining({ from: "src/deep.cc#first_name", to: "src/deep.cc#var:kNames", kind: "data.read" }));
   });
 });
