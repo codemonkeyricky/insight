@@ -15,6 +15,7 @@ export class ZoomStore {
   private fileLoads = new Map<string, Promise<void>>();
   private messages = new Map<string, Promise<FunctionFlow>>();
   private receivers = new Map<string, Promise<MessageReceiver[]>>();
+  private loadedReceivers = new Map<string, MessageReceiver[]>();
 
   /** `detail` defaults to the reader's saved Detail choice. */
   constructor(id: string, detail: FlowDetail = readDetail()) {
@@ -79,6 +80,22 @@ export class ZoomStore {
     } catch {
       return chart;
     }
+  }
+
+  /** Loads `fnId`'s receivers, so that `messagesOf` can point a chart's message steps at them synchronously. Never throws. */
+  async loadMessages(fnId: string): Promise<void> {
+    try {
+      this.loadedReceivers.set(fnId, await this.receiversOf(fnId));
+    } catch {
+      // Without receivers the message steps keep no target (messagesOf returns the chart as it is).
+    }
+  }
+
+  /** `chart` with its message steps pointed at the receivers `loadMessages` loaded for `fnId`; as it is when they are not loaded. */
+  messagesOf(fnId: string, chart: FunctionFlow): FunctionFlow {
+    const receivers = this.loadedReceivers.get(fnId);
+    if (receivers === undefined || !chart.nodes.some(isPostStep)) return chart;
+    return withMessageTargets(chart, receivers);
   }
 
   /** The functions a function posts messages to, named as their own charts name them. Reads the project's references. Cached per function. */
