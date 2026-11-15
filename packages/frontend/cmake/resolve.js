@@ -1,16 +1,39 @@
 // Resolver: answers a C++ include with the headers found through a target's include directories, and, when no
 // in-repository header explains it, with the external package the target's dependencies declare.
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join, posix } from "node:path";
 import { externalsForInclude } from "@insight/sdk";
 import { buildCmakeModel, closureOf, includeDirsOf, isCMakeFile, ownersOf, resolveLink } from "./parse.js";
 
+/**
+ * The model of the last link run. It is reused while the file list is the same array with the same length and the
+ * CMake texts hash to the same digest, so an edit to any CMake file is still seen at once.
+ */
+let cached;
+
+function digestOf(texts) {
+  const hash = createHash("sha256");
+  for (const key of [...texts.keys()].sort()) {
+    const text = texts.get(key);
+    hash.update(`${key}\0${text.length}\0${text}\0`);
+  }
+  return hash.digest("hex");
+}
+
 async function loadModel(ctx) {
+  const files = ctx.listFiles();
   const texts = new Map();
-  for (const f of ctx.listFiles()) {
+  for (const f of files) {
     if (isCMakeFile(f)) texts.set(f, await readFile(join(ctx.root.path, f), "utf8"));
   }
-  return buildCmakeModel(texts, ctx.listFiles());
+  const digest = digestOf(texts);
+  if (cached !== undefined && cached.files === files && cached.count === files.length && cached.digest === digest) {
+    return cached.model;
+  }
+  const model = buildCmakeModel(texts, files);
+  cached = { files, count: files.length, digest, model };
+  return model;
 }
 
 /** The external packages the closure's links name, by id. */
