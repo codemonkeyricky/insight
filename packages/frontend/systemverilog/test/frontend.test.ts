@@ -766,6 +766,13 @@ describe("name resolution by scope", () => {
     expect(call?.provenance?.confidence).toBe("inferred");
   });
 
+  it("a top-level function of a file a package includes is a function of that package", async () => {
+    const batches = await extractDir(fx("include_pkg_fns"), ["pkg.sv", "h.svh", "t.sv"]);
+    const call = callsNamed(batches, "p::g")[0];
+    expect(call?.to).toBe("h.svh#g");
+    expect(nodesOf(allRecords(batches)).some((n) => n.id === "h.svh#g")).toBe(true);
+  });
+
   it("a class inside a module finds the module's function through the enclosing scope, exactly", async () => {
     const batches = await extractDir(fx("module_scope_fn"), ["m.sv"]);
     const call = callsNamed(batches, "h")[0];

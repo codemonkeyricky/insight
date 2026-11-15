@@ -490,6 +490,7 @@ export async function indexProject(texts: Map<string, string>): Promise<Project>
   }
   for (const unit of p.units.values()) registerScanned(unit, scans.get(unit.rel) ?? [], p);
   linkIncludes(p);
+  adoptIncludedFunctions(p);
   return p;
 }
 
@@ -510,6 +511,26 @@ function linkIncludes(p: Project): void {
         if (near.length > 0) matches = near;
       }
       for (const m of matches) if (m !== unit.rel && !p.includedIn.has(m)) p.includedIn.set(m, { pkg: inc.pkg, from: unit.rel });
+    }
+  }
+}
+
+/**
+ * Files an included file's top-level functions into the package that includes it, so a package lookup finds them.
+ * Only the scope key changes: the functions keep their ids.
+ */
+function adoptIncludedFunctions(p: Project): void {
+  const top = p.fnsByScope.get("");
+  if (!top) return;
+  for (const [file, { pkg }] of p.includedIn) {
+    for (const [name, refs] of [...top]) {
+      const mine = refs.filter((r) => r.file === file);
+      if (mine.length === 0) continue;
+      top.set(name, refs.filter((r) => r.file !== file));
+      for (const r of mine) {
+        addFn(p, pkg, r);
+        p.pkgFnsByName.set(name, [...(p.pkgFnsByName.get(name) ?? []), r]);
+      }
     }
   }
 }
