@@ -46,6 +46,8 @@ A plugin that fails any check (bad JSON, missing entry, wrong export, mismatched
 ```
 
 - `files` lists the project files the frontend reads. `ctx.files` only holds paths that match it. When `files` is omitted, the `detect` globs are used, and when both are omitted, every file.
+- `inputs` lists extra globs whose file contents matter. Their contents are hashed into the frontend's `inputsHash`, and when that hash changes every shard of the frontend is extracted again. Use it for files like build definitions, where an edit changes the output.
+- `inputListing` lists globs for frontends whose output depends on which files exist, not on their contents, such as build-file globs (`glob(["*.cc"])`, `file(GLOB ...)`). A matching file contributes only its path to `inputsHash`, so adding or removing one re-extracts every shard, and editing one does not. A file that matches both `inputs` and `inputListing` contributes its path and its contents.
 - `detect` lists globs that suggest the frontend applies. `detect(root)` still decides.
 - `provides` lists the facets it fills. The coverage table in the overview reports them per run.
 - `roles.frontend` is a module whose default export is the `Frontend`.
@@ -57,7 +59,7 @@ A plugin that fails any check (bad JSON, missing entry, wrong export, mismatched
   }
   ```
 
-  `priority` decides which resolver runs first when several match.
+  `priority` decides which resolver runs first when several match. Set `"fallback": true` on a resolver that only makes syntactic guesses: its answers are used only when no resolver without the flag answered the same reference.
 
 ## detect and extract
 
@@ -127,6 +129,23 @@ Return `null` to leave the reference open. The manifest's `roles.resolver.scheme
 ## apiDigest (optional)
 
 When a dependency changes, dependents are re-extracted unless the dependency's *API* did not change. Implement `apiDigest(relPath, text)` to return a digest of what other files can see (exported names, signatures). Without it, the file's whole content hash is used, which is correct and slower.
+
+## Build-system frontends
+
+A frontend that reads a build system (Bazel, CMake, and later Ninja or Make) draws the package boundaries and the
+third-party packages of a C++ project. Its facts follow the build-system contract, which the core reads the same way for
+every build system. See [build-systems.md](build-systems.md) for what the two existing frontends read, and
+[ir-reference.md](ir-reference.md#build-system-packages) for the record shapes. At minimum, a build-system frontend emits:
+
+- `structure.package` `{name, root, buildSystem}` for each package directory, with an id scoped to the build system (`//lib`, `cmake:lib`).
+- `packaging.build-target` `{name, label, targetKind, output, source}` for each target, with `output` one of `executable`, `library`, `test` or `other`, and `parent` set to its package id.
+- `packaging.target-contains` from each target to each file it owns.
+- `packaging.dep-edge` from each target to a target, to a `packaging.external` node, or to `{unresolved: {scheme, text}}` when it cannot tell.
+- `packaging.external` `{name, source, manager}` for each third-party package the build declares, with `version` and `override` when known.
+- Optionally, a `cpp.include` resolver. A build-system resolver leaves `fallback` unset. The syntactic C++ resolver sets `"fallback": true`, so its answers count only when no other resolver answered (see [Resolvers](#resolvers)).
+
+Set `provenance.frontend` and a `confidence` on every record. A heuristic read of a macro is `heuristic`, and a parse the
+build file states outright is `exact`.
 
 ## Test it with the conformance kit
 

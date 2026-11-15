@@ -132,6 +132,7 @@ export function folderView(model: ArchModel): DiagramModel & { depth: number } {
       edges,
       unresolved,
       externals: [],
+      externalPackages: [],
       violations: [],
       files: model.files,
       fileImports: model.fileImports,

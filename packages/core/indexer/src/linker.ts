@@ -1,5 +1,6 @@
 import type { IRDocument, IREdge, IRFinding, IRNode, IRRecord, NodeId, Provenance } from "@insight/ir";
 import type { ProjectRoot, ResolveAnswer, Resolver, ResolveContext } from "@insight/sdk";
+import { narrowByBuildGraph } from "./narrow.js";
 import { compareStrings } from "./util.js";
 
 export interface LinkShard {
@@ -12,6 +13,8 @@ export interface LinkResolver {
   /** The plugin id, recorded in provenance.resolvedBy. */
   id: string;
   resolver: Resolver;
+  /** A syntactic guesser. Its answers are used only when no non-fallback resolver answered. */
+  fallback?: boolean;
 }
 
 export interface LinkInput {
@@ -22,12 +25,16 @@ export interface LinkInput {
   shards: LinkShard[];
   /** Resolvers in priority order, highest first. */
   resolvers: LinkResolver[];
+  /** Narrow ambiguous call candidates by the build graph after resolution. Defaults to true. */
+  narrowByBuildGraph?: boolean;
 }
 
 export interface LinkResult {
   doc: IRDocument;
   resolved: number;
   unresolved: number;
+  /** Call edges whose candidates were narrowed by the build graph. */
+  narrowed: number;
 }
 
 type Confidence = Provenance["confidence"];
@@ -91,6 +98,8 @@ export async function link(input: LinkInput): Promise<LinkResult> {
   }
 
   const extra: { edge: IREdge; file: string }[] = [];
+  // One map for this link run only, shared by every resolve call in it (see ResolveContext.runCache).
+  const runCache = new Map<string, unknown>();
   for (const { edge, file } of edges) {
     const to = edge.to;
     if (typeof to === "string" || "candidates" in to) continue;
@@ -98,12 +107,14 @@ export async function link(input: LinkInput): Promise<LinkResult> {
     const ctx: ResolveContext = {
       root: input.root,
       fromFile: file,
+      attrs: edge.attrs,
       hasFile: (p) => fileSet.has(p),
       hasNode: (n) => nodes.has(n),
       listFiles: () => input.files,
+      runCache,
     };
-    const answers: { id: string; answer: ResolveAnswer }[] = [];
-    for (const { id, resolver } of byScheme.get(ref.scheme) ?? []) {
+    const answers: { id: string; answer: ResolveAnswer; fallback: boolean }[] = [];
+    for (const { id, resolver, fallback } of byScheme.get(ref.scheme) ?? []) {
       let answer: ResolveAnswer | null;
       try {
         answer = await resolver.resolve(ref, ctx);
@@ -113,13 +124,18 @@ export async function link(input: LinkInput): Promise<LinkResult> {
       }
       if (!answer || answer.targets.length === 0) continue;
       if (!answer.targets.every((t) => nodes.has(t))) continue;
-      answers.push({ id, answer });
+      answers.push({ id, answer, fallback: fallback === true });
     }
+
+    // A fallback resolver (syntactic guesses) only answers when no build-system resolver did, so its
+    // answers are dropped whenever a non-fallback resolver answered.
+    const buildAnswers = answers.filter((a) => !a.fallback);
+    const settled = buildAnswers.length > 0 ? buildAnswers : answers;
 
     // A heuristic answer only counts when no strong answer exists. Strong answers that agree are
     // adopted together. Strong answers that disagree keep every target, each on its own edge.
-    const strong = answers.filter((a) => a.answer.confidence !== "heuristic");
-    const pool = strong.length > 0 ? strong : answers;
+    const strong = settled.filter((a) => a.answer.confidence !== "heuristic");
+    const pool = strong.length > 0 ? strong : settled;
     if (pool.length === 0) {
       unresolved++;
       continue;
@@ -166,10 +182,12 @@ export async function link(input: LinkInput): Promise<LinkResult> {
   }
   edges.push(...extra);
 
+  const narrowed = input.narrowByBuildGraph === false ? 0 : narrowByBuildGraph(nodes, edges);
+
   const doc: IRDocument = {
     nodes: [...nodes.values()].sort((a, b) => compareStrings(a.id, b.id)),
     edges: edges.map((e) => e.edge),
     findings,
   };
-  return { doc, resolved, unresolved };
+  return { doc, resolved, unresolved, narrowed };
 }

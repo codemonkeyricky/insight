@@ -77,7 +77,7 @@ describe("google/benchmark sample, static mode", () => {
     const cpp = summary.coverage.find((c) => c.facet === "structure");
     expect(cpp?.filesScanned).toBe(225);
     expect(summary.frontends.find((f) => f.id === "frontend-cpp")?.files).toBe(121);
-    expect(summary.frontends.find((f) => f.id === "frontend-bazel")?.files).toBe(4);
+    expect(summary.frontends.find((f) => f.id === "frontend-bazel")?.files).toBe(6);
     expect(summary.frontends.find((f) => f.id === "frontend-cmake")?.files).toBe(3);
   });
 

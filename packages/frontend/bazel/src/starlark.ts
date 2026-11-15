@@ -218,7 +218,9 @@ export function globsIn(toks: Tok[]): GlobCall[] {
     const close = matchClose(toks, k + 1);
     if (close < 0) break;
     const args = splitArgs(toks.slice(k + 2, close));
-    const include = stringsIn(args.find((a) => a.key === undefined)?.tokens ?? []);
+    // The patterns are the first positional argument, or the `include` keyword: glob(include = [...], exclude = [...]).
+    const includeArg = args.find((a) => a.key === "include") ?? args.find((a) => a.key === undefined);
+    const include = stringsIn(includeArg?.tokens ?? []);
     const exclude = stringsIn(args.find((a) => a.key === "exclude")?.tokens ?? []);
     out.push({ include, exclude });
     k = close;

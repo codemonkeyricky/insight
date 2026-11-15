@@ -2,7 +2,7 @@
   "frontends": [
     {
       "id": "frontend-bazel",
-      "files": 4
+      "files": 6
     },
     {
       "id": "frontend-cmake",
@@ -21,10 +21,10 @@
         "frontend-cpp"
       ],
       "filesScanned": 121,
-      "filesWithRecords": 88,
+      "filesWithRecords": 91,
       "filesWithErrors": 0,
       "nodes": 0,
-      "edges": 1625
+      "edges": 1911
     },
     {
       "facet": "concurrency",
@@ -66,11 +66,11 @@
         "frontend-cmake",
         "frontend-cpp"
       ],
-      "filesScanned": 128,
-      "filesWithRecords": 124,
+      "filesScanned": 130,
+      "filesWithRecords": 127,
       "filesWithErrors": 0,
-      "nodes": 63,
-      "edges": 1173
+      "nodes": 76,
+      "edges": 1185
     },
     {
       "facet": "state",
@@ -78,21 +78,23 @@
         "frontend-cpp"
       ],
       "filesScanned": 121,
-      "filesWithRecords": 6,
+      "filesWithRecords": 15,
       "filesWithErrors": 0,
-      "nodes": 15,
+      "nodes": 56,
       "edges": 0
     },
     {
       "facet": "structure",
       "providers": [
         "core",
+        "frontend-bazel",
+        "frontend-cmake",
         "frontend-cpp"
       ],
       "filesScanned": 225,
       "filesWithRecords": 225,
       "filesWithErrors": 0,
-      "nodes": 1578,
+      "nodes": 1633,
       "edges": 0
     },
     {
@@ -111,7 +113,7 @@
     {
       "id": "lens-calls",
       "status": "ok",
-      "findings": 364
+      "findings": 370
     },
     {
       "id": "lens-concurrency-map",
@@ -121,7 +123,7 @@
     {
       "id": "lens-dependencies",
       "status": "ok",
-      "findings": 0
+      "findings": 1
     },
     {
       "id": "lens-effects",
@@ -163,7 +165,7 @@
     "asyncWithoutAwait": 0
   },
   "recordsByKind": {
-    "calls.call": 1554,
+    "calls.call": 1840,
     "calls.reference": 71,
     "concurrency.spawn-process": 1,
     "concurrency.spawn-thread": 5,
@@ -174,23 +176,26 @@
     "effects.fs.write": 2,
     "effects.os.call": 14,
     "effects.proc.exec": 2,
-    "finding": 47,
+    "finding": 21,
     "flow.branch": 536,
     "flow.branch-arm": 594,
     "flow.loop": 366,
     "flow.switch": 12,
     "flow.throw": 8,
     "flow.try": 1,
-    "packaging.build-target": 63,
-    "packaging.dep-edge": 99,
+    "packaging.build-target": 64,
+    "packaging.dep-edge": 97,
+    "packaging.external": 12,
     "packaging.include": 889,
-    "packaging.target-contains": 185,
-    "state.holder": 7,
-    "state.write": 8,
+    "packaging.target-contains": 199,
+    "state.holder": 21,
+    "state.test": 3,
+    "state.write": 32,
     "structure.file": 225,
-    "structure.function": 1038,
+    "structure.function": 1067,
     "structure.namespace": 191,
-    "structure.type": 124,
+    "structure.package": 6,
+    "structure.type": 144,
     "sync.lock-acquire": 4,
     "sync.lock-release": 5,
     "x-cpp.scoped-lock": 1

@@ -229,3 +229,72 @@ describe("system-tab kinds (os.call, syscall, channels, sync)", () => {
     expect(report.ok).toBe(true);
   });
 });
+
+describe("packaging.external and build-target visibility", () => {
+  const lines = (...records: unknown[]) => records.map((r) => JSON.stringify(r)).join("\n");
+  const external = (attrs: Record<string, unknown>) => ({
+    node: { id: "@abseil-cpp", facet: "packaging", kind: "packaging.external", attrs, provenance: { frontend: "frontend-bazel", confidence: "exact" } },
+  });
+
+  it("validates a bzlmod external package", () => {
+    const report = validateIR(lines(external({ name: "abseil-cpp", version: "20240116.2", source: "bzlmod", manager: "bazel" })), createCoreRegistry());
+    expect(report.errors).toEqual([]);
+    expect(report.ok).toBe(true);
+  });
+
+  it("rejects an external package without source", () => {
+    const report = validateIR(lines(external({ name: "abseil-cpp", version: "20240116.2" })), createCoreRegistry());
+    expect(report.ok).toBe(false);
+    expect(report.errors.some((e) => e.message.includes("must have required property 'source'"))).toBe(true);
+  });
+
+  it("rejects an external package without manager", () => {
+    const report = validateIR(lines(external({ name: "abseil-cpp", version: "20240116.2", source: "bzlmod" })), createCoreRegistry());
+    expect(report.ok).toBe(false);
+    expect(report.errors.some((e) => e.message.includes("must have required property 'manager'"))).toBe(true);
+  });
+
+  it("accepts open source and override values from any build system", () => {
+    const cmake = validateIR(
+      lines(external({ name: "fmt", source: "find_package", manager: "cmake", override: "local" })),
+      createCoreRegistry(),
+    );
+    expect(cmake.errors).toEqual([]);
+    expect(cmake.ok).toBe(true);
+  });
+
+  it("validates a build target with an output kind", () => {
+    const target = {
+      node: { id: "cmake:tools", facet: "packaging", kind: "packaging.build-target", attrs: { name: "tools", source: "tool", output: "executable" }, provenance: { frontend: "frontend-cmake", confidence: "exact" } },
+    };
+    const report = validateIR(lines(target), createCoreRegistry());
+    expect(report.errors).toEqual([]);
+    expect(report.ok).toBe(true);
+  });
+
+  it("rejects a build target output outside the contract", () => {
+    const target = {
+      node: { id: "//app:x", facet: "packaging", kind: "packaging.build-target", attrs: { name: "x", source: "tool", output: "binary" }, provenance: { frontend: "frontend-bazel", confidence: "exact" } },
+    };
+    const report = validateIR(lines(target), createCoreRegistry());
+    expect(report.ok).toBe(false);
+  });
+
+  it("accepts buildSystem on a structure.package", () => {
+    const pkg = {
+      node: { id: "cmake:lib", facet: "structure", kind: "structure.package", attrs: { name: "lib", root: "lib", buildSystem: "cmake" }, provenance: { frontend: "frontend-cmake", confidence: "exact" } },
+    };
+    const report = validateIR(lines(pkg), createCoreRegistry());
+    expect(report.errors).toEqual([]);
+    expect(report.ok).toBe(true);
+  });
+
+  it("validates a build target with visibility", () => {
+    const target = {
+      node: { id: "//app:main", facet: "packaging", kind: "packaging.build-target", attrs: { name: "main", source: "tool", visibility: ["//visibility:public"] }, provenance: { frontend: "frontend-bazel", confidence: "exact" } },
+    };
+    const report = validateIR(lines(target), createCoreRegistry());
+    expect(report.errors).toEqual([]);
+    expect(report.ok).toBe(true);
+  });
+});

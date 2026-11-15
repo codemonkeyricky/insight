@@ -1,0 +1,9 @@
+{
+  "lockFileVersion": 10,
+  "registryFileHashes": {
+    "https://bcr.bazel.build/modules/abseil-cpp/20240116.2/MODULE.bazel": "sha256-abseil",
+    "https://bcr.bazel.build/modules/googletest/1.14.0/MODULE.bazel": "sha256-gtest",
+    "https://bcr.bazel.build/modules/sample/0.1.0/MODULE.bazel": "sha256-root"
+  },
+  "moduleExtensions": {}
+}

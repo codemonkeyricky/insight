@@ -165,7 +165,7 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
 
   const inside = (file: string | undefined): file is string => file !== undefined && inScope(file, scope) && fileSet.has(file);
   const fileSet = new Set(files);
-  const packages = packageRoots(model.files);
+  const packages = packageRoots(model.files, nodePackageRoots(model));
 
   // Ownership: a file belongs to the outermost package strictly under the scope, else to its child folder or file.
   const compOf = new Map<string, Comp>();
@@ -802,8 +802,11 @@ export function componentOf(file: string, scope: string, packages: string[], sco
   return { id: folder, label: folder, path: folder, kind: "folder" };
 }
 
-/** The package roots of the project: the folders of its package.json files, outside fixture folders. The root package is not a root here. */
-export function packageRoots(files: string[]): string[] {
+/**
+ * The package roots of the project: the folders of its package.json files, plus the `extra` roots (see `nodePackageRoots`),
+ * outside fixture folders. The root package is not a root here.
+ */
+export function packageRoots(files: string[], extra: string[] = []): string[] {
   const roots = new Set<string>();
   for (const file of files) {
     const slash = file.lastIndexOf("/");
@@ -812,7 +815,28 @@ export function packageRoots(files: string[]): string[] {
     if (NOT_A_PACKAGE.test(dir)) continue;
     roots.add(dir);
   }
+  for (const dir of extra) {
+    if (dir === "." || dir === "" || NOT_A_PACKAGE.test(dir)) continue;
+    roots.add(dir);
+  }
   return [...roots].sort();
+}
+
+const nodeRootCache = new WeakMap<ProjectModel, string[]>();
+
+/** The package roots of structure.package nodes (a build system's packages, such as Bazel's), from each node's `root` attribute. The root package "." is not one here. */
+export function nodePackageRoots(model: ProjectModel): string[] {
+  const cached = nodeRootCache.get(model);
+  if (cached !== undefined) return cached;
+  const roots = new Set<string>();
+  for (const node of model.doc.nodes) {
+    if (node.kind !== "structure.package") continue;
+    const root = (node.attrs as { root?: unknown }).root;
+    if (typeof root === "string" && root !== "." && root !== "") roots.add(root);
+  }
+  const list = [...roots].sort();
+  nodeRootCache.set(model, list);
+  return list;
 }
 
 /** The verb of an HTTP method: reads for GET and HEAD, writes for the rest that change state, calls when unknown. */

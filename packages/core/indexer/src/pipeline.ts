@@ -54,6 +54,8 @@ export interface IndexOptions extends LoadOptions {
   stateDir?: string;
   /** Write the SQLite index to `index.sqlite`. Defaults to true. Off when the index is only read through the server. */
   writeIndexDb?: boolean;
+  /** Narrow ambiguous call candidates by the build graph. Defaults to true. */
+  narrowByBuildGraph?: boolean;
   /** Caps on what the run reads. Unset means no caps. Files over `maxFileBytes` are skipped with a warning. */
   limits?: IndexLimits;
   /** Snapshots kept per project, the newest first. Defaults to KEEP_SNAPSHOTS. */
@@ -70,6 +72,8 @@ export interface IndexReport {
   findings: number;
   resolved: number;
   unresolved: number;
+  /** Call edges whose candidates the build graph narrowed. */
+  narrowed: number;
   /** Frontends that ran, with the number of files they cover. */
   frontends: { id: string; version: string; files: number }[];
   /** Frontends that did not run, and why. */
@@ -216,7 +220,14 @@ export async function runIndex(opts: IndexOptions): Promise<IndexReport> {
     const inputMatch = inputGlobs.length > 0 ? picomatch(inputGlobs) : () => false;
     const files = allFiles.filter((f) => fileMatch(f));
     const inputFiles = allFiles.filter((f) => inputMatch(f));
-    const inputsHash = sha256(canonicalJson(inputFiles.map((p) => [p, scan.files.get(p)])));
+    const listingGlobs = manifest.inputListing ?? [];
+    const listingMatch = listingGlobs.length > 0 ? picomatch(listingGlobs) : () => false;
+    const contents = inputFiles.map((p) => [p, scan.files.get(p)]);
+    // Without inputListing the hash is the same as before, so existing shard keys do not change.
+    const inputsHash =
+      listingGlobs.length > 0
+        ? sha256(canonicalJson({ contents, listing: allFiles.filter((f) => listingMatch(f)).sort() }))
+        : sha256(canonicalJson(contents));
 
     const previous = state.frontends[manifest.id];
     const reusable = previous && previous.version === frontend.version && previous.inputsHash === inputsHash ? previous : undefined;
@@ -382,8 +393,10 @@ export async function runIndex(opts: IndexOptions): Promise<IndexReport> {
     root: projectRoot,
     files: allFiles,
     shards,
-    resolvers: plugins.resolvers.map((r) => ({ id: r.manifest.id, resolver: r.resolver })),
+    resolvers: plugins.resolvers.map((r) => ({ id: r.manifest.id, resolver: r.resolver, fallback: r.fallback })),
+    narrowByBuildGraph: opts.narrowByBuildGraph,
   });
+  if (linked.narrowed > 0) say(`linker: narrowed ${linked.narrowed} calls by build graph`);
   const text = serializeDocument(linked.doc);
   const validation = validateIR(text, plugins.registry, { closed: true });
   const problems = validation.errors.slice(0, 50).map((e) => (e.line ? `line ${e.line}: ${e.message}` : e.message));
@@ -472,6 +485,7 @@ export async function runIndex(opts: IndexOptions): Promise<IndexReport> {
     findings: linked.doc.findings.length,
     resolved: linked.resolved,
     unresolved: linked.unresolved,
+    narrowed: linked.narrowed,
     frontends: frontendReports,
     skipped,
     disabled: plugins.disabled,

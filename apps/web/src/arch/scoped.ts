@@ -287,6 +287,7 @@ export function scopedView(model: ArchModel, scope: string): ScopedDiagram | nul
       edges,
       unresolved,
       externals,
+      externalPackages: model.externalPackages,
       violations,
       files: model.files,
       fileImports: model.fileImports,

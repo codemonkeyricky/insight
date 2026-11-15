@@ -2,6 +2,9 @@ import picomatch from "picomatch";
 import { findCycles, type GraphView, type Lens, type LensFinding, type LensResult, type TableView } from "@insight/sdk";
 import type { NodeId } from "@insight/ir";
 import { buildModuleGraph } from "@insight/model";
+import { buildGraphRules, type BuildGraphConfig } from "./build-graph.js";
+
+export type { BuildGraphConfig } from "./build-graph.js";
 
 /** A layer rule the user writes in .insight/lenses/lens-dependencies.json. */
 export interface DependencyRule {
@@ -14,6 +17,8 @@ export interface DependencyRule {
 
 export interface DependencyConfig {
   rules?: DependencyRule[];
+  /** The build-graph rules (undeclared include, unused dependency, visibility). Each is on unless set to false. */
+  buildGraph?: BuildGraphConfig;
 }
 
 export const lensDependencies: Lens = {
@@ -94,6 +99,9 @@ export const lensDependencies: Lens = {
       }),
     };
 
+    const buildGraph = buildGraphRules(view, config.buildGraph ?? {});
+    if (buildGraph) findings.push(...buildGraph.findings);
+
     const cycleTable: TableView = {
       type: "table",
       id: "cycles",
@@ -106,7 +114,7 @@ export const lensDependencies: Lens = {
     const callCount = [...pairs.values()].filter((p) => p.calls > 0).length;
     return {
       findings: findings.map((f) => ({ ...f, lens: "lens-dependencies" })) as LensFinding[],
-      views: [graph, cycleTable],
+      views: [graph, cycleTable, ...(buildGraph ? [buildGraph.table] : [])],
       metrics: {
         modules: sortedModules.filter((m) => local.has(m)).length,
         externalModules: sortedModules.filter((m) => !local.has(m)).length,
@@ -115,6 +123,8 @@ export const lensDependencies: Lens = {
         cycles: cycles.length,
         unresolvedImports: unresolved,
         ruleViolations: findings.filter((f) => f.id.startsWith("rule:")).length,
+        // Added only when the project has build targets, so a TypeScript-only project gets the same metrics as before.
+        ...(buildGraph ? buildGraph.metrics : {}),
       },
     };
   },

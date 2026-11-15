@@ -64,10 +64,19 @@ export interface ResolveContext {
   root: ProjectRoot;
   /** Project-relative path of the file that holds the unresolved reference. */
   fromFile: string;
+  /** The attributes of the edge that holds the reference (for an include, `system` is true for `<...>`). */
+  attrs?: Readonly<Record<string, unknown>>;
   hasFile(relPath: string): boolean;
   /** True when a node with this id exists in the linked IR. */
   hasNode(id: NodeId): boolean;
   listFiles(): string[];
+  /**
+   * A map that lives exactly one link run: the linker creates it fresh for each run and passes the same map to every
+   * resolve call of that run, so a plugin may memoize anything derived from the files there (a parsed build model, for
+   * example). Keys are shared by all resolvers, so prefix them with the plugin id (`"frontend-bazel:model"`). Absent
+   * when a caller resolves outside a link run, so a plugin must still work without it.
+   */
+  runCache?: Map<string, unknown>;
 }
 
 export interface ResolveAnswer {

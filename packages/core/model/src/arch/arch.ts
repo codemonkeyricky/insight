@@ -1,5 +1,5 @@
-import type { IRView } from "@insight/sdk";
-import type { IREdge, NodeId, Span } from "@insight/ir";
+import { edgeTargets, type IRView } from "@insight/sdk";
+import type { IREdge, IRNode, NodeId, Span } from "@insight/ir";
 import { buildModuleGraph } from "./module-graph.js";
 
 /** Layer order used when the caller does not supply its own `layerOf`. */
@@ -72,6 +72,11 @@ export interface ArchEdge {
   confidence: IREdge["provenance"]["confidence"];
   /** Import spans from every module pair of the two packages, merged and sorted. */
   sites: Span[];
+  /**
+   * Set only when the project has build-target dependencies (packaging.dep-edge between two targets): true when a target
+   * of `from` depends on a target of `to`, false otherwise. Absent in a project without them.
+   */
+  declared?: boolean;
 }
 
 export interface ArchUnresolved {
@@ -80,12 +85,34 @@ export interface ArchUnresolved {
   span?: Span;
 }
 
-/** A package a project package imports from outside the project (an npm package or a Node built-in), counted by import. */
+/**
+ * A package a project package imports from outside the project (an npm package or a Node built-in), counted by import.
+ * An external package a build system declares (a packaging.external node) gets its own entry, with `id` set.
+ */
 export interface ArchExternal {
   fromPackage: string;
-  /** The package name without any subpath: "@scope/name", "name" or "node:fs". */
+  /** The package name without any subpath: "@scope/name", "name" or "node:fs". For a packaging.external node, its attrs.name. */
   name: string;
   imports: number;
+  /** The packaging.external node id ("@abseil-cpp"). Set only for externals a build system declares or an include resolves to. */
+  id?: string;
+  version?: string;
+  /** True when a build target of the package depends on the external (a packaging.dep-edge). Absent otherwise. */
+  declared?: boolean;
+}
+
+/** An external package the project's build declares: one packaging.external node. */
+export interface ArchExternalPackage {
+  id: string;
+  name: string;
+  version?: string;
+  source: string;
+  /** The build system that declares it ("bazel", "cmake"), from the node's attrs. Absent when the node names none. */
+  manager?: string;
+  dev?: boolean;
+  override?: string;
+  registry?: string;
+  url?: string;
 }
 
 export interface ArchViolation {
@@ -102,6 +129,8 @@ export interface ArchModel {
   /** Relative or absolute imports that resolved to nothing. */
   unresolved: ArchUnresolved[];
   externals: ArchExternal[];
+  /** Every packaging.external node of the project (a build system's declared external packages), sorted by id. Empty when none. */
+  externalPackages: ArchExternalPackage[];
   violations: ArchViolation[];
   /** Every source file of the project, sorted by path. */
   files: ArchFile[];
@@ -135,12 +164,39 @@ const lastSegment = (path: string): string => path.slice(path.lastIndexOf("/") +
  * from package.json files among the structure.file nodes. The TypeScript frontend emits no
  * package nodes, so the second source is the one that usually applies.
  */
+/** The buildSystem a structure.package node names, or undefined when it names none. */
+function buildSystemOf(node: IRNode): string | undefined {
+  const value = (node.attrs as { buildSystem?: unknown }).buildSystem;
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+/**
+ * The structure.package node that names a directory's package when several build systems describe it. The node whose
+ * buildSystem sorts first wins; a node with no buildSystem sorts last; ties go to the lower node id. So the result does
+ * not depend on record order.
+ */
+function winningPackage(a: IRNode, b: IRNode): IRNode {
+  const sa = buildSystemOf(a);
+  const sb = buildSystemOf(b);
+  if (sa !== sb) {
+    if (sa === undefined) return b;
+    if (sb === undefined) return a;
+    return sa < sb ? a : b;
+  }
+  return a.id <= b.id ? a : b;
+}
+
 function packageRoots(view: IRView): PkgRoot[] {
   const roots = new Map<string, PkgRoot>();
+  const winners = new Map<string, IRNode>();
   for (const node of view.nodes({ kind: "structure.package" })) {
-    const attrs = node.attrs as { name?: unknown; root?: unknown };
+    const attrs = node.attrs as { root?: unknown };
     const path = typeof attrs.root === "string" ? attrs.root : node.id;
-    if (roots.has(path)) continue;
+    const current = winners.get(path);
+    winners.set(path, current === undefined ? node : winningPackage(current, node));
+  }
+  for (const [path, node] of winners) {
+    const attrs = node.attrs as { name?: unknown };
     roots.set(path, { path, name: typeof attrs.name === "string" ? attrs.name : path === "." ? "." : lastSegment(path) });
   }
   for (const node of view.nodes({ kind: "structure.file" })) {
@@ -274,10 +330,95 @@ export function archModel(view: IRView, options: ArchOptions = {}): ArchModel {
       externalCounts.set(key, cur);
     }
   }
+  // Build-system facts. A target's package is its parent structure.package node's root, else the package of its first file.
+  const targetFile = new Map<NodeId, NodeId>();
+  for (const e of view.edges({ facet: "packaging", kind: "packaging.target-contains" })) {
+    const file = edgeTargets(e).nodes[0];
+    if (file !== undefined && !targetFile.has(e.from)) targetFile.set(e.from, file);
+  }
+  const packageOfTarget = (target: NodeId): string | undefined => {
+    const node = view.node(target);
+    const parent = node?.parent !== undefined ? view.node(node.parent) : undefined;
+    if (parent?.kind === "structure.package") {
+      const root = (parent.attrs as { root?: unknown }).root;
+      if (typeof root === "string") return root;
+    }
+    const file = targetFile.get(target);
+    return file === undefined ? undefined : pathOf(file);
+  };
+  const isPackagingExternal = (id: NodeId): boolean => view.node(id)?.kind === "packaging.external";
+  const packagingExternals = new Map<string, ArchExternal>();
+  const externalOf = (fromPackage: string, id: NodeId): ArchExternal => {
+    const key = `${fromPackage}\0${id}`;
+    let cur = packagingExternals.get(key);
+    if (cur === undefined) {
+      const attrs = (view.node(id)?.attrs ?? {}) as { name?: unknown; version?: unknown };
+      cur = { fromPackage, name: typeof attrs.name === "string" ? attrs.name : id, imports: 0, id };
+      if (typeof attrs.version === "string") cur.version = attrs.version;
+      packagingExternals.set(key, cur);
+    }
+    return cur;
+  };
+  for (const e of view.edges({ facet: "packaging", kind: "packaging.dep-edge" })) {
+    if (typeof e.to !== "string" || !isPackagingExternal(e.to)) continue;
+    const fromPackage = packageOfTarget(e.from);
+    if (fromPackage !== undefined) externalOf(fromPackage, e.to).declared = true;
+  }
+  for (const e of [...view.edges({ facet: "packaging", kind: "packaging.import" }), ...view.edges({ facet: "packaging", kind: "packaging.include" })]) {
+    const fromPackage = pathOf(e.from);
+    if (fromPackage === undefined) continue;
+    for (const t of edgeTargets(e).nodes) if (isPackagingExternal(t)) externalOf(fromPackage, t).imports += 1;
+  }
+  // Target-to-target dependencies make the declared edges. Each one across two packages has its rolled edge, which is
+  // declared; every other edge is not. Without any such dependency, no edge carries the field.
+  const targetDeps: Array<{ from: NodeId; to: NodeId; confidence: ArchEdge["confidence"] }> = [];
+  for (const e of view.edges({ facet: "packaging", kind: "packaging.dep-edge" })) {
+    if (typeof e.to !== "string") continue;
+    if (view.node(e.from)?.kind !== "packaging.build-target" || view.node(e.to)?.kind !== "packaging.build-target") continue;
+    targetDeps.push({ from: e.from, to: e.to, confidence: e.provenance.confidence });
+  }
+  let declaredPairs: Set<string> | undefined;
+  if (targetDeps.length > 0) {
+    declaredPairs = new Set();
+    for (const dep of targetDeps) {
+      const pa = packageOfTarget(dep.from);
+      const pb = packageOfTarget(dep.to);
+      if (pa === undefined || pb === undefined || pa === pb) continue;
+      const key = `${pa}\0${pb}`;
+      declaredPairs.add(key);
+      if (!rolled.has(key)) rolled.set(key, { from: pa, to: pb, imports: 0, calls: 0, confidence: dep.confidence, sites: [] });
+    }
+  }
   const edges: ArchEdge[] = [...rolled.values()]
-    .map((e) => ({ ...e, sites: mergeSpans(e.sites) }))
+    .map((e) => {
+      const edge: ArchEdge = { ...e, sites: mergeSpans(e.sites) };
+      if (declaredPairs !== undefined) edge.declared = declaredPairs.has(`${e.from}\0${e.to}`);
+      return edge;
+    })
     .sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to));
-  const externals = [...externalCounts.values()].sort((a, b) => a.fromPackage.localeCompare(b.fromPackage) || b.imports - a.imports || a.name.localeCompare(b.name));
+  const externals = [...externalCounts.values(), ...packagingExternals.values()].sort(
+    (a, b) => a.fromPackage.localeCompare(b.fromPackage) || b.imports - a.imports || a.name.localeCompare(b.name) || (a.id ?? "").localeCompare(b.id ?? ""),
+  );
+
+  const optStr = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+  const externalPackages: ArchExternalPackage[] = [];
+  for (const node of view.nodes({ kind: "packaging.external" })) {
+    const a = node.attrs as Record<string, unknown>;
+    const ext: ArchExternalPackage = { id: node.id, name: optStr(a.name) ?? node.id, source: optStr(a.source) ?? "" };
+    const version = optStr(a.version);
+    if (version !== undefined) ext.version = version;
+    const manager = optStr(a.manager);
+    if (manager !== undefined) ext.manager = manager;
+    if (typeof a.dev === "boolean") ext.dev = a.dev;
+    const override = optStr(a.override);
+    if (override !== undefined) ext.override = override;
+    const registry = optStr(a.registry);
+    if (registry !== undefined) ext.registry = registry;
+    const url = optStr(a.url);
+    if (url !== undefined) ext.url = url;
+    externalPackages.push(ext);
+  }
+  externalPackages.sort((a, b) => a.id.localeCompare(b.id));
 
   const fileImports: ArchFileImport[] = [];
   for (const [key, info] of pairs) {
@@ -305,5 +446,5 @@ export function archModel(view: IRView, options: ArchOptions = {}): ArchModel {
   if (packageList.some((pkg) => pkg.layer === "other")) layers.push("other");
 
   const fileList = [...files.values()].sort((a, b) => a.path.localeCompare(b.path));
-  return { layers, packages: packageList, edges, unresolved, externals, violations, files: fileList, fileImports };
+  return { layers, packages: packageList, edges, unresolved, externals, externalPackages, violations, files: fileList, fileImports };
 }
