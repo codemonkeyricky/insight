@@ -431,10 +431,8 @@ export function emitUnit(project: Project, rel: string): IRBatch {
       return;
     }
     if (isAtomicMethod(v.type, method)) {
-      // The object names the atomic when it is a plain name or a member path. Any other object leaves it unnamed.
-      const obj = nameText(fnNode.childForFieldName("argument") ?? undefined);
-      const lock = obj === DYNAMIC ? undefined : lockIdentity(obj, undefined, project.members);
-      emitNode(call, container, "sync", "sync.atomic-op", "atomic", { op: "op", api, ...(lock !== undefined ? { lock } : {}) }, prov);
+      // Named by the resolved variable, as condvars and semaphores are: Class::member, a qualified global, or <dynamic> for a local.
+      emitNode(call, container, "sync", "sync.atomic-op", "atomic", { op: "op", api, lock: v.channel }, prov);
     }
   };
 
@@ -543,9 +541,7 @@ export function emitUnit(project: Project, rel: string): IRBatch {
     const v = resolveVar(project, ref.name, n, classAt(project, rel, n), ref.viaThis);
     if (v?.type !== "std::atomic") return;
     const op = n.childForFieldName("operator")?.text === "--" ? "operator--" : "operator++";
-    const obj = nameText(n.childForFieldName("argument") ?? undefined);
-    const lock = obj === DYNAMIC ? undefined : lockIdentity(obj, undefined, project.members);
-    emitNode(n, container, "sync", "sync.atomic-op", "atomic", { op: "op", api: `std::atomic::${op}`, ...(lock !== undefined ? { lock } : {}) }, prov);
+    emitNode(n, container, "sync", "sync.atomic-op", "atomic", { op: "op", api: `std::atomic::${op}`, lock: v.channel }, prov);
   };
 
   const handleDeclaration = (decl: SyntaxNode, container: NodeId, fn: FnDecl | undefined) => {

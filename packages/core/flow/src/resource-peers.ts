@@ -33,7 +33,8 @@ function resourceOf(node: FlowNode): { kind: "lock" | "channel"; name: string; o
   }
   const text = node.title ?? node.label;
   const lock = /^🔒 (.+?)(?: \(shared\))?$/.exec(text);
-  if (lock?.[1] !== undefined) return { kind: "lock", name: lock[1] };
+  // A <dynamic> lock is unresolved: it names no resource, so it gets no peers.
+  if (lock?.[1] !== undefined) return lock[1] === "<dynamic>" ? undefined : { kind: "lock", name: lock[1] };
   const send = /^▶ send (.+)$/.exec(text);
   if (send?.[1] !== undefined) return { kind: "channel", name: send[1], op: "send" };
   const recv = /^◀ recv (.+)$/.exec(text);

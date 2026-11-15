@@ -14,10 +14,10 @@ export function topLevelName(file: string): string {
   return `${base} · top level`;
 }
 
-/** One fact inside a function that takes part in the flow, reduced to what the chart needs. */
 /** The lock or channel a sync row names. */
 type SyncResource = { kind: "lock" | "channel"; name: string };
 
+/** One fact inside a function that takes part in the flow, reduced to what the chart needs. */
 interface Ev {
   type: "call" | "await" | "spawn" | "effect" | "sync" | "branch" | "switch" | "arm" | "loop" | "block" | "try" | "return" | "throw" | "break" | "continue";
   start: Pos;
@@ -140,10 +140,13 @@ function syncInfo(n: IRNode): { label: string; text: string; lock?: string; lock
     case "x-cpp.scoped-lock": {
       const lock = str(a.lock);
       const shared = a.mode === "shared" ? " (shared)" : "";
+      // An unnamed lock is a plain row: no lock, so it never frames with other unnamed locks.
+      if (lock === "") return { label: `🔒 (unnamed)${shared}`, text: `lock (unnamed)${shared}` };
       return { label: `🔒 ${lock}${shared}`, text: `lock ${lock}${shared}`, lock, lockOp: "acquire" };
     }
     case "sync.lock-release": {
       const lock = str(a.lock);
+      if (lock === "") return { label: "🔓 (unnamed)", text: "unlock (unnamed)" };
       return { label: `🔓 ${lock}`, text: `unlock ${lock}`, lock, lockOp: "release" };
     }
     case "sync.condvar": {
@@ -182,7 +185,7 @@ function syncResourceOf(n: IRNode): SyncResource | undefined {
     case "x-cpp.scoped-lock":
     case "sync.lock-release": {
       const lock = str(n.attrs.lock);
-      return lock === "" ? undefined : { kind: "lock", name: lock };
+      return lock === "" || lock === "<dynamic>" ? undefined : { kind: "lock", name: lock };
     }
     case "concurrency.channel-send":
     case "concurrency.channel-recv": {

@@ -268,3 +268,19 @@ describe("lock frames that cross, and what they count", () => {
   });
 });
 
+describe("unnamed locks", () => {
+  it("leaves unnamed acquires and releases as plain rows, never framed with each other", () => {
+    const nodes: IRNode[] = [
+      fn("grab", 60, 70),
+      fact("grab:acq1", fid("grab"), "sync", "sync.lock-acquire", 61, {}),
+      write("grab", 62, "a"),
+      fact("grab:rel1", fid("grab"), "sync", "sync.lock-release", 63, {}),
+      fact("grab:acq2", fid("grab"), "sync", "sync.lock-acquire", 64, {}),
+      write("grab", 65, "b"),
+      fact("grab:rel2", fid("grab"), "sync", "sync.lock-release", 66, {}),
+    ];
+    const items = itemsOf(nodes, [], "grab");
+    expect(items.some((i) => i.t === "fork")).toBe(false);
+    expect(labels(items)).toEqual(["🔒 (unnamed)", "write · a", "🔓 (unnamed)", "🔒 (unnamed)", "write · b", "🔓 (unnamed)"]);
+  });
+});

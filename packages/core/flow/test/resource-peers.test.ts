@@ -100,3 +100,12 @@ describe("withResourcePeers: the resource and the thread label", () => {
   });
 });
 
+describe("withResourcePeers: dynamic locks", () => {
+  it("gives a <dynamic> lock row no peer text, even when a model lock of that name has sites", () => {
+    const m = model([res("lock", "<dynamic>", [site("src/a.ts#consume", "acquire", 6), site("src/a.ts#worker", "acquire", 2)])]);
+    const chart = chartOf([node("1", "sync", "🔒 <dynamic>")]);
+    const out = withResourcePeers(chart, "src/a.ts#worker", m);
+    expect(out.nodes[0]?.title).toBeUndefined();
+    expect(out.nodes[0]?.label).toBe("🔒 <dynamic>");
+  });
+});

@@ -997,7 +997,13 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     // The unfolded chart gets the same annotations as a loaded one: its messages, then its resource peers.
     const finish = (chart: FunctionFlow): FunctionFlow => {
       const withMessages = store?.messagesOf(fnId, chart) ?? chart;
-      return source.annotateChart !== undefined ? source.annotateChart(cur, fnId, withMessages) : withMessages;
+      if (source.annotateChart === undefined) return withMessages;
+      // An annotation that throws leaves the chart as it is, so the unfold still opens (as loadChart does).
+      try {
+        return source.annotateChart(cur, fnId, withMessages);
+      } catch {
+        return withMessages;
+      }
     };
     setExp(toggleFold(placeAll(cur, expRef.current), fnId, foldId, chartSource, placeView(cur), flow.coupling, finish));
   };
