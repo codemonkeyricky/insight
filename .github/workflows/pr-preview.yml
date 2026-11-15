@@ -44,8 +44,10 @@ jobs:
         id: deploy
         working-directory: ${{ runner.temp }}/out
         run: |
-          json="$(vercel deploy --prebuilt --archive=tgz --token "$VERCEL_TOKEN")"
-          url="$(printf '%s' "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["deployment"]["url"])')"
+          out="$(vercel deploy --prebuilt --archive=tgz --token "$VERCEL_TOKEN")"
+          url="$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["deployment"]["url"])' 2>/dev/null || true)"
+          [ -n "$url" ] || url="$(printf '%s\n' "$out" | grep -oE 'https://[A-Za-z0-9.-]+\.vercel\.app' | tail -1 || true)"
+          [ -n "$url" ] || { echo "::error::no deployment URL in vercel deploy output"; printf '%s\n' "$out" | tail -5; exit 1; }
           echo "url=$url" >> "$GITHUB_OUTPUT"
           echo "bundle=$(basename "$(ls .vercel/output/static/assets/index-*.js | head -1)")" >> "$GITHUB_OUTPUT"
       - name: Alias
