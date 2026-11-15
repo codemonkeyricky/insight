@@ -586,3 +586,71 @@ describe("system model: review fixes", () => {
     expect(new Set(sems.map((r) => r.id)).size).toBe(2);
   });
 });
+
+describe("system model: spawns and posts of the same component", () => {
+  it("draws a grounded spawn to the worker's slice, even when the spawner is in the same component", () => {
+    const s = tsSystem();
+    const spawns = (s.edges ?? []).filter((e) => e.verb === "spawns" && e.to === "thread:src/main.ts@spawn:10|src");
+    expect(spawns.map((e) => e.from)).toEqual(["thread:main:entry:node:src/main.ts|src"]);
+  });
+
+  it("draws a flat spawn within one component as an edge to a worker box of the file", () => {
+    // A spawn the exec model does not know (its node kind is not a spawn), so the scope has no runtime context.
+    const spawnNode = fx.node("packages/a/a.ts@spawn:5", "concurrency", "concurrency.spawn-unknown", { attrs: { api: "Worker" }, parent: "packages/a/a.ts#run", span: fx.span("packages/a/a.ts", 5, 2, 5, 20) });
+    const doc: IRDocument = {
+      nodes: [file("packages/a/package.json"), file("packages/a/a.ts"), file("packages/a/b.ts"), fn("packages/a/a.ts", "run"), fn("packages/a/b.ts", "work"), spawnNode],
+      edges: [fx.edge("packages/a/a.ts@spawn:5", "packages/a/b.ts#work", "concurrency", "concurrency.spawns", { attrs: { how: "thread" }, span: fx.span("packages/a/a.ts", 5, 2, 5, 20) })],
+      findings: [],
+    };
+    const s = systemModel(buildProjectModel(doc), "");
+    expect(s.runtime).toBe("none");
+    expect(s.edges.map((e) => `${e.from}>${e.verb}>${e.to}`)).toEqual(["packages/a>spawns>worker:packages/a/b.ts"]);
+    expect(s.externals.find((x) => x.id === "worker:packages/a/b.ts")).toEqual(expect.objectContaining({ label: "b.ts", category: "worker" }));
+  });
+
+  it("sends a worker's post with no dispatch to its spawner's inbox, not to the unknown peer", () => {
+    const doc: IRDocument = {
+      nodes: [
+        file("package.json"), file("src/main.ts"), file("src/worker.ts"),
+        moduleFn("src/main.ts", { nodeEntry: true }), fn("src/main.ts", "main"),
+        moduleFn("src/worker.ts"), fn("src/worker.ts", "handle"),
+        effect("src/worker.ts", "handle", 6, "effects.message.post", { api: "postMessage" }),
+        spawn("src/main.ts", "main", 10, "Worker", "src/worker.ts#(module)").node,
+      ],
+      edges: [
+        call("src/main.ts#(module)", "src/main.ts#main", "src/main.ts", 30),
+        call("src/worker.ts#(module)", "src/worker.ts#handle", "src/worker.ts", 1),
+        spawn("src/main.ts", "main", 10, "Worker", "src/worker.ts#(module)").edge,
+      ],
+      findings: [],
+    };
+    const s = systemModel(buildProjectModel(doc), "");
+    expect(s.runtime).toBe("grounded");
+    const from = "thread:src/main.ts@spawn:10|src/worker.ts";
+    expect((s.edges ?? []).filter((e) => e.verb === "enqueues" && e.from === from).map((e) => e.to)).toEqual(["queue:thread:main:entry:node:src/main.ts:inbox"]);
+    expect((s.resources ?? []).some((r) => r.label === "inbox (unknown peer)")).toBe(false);
+  });
+
+  it("sends a post from the spawning function to the one worker it spawns, and the worker reads its inbox", () => {
+    const doc: IRDocument = {
+      nodes: [
+        file("package.json"), file("src/main.ts"), file("src/worker.ts"),
+        moduleFn("src/main.ts", { nodeEntry: true }), fn("src/main.ts", "main"),
+        moduleFn("src/worker.ts"), fn("src/worker.ts", "work"),
+        effect("src/main.ts", "main", 12, "effects.message.post", { api: "postMessage" }),
+        spawn("src/main.ts", "main", 10, "Worker", "src/worker.ts#(module)").node,
+      ],
+      edges: [
+        call("src/main.ts#(module)", "src/main.ts#main", "src/main.ts", 30),
+        call("src/worker.ts#(module)", "src/worker.ts#work", "src/worker.ts", 1),
+        spawn("src/main.ts", "main", 10, "Worker", "src/worker.ts#(module)").edge,
+      ],
+      findings: [],
+    };
+    const s = systemModel(buildProjectModel(doc), "");
+    expect(s.runtime).toBe("grounded");
+    const inbox = "queue:thread:src/main.ts@spawn:10:inbox";
+    expect((s.edges ?? []).some((e) => e.verb === "enqueues" && e.from === "thread:main:entry:node:src/main.ts|src/main.ts" && e.to === inbox)).toBe(true);
+    expect((s.edges ?? []).some((e) => e.verb === "dequeues" && e.from === inbox && e.to === "thread:src/main.ts@spawn:10|src/worker.ts")).toBe(true);
+  });
+});

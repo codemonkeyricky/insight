@@ -282,6 +282,37 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
   const fetches: Array<{ node: IRNode; file: string }> = [];
   const messageFrom = new Set(plan.exec.dispatches.filter((d) => d.how === "message").map((d) => d.from));
   const fileOfFn = new Map(plan.exec.functions.map((f) => [f.id, f.file] as const));
+  // Grounded spawned threads, by runtime: where each was spawned, and the spawned threads each function starts.
+  const spawnOfThread = new Map<string, { owner?: string; file: string }>();
+  const threadsSpawnedBy = new Map<string, Array<{ rt: string; comp?: string }>>();
+  for (const t of plan.exec.threads) {
+    if (!t.grounded || t.kind === "process" || t.spawn === undefined) continue;
+    const rt = plan.threadOfSpawn(t.spawn.node);
+    if (rt === undefined) continue;
+    spawnOfThread.set(rt, { ...(t.spawn.owner !== undefined ? { owner: t.spawn.owner } : {}), file: t.spawn.file });
+    if (t.spawn.owner === undefined) continue;
+    const root = t.roots[0];
+    const wfile = root === undefined ? undefined : fileOfFn.get(root);
+    const wcomp = wfile === undefined ? undefined : compOf.get(wfile)?.id;
+    const list = threadsSpawnedBy.get(t.spawn.owner) ?? [];
+    list.push({ rt, ...(wcomp !== undefined ? { comp: wcomp } : {}) });
+    threadsSpawnedBy.set(t.spawn.owner, list);
+  }
+  // Where a grounded post with no dispatch goes when its thread structure names the receiver: the spawner's inbox when the
+  // posting thread was spawned, else the one thread its function spawns (with that thread's worker slice). Undefined otherwise.
+  const postInbox = (rt: string | undefined, owner: string | undefined): { thread: string; worker?: string } | undefined => {
+    const self = rt === undefined ? undefined : plan.threadOf(rt);
+    const sp = self === undefined ? undefined : spawnOfThread.get(self);
+    if (sp !== undefined && sp.owner !== undefined) {
+      const spawner = plan.owners(sp.owner, sp.file)[0];
+      const thread = spawner === undefined ? undefined : plan.threadOf(spawner);
+      if (thread !== undefined) return { thread };
+    }
+    const spawned = threadsSpawnedBy.get(owner ?? "") ?? [];
+    if (spawned.length !== 1) return undefined;
+    const w = spawned[0] as { rt: string; comp?: string };
+    return { thread: w.rt, ...(w.comp !== undefined ? { worker: plan.sliceId(w.rt, w.comp) } : {}) };
+  };
   for (const node of model.doc.nodes) {
     if (!node.kind.startsWith("effects.")) continue;
     const file = model.fileOf(node.id);
@@ -371,6 +402,13 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
         // A post with a dispatch from the same function is routed by that dispatch; any other goes to a peer box.
         if (!messageFrom.has(owner ?? "")) {
           for (const s of sourcesOf(owner, file, comp)) {
+            const via = postInbox(s.rt, owner);
+            if (via !== undefined) {
+              const inbox = putResource({ id: `queue:${via.thread}:inbox`, kind: "queue", label: `${plan.label(via.thread)} inbox`, ...(progOf(via.thread) !== undefined ? { program: progOf(via.thread) as string } : {}), source: "message" });
+              addFact(s.from, inbox, "enqueues", "postMessage", site, false);
+              if (via.worker !== undefined) addFact(inbox, via.worker, "dequeues", "postMessage", site, false);
+              continue;
+            }
             const prog = progOf(s.rt);
             const rid = putResource({ id: resId("queue", "peer", prog), kind: "queue", label: "inbox (unknown peer)", ...(prog !== undefined ? { program: prog } : {}), source: "message" });
             addFact(s.from, rid, "enqueues", "postMessage", site, exact);
@@ -458,9 +496,16 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
         }
         if (inside(toFile)) {
           const b = compOf.get(toFile)?.id as string;
-          if (a === b) continue;
-          const to = grounded && spawned !== undefined ? plan.sliceId(spawned, b) : b;
-          addFact(s.from, to, "spawns", `spawns ${api}`, spawnSite, exact);
+          if (grounded && spawned !== undefined) {
+            // A grounded worker is its own slice, even in the spawner's component.
+            addFact(s.from, plan.sliceId(spawned, b), "spawns", `spawns ${api}`, spawnSite, exact);
+          } else if (a === b) {
+            // Flat, same component: the worker is drawn as its own box, so the spawn still shows.
+            const id = ensureExternal({ id: `worker:${toFile}`, label: toFile.slice(toFile.lastIndexOf("/") + 1), category: "worker" });
+            addFact(s.from, id, "spawns", `spawns ${api}`, spawnSite, exact);
+          } else {
+            addFact(s.from, b, "spawns", `spawns ${api}`, spawnSite, exact);
+          }
         } else if (toFile !== undefined) {
           addFact(s.from, ensureExternal({ id: `worker:${toFile}`, label: toFile, category: "worker" }), "spawns", `spawns ${api}`, spawnSite, exact);
         }
