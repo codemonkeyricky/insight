@@ -21,10 +21,10 @@
         "frontend-cpp"
       ],
       "filesScanned": 121,
-      "filesWithRecords": 88,
+      "filesWithRecords": 89,
       "filesWithErrors": 0,
       "nodes": 0,
-      "edges": 1596
+      "edges": 1881
     },
     {
       "facet": "concurrency",
@@ -83,7 +83,7 @@
       "filesScanned": 225,
       "filesWithRecords": 225,
       "filesWithErrors": 0,
-      "nodes": 1621,
+      "nodes": 1610,
       "edges": 0
     },
     {
@@ -102,7 +102,7 @@
     {
       "id": "lens-calls",
       "status": "ok",
-      "findings": 374
+      "findings": 370
     },
     {
       "id": "lens-concurrency-map",
@@ -149,7 +149,7 @@
     "asyncWithoutAwait": 0
   },
   "recordsByKind": {
-    "calls.call": 1525,
+    "calls.call": 1810,
     "calls.reference": 71,
     "concurrency.spawn-thread": 5,
     "concurrency.spawns": 3,
@@ -169,7 +169,7 @@
     "packaging.include": 889,
     "packaging.target-contains": 199,
     "structure.file": 225,
-    "structure.function": 1075,
+    "structure.function": 1064,
     "structure.namespace": 191,
     "structure.package": 6,
     "structure.type": 124,
