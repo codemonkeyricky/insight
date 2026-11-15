@@ -105,7 +105,7 @@ describe("core registry", () => {
     const registry = createCoreRegistry();
     const facets = new Set(registry.list().map((k) => k.facet));
     expect([...facets].sort()).toEqual(
-      ["calls", "concurrency", "effects", "flow", "packaging", "state", "structure", "sync"],
+      ["calls", "concurrency", "data", "effects", "flow", "packaging", "state", "structure", "sync"],
     );
     expect(registry.subkinds("sync.lock-acquire")).toContain("sync.rwlock-acquire");
   });
@@ -296,5 +296,42 @@ describe("packaging.external and build-target visibility", () => {
     const report = validateIR(lines(target), createCoreRegistry());
     expect(report.errors).toEqual([]);
     expect(report.ok).toBe(true);
+  });
+});
+
+describe("data facet", () => {
+  const prov = { frontend: "hand-written", confidence: "exact" };
+  const variable = (storage: string) =>
+    JSON.stringify({
+      node: {
+        id: "app/state.ts#var:counter",
+        facet: "data",
+        kind: "data.variable",
+        parent: "app/state.ts",
+        attrs: { name: "counter", qualifiedName: "counter", storage, exported: true, mutable: true },
+        provenance: prov,
+      },
+    });
+  const doc = (storage: string) =>
+    [
+      JSON.stringify({ node: { id: "app/state.ts", facet: "structure", kind: "structure.file", attrs: { path: "app/state.ts", language: "typescript", parseStatus: "ok" }, provenance: prov } }),
+      JSON.stringify({ node: { id: "app/a.ts", facet: "structure", kind: "structure.file", attrs: { path: "app/a.ts", language: "typescript", parseStatus: "ok" }, provenance: prov } }),
+      variable(storage),
+      JSON.stringify({ node: { id: "app/a.ts#bump", facet: "structure", kind: "structure.function", parent: "app/a.ts", attrs: { name: "bump" }, provenance: prov } }),
+      JSON.stringify({ edge: { from: "app/a.ts#bump", to: "app/state.ts#var:counter", facet: "data", kind: "data.write", attrs: { how: "update" }, provenance: prov } }),
+      JSON.stringify({ edge: { from: "app/a.ts#bump", to: "app/state.ts#var:counter", facet: "data", kind: "data.read", attrs: {}, provenance: prov } }),
+    ].join("\n");
+
+  it("validates data.variable, data.read and data.write", () => {
+    const report = validateIR(doc("module"), createCoreRegistry());
+    expect(report.errors).toEqual([]);
+    expect(report.ok).toBe(true);
+    expect(report.opaqueKinds).toEqual([]);
+  });
+
+  it("rejects an unknown storage value", () => {
+    const report = validateIR(doc("heap"), createCoreRegistry());
+    expect(report.ok).toBe(false);
+    expect(report.errors.some((e) => e.line === 3 && e.message.includes("storage"))).toBe(true);
   });
 });

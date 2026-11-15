@@ -38,6 +38,15 @@
       "edges": 3
     },
     {
+      "facet": "data",
+      "providers": [],
+      "filesScanned": 0,
+      "filesWithRecords": 0,
+      "filesWithErrors": 0,
+      "nodes": 0,
+      "edges": 0
+    },
+    {
       "facet": "effects",
       "providers": [
         "frontend-cpp"
