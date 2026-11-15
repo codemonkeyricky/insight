@@ -21,12 +21,40 @@ function digestOf(texts) {
   return hash.digest("hex");
 }
 
-async function loadModel(ctx) {
-  const files = ctx.listFiles();
+async function readTexts(ctx) {
   const texts = new Map();
-  for (const f of files) {
+  for (const f of ctx.listFiles()) {
     if (isCMakeFile(f)) texts.set(f, await readFile(join(ctx.root.path, f), "utf8"));
   }
+  return texts;
+}
+
+/**
+ * With a runCache (one per link run, see ResolveContext.runCache) the model is built once per run and stored there as
+ * a Promise, so the files are not read again. Without it the model is rebuilt when the file list or the CMake texts
+ * change, checked by the digest of those texts.
+ */
+function loadModel(ctx) {
+  if (ctx.runCache !== undefined) {
+    const cache = ctx.runCache;
+    const key = "frontend-cmake:model";
+    const hit = cache.get(key);
+    if (hit !== undefined) return hit;
+    const pending = readTexts(ctx)
+      .then((texts) => buildCmakeModel(texts, ctx.listFiles()))
+      .catch((err) => {
+        cache.delete(key);
+        throw err;
+      });
+    cache.set(key, pending);
+    return pending;
+  }
+  return loadModelByDigest(ctx);
+}
+
+async function loadModelByDigest(ctx) {
+  const files = ctx.listFiles();
+  const texts = await readTexts(ctx);
   const digest = digestOf(texts);
   if (cached !== undefined && cached.files === files && cached.count === files.length && cached.digest === digest) {
     return cached.model;

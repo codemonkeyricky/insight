@@ -16,23 +16,44 @@ export function externalMatches(include: string, externals: ExternalName[]): str
   return externalsForInclude(include, externals).map((m) => m.id);
 }
 
-/** Reads every BUILD file of the project. Each lookup re-reads them, so an edit is seen at once. */
-async function loadModel(ctx: ResolveContext): Promise<BazelModel> {
-  const texts = new Map<string, string>();
-  for (const f of ctx.listFiles()) {
-    if (isBuildFile(f)) texts.set(f, await readFile(join(ctx.root.path, f), "utf8"));
-  }
-  return buildModel(texts, ctx.listFiles());
+/**
+ * Loads a value once per link run when the run supplies runCache (see ResolveContext.runCache). The Promise is stored,
+ * so resolves that run at once share one load, and a failed load is not kept. Without runCache it loads on every call.
+ */
+function memoPerRun<T>(ctx: ResolveContext, key: string, load: () => Promise<T>): Promise<T> {
+  const cache = ctx.runCache;
+  if (cache === undefined) return load();
+  const hit = cache.get(key);
+  if (hit !== undefined) return hit as Promise<T>;
+  const pending = load().catch((err: unknown) => {
+    cache.delete(key);
+    throw err;
+  });
+  cache.set(key, pending);
+  return pending;
 }
 
-/** Reads the declarations of the external repositories, as the frontend does. */
-async function loadExternals(ctx: ResolveContext): Promise<Externals> {
-  const texts = new Map<string, string>();
-  const files = ctx.listFiles();
-  for (const f of EXTERNAL_FILES) {
-    if (files.includes(f)) texts.set(f, await readFile(join(ctx.root.path, f), "utf8"));
-  }
-  return parseExternals(texts);
+/** Reads every BUILD file of the project and builds the model. Once per link run when the run has a runCache. */
+function loadModel(ctx: ResolveContext): Promise<BazelModel> {
+  return memoPerRun(ctx, "frontend-bazel:model", async () => {
+    const texts = new Map<string, string>();
+    for (const f of ctx.listFiles()) {
+      if (isBuildFile(f)) texts.set(f, await readFile(join(ctx.root.path, f), "utf8"));
+    }
+    return buildModel(texts, ctx.listFiles());
+  });
+}
+
+/** Reads the declarations of the external repositories, as the frontend does. Once per link run with a runCache. */
+function loadExternals(ctx: ResolveContext): Promise<Externals> {
+  return memoPerRun(ctx, "frontend-bazel:externals", async () => {
+    const texts = new Map<string, string>();
+    const files = ctx.listFiles();
+    for (const f of EXTERNAL_FILES) {
+      if (files.includes(f)) texts.set(f, await readFile(join(ctx.root.path, f), "utf8"));
+    }
+    return parseExternals(texts);
+  });
 }
 
 /**
