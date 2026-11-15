@@ -14,6 +14,7 @@ export class ZoomStore {
   private fns = new Map<string, FunctionFlow>();
   private fileLoads = new Map<string, Promise<void>>();
   private messages = new Map<string, Promise<FunctionFlow>>();
+  private receivers = new Map<string, Promise<MessageReceiver[]>>();
 
   /** `detail` defaults to the reader's saved Detail choice. */
   constructor(id: string, detail: FlowDetail = readDetail()) {
@@ -66,8 +67,32 @@ export class ZoomStore {
     return load;
   }
 
-  /** The functions a function posts messages to, named as their own charts name them. Reads the project's references. */
-  private async receiversOf(fnId: string): Promise<MessageReceiver[]> {
+  /**
+   * A chart of a function with its message steps pointed at their receivers, for a chart derived from the function's own
+   * (an unfolded coupling chart): the receivers are cached per function, the chart is not. A chart with no message step, or
+   * whose receivers cannot be read, is returned as it is.
+   */
+  async withMessages(fnId: string, chart: FunctionFlow): Promise<FunctionFlow> {
+    if (!chart.nodes.some(isPostStep)) return chart;
+    try {
+      return withMessageTargets(chart, await this.receiversOf(fnId));
+    } catch {
+      return chart;
+    }
+  }
+
+  /** The functions a function posts messages to, named as their own charts name them. Reads the project's references. Cached per function. */
+  private receiversOf(fnId: string): Promise<MessageReceiver[]> {
+    let load = this.receivers.get(fnId);
+    if (load === undefined) {
+      load = this.loadReceivers(fnId);
+      this.receivers.set(fnId, load);
+      load.catch(() => this.receivers.delete(fnId));
+    }
+    return load;
+  }
+
+  private async loadReceivers(fnId: string): Promise<MessageReceiver[]> {
     const refs = await api.getRefs(this.id, "", fnId);
     return Promise.all(
       messageReceivers(refs.calls).map(async (r) => {

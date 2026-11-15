@@ -150,6 +150,7 @@ function chartOf(ix: Indexed, id: string) {
 }
 
 const fid = (file: string, name: string) => `${file}#${name}`;
+type Step = Extract<Item, { t: "step" }>;
 const kept = (items: Item[]) => items.filter((i) => !(i.t === "step" && i.foldId !== undefined));
 const isFoldOnly = (items: Item[]) => items.length > 0 && items.every((i) => i.t === "step" && i.foldId !== undefined);
 
@@ -282,7 +283,7 @@ describe("coupling pass over a package fixture", () => {
           const ids = new Set<string>();
           const gather = (list: Item[]) => {
             for (const i of list) {
-              if (i.t === "step" && i.foldId !== undefined) ids.add(i.foldId);
+              if (i.t === "step" && i.foldId !== undefined && i.open !== true) ids.add(i.foldId);
               if (i.t === "fork") for (const a of i.arms) gather(a.body);
               if (i.t === "loop") gather(i.body);
             }
@@ -300,6 +301,8 @@ describe("coupling pass over a package fixture", () => {
 /** The sequence of rows of a chart, with their roles, labels and spans; nested rows follow their parent. */
 function flat(items: readonly Item[]): string[] {
   return items.flatMap((i): string[] => {
+    // An open fold's header is not a row of the original chart.
+    if (i.t === "step" && i.open === true) return [];
     // The hoisted suffix (` ⇢ fs.write`) is the coupling view's, not the original row's: compare the label before it.
     if (i.t === "step") return [`step:${i.role}:${i.label.split(" ⇢ ")[0]}:${JSON.stringify(i.span ?? null)}`];
     if (i.t === "term") return [`term:${i.role}:${JSON.stringify(i.span ?? null)}`];
@@ -361,14 +364,106 @@ describe("unfoldChart", () => {
     const foldId = folded.items?.find((i) => i.t === "step" && i.foldId !== undefined);
     if (foldId?.t !== "step" || foldId.foldId === undefined) throw new Error("expected a fold row");
     const open = unfoldChart(folded, new Set([foldId.foldId]));
-    expect(open.nodes.some((n) => n.foldId !== undefined)).toBe(false);
+    // The only fold row left is the open header, which folds the rows back.
+    expect(open.nodes.filter((n) => n.foldId !== undefined).map((n) => n.open)).toEqual([true]);
     expect(open.nodes.length).toBeGreaterThanOrEqual(folded.nodes.length);
     expect(open.coupling).toBe(folded.coupling);
     expect(unfoldChart(folded, new Set()).nodes).toEqual(folded.nodes);
   });
 
+  it("an open fold emits its header row first, then the rows it folds", () => {
+    const items: Item[] = [
+      { t: "step", role: "call", label: "db.save()", target: "db#save" },
+      { t: "step", role: "marker", label: "⋯ 2 local", foldId: "F1", fold: [{ t: "step", role: "call", label: "a()" }, { t: "step", role: "call", label: "b()" }] },
+    ];
+    const open = unfold(items, new Set(["F1"]));
+    expect(open[1]).toMatchObject({ t: "step", role: "marker", label: "▾ 2 local", foldId: "F1", open: true });
+    expect(open.slice(2).map((i) => (i.t === "step" ? i.label : ""))).toEqual(["a()", "b()"]);
+    expect(unfold(items, new Set())).toEqual(items);
+  });
+
+  it("an open header's fold stays closed to a second unfold, so the rows are not expanded twice", () => {
+    const items: Item[] = [{ t: "step", role: "marker", label: "⋯ 1 local", foldId: "F1", fold: [{ t: "step", role: "call", label: "a()" }] }];
+    const once = unfold(items, new Set(["F1"]));
+    expect(unfold(once, new Set(["F1"]))).toEqual(once);
+  });
+
   it("returns a flow with no items as it is", () => {
     const bare: FunctionFlow = { id: "x", name: "x", async: false, stats: { steps: 0, decisions: 0, loops: 0, tries: 0, exits: 0, depth: 0 }, width: 0, height: 0, nodes: [], edges: [], tooLarge: true };
     expect(unfoldChart(bare, new Set(["f0"]))).toBe(bare);
+  });
+});
+
+/** Indexes a fixture and gives every function's coupling chart and footprint, as the file flow does. */
+async function couplingOf(files: Record<string, string>) {
+  const { nodes, edges } = await indexFixture(files);
+  const { modules, facts, footprints } = couplingFacts(nodes, edges);
+  return { modules, facts, footprints };
+}
+
+describe("await hoisting", () => {
+  const FILES: Record<string, string> = {
+    "package.json": JSON.stringify({ name: "root", private: true }),
+    "pkgs/a/package.json": JSON.stringify({ name: "a" }),
+    "pkgs/a/src/io.ts": `import { writeFileSync } from "node:fs";
+export async function save(): Promise<void> {
+  writeFileSync("out.txt", "x");
+  throw new Error("save");
+}
+export async function run(): Promise<void> {
+  await save();
+}
+`,
+  };
+  let ix: Awaited<ReturnType<typeof couplingOf>>;
+  beforeAll(async () => {
+    ix = await couplingOf(FILES);
+  });
+
+  it("hoists a same-module callee's io and throws onto the await row, and the footprint has io, conc and escape", () => {
+    const id = fid("pkgs/a/src/io.ts", "run");
+    const f = ix.facts.get(id);
+    if (!f) throw new Error(`no function ${id}`);
+    const { items, info } = couplingChart(id, f.items, ix.modules, ix.footprints);
+    const await_ = kept(items).find((i): i is Step => i.t === "step" && i.role === "await");
+    if (!await_) throw new Error("expected an await row");
+    // io outranks conc under ORDER, so the row takes io; the footprint entry for the await itself stays conc.
+    expect(await_.coupling).toBe("io");
+    expect(await_.hoisted).toMatch(/throws/);
+    expect(await_.hoisted).toMatch(/fs|write|save/);
+    expect(await_.title).toContain(" ⇢ ");
+    const classes = new Set(info.footprint.entries.map((e) => e.cls));
+    expect(classes).toEqual(new Set(["io", "conc", "escape"]));
+    expect(info.footprint.entries.find((e) => e.cls === "conc")?.label).toMatch(/^await/);
+  });
+});
+
+describe("footprint cap", () => {
+  const FILES: Record<string, string> = {
+    "package.json": JSON.stringify({ name: "root", private: true }),
+    "pkgs/a/package.json": JSON.stringify({ name: "a" }),
+    "pkgs/b/package.json": JSON.stringify({ name: "b" }),
+    "pkgs/b/src/many.ts": Array.from({ length: 55 }, (_, k) => `export function f${k}(): number {\n  return ${k};\n}\n`).join(""),
+    "pkgs/a/src/fan.ts": `import { ${Array.from({ length: 55 }, (_, k) => `f${k}`).join(", ")} } from "../../b/src/many.js";
+export function fan(): void {
+${Array.from({ length: 55 }, (_, k) => `  f${k}();`).join("\n")}
+  throw new Error("fan");
+}
+`,
+  };
+  let ix: Awaited<ReturnType<typeof couplingOf>>;
+  beforeAll(async () => {
+    ix = await couplingOf(FILES);
+  });
+
+  it("keeps escape and the module past the entry cap", () => {
+    const id = fid("pkgs/a/src/fan.ts", "fan");
+    const fp = ix.footprints.get(id);
+    if (!fp) throw new Error(`no footprint for ${id}`);
+    expect(fp.entries.length).toBeLessThanOrEqual(50);
+    expect(fp.escape).toBe(true);
+    expect(fp.modules).toEqual(["pkgs/b"]);
+    expect(footprintSummary(fp)).toContain("throws ↑");
+    expect(footprintSummary(fp)).toContain("⇄ 1 module");
   });
 });

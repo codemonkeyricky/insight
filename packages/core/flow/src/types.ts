@@ -26,7 +26,10 @@ export type FlowRole =
   | "break"
   | "continue";
 
-/** What a chart row is for the coupling view: a local row, or the boundary it crosses. */
+/**
+ * What a chart row is for the coupling view: a local row, or the boundary it crosses. `state` and `ctl` are reserved for
+ * phases 3 and 4 of the coupling view: no row takes them yet.
+ */
 export type CouplingClass = "local" | "cross" | "io" | "state" | "conc" | "escape" | "ctl";
 
 /** How the renderer draws a node. */
@@ -53,6 +56,8 @@ export interface FlowNode {
   foldId?: string;
   /** A `⋯ n local` fold row: how many rows it folds. */
   fold?: number;
+  /** An open fold's header row (`▾ n local`): folding it back closes the fold. */
+  open?: boolean;
   /** Absolute lane of the node's station (line map layout). */
   lane?: number;
   /** Absolute x where the label text starts. */

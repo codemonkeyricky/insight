@@ -265,28 +265,32 @@ function Station({ node, cx, cy, resolved }: { node: FlowNode; cx: number; cy: n
  * a row whose hoisted text says `throws` / `may throw`). A cross row stays cross. Undefined for a row with no class.
  */
 export function couplingClassOf(node: FlowNode): string | undefined {
-  if (node.coupling === undefined) return undefined;
-  if (node.coupling === "cross") return "cross";
-  if (node.coupling === "escape" || (node.hoisted !== undefined && /throws/.test(node.hoisted))) return "escape";
-  return node.coupling;
+  // `coupling` is already the strongest class of the row (coupling.ts ORDER), its own or hoisted; the hoisted text is only a
+  // list of labels, so a `throws` in it does not restyle an io or conc row.
+  return node.coupling === undefined ? undefined : node.coupling;
 }
 
-/** A fold row: `⋯ n local`, a thin muted row with a ▸ chevron. Opening it replaces it with the rows it folds (see expand.ts toggleFold). */
+/**
+ * A fold row. Closed, `⋯ n local` with a ▸ chevron: opening it replaces it with the rows it folds (see expand.ts toggleFold).
+ * Open, its header `▾ n local` with a ▾ chevron: opening it folds the rows back. The header's own ▾ is not repeated in the text.
+ */
 function FoldRow({ node, width, onNodeClick, onNodeOpen, selected, delay }: { node: FlowNode; width: number; onNodeClick?: FlowNodeClick; onNodeOpen?: FlowNodeOpen; selected: boolean; delay: number }) {
   const cy = node.y + ROW_H / 2;
+  const open = node.open === true;
   const onClick = onNodeClick
     ? (e: MouseEvent<Element>) => {
         if (onNodeClick(node)) e.preventDefault();
       }
     : undefined;
+  const text = open ? node.label.replace(/^▾\s*/, "") : node.label;
   return (
-    <g className={`flow-node flow-fold${selected ? " selected" : ""}`} style={delayStyle(delay)} onClick={onClick} data-node={node.id} data-fold={node.foldId} role={onNodeOpen ? "button" : undefined} aria-label={`${node.label}: open to show its rows`} tabIndex={onNodeOpen ? 0 : undefined} {...openHandlers(node, onNodeOpen)}>
-      <title>{`${node.label}: the local calls and steps that stay in their module. Open to show them.`}</title>
+    <g className={`flow-node flow-fold${open ? " flow-fold-open" : ""}${selected ? " selected" : ""}`} style={delayStyle(delay)} onClick={onClick} data-node={node.id} data-fold={node.foldId} role={onNodeOpen ? "button" : undefined} aria-label={open ? `${node.label}: fold back` : `${node.label}: open to show its rows`} tabIndex={onNodeOpen ? 0 : undefined} {...openHandlers(node, onNodeOpen)}>
+      <title>{open ? "The local calls and steps shown above. Fold them back." : `${node.label}: the local calls and steps that stay in their module. Open to show them.`}</title>
       <rect x={4} y={node.y} width={Math.max(0, width - 8)} height={ROW_H} rx={7} className="flow-hit" />
       <text x={labelAt(node)} y={cy} dominantBaseline="central" className="flow-text flow-fold-label">
-        {node.label}
+        {text}
       </text>
-      {onNodeOpen && <Chevron node={node} x={width - 4 - CHEV_INSET - CHEV_HIT / 2} y={node.y} fold={false} onNodeOpen={onNodeOpen} />}
+      {onNodeOpen && <Chevron node={node} x={width - 4 - CHEV_INSET - CHEV_HIT / 2} y={node.y} fold={open} onNodeOpen={onNodeOpen} />}
     </g>
   );
 }

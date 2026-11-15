@@ -55,6 +55,8 @@ export type Item =
       /** Coupling pass: a `⋯ n local` fold row holds the items it stands for. */
       fold?: Item[];
       foldId?: string;
+      /** Coupling pass: an open fold's header row (`▾ n local`), before the rows it folds. */
+      open?: boolean;
     }
   | { t: "term"; role: "return" | "throw" | "break" | "continue"; label: string; span?: FlowSpan; coupling?: CouplingClass }
   | { t: "fork"; role: "branch" | "switch" | "try"; label: string; title?: string; span?: FlowSpan; arms: Arm[]; complete: boolean }

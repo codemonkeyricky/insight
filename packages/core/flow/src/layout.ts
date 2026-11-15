@@ -58,6 +58,7 @@ interface Extra {
   hoisted?: string;
   foldId?: string;
   fold?: number;
+  open?: true;
 }
 
 class Maker {
@@ -85,6 +86,7 @@ class Maker {
     if (extra.hoisted !== undefined) out.hoisted = extra.hoisted;
     if (extra.foldId !== undefined) out.foldId = extra.foldId;
     if (extra.fold !== undefined) out.fold = extra.fold;
+    if (extra.open === true) out.open = true;
     return out;
   }
 }
@@ -209,6 +211,7 @@ function walkItem(c: Ctx, mk: Maker, item: Item, lane: number, labelLane: number
         const m = mk.node("marker", "label", item.label, {
           ...(item.span ? { span: item.span } : {}),
           ...(item.foldId !== undefined ? { foldId: item.foldId, fold: item.fold?.length ?? 0 } : {}),
+          ...(item.open === true ? { open: true as const } : {}),
         });
         row(c, m, lane, labelLane, skip, into);
         return [next(m)];
