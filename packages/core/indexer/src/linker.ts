@@ -1,5 +1,6 @@
 import type { IRDocument, IREdge, IRFinding, IRNode, IRRecord, NodeId, Provenance } from "@insight/ir";
 import type { ProjectRoot, ResolveAnswer, Resolver, ResolveContext } from "@insight/sdk";
+import { narrowByBuildGraph } from "./narrow.js";
 import { compareStrings } from "./util.js";
 
 export interface LinkShard {
@@ -24,12 +25,16 @@ export interface LinkInput {
   shards: LinkShard[];
   /** Resolvers in priority order, highest first. */
   resolvers: LinkResolver[];
+  /** Narrow ambiguous call candidates by the build graph after resolution. Defaults to true. */
+  narrowByBuildGraph?: boolean;
 }
 
 export interface LinkResult {
   doc: IRDocument;
   resolved: number;
   unresolved: number;
+  /** Call edges whose candidates were narrowed by the build graph. */
+  narrowed: number;
 }
 
 type Confidence = Provenance["confidence"];
@@ -173,10 +178,12 @@ export async function link(input: LinkInput): Promise<LinkResult> {
   }
   edges.push(...extra);
 
+  const narrowed = input.narrowByBuildGraph === false ? 0 : narrowByBuildGraph(nodes, edges);
+
   const doc: IRDocument = {
     nodes: [...nodes.values()].sort((a, b) => compareStrings(a.id, b.id)),
     edges: edges.map((e) => e.edge),
     findings,
   };
-  return { doc, resolved, unresolved };
+  return { doc, resolved, unresolved, narrowed };
 }
