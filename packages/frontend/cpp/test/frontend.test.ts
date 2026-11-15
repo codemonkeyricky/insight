@@ -140,3 +140,57 @@ describe("frontend-cpp declared names", () => {
     expect(calls.some((e) => e.from === `${file}#caller` && e.to === `${file}#KvPairsFromEnv`)).toBe(true);
   });
 });
+
+describe("frontend-cpp round-4 fixes", () => {
+  const extractOne = async (file: string, src: string): Promise<IRRecord[]> => {
+    const ctx = { root, files: [file], listFiles: () => [file], readFile: async () => src, log: () => undefined };
+    const batches: IRBatch[] = [];
+    for await (const batch of frontend.extract(ctx)) batches.push(batch);
+    return allRecords(batches);
+  };
+  const fnNodes = (records: IRRecord[]) => records.flatMap((r) => ("node" in r && r.node.kind === "structure.function" ? [r.node] : []));
+  const callEdges = (records: IRRecord[]) => records.flatMap((r) => ("edge" in r && r.edge.kind === "calls.call" ? [r.edge] : []));
+
+  it("keeps a call to overloads that share one qualified name, with every candidate", async () => {
+    const types = ["int", "long", "short", "char", "bool", "float", "double", "unsigned", "long long", "unsigned char"];
+    const overloads = types.map((t) => `void f(${t} x) {}`).join("\n");
+    const file = "overload/ten.cc";
+    const edges = callEdges(await extractOne(file, `${overloads}\nvoid caller() { f(1); }\n`));
+    const call = edges.find((e) => e.from === `${file}#caller`);
+    expect(call).toBeDefined();
+    expect(typeof call?.to === "object" && "candidates" in call.to ? call.to.candidates.length : 0).toBe(10);
+  });
+
+  it("still caps a call to ten different functions that share a simple name", async () => {
+    const namespaces = Array.from({ length: 10 }, (_, i) => `namespace n${i} { void f() {} }`).join("\n");
+    const file = "overload/capped.cc";
+    const edges = callEdges(await extractOne(file, `${namespaces}\nvoid caller() { f(); }\n`));
+    expect(edges.some((e) => e.from === `${file}#caller`)).toBe(false);
+  });
+
+  it("resolves a call to an explicit operator new", async () => {
+    const file = "ops/new.cc";
+    const src = "void* operator new(std::size_t n) { return nullptr; }\nvoid caller() { void* p = operator new(8); }\n";
+    const records = await extractOne(file, src);
+    const target = `${file}#operator new`;
+    expect(fnNodes(records).some((n) => n.id === target && n.attrs.name === "operator new")).toBe(true);
+    expect(callEdges(records).some((e) => e.from === `${file}#caller` && e.to === target)).toBe(true);
+  });
+
+  it("gives a function declared = delete no function node", async () => {
+    const records = await extractOne("del/a.cc", "struct A { A& operator=(const A&) = delete; };\n");
+    expect(fnNodes(records).some((n) => n.attrs.name === "operator=")).toBe(false);
+  });
+
+  it("names a method of a class with an export macro under the real class", async () => {
+    const records = await extractOne("macro/counter.cc", "namespace benchmark { class BENCHMARK_EXPORT Counter { public: int name() const { return 0; } }; }\n");
+    const fn = fnNodes(records).find((n) => n.attrs.name === "name");
+    expect(fn?.attrs.qualifiedName).toBe("benchmark::Counter::name");
+  });
+
+  it("names a method of a struct with an export macro under the real struct", async () => {
+    const records = await extractOne("macro/struct.cc", "namespace benchmark { struct GTEST_API_ S { int name() const { return 0; } }; }\n");
+    const fn = fnNodes(records).find((n) => n.attrs.name === "name");
+    expect(fn?.attrs.qualifiedName).toBe("benchmark::S::name");
+  });
+});

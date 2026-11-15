@@ -7,6 +7,12 @@ export const FRONTEND_ID = "frontend-cpp";
 export const CPP_RE = /\.(?:c|cc|cpp|cxx|h|hh|hpp|hxx|inl)$/i;
 
 export const norm = (s: string): string => s.replace(/\s+/g, "");
+/**
+ * A name with its whitespace removed, except the single space that `operator new` keeps between the keyword and a
+ * word operator. Declared operator names and callee names both take this form, so they match.
+ */
+export const normName = (s: string): string =>
+  norm(s.replace(/\s+/g, " ").replace(/\boperator (?=[A-Za-z_])/g, "operator")).replace(//g, " ");
 /** One piece of a name. `top` is false for anything inside a template argument list. */
 interface ScanToken {
   text: string;
@@ -96,6 +102,24 @@ export interface Scope {
   cls?: string;
 }
 
+/** An ALL_CAPS word, as an export macro is written. */
+const MACRO_NAME = /^[A-Z][A-Z0-9_]*$/;
+
+/**
+ * The name of a class that an export macro hides. `class MACRO Name { ... }` parses as a function definition whose
+ * return type is a class with no body, named by the macro, and whose declarator is the real name. The body is a
+ * compound statement, not a field list. Undefined for any other node.
+ */
+export function macroClassName(node: SyntaxNode): string | undefined {
+  if (node.type !== "function_definition") return undefined;
+  const type = node.childForFieldName("type");
+  if (!type || (type.type !== "class_specifier" && type.type !== "struct_specifier") || type.childForFieldName("body")) return undefined;
+  const macro = type.childForFieldName("name")?.text ?? "";
+  const name = node.childForFieldName("declarator");
+  if (!MACRO_NAME.test(macro) || name?.type !== "identifier" || node.childForFieldName("body")?.type !== "compound_statement") return undefined;
+  return name.text;
+}
+
 /** The namespaces and classes around a node, found by walking up its parents. */
 export function scopeOf(node: SyntaxNode): Scope {
   const frames: { name: string; isClass: boolean }[] = [];
@@ -105,6 +129,8 @@ export function scopeOf(node: SyntaxNode): Scope {
       const name = p.childForFieldName("name")?.text;
       if (name) frames.unshift({ name, isClass: false });
       else anon = true;
+    } else if (p.type === "function_definition" && macroClassName(p) !== undefined) {
+      frames.unshift({ name: macroClassName(p) as string, isClass: true });
     } else if ((p.type === "class_specifier" || p.type === "struct_specifier") && p.childForFieldName("body")) {
       const name = p.childForFieldName("name")?.text;
       if (name) frames.unshift({ name: stripTemplates(norm(name)), isClass: true });
@@ -215,9 +241,7 @@ function declaredName(fn: SyntaxNode): { qname: string; simple: string } | undef
   if (head.text.substring(offset, offset + raw.length) !== raw) offset = head.text.lastIndexOf(raw);
   if (offset < 0) return declaredNameFromText(head);
   const simple =
-    name.type === "operator_name"
-      ? raw.replace(/\s+/g, " ").replace(/^operator (?=[^\w\s])/, "operator")
-      : stripTemplates(norm(raw));
+    name.type === "operator_name" ? normName(raw) : stripTemplates(norm(raw));
   const parts = [...scopeParts(head.text.slice(0, offset)), simple];
   return { qname: parts.join("::"), simple };
 }
@@ -229,20 +253,31 @@ function declaredNameFromText(head: SyntaxNode): { qname: string; simple: string
   return { qname: parts.join("::"), simple: parts[parts.length - 1] ?? bare };
 }
 
-function collectMembers(root: SyntaxNode, scopeOfClass: (n: SyntaxNode) => string | undefined, members: Map<string, Set<string>>): void {
+/**
+ * A definition with no body to run: `= delete`, or `= default` on a reference-returning function. A reference return
+ * is only reached by the declarator walk since it was extended to wrappers, so those defaults are skipped as before.
+ * Other `= default` definitions, such as constructors, keep their nodes.
+ */
+function hasNoBody(fn: SyntaxNode): boolean {
+  if (fn.namedChildren.some((c) => c.type === "delete_method_clause")) return true;
+  return fn.childForFieldName("declarator")?.type === "reference_declarator" && fn.namedChildren.some((c) => c.type === "default_method_clause");
+}
+
+function collectMembers(root: SyntaxNode, members: Map<string, Set<string>>): void {
   walk(root, (node) => {
-    if (node.type !== "class_specifier" && node.type !== "struct_specifier") return;
+    const macro = macroClassName(node);
+    if (macro === undefined && node.type !== "class_specifier" && node.type !== "struct_specifier") return;
     const body = node.childForFieldName("body");
-    const name = node.childForFieldName("name")?.text;
+    const name = macro ?? stripTemplates(norm(node.childForFieldName("name")?.text ?? ""));
     if (!body || !name) return;
-    const cls = scopeOfClass(node);
-    if (cls === undefined) return;
+    const cls = [...scopeOf(node).path, name].join("::");
     const set = members.get(cls) ?? new Set<string>();
     for (const field of body.namedChildren) {
-      if (field.type !== "field_declaration") continue;
+      // A macro-exported class has a compound body, so its members are declarations rather than field declarations.
+      if (field.type !== "field_declaration" && !(macro !== undefined && field.type === "declaration")) continue;
       let d: SyntaxNode | null = field.childForFieldName("declarator");
       let isFunction = false;
-      while (d && d.type !== "field_identifier") {
+      while (d && d.type !== "field_identifier" && d.type !== "identifier") {
         if (d.type === "function_declarator") isFunction = true;
         d = d.childForFieldName("declarator");
       }
@@ -346,13 +381,26 @@ function addLambdas(rel: string, lambdas: SyntaxNode[], fns: Map<string, FnDecl>
   }
 }
 
+/** A `public:`, `private:` or `protected:` label, not a `::`. */
+const ACCESS_LABEL = /\b(public|private|protected)(\s*):(?!:)/g;
+
 /** Parses every C or C++ file and collects the function definitions that calls can target. */
 export async function buildProject(texts: Map<string, string>): Promise<Project> {
   const parser = await getParser();
   const units = new Map<string, Unit>();
   for (const [rel, text] of texts) {
-    const tree = parser.parse(text);
+    let tree = parser.parse(text);
     if (!tree) throw new Error(`could not parse ${rel}`);
+    // An access label before an inline member of a macro-exported class makes tree-sitter misread that member. The
+    // labels are blanked (newlines kept, so every position holds) and the file is parsed again.
+    if (tree.rootNode.hasError && tree.rootNode.descendantsOfType("function_definition").some((n) => macroClassName(n) !== undefined)) {
+      const blanked = text.replace(ACCESS_LABEL, (m) => m.replace(/[^\n]/g, " "));
+      if (blanked !== text) {
+        tree.delete();
+        tree = parser.parse(blanked);
+        if (!tree) throw new Error(`could not parse ${rel}`);
+      }
+    }
     const root = tree.rootNode;
     // A file can be wrong without an ERROR node (a MISSING token), so the root stands in for it.
     const found = root.hasError ? root.descendantsOfType("ERROR") : [];
@@ -372,7 +420,7 @@ export async function buildProject(texts: Map<string, string>): Promise<Project>
     const lambdas: SyntaxNode[] = [];
     walk(unit.root, (node) => {
       if (node.type === "lambda_expression") lambdas.push(node);
-      if (node.type !== "function_definition") return;
+      if (node.type !== "function_definition" || hasNoBody(node)) return;
       const names = declaredName(node);
       if (!names) return;
       const scope = scopeOf(node);
@@ -410,11 +458,7 @@ export async function buildProject(texts: Map<string, string>): Promise<Project>
     });
     addLambdas(unit.rel, lambdas, fns, list, lambdaBindings);
     fnsByFile.set(unit.rel, list);
-    collectMembers(unit.root, (n) => {
-      const scope = scopeOf(n);
-      const name = stripTemplates(norm(n.childForFieldName("name")?.text ?? ""));
-      return name ? [...scope.path, name].join("::") : undefined;
-    }, members);
+    collectMembers(unit.root, members);
   }
 
   // A call to a coroutine only creates one, and the callee may sit in a file the emitter has not

@@ -10,6 +10,7 @@ import {
   lockIdentity,
   nodeKey,
   norm,
+  normName,
   scopeOf,
   stripTemplates,
   type FnDecl,
@@ -84,9 +85,15 @@ interface Resolved {
   confidence: Confidence;
 }
 
-/** The candidates, or undefined when there are none or too many to be useful. Several candidates are never more than heuristic. */
+/**
+ * The candidates, or undefined when there are none or too many to be useful. Overloads share one qualified name and
+ * are one function to a caller, so the cap applies only when the candidates name different functions.
+ * Several candidates are never more than heuristic.
+ */
 function candidatesOf(targets: FnDecl[], confidence: Confidence): Resolved | undefined {
-  if (targets.length === 0 || targets.length > MAX_CANDIDATES) return undefined;
+  if (targets.length === 0) return undefined;
+  const overloads = targets.every((t) => t.qname === targets[0]?.qname);
+  if (targets.length > MAX_CANDIDATES && !overloads) return undefined;
   return { targets, confidence: targets.length > 1 ? "heuristic" : confidence };
 }
 
@@ -107,14 +114,15 @@ function resolveName(project: Project, name: string, qualified: boolean): Resolv
 function resolveCallee(project: Project, fnNode: SyntaxNode): Resolved | undefined {
   switch (fnNode.type) {
     case "identifier":
-      return resolveName(project, stripTemplates(norm(fnNode.text)), false);
+      return resolveName(project, stripTemplates(normName(fnNode.text)), false);
     case "template_function":
-      return resolveName(project, stripTemplates(norm(fnNode.childForFieldName("name")?.text ?? "")), false);
+      return resolveName(project, stripTemplates(normName(fnNode.childForFieldName("name")?.text ?? "")), false);
     case "qualified_identifier":
-      return resolveName(project, stripTemplates(norm(fnNode.text)).replace(/^::/, ""), true);
+      return resolveName(project, stripTemplates(normName(fnNode.text)).replace(/^::/, ""), true);
     case "field_expression": {
-      const simple = fnNode.childForFieldName("field")?.text;
-      if (!simple) return undefined;
+      const field = fnNode.childForFieldName("field")?.text;
+      if (!field) return undefined;
+      const simple = normName(field);
       return candidatesOf((project.bySimple.get(simple) ?? []).filter((d) => d.cls !== undefined), "heuristic");
     }
     default:
@@ -199,7 +207,7 @@ function resolveSpawnTarget(project: Project, rel: string, arg: SyntaxNode): { n
     const bound = boundLambda(project, rel, name);
     if (bound) return { name, resolved: { targets: [bound.decl], confidence: bound.confidence } };
   }
-  const resolved = resolveName(project, stripTemplates(norm(name.text)).replace(/^::/, ""), name.type === "qualified_identifier");
+  const resolved = resolveName(project, stripTemplates(normName(name.text)).replace(/^::/, ""), name.type === "qualified_identifier");
   return resolved ? { name, resolved } : undefined;
 }
 
@@ -303,7 +311,7 @@ export function emitUnit(project: Project, rel: string): IRBatch {
   const handleCall = (call: SyntaxNode, container: NodeId, fn: FnDecl | undefined) => {
     const fnNode = call.childForFieldName("function");
     if (!fnNode) return;
-    const callee = stripTemplates(norm(fnNode.text)).replace(/^::/, "");
+    const callee = stripTemplates(normName(fnNode.text)).replace(/^::/, "");
     const args = argsOf(call);
 
     const spawnCall = SPAWN_CALLS.get(callee);
