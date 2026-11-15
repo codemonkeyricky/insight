@@ -140,4 +140,30 @@ describe("createWorkerSolver", () => {
     await expect(p).rejects.toMatchObject({ name: "AbortError" });
     expect(workers[0]!.terminated).toBe(true);
   });
+
+  it("a worker that cannot be made rejects that job and the queue keeps pumping", async () => {
+    const workers: FakeWorker[] = [];
+    let calls = 0;
+    const solve = createWorkerSolver(() => {
+      calls++;
+      if (calls === 2) throw new Error("no worker");
+      const w = new FakeWorker();
+      workers.push(w);
+      return w as unknown as Worker;
+    });
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    const p1 = solve(g);
+    const p2 = solve({ id: "b" });
+    const p3 = solve({ id: "c" });
+    workers[0]!.emit("error", { message: "boom" });
+    await expect(p1).rejects.toThrow(/boom/);
+    await expect(p2).rejects.toThrow(/no worker/);
+    expect(workers).toHaveLength(2);
+    workers[1]!.answer({ id: "c", width: 3 });
+    await expect(p3).resolves.toMatchObject({ width: 3 });
+    await new Promise((r) => setTimeout(r, 0));
+    process.off("unhandledRejection", unhandled);
+    expect(unhandled).not.toHaveBeenCalled();
+  });
 });

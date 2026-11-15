@@ -79,7 +79,16 @@ export function createWorkerSolver(newWorker: () => Worker, ms = LAYOUT_TIMEOUT_
     if (running) return;
     const job = queue.shift();
     if (!job) return;
-    const self = (current ??= makeClient());
+    let self: Client;
+    try {
+      self = current ??= makeClient();
+    } catch (e) {
+      // No worker could be made: this job fails, the next one gets its own try.
+      finish(job);
+      job.reject(e instanceof Error ? e : new Error(String(e)));
+      pump();
+      return;
+    }
     running = job;
     timer = setTimeout(() => {
       if (running === job) failRunning(new Error(`layout timed out after ${Math.round(ms / 1000)} s`));

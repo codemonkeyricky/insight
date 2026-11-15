@@ -326,4 +326,12 @@ describe("review round 3", () => {
     const [w] = await wr("Defer.start");
     expect(w!.attrs).toMatchObject({ fromEntry: true, stale: true });
   });
+  it("round 4 item 1: a .d.ts base member and a bodied overload keep the known set", async () => {
+    expect((await wr("Em.go"))[0]!.attrs.from).toEqual(["S.A"]);
+    expect((await wr("Ov.go"))[0]!.attrs.from).toEqual(["S.A"]);
+  });
+  it("round 4 item 2: forEach, Promise executor and IIFE writes count; setTimeout ones do not", async () => {
+    for (const fn of ["goEach", "goExec", "goIife"]) expect((await wr(`Cb.${fn}`))[0]!.attrs.fromEntry, fn).toBeUndefined();
+    expect((await wr("Cb.goLater"))[0]!.attrs.fromEntry).toBe(true);
+  });
 });

@@ -796,6 +796,8 @@ export function emitState(h: StateHelpers): StateOutput {
   interface Abrupt {
     kind: "return" | "break" | "continue" | "throw";
     env: Env;
+    /** Cached signature of `env` (throws only), for the duplicate check. */
+    sig?: string;
     target?: Jump;
     /** The jump depth of the target: only finallys opened inside it are crossed. */
     depth: number;
@@ -820,8 +822,8 @@ export function emitState(h: StateHelpers): StateOutput {
       if (a.kind === "throw") {
         if (c.phase === "try" && c.hasCatch) return;
         if (c.hasFinally) {
-          const g = sig(a.env);
-          if (!c.abrupts.some((x) => x.kind === "throw" && sig(x.env) === g)) c.abrupts.push({ ...a, env: clone(a.env) });
+          const g = a.sig ?? sig(a.env);
+          if (!c.abrupts.some((x) => x.kind === "throw" && x.sig === g)) c.abrupts.push({ ...a, sig: g, env: clone(a.env) });
           return;
         }
         continue;
@@ -1004,6 +1006,38 @@ export function emitState(h: StateHelpers): StateOutput {
    * never leaves a partial set behind.
    */
   const writtenCache = new Map<ts.Node, Set<Holder>>();
+  /** The declaration with a body, so an overloaded method resolves to its implementation. */
+  const bodyOf = (sym: ts.Symbol | undefined): ts.FunctionLikeDeclaration | undefined => {
+    if (!sym) return undefined;
+    const first = fnNodeFromDecl(sym.valueDeclaration);
+    if (first) return first;
+    for (const d of sym.declarations ?? []) {
+      const f = fnNodeFromDecl(d);
+      if (f) return f;
+    }
+    return undefined;
+  };
+  const SYNC_CALLBACK_METHODS = new Set(["forEach", "map", "filter", "some", "every", "find", "findIndex", "reduce", "flatMap", "sort"]);
+  /** Whether a nested function runs while its enclosing body runs: an IIFE, a `new Promise` executor, an array callback. */
+  const runsNow = (fn: ts.Node): boolean => {
+    let node: ts.Node = fn;
+    let p = fn.parent;
+    while (p && ts.isParenthesizedExpression(p)) {
+      node = p;
+      p = p.parent;
+    }
+    if (!p) return false;
+    if (ts.isCallExpression(p)) {
+      if (p.expression === node) return true;
+      const c = stripAll(p.expression);
+      return ts.isPropertyAccessExpression(c) && SYNC_CALLBACK_METHODS.has(c.name.text) && p.arguments[0] === node;
+    }
+    if (ts.isNewExpression(p)) {
+      const c = p.expression;
+      return ts.isIdentifier(c) && c.text === "Promise" && p.arguments?.[0] === node;
+    }
+    return false;
+  };
   const writtenBy = (root: ts.FunctionLikeDeclaration): Set<Holder> => {
     const hit = writtenCache.get(root);
     if (hit) return hit;
@@ -1011,8 +1045,14 @@ export function emitState(h: StateHelpers): StateOutput {
     const seen = new Set<ts.Node>([root]);
     const visit = (fn: ts.FunctionLikeDeclaration): void => {
       const walk = (n: ts.Node): void => {
-        // Deferred code (callbacks, nested classes, object-literal methods) does not run in this body.
-        if (isFnLike(n) || ts.isClassDeclaration(n) || ts.isClassExpression(n)) return;
+        // Stored code (callbacks kept for later, nested classes, object-literal methods) does not run in this body.
+        if (ts.isClassDeclaration(n) || ts.isClassExpression(n)) return;
+        if (isFnLike(n)) {
+          if (!runsNow(n)) return;
+          const b = (n as ts.FunctionLikeDeclaration).body;
+          if (b) walk(b);
+          return;
+        }
         if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
           const l = stripAll(n.left);
           if (ts.isPropertyAccessExpression(l) && l.expression.kind === ts.SyntaxKind.ThisKeyword) {
@@ -1028,7 +1068,7 @@ export function emitState(h: StateHelpers): StateOutput {
           const c = stripAll(n.expression);
           if (ts.isPropertyAccessExpression(c) && c.expression.kind === ts.SyntaxKind.ThisKeyword) {
             const sy = resolveAlias(checker.getSymbolAtLocation(c.name));
-            const cf = fnNodeFromDecl(sy?.valueDeclaration ?? sy?.declarations?.[0]);
+            const cf = bodyOf(sy);
             if (cf && !ts.isGetAccessorDeclaration(cf) && !seen.has(cf)) {
               seen.add(cf);
               visit(cf);
@@ -1077,11 +1117,12 @@ export function emitState(h: StateHelpers): StateOutput {
     if (!nameNode) return;
     const sym = resolveAlias(checker.getSymbolAtLocation(nameNode));
     const decl = sym?.valueDeclaration ?? sym?.declarations?.[0];
-    const fn = fnNodeFromDecl(decl);
-    if (!fn || (fn && ts.isGetAccessorDeclaration(fn))) {
-      // A `this.x()` that cannot be resolved to a body (abstract, interface-typed, function-valued property) may
-      // write anything: every holder of the class becomes plain unknown.
-      if (!fn && ts.isPropertyAccessExpression(callee) && callee.expression.kind === ts.SyntaxKind.ThisKeyword && env) {
+    const fn = bodyOf(sym);
+    if (!fn || ts.isGetAccessorDeclaration(fn)) {
+      // A `this.x()` declared in project source without a body (abstract, interface-typed, function-valued
+      // property) may write anything: every holder of the class becomes plain unknown. Members from .d.ts, lib or
+      // node_modules sources are treated as non-writing.
+      if (!fn && decl && relOfNode(decl) !== undefined && ts.isPropertyAccessExpression(callee) && callee.expression.kind === ts.SyntaxKind.ThisKeyword && env) {
         const cls = enclosingClass(call);
         const cd = cls ? project.decls.get(cls) : undefined;
         if (cd) forgetHolders([...holderById.values()].filter((x) => x.classId === cd.id), env, call);

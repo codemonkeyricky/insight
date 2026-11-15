@@ -1,3 +1,4 @@
+import { Emitter } from "./emitter";
 export enum S {
   Idle = "Idle",
   A = "A",
@@ -137,5 +138,70 @@ export class Defer {
   }
   stop() {
     this.s = S.D;
+  }
+}
+
+/** Round 4 item 1: members from a .d.ts base and overloads with a body do not wipe the holders. */
+export class Em extends Emitter {
+  s: S = S.Idle;
+  go() {
+    if (this.s !== S.A) return;
+    this.emit("x");
+    this.s = S.B;
+  }
+}
+export class Ov {
+  s: S = S.Idle;
+  note(x: string): void;
+  note(x: number): void;
+  note(x: string | number): void {
+    log();
+  }
+  go() {
+    if (this.s !== S.A) return;
+    this.note("x");
+    this.s = S.B;
+  }
+}
+
+/** Round 4 item 2: synchronously invoked callbacks count; stored ones do not. */
+export class Cb {
+  s: S = S.Idle;
+  each() {
+    [1].forEach(() => {
+      this.s = S.Idle;
+    });
+  }
+  exec() {
+    new Promise<void>((r) => {
+      this.s = S.Idle;
+      r();
+    });
+  }
+  iife() {
+    (() => {
+      this.s = S.Idle;
+    })();
+  }
+  later() {
+    setTimeout(() => {
+      this.s = S.Idle;
+    }, 1);
+  }
+  goEach() {
+    this.each();
+    this.s = S.B;
+  }
+  goExec() {
+    this.exec();
+    this.s = S.B;
+  }
+  goIife() {
+    this.iife();
+    this.s = S.B;
+  }
+  goLater() {
+    this.later();
+    this.s = S.B;
   }
 }
