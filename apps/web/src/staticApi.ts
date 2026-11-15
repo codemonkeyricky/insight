@@ -29,7 +29,7 @@ import type {
   TargetType,
 } from "./api";
 import type { CallerOptions, PipelineModel, SerializedModel, SystemModel } from "@insight/model";
-import { buildFileFlow } from "@insight/flow";
+import { buildFileFlow, couplingIndex, type CouplingIndex } from "@insight/flow";
 import { callerGraphFor, pipelineFor, refsFor, scopeCallersFor, scopeExecFor, scopeFlowFor, systemFor, type CallerGraphPayload, type ScopeRefsPayload } from "./model/payloads";
 import { models } from "./model/store";
 import { canonicalScope, scopeKey, scopeProblem } from "./scopeKey";
@@ -116,6 +116,19 @@ export function makeStaticApi(baseFor: (projectId: string) => string | Promise<s
   const sourceFor = opts.sourceFor ?? ((projectId: string, path: string) => load<Record<string, string>>(projectId, "sources.json").then((m) => m[path]));
 
   const graphIndexes = new Map<string, Promise<{ graph: Graph; index: GraphIndex }>>();
+  /** The project-wide coupling index, built once per graph (the same key loadGraph caches by). */
+  const couplingIndexes = new Map<string, CouplingIndex>();
+  const couplingOf = async (projectId: string, graph: Graph): Promise<CouplingIndex> => {
+    const base = await baseOf(projectId);
+    const key = `${base}|${graph.snapshot}`;
+    const hit = couplingIndexes.get(key);
+    if (hit) return hit;
+    type IndexInput = Parameters<typeof couplingIndex>;
+    const index = couplingIndex(graph.nodes as unknown as IndexInput[0], graph.edges as unknown as IndexInput[1]);
+    couplingIndexes.set(key, index);
+    if (couplingIndexes.size > 4) couplingIndexes.delete(couplingIndexes.keys().next().value as string);
+    return index;
+  };
   const loadGraph = async (projectId: string) => {
     const base = await baseOf(projectId);
     let hit = graphIndexes.get(base);
@@ -320,7 +333,8 @@ export function makeStaticApi(baseFor: (projectId: string) => string | Promise<s
       const nodes = graph.nodes.filter((n) => n.span?.file === path);
       const edges = graph.edges.filter((e) => e.span?.file === path);
       type FlowInput = Parameters<typeof buildFileFlow>;
-      return buildFileFlow(path, nodes as unknown as FlowInput[1], edges as unknown as FlowInput[2]);
+      const coupling = await couplingOf(id, graph);
+      return buildFileFlow(path, nodes as unknown as FlowInput[1], edges as unknown as FlowInput[2], { coupling });
     },
     flowSummary: async (id: string): Promise<FileFlowSummary[]> => {
       await checkProject(id);

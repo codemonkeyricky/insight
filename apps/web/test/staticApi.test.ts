@@ -81,3 +81,36 @@ describe("makeStaticApi file flow", () => {
     expect((await api.flow("flowy", "c.ts")).functions).toEqual([]);
   });
 });
+
+describe("makeStaticApi coupling flow", () => {
+  it("carries a coupling chart on each function, from the project-wide graph", async () => {
+    const span = (file: string, start: number[], end: number[]) => ({ file, start, end });
+    const graph = {
+      snapshot: "snap-coupling",
+      nodes: [
+        { id: "pkgs/a/package.json", kind: "structure.file", facet: "structure", attrs: {}, span: span("pkgs/a/package.json", [0, 0], [0, 0]), provenance: { confidence: "exact", frontend: "x" } },
+        { id: "pkgs/b/package.json", kind: "structure.file", facet: "structure", attrs: {}, span: span("pkgs/b/package.json", [0, 0], [0, 0]), provenance: { confidence: "exact", frontend: "x" } },
+        { id: "pkgs/a/src/main.ts#run", kind: "structure.function", facet: "structure", attrs: { name: "run" }, span: span("pkgs/a/src/main.ts", [1, 0], [3, 1]), provenance: { confidence: "exact", frontend: "x" } },
+        { id: "pkgs/b/src/lib.ts#helper", kind: "structure.function", facet: "structure", attrs: { name: "helper" }, span: span("pkgs/b/src/lib.ts", [1, 0], [3, 1]), provenance: { confidence: "exact", frontend: "x" } },
+      ],
+      edges: [],
+      incoming: {},
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/project.json")) return json(projectJson("mono"));
+        if (url.endsWith("/graph.json")) return json(graph);
+        return new Response("nope", { status: 404 });
+      }),
+    );
+    const api = makeStaticApi(() => "https://factory.test/mono/");
+    const flow = await api.flow("mono", "pkgs/a/src/main.ts");
+    const run = flow.functions.find((f) => f.name === "run");
+    expect(run?.coupling).toBeDefined();
+    expect(run?.coupling?.module).toBe("pkgs/a");
+    expect(run?.coupling?.summary).toBe("no coupling");
+    expect(run?.coupling?.chart.id).toBe("pkgs/a/src/main.ts#run");
+    expect(run?.coupling?.rows.all).toBeGreaterThan(0);
+  });
+});

@@ -1,5 +1,6 @@
 import { edgeTargets, type IRView } from "@insight/sdk";
 import type { IREdge, IRNode, NodeId, Span } from "@insight/ir";
+import { packageRoots, rootOf } from "@insight/flow";
 import { buildModuleGraph } from "./module-graph.js";
 
 /** Layer order used when the caller does not supply its own `layerOf`. */
@@ -144,70 +145,6 @@ function bareName(specifier: string): string {
   return specifier.startsWith("@") ? parts.slice(0, 2).join("/") : (parts[0] as string);
 }
 
-/** Directories whose package.json files describe fixtures, not packages of the project. */
-const NOT_A_PACKAGE = /(^|\/)(node_modules|test|tests|fixtures|__fixtures__|samples)(\/|$)/;
-
-interface PkgRoot {
-  path: string;
-  name: string;
-}
-
-const dirOf = (path: string): string => {
-  const slash = path.lastIndexOf("/");
-  return slash >= 0 ? path.slice(0, slash) : ".";
-};
-
-const lastSegment = (path: string): string => path.slice(path.lastIndexOf("/") + 1);
-
-/**
- * Package roots come from structure.package nodes when a frontend emits them, and otherwise
- * from package.json files among the structure.file nodes. The TypeScript frontend emits no
- * package nodes, so the second source is the one that usually applies.
- */
-/** The buildSystem a structure.package node names, or undefined when it names none. */
-function buildSystemOf(node: IRNode): string | undefined {
-  const value = (node.attrs as { buildSystem?: unknown }).buildSystem;
-  return typeof value === "string" && value !== "" ? value : undefined;
-}
-
-/**
- * The structure.package node that names a directory's package when several build systems describe it. The node whose
- * buildSystem sorts first wins; a node with no buildSystem sorts last; ties go to the lower node id. So the result does
- * not depend on record order.
- */
-function winningPackage(a: IRNode, b: IRNode): IRNode {
-  const sa = buildSystemOf(a);
-  const sb = buildSystemOf(b);
-  if (sa !== sb) {
-    if (sa === undefined) return b;
-    if (sb === undefined) return a;
-    return sa < sb ? a : b;
-  }
-  return a.id <= b.id ? a : b;
-}
-
-function packageRoots(view: IRView): PkgRoot[] {
-  const roots = new Map<string, PkgRoot>();
-  const winners = new Map<string, IRNode>();
-  for (const node of view.nodes({ kind: "structure.package" })) {
-    const attrs = node.attrs as { root?: unknown };
-    const path = typeof attrs.root === "string" ? attrs.root : node.id;
-    const current = winners.get(path);
-    winners.set(path, current === undefined ? node : winningPackage(current, node));
-  }
-  for (const [path, node] of winners) {
-    const attrs = node.attrs as { name?: unknown };
-    roots.set(path, { path, name: typeof attrs.name === "string" ? attrs.name : path === "." ? "." : lastSegment(path) });
-  }
-  for (const node of view.nodes({ kind: "structure.file" })) {
-    if (lastSegment(node.id) !== "package.json") continue;
-    const dir = dirOf(node.id);
-    if (roots.has(dir) || NOT_A_PACKAGE.test(dir)) continue;
-    roots.set(dir, { path: dir, name: dir === "." ? "." : lastSegment(dir) });
-  }
-  return [...roots.values()];
-}
-
 /** The nearest structure.file node above a node, or undefined when there is none. */
 function fileAncestor(view: IRView, id: NodeId): NodeId | undefined {
   let cur = view.node(id);
@@ -217,21 +154,6 @@ function fileAncestor(view: IRView, id: NodeId): NodeId | undefined {
     cur = view.node(cur.parent);
   }
   return undefined;
-}
-
-/** The nearest package root above a file. The root "." matches everything but ranks lowest. */
-function rootOf(roots: PkgRoot[], file: NodeId): PkgRoot | undefined {
-  let best: PkgRoot | undefined;
-  let bestRank = -2;
-  for (const root of roots) {
-    if (root.path !== "." && !file.startsWith(`${root.path}/`)) continue;
-    const rank = root.path === "." ? -1 : root.path.length;
-    if (rank > bestRank) {
-      best = root;
-      bestRank = rank;
-    }
-  }
-  return best;
 }
 
 const weakest = (a: ArchEdge["confidence"], b: ArchEdge["confidence"]): ArchEdge["confidence"] => {
@@ -257,7 +179,7 @@ function mergeSpans(spans: Span[]): Span[] {
  * their import spans, unresolved imports, and rule violations. Plain JSON, no UI.
  */
 export function archModel(view: IRView, options: ArchOptions = {}): ArchModel {
-  const roots = packageRoots(view);
+  const roots = packageRoots([...view.nodes({ kind: "structure.package" }), ...view.nodes({ kind: "structure.file" })]);
   // Without a caller's own layerOf, a project whose packages mostly miss the Insight layers gets top-directory layers.
   // The root package "." is left out of the count: the default layers name it "project" in any repository.
   const named = roots.filter((r) => r.path !== ".");

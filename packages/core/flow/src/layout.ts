@@ -1,5 +1,5 @@
 import type { FunctionFacts, Item } from "./build.js";
-import type { FlowEdge, FlowEdgeKind, FlowEdgeStyle, FlowNode, FlowShape, FlowRole, FlowSpan, FlowStats, FunctionFlow } from "./types.js";
+import type { CouplingClass, FlowEdge, FlowEdgeKind, FlowEdgeStyle, FlowNode, FlowShape, FlowRole, FlowSpan, FlowStats, FunctionFlow } from "./types.js";
 import { displayName } from "./names.js";
 
 /*
@@ -48,6 +48,19 @@ interface Scope {
   ancestors: ReadonlySet<string>;
 }
 
+/** The fields a row takes from its chart item. */
+interface Extra {
+  title?: string;
+  span?: FlowSpan;
+  target?: string;
+  handler?: true;
+  coupling?: CouplingClass;
+  hoisted?: string;
+  foldId?: string;
+  fold?: number;
+  open?: true;
+}
+
 class Maker {
   private n = 0;
   constructor(
@@ -60,15 +73,20 @@ class Maker {
   reserve(): void {
     this.n++;
   }
-  node(role: FlowRole, shape: FlowShape, label: string, extra: { title?: string; span?: FlowSpan; target?: string; handler?: true } = {}): FlowNode {
+  node(role: FlowRole, shape: FlowShape, label: string, extra: Extra = {}): FlowNode {
     return this.make(`${this.prefix}n${++this.n}`, role, shape, label, extra);
   }
-  make(id: string, role: FlowRole, shape: FlowShape, label: string, extra: { title?: string; span?: FlowSpan; target?: string; handler?: true } = {}): FlowNode {
+  make(id: string, role: FlowRole, shape: FlowShape, label: string, extra: Extra = {}): FlowNode {
     const out: FlowNode = { id, role, shape, label, w: 0, h: ROW_H, x: 0, y: 0 };
     if (extra.title !== undefined && extra.title !== label) out.title = extra.title;
     if (extra.span) out.span = extra.span;
     if (extra.target) out.target = extra.target;
     if (extra.handler) out.handler = true;
+    if (extra.coupling !== undefined) out.coupling = extra.coupling;
+    if (extra.hoisted !== undefined) out.hoisted = extra.hoisted;
+    if (extra.foldId !== undefined) out.foldId = extra.foldId;
+    if (extra.fold !== undefined) out.fold = extra.fold;
+    if (extra.open === true) out.open = true;
     return out;
   }
 }
@@ -190,15 +208,29 @@ function walkItem(c: Ctx, mk: Maker, item: Item, lane: number, labelLane: number
   switch (item.t) {
     case "step": {
       if (item.role === "marker") {
-        const m = mk.node("marker", "label", item.label, item.span ? { span: item.span } : {});
+        const m = mk.node("marker", "label", item.label, {
+          ...(item.span ? { span: item.span } : {}),
+          ...(item.foldId !== undefined ? { foldId: item.foldId, fold: item.fold?.length ?? 0 } : {}),
+          ...(item.open === true ? { open: true as const } : {}),
+        });
         row(c, m, lane, labelLane, skip, into);
         return [next(m)];
       }
-      const node = mk.node(item.role, "step", clipLabel(item.label, LABEL_MAX), { title: item.title ?? item.label, ...(item.span ? { span: item.span } : {}), ...(item.target ? { target: item.target } : {}), ...(item.handler ? { handler: true as const } : {}) });
+      const node = mk.node(item.role, "step", clipLabel(item.label, LABEL_MAX), {
+        title: item.title ?? item.label,
+        ...(item.span ? { span: item.span } : {}),
+        ...(item.target ? { target: item.target } : {}),
+        ...(item.handler ? { handler: true as const } : {}),
+        ...(item.coupling !== undefined ? { coupling: item.coupling } : {}),
+        ...(item.hoisted !== undefined ? { hoisted: item.hoisted } : {}),
+      });
       return stepRow(c, mk, node, lane, labelLane, skip, into);
     }
     case "term": {
-      const t = mk.node(item.role, "exit", item.label, item.span ? { span: item.span } : {});
+      const t = mk.node(item.role, "exit", item.label, {
+        ...(item.span ? { span: item.span } : {}),
+        ...(item.coupling !== undefined ? { coupling: item.coupling } : {}),
+      });
       row(c, t, lane, labelLane, skip, into);
       return [];
     }

@@ -1,4 +1,5 @@
 import { readLambdas, writeLambdas } from "../../zoom/lambdaPref";
+import { readDetail, writeDetail } from "../../zoom/detailPref";
 import { readFlowMotion, writeFlowMotion } from "../../zoom/flowMotionPref";
 import { readRuntimeBoxes, writeRuntimeBoxes } from "../../zoom/runtimePref";
 import { useEffect, useMemo, useState } from "react";
@@ -52,7 +53,7 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
   const { showCode } = useCodeTarget();
   const kind = scopeKind(scope, files);
   /** What the map shows: frames and calls on by default, findings off until the reader turns the layer on, lambdas off (folded). */
-  const [shown, setShown] = useState<LayerState>(() => ({ frames: true, calls: true, findings: findingKind !== undefined, lambdas: readLambdas(), motion: readFlowMotion(), runtime: readRuntimeBoxes() }));
+  const [shown, setShown] = useState<LayerState>(() => ({ frames: true, calls: true, findings: findingKind !== undefined, lambdas: readLambdas(), motion: readFlowMotion(), runtime: readRuntimeBoxes(), coupling: readDetail() === "coupling" }));
   const exec = useMemo(() => new ExecStore(id, roots, shown.lambdas, shown.runtime), [id, roots, shown.lambdas, shown.runtime]);
   // A "Show in Flow" link for a kind turns the findings layer on, even when the flow is already open.
   useEffect(() => {
@@ -112,7 +113,7 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
       <div className="sh-sheet">
         <div className="sh-canvas">
           <ZoomMap
-            key={`${roots ? "roots" : "all"}-${shown.lambdas ? "lambdas" : "folded"}-${shown.runtime ? "runtime" : "flat"}`}
+            key={`${roots ? "roots" : "all"}-${shown.lambdas ? "lambdas" : "folded"}-${shown.runtime ? "runtime" : "flat"}-${shown.coupling ? "coupling" : "full"}`}
             id={id}
             source={exec}
             scope={scope}
@@ -142,6 +143,11 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
             findingCount={findingRows?.length}
             onChange={(key, on) => {
               setShown((s) => ({ ...s, [key]: on }));
+              if (key === "coupling") {
+                // The store reads the choice when it picks a function's chart; the map remounts below, so its charts are drawn again.
+                store.setDetail(on ? "coupling" : "all");
+                writeDetail(on ? "coupling" : "all");
+              }
               if (key === "lambdas") writeLambdas(on);
               if (key === "motion") writeFlowMotion(on);
               if (key === "runtime") writeRuntimeBoxes(on);

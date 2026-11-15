@@ -260,7 +260,43 @@ function Station({ node, cx, cy, resolved }: { node: FlowNode; cx: number; cy: n
   return <circle className="st step" cx={cx} cy={cy} r={3.5} />;
 }
 
+/**
+ * The coupling class a kept row is drawn in (`cp-<class>`): the row's `coupling`, which is already its strongest class (its
+ * own or hoisted, see coupling.ts ORDER). A hoisted throw does not restyle the row here. Undefined for a row with no class.
+ */
+export function couplingClassOf(node: FlowNode): string | undefined {
+  // `coupling` is already the strongest class of the row (coupling.ts ORDER), its own or hoisted; the hoisted text is only a
+  // list of labels, so a `throws` in it does not restyle an io or conc row.
+  return node.coupling === undefined ? undefined : node.coupling;
+}
+
+/**
+ * A fold row. Closed, `⋯ n local` with a ▸ chevron: opening it replaces it with the rows it folds (see expand.ts toggleFold).
+ * Open, its header `▾ n local` with a ▾ chevron: opening it folds the rows back. The header's own ▾ is not repeated in the text.
+ */
+function FoldRow({ node, width, onNodeClick, onNodeOpen, selected, delay }: { node: FlowNode; width: number; onNodeClick?: FlowNodeClick; onNodeOpen?: FlowNodeOpen; selected: boolean; delay: number }) {
+  const cy = node.y + ROW_H / 2;
+  const open = node.open === true;
+  const onClick = onNodeClick
+    ? (e: MouseEvent<Element>) => {
+        if (onNodeClick(node)) e.preventDefault();
+      }
+    : undefined;
+  const text = open ? node.label.replace(/^▾\s*/, "") : node.label;
+  return (
+    <g className={`flow-node flow-fold${open ? " flow-fold-open" : ""}${selected ? " selected" : ""}`} style={delayStyle(delay)} onClick={onClick} data-node={node.id} data-fold={node.foldId} role={onNodeOpen ? "button" : undefined} aria-label={open ? `${node.label}: fold back` : `${node.label}: open to show its rows`} tabIndex={onNodeOpen ? 0 : undefined} {...openHandlers(node, onNodeOpen)}>
+      <title>{open ? "The local calls and steps shown above. Fold them back." : `${node.label}: the local calls and steps that stay in their module. Open to show them.`}</title>
+      <rect x={4} y={node.y} width={Math.max(0, width - 8)} height={ROW_H} rx={7} className="flow-hit" />
+      <text x={labelAt(node)} y={cy} dominantBaseline="central" className="flow-text flow-fold-label">
+        {text}
+      </text>
+      {onNodeOpen && <Chevron node={node} x={width - 4 - CHEV_INSET - CHEV_HIT / 2} y={node.y} fold={open} onNodeOpen={onNodeOpen} />}
+    </g>
+  );
+}
+
 function Node({ id, node, fnId, scope, width, onNodeClick, onNodeOpen, selected, delay }: { id: string; node: FlowNode; fnId: string; scope: string; width: number; onNodeClick?: FlowNodeClick; onNodeOpen?: FlowNodeOpen; selected: boolean; delay: number }) {
+  if (node.foldId !== undefined) return <FoldRow node={node} width={width} onNodeClick={onNodeClick} onNodeOpen={onNodeOpen} selected={selected} delay={delay} />;
   const { shape } = node;
   const [cx, cy] = station(node);
   const target = node.target;
@@ -281,7 +317,10 @@ function Node({ id, node, fnId, scope, width, onNodeClick, onNodeOpen, selected,
       {inside && <Chevron node={node} x={width - 4 - CHEV_INSET - CHEV_HIT / 2} y={node.y} fold={shape === "fork"} onNodeOpen={onNodeOpen} />}
     </>
   );
-  const cls = `flow-node ${shape} role-${node.role} c${laneOf(node.lane)}${outside ? " unresolved" : ""}${inside ? " resolves" : ""}${selected ? " selected" : ""}`;
+  const cp = couplingClassOf(node);
+  // The write-to-disk rows of the coupling view are drawn stronger than the other IO rows (see styles.css).
+  const cpCls = cp === undefined ? "" : ` cp-${cp}${cp === "io" && node.label.startsWith("fs.write") ? " cp-io-write" : ""}`;
+  const cls = `flow-node ${shape} role-${node.role} c${laneOf(node.lane)}${outside ? " unresolved" : ""}${inside ? " resolves" : ""}${selected ? " selected" : ""}${cpCls}`;
   const style = delayStyle(delay);
   // A call into this scope opens the callee's chart; every other step with a span opens its source line.
   const link = inside && target !== undefined ? hrefView(id, "flow", { scope, fn: target }) : node.span ? hrefFile(id, node.span.file, node.span.start[0] + 1) : undefined;

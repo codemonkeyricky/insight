@@ -266,6 +266,30 @@ a.flow-node { cursor: pointer; }
 .flow-text, .flow-chev, .flow-kw { user-select: none; -webkit-user-select: none; }
 .flow-chevron { cursor: pointer; }
 .flow-chevron-hit { fill: transparent; stroke: none; transition: fill 120ms ease-out; }
+/* Coupling detail layer: a row's class colours its text (cross accent, IO, writes, concurrency, state, escape) and its stroke. */
+.flow-node.cp-cross .flow-text { fill: var(--accent-text); font-weight: 600; }
+.flow-node.cp-cross .st { stroke: var(--accent-text); }
+.flow-node.cp-io .flow-text { fill: var(--coroutine); }
+.flow-node.cp-io .st { stroke: var(--coroutine); }
+.flow-node.cp-io-write .flow-text { fill: var(--warn-text); font-weight: 700; }
+.flow-node.cp-conc .flow-text { fill: var(--thread); }
+.flow-node.cp-conc .st { stroke: var(--thread); }
+.flow-node.cp-state .flow-text { fill: var(--ok-text); }
+.flow-node.cp-escape .flow-text { fill: var(--red-text); font-weight: 600; }
+.flow-node.cp-escape .st { stroke: var(--red-text); }
+.flow-fold .flow-text { fill: var(--muted); font-size: 11px; font-style: italic; }
+.flow-fold .flow-chev { fill: var(--muted); }
+.flow-fold .st { stroke: var(--muted); stroke-dasharray: 3 2.5; }
+.sh-coupling-legend { font-size: var(--t-sm); color: var(--ink); display: grid; gap: 4px; margin-top: 6px; }
+.sh-coupling-legend p { margin: 4px 0 0; font-size: var(--t-sm); }
+.cp-key { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; margin-right: 4px; background: var(--graphite); }
+.cp-key.cp-cross { background: var(--accent-text); }
+.cp-key.cp-io { background: var(--coroutine); }
+.cp-key.cp-conc { background: var(--thread); }
+.cp-key.cp-escape { background: var(--red-text); }
+.cp-key.cp-fold { background: none; border: 1px dashed var(--muted); }
+.exec-coupling h3 { margin: 12px 0 4px; font-size: var(--t-md); }
+.exec-coupling ul { margin: 0 0 6px; padding-left: 18px; }
 .flow-chevron:hover .flow-chevron-hit { fill: color-mix(in srgb, var(--accent) 22%, transparent); }
 .flow-mark { fill: var(--warn-text); font: 700 12px system-ui, sans-serif; }
 .flow-edge { fill: none; stroke: var(--lane-0); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }

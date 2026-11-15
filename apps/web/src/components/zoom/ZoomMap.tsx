@@ -8,10 +8,10 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type Keyb
 import { select } from "d3-selection";
 import { zoom, zoomIdentity, type D3ZoomEvent, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
 import { CHART_FIT_MAX_K, CHART_HEAD, MORE_SUFFIX, ZOOM_SIZE, fitCamera, fitChartCamera, visibleWorld, type Camera, type FlowNode, type FlowSpan, type FunctionFlow, type PlacedItem, type Rect } from "@insight/flow";
-import { nameOfId, runtimeLabel, stepRuntime } from "../../flowTargets";
+import { isPostStep, nameOfId, runtimeLabel, stepRuntime } from "../../flowTargets";
 import { hrefView } from "../../router";
 import { CHART_MIN_PX } from "../../zoom/chart";
-import { anchoredTo, CALLERS_CAP, callerRowRect, callersAt, chainHas, hangCallersFrom, hangsFromCallers, expandCamera, headerAnchor, isInPlace, calloutOf, closeExpansion, footprintOf, isNested, loadFunctionChart, NARROW_VIEW_PX, openExpansion, ownerOf, REVEAL_MIN_K, refresh, refusedCallersPlan, resizeCallers, revealCamera, rootBoxOf, sameFootprint, sceneCamera, setInline, SLOT_PAD, shiftAt, stepRect, stillOpen, syncCallerRows, toggleCallers, type Expansion, type ExpandAnchor } from "../../zoom/expand";
+import { anchoredTo, CALLERS_CAP, callerRowRect, callersAt, chainHas, hangCallersFrom, hangsFromCallers, expandCamera, headerAnchor, isInPlace, calloutOf, closeExpansion, footprintOf, isNested, loadFunctionChart, NARROW_VIEW_PX, openExpansion, ownerOf, REVEAL_MIN_K, refresh, refusedCallersPlan, resizeCallers, revealCamera, rootBoxOf, sameFootprint, sceneCamera, setInline, SLOT_PAD, shiftAt, stepRect, stillOpen, syncCallerRows, toggleCallers, toggleFold, type Expansion, type ExpandAnchor } from "../../zoom/expand";
 import { callersKey, isCallersKey, refOfCallersKey, type CallerRow } from "../../zoom/callers";
 import { LatestLoad } from "../../zoom/latestLoad";
 import { CallersBox } from "./CallersBox";
@@ -942,6 +942,10 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   const chartOpen = (fnId: string, node: FlowNode): boolean => {
     stageRef.current?.focus({ preventScroll: true });
     const action = stepAction(node, "open", stepContext(fnId, node));
+    if (action === "unfold") {
+      void unfoldStep(fnId, node);
+      return true;
+    }
     const callee = node.target ?? "";
     if (action === "fold") void inlineStep(fnId, node, callee);
     else if (action === "lambda") void highlightLambda(fnId, node, callee);
@@ -951,6 +955,35 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
       void inlineStep(fnId, node, callee, kind === "same" ? undefined : kind);
     }
     return action !== "none";
+  };
+
+  /**
+   * Opens a `⋯ n local` fold of a box's coupling chart: the fold is replaced by the rows it folds (and folds back when it is
+   * opened again). Only a fold of the box's own chart opens. A fold inside a nested callee's frame stays closed: it is drawn
+   * but inert, since its rows belong to the callee's chart. The toggle is toggleFold, computed from the expansions as they
+   * are after the loads: a later click on this chart supersedes the load, and a box closed meanwhile opens nothing.
+   */
+  const unfoldStep = async (fnId: string, node: FlowNode) => {
+    const b = buildRef.current;
+    const foldId = node.foldId;
+    if (!b || foldId === undefined) return;
+    const e = expRef.current.find((x) => x.fnId === fnId);
+    if (e === undefined || ownerOf(e, node.id) !== fnId) return;
+    // A later click on this chart (another step, or its Callers button) supersedes this load: the click made last wins.
+    const token = loadsRef.current.start(fnId);
+    // The loaded chart carries the coupling (the summary the box shows) and the message targets; the unfolded chart is laid
+    // out again from the coupling chart's items, with the message targets applied to it.
+    const flow = await loadChart(fnId);
+    const source = flow?.coupling?.chart;
+    if (flow === undefined || source === undefined) return;
+    // Receivers are read only when the function posts messages: a chart with no post step needs no references request.
+    if (flow.nodes.some(isPostStep)) await charts?.store.loadMessages(fnId);
+    if (!loadsRef.current.isLatest(fnId, token)) return;
+    // The build and the expansions are read now, after the awaits: the folds are those open at this moment.
+    const cur = buildRef.current;
+    if (cur === undefined || !expRef.current.some((x) => x.fnId === fnId)) return;
+    const store = charts?.store;
+    setExp(toggleFold(placeAll(cur, expRef.current), fnId, foldId, source, placeView(cur), flow.coupling, (chart) => store?.messagesOf(fnId, chart) ?? chart));
   };
 
   /**

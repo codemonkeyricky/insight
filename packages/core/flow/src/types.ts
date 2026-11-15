@@ -1,4 +1,5 @@
 import type { Item } from "./build.js";
+import type { CouplingInfo } from "./coupling.js";
 
 /** A source range copied from the IR. Lines are 0-based, so add 1 to show a line number. */
 export interface FlowSpan {
@@ -25,6 +26,12 @@ export type FlowRole =
   | "break"
   | "continue";
 
+/**
+ * What a chart row is for the coupling view: a local row, or the boundary it crosses. `state` and `ctl` are reserved for
+ * phases 3 and 4 of the coupling view: no row takes them yet.
+ */
+export type CouplingClass = "local" | "cross" | "io" | "state" | "conc" | "escape" | "ctl";
+
 /** How the renderer draws a node. */
 export type FlowShape = "terminator" | "step" | "decision" | "loop" | "label" | "join" | "exit" | "nest" | "fork" | "line";
 
@@ -41,6 +48,16 @@ export interface FlowNode {
   target?: string;
   /** The step is a handler the code installs (`onmessage = …`): it opens its target, even a folded lambda. */
   handler?: true;
+  /** The row's coupling class (coupling view only). */
+  coupling?: CouplingClass;
+  /** What a local call hoists from its callee, or `may throw` for a cross call (coupling view only). */
+  hoisted?: string;
+  /** A `⋯ n local` fold row: the id that unfolds it. */
+  foldId?: string;
+  /** A `⋯ n local` fold row: how many rows it folds. */
+  fold?: number;
+  /** An open fold's header row (`▾ n local`): folding it back closes the fold. */
+  open?: boolean;
   /** Absolute lane of the node's station (line map layout). */
   lane?: number;
   /** Absolute x where the label text starts. */
@@ -108,6 +125,12 @@ export interface FunctionFlow {
    * steps (see `relayout`). Absent on a chart too large to draw.
    */
   items?: Item[];
+  /**
+   * The coupling view: the function's chart pruned to the rows that cross a module, do I/O, spawn work, or throw out. Set
+   * only when the file flow was built with a coupling index and the full chart fits. `rows` counts the laid-out boxes of
+   * the full chart (`all`) and of the coupling chart (`coupling`).
+   */
+  coupling?: CouplingInfo & { chart: FunctionFlow; rows: { all: number; coupling: number } };
 }
 
 export interface FileFlow {

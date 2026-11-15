@@ -1,6 +1,6 @@
 import type { IREdge, IRNode } from "@insight/ir";
 import { edgeTargets } from "@insight/sdk";
-import type { FlowRole, FlowSpan } from "./types.js";
+import type { CouplingClass, FlowRole, FlowSpan } from "./types.js";
 
 type Pos = readonly [number, number];
 const cmp = (a: Pos, b: Pos) => a[0] - b[0] || a[1] - b[1];
@@ -25,6 +25,10 @@ interface Ev {
   detail?: string;
   span?: FlowSpan;
   target?: string;
+  /** The IR node kind (`calls.call` for a call edge). Only kept for `sources` builds. */
+  kind?: string;
+  /** Every candidate of a call with more than one. Only kept for `sources` builds. */
+  targets?: string[];
   /** A handler the code installs (`onmessage = …`): its step opens the handler even when it is a folded lambda. */
   handler?: true;
   children: Ev[];
@@ -32,8 +36,29 @@ interface Ev {
 
 /** The chart before layout: a tree of what runs in order. */
 export type Item =
-  | { t: "step"; role: FlowRole; label: string; title?: string; span?: FlowSpan; target?: string; handler?: true }
-  | { t: "term"; role: "return" | "throw" | "break" | "continue"; label: string; span?: FlowSpan }
+  | {
+      t: "step";
+      role: FlowRole;
+      label: string;
+      title?: string;
+      span?: FlowSpan;
+      target?: string;
+      handler?: true;
+      /** IR kind of the row (`sources` builds only). */
+      kind?: string;
+      /** All candidate targets of a multi-candidate call (`sources` builds only). */
+      targets?: string[];
+      /** Coupling pass: the row's class. */
+      coupling?: CouplingClass;
+      /** Coupling pass: the classes and labels a local call hoists. */
+      hoisted?: string;
+      /** Coupling pass: a `⋯ n local` fold row holds the items it stands for. */
+      fold?: Item[];
+      foldId?: string;
+      /** Coupling pass: an open fold's header row (`▾ n local`), before the rows it folds. */
+      open?: boolean;
+    }
+  | { t: "term"; role: "return" | "throw" | "break" | "continue"; label: string; span?: FlowSpan; coupling?: CouplingClass }
   | { t: "fork"; role: "branch" | "switch" | "try"; label: string; title?: string; span?: FlowSpan; arms: Arm[]; complete: boolean }
   | { t: "loop"; label: string; title?: string; span?: FlowSpan; body: Item[] };
 
@@ -82,7 +107,7 @@ function effectLabel(n: IRNode): string {
 
 function toEvent(n: IRNode): Ev | undefined {
   if (!n.span) return undefined;
-  const base = { start: n.span.start as Pos, end: n.span.end as Pos, span: spanOf(n), children: [] as Ev[] };
+  const base = { start: n.span.start as Pos, end: n.span.end as Pos, span: spanOf(n), children: [] as Ev[], kind: n.kind };
   const a = n.attrs;
   const str = (v: unknown) => (typeof v === "string" ? v : "");
   switch (n.kind) {
@@ -141,18 +166,28 @@ function nest(events: Ev[]): Ev[] {
 const sameRange = (a: Ev, b: Ev) => cmp(a.start, b.start) === 0 && cmp(a.end, b.end) === 0;
 
 /** Turn the children of one event into items in source order. */
-function convertAll(evs: Ev[]): Item[] {
-  return evs.flatMap(convert);
+function convertAll(evs: Ev[], sources: boolean): Item[] {
+  return evs.flatMap((ev) => convert(ev, sources));
 }
 
-function step(role: FlowRole, ev: Ev, label: string): Item {
-  return { t: "step", role, label: clip(label, 30), title: label, ...(ev.span ? { span: ev.span } : {}), ...(ev.target ? { target: ev.target } : {}), ...(ev.handler ? { handler: true as const } : {}) };
+function step(role: FlowRole, ev: Ev, label: string, sources: boolean): Item {
+  return {
+    t: "step",
+    role,
+    label: clip(label, 30),
+    title: label,
+    ...(ev.span ? { span: ev.span } : {}),
+    ...(ev.target ? { target: ev.target } : {}),
+    ...(ev.handler ? { handler: true as const } : {}),
+    ...(sources && ev.kind !== undefined ? { kind: ev.kind } : {}),
+    ...(sources && ev.targets !== undefined ? { targets: ev.targets } : {}),
+  };
 }
 
-function convert(ev: Ev): Item[] {
+function convert(ev: Ev, sources: boolean): Item[] {
   switch (ev.type) {
     case "call":
-      return [...convertAll(ev.children), step("call", ev, ev.label)];
+      return [...convertAll(ev.children, sources), step("call", ev, ev.label, sources)];
     case "await":
     case "spawn":
     case "effect": {
@@ -163,17 +198,18 @@ function convert(ev: Ev): Item[] {
       const wrapped = kids.find((c) => c.type === "call" && (ev.type === "await" || cmp(c.start, ev.start) === 0));
       const rest = kids.filter((c) => c !== wrapped);
       const inner = wrapped?.label ?? "";
-      const items = convertAll(rest);
-      if (wrapped?.type === "call") items.push(...convertAll(wrapped.children));
-      if (ev.type === "await") return [...items, step("await", { ...ev, ...(wrapped?.target ? { target: wrapped.target } : {}) }, inner ? `await ${inner}` : "await")];
+      const items = convertAll(rest, sources);
+      if (wrapped?.type === "call") items.push(...convertAll(wrapped.children, sources));
+      const wrap = { ...(wrapped?.target ? { target: wrapped.target } : {}), ...(wrapped?.targets ? { targets: wrapped.targets } : {}) };
+      if (ev.type === "await") return [...items, step("await", { ...ev, ...wrap }, inner ? `await ${inner}` : "await", sources)];
       // Effects keep their own label; a resolved call inside only adds the link to its target.
-      return [...items, step(ev.type, { ...ev, ...(wrapped?.target ? { target: wrapped.target } : {}) }, ev.label)];
+      return [...items, step(ev.type, { ...ev, ...wrap }, ev.label, sources)];
     }
     case "return":
     case "throw":
     case "break":
     case "continue":
-      return [...convertAll(ev.children), { t: "term", role: ev.type, label: ev.label, ...(ev.span ? { span: ev.span } : {}) }];
+      return [...convertAll(ev.children, sources), { t: "term", role: ev.type, label: ev.label, ...(ev.span ? { span: ev.span } : {}) }];
     case "branch":
     case "switch": {
       const arms = ev.children.filter((c) => c.type === "arm");
@@ -182,7 +218,7 @@ function convert(ev: Ev): Item[] {
       const out: Arm[] = arms.map((a) => ({
         label: a.label,
         kind: isSwitch ? "case" : a.label === "then" ? "true" : "false",
-        body: convertAll(a.children),
+        body: convertAll(a.children, sources),
       }));
       let complete = true;
       if (isSwitch) {
@@ -203,32 +239,32 @@ function convert(ev: Ev): Item[] {
         arms: out,
         complete,
       };
-      return [...convertAll(head), fork];
+      return [...convertAll(head, sources), fork];
     }
     case "loop": {
       const body = ev.children.filter((c) => c.type === "block" && c.label === "body");
       const head = ev.children.filter((c) => !body.includes(c));
-      const loop: Item = { t: "loop", label: ev.label, title: ev.label, ...(ev.span ? { span: ev.span } : {}), body: convertAll(body.flatMap((b) => b.children)) };
-      return [...convertAll(head), loop];
+      const loop: Item = { t: "loop", label: ev.label, title: ev.label, ...(ev.span ? { span: ev.span } : {}), body: convertAll(body.flatMap((b) => b.children), sources) };
+      return [...convertAll(head, sources), loop];
     }
     case "try": {
       const part = (label: string) => ev.children.find((c) => c.type === "block" && c.label === label);
       const tryBlock = part("try");
       const catchBlock = part("catch");
       const finallyBlock = part("finally");
-      const arms: Arm[] = [{ label: "try", kind: "next", body: convertAll(tryBlock?.children ?? []) }];
-      if (catchBlock) arms.push({ label: "catch", kind: "exception", body: convertAll(catchBlock.children) });
+      const arms: Arm[] = [{ label: "try", kind: "next", body: convertAll(tryBlock?.children ?? [], sources) }];
+      if (catchBlock) arms.push({ label: "catch", kind: "exception", body: convertAll(catchBlock.children, sources) });
       const fork: Item = { t: "fork", role: "try", label: "try", ...(ev.span ? { span: ev.span } : {}), arms, complete: true };
       const out: Item[] = [fork];
       if (finallyBlock) {
-        out.push({ t: "step", role: "marker", label: "finally", ...(finallyBlock.span ? { span: finallyBlock.span } : {}) }, ...convertAll(finallyBlock.children));
+        out.push({ t: "step", role: "marker", label: "finally", ...(finallyBlock.span ? { span: finallyBlock.span } : {}) }, ...convertAll(finallyBlock.children, sources));
       }
       return out;
     }
     case "arm":
     case "block":
       // A region that is not under a branch, loop or try (for example an arm of a conditional inside a call) runs inline.
-      return convertAll(ev.children);
+      return convertAll(ev.children, sources);
   }
 }
 
@@ -244,7 +280,8 @@ export interface FunctionFacts {
  * Group a file's IR records by the function that owns them and rebuild each function's flow.
  * `nodes` and `edges` may hold more than the file; records from other files are ignored.
  */
-export function factsForFile(file: string, nodes: Iterable<IRNode>, edges: Iterable<IREdge>): FunctionFacts[] {
+export function factsForFile(file: string, nodes: Iterable<IRNode>, edges: Iterable<IREdge>, opts: { sources?: boolean } = {}): FunctionFacts[] {
+  const sources = opts.sources === true;
   const allNodes = [...nodes];
   const functions = new Map<string, FunctionFacts>();
   const events = new Map<string, Ev[]>();
@@ -277,7 +314,10 @@ export function factsForFile(file: string, nodes: Iterable<IRNode>, edges: Itera
   for (const e of edges) {
     if (e.kind !== "calls.call" || e.span?.file !== file || (!functions.has(e.from) && e.from !== file)) continue;
     const callee = typeof e.attrs?.callee === "string" ? e.attrs.callee : "call";
-    const target = edgeTargets(e).nodes[0];
+    const targets = edgeTargets(e);
+    const target = targets.nodes[0];
+    // A multi-candidate call has no resolved node: its candidates are the targets.
+    const all = targets.nodes.length > 0 ? targets.nodes : targets.candidates;
     add(e.from, {
       type: "call",
       start: e.span.start as Pos,
@@ -286,19 +326,21 @@ export function factsForFile(file: string, nodes: Iterable<IRNode>, edges: Itera
       label: `${callee}()`,
       span: spanOf(e),
       ...(target !== undefined ? { target } : {}),
+      kind: "calls.call",
+      ...(sources && all.length > 1 ? { targets: [...all] } : {}),
       children: [],
     });
   }
 
   const out: FunctionFacts[] = [];
   for (const fn of functions.values()) {
-    fn.items = convertAll(nest(events.get(fn.id) ?? []));
+    fn.items = convertAll(nest(events.get(fn.id) ?? []), sources);
     out.push(fn);
   }
   // Statements outside every function run when the module loads.
   const top = events.get(file);
   if (top && top.length > 0) {
-    out.push({ id: file, name: topLevelName(file), async: false, items: convertAll(nest(top)) });
+    out.push({ id: file, name: topLevelName(file), async: false, items: convertAll(nest(top), sources) });
   }
   return out.sort((a, b) => (a.span ? a.span.start[0] : 0) - (b.span ? b.span.start[0] : 0) || a.name.localeCompare(b.name));
 }
