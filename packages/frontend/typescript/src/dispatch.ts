@@ -1,4 +1,5 @@
 import ts from "typescript";
+import { relative, sep } from "node:path";
 import type { Decl, Project } from "./extract.js";
 
 /** The most candidates one dispatch site records. Past this, the first ids in order are kept and the edge is marked truncated. */
@@ -33,13 +34,17 @@ function aliased(checker: ts.TypeChecker, sym: ts.Symbol | undefined): ts.Symbol
  */
 interface Site {
   kind: "interface" | "abstract";
-  owner: ts.InterfaceDeclaration | ts.ClassDeclaration;
+  owner: ts.InterfaceDeclaration | ts.ClassDeclaration | ts.TypeAliasDeclaration;
   name: string;
 }
 
 function siteOf(member: ts.Node): Site | undefined {
   if ((ts.isMethodSignature(member) || ts.isPropertySignature(member)) && ts.isInterfaceDeclaration(member.parent)) {
     return { kind: "interface", owner: member.parent, name: propName(member.name) };
+  }
+  // A member of a named object type, `type X = { m(): T }`, dispatches like an interface member.
+  if ((ts.isMethodSignature(member) || ts.isPropertySignature(member)) && ts.isTypeLiteralNode(member.parent) && ts.isTypeAliasDeclaration(member.parent.parent)) {
+    return { kind: "interface", owner: member.parent.parent, name: propName(member.name) };
   }
   if ((ts.isMethodDeclaration(member) || ts.isPropertyDeclaration(member)) && hasAbstract(member) && ts.isClassDeclaration(member.parent)) {
     return { kind: "abstract", owner: member.parent, name: propName(member.name) };
@@ -162,23 +167,22 @@ class Hierarchy {
     return undefined;
   }
 
-  /** The interface an object literal's contextual type names, when the project declares it. Unions and non-interfaces are not. */
+  /**
+   * The interface an object literal's contextual type names, when the project declares it. Unions are not. A named object
+   * type `type X = { … }` counts as an interface for this.
+   */
   private contextualInterface(literal: ts.ObjectLiteralExpression): Decl | undefined {
     const type = this.project.checker.getContextualType(literal);
     if (type === undefined || type.isUnion()) return undefined;
-    const node = type.getSymbol()?.declarations?.find((d) => ts.isInterfaceDeclaration(d));
+    const node =
+      type.getSymbol()?.declarations?.find((d) => ts.isInterfaceDeclaration(d)) ??
+      type.aliasSymbol?.declarations?.find((d) => ts.isTypeAliasDeclaration(d) && ts.isTypeLiteralNode(d.type));
     return node && this.declOfNode(node);
   }
 
-  /** The function-valued members of an object literal, by name: its methods and its function-valued properties. */
+  /** The function-valued members of an object literal, by name. */
   private functionMembers(literal: ts.ObjectLiteralExpression): Map<string, Decl> {
-    const out = new Map<string, Decl>();
-    for (const m of literal.properties) {
-      if (!(ts.isMethodDeclaration(m) || ts.isPropertyAssignment(m))) continue;
-      const decl = this.project.decls.get(ts.isPropertyAssignment(m) ? m.initializer : m);
-      if (decl?.entity.type === "function") out.set(propName(m.name), decl);
-    }
-    return out;
+    return functionMembersOf(this.project, literal);
   }
 
   /**
@@ -229,6 +233,176 @@ class Hierarchy {
     this.results.set(key, out);
     return out;
   }
+}
+
+/** An expression with its parentheses, type assertions, non-null and `satisfies` wrappers removed. */
+function unwrap(expr: ts.Expression): ts.Expression {
+  let out = expr;
+  while (ts.isParenthesizedExpression(out) || ts.isAsExpression(out) || ts.isNonNullExpression(out) || ts.isSatisfiesExpression(out) || ts.isTypeAssertionExpression(out)) {
+    out = out.expression;
+  }
+  return out;
+}
+
+/** The indexed declaration of a node: the node's own, or the source it was built from. */
+const declAt = (project: Project, node: ts.Node): Decl | undefined => project.decls.get(node) ?? project.sourceOf(node);
+
+/** The indexed declaration a symbol names, following an alias. A const bound to a value resolves to that value's declaration. */
+function symbolDecl(project: Project, sym: ts.Symbol | undefined): Decl | undefined {
+  const resolved = aliased(project.checker, sym);
+  const node = resolved?.valueDeclaration ?? resolved?.declarations?.[0];
+  if (node === undefined) return undefined;
+  const found = declAt(project, node);
+  if (found !== undefined) return found;
+  if (ts.isVariableDeclaration(node) && node.initializer !== undefined) return declAt(project, unwrap(node.initializer));
+  return undefined;
+}
+
+/** The function an expression evaluates to, when the project declares it: a function literal, or a name bound to one. */
+function functionOf(project: Project, expr: ts.Expression): Decl | undefined {
+  const e = unwrap(expr);
+  let decl: Decl | undefined;
+  if (ts.isArrowFunction(e) || ts.isFunctionExpression(e)) {
+    decl = declAt(project, e) ?? declAt(project, expr);
+  } else if (ts.isIdentifier(e) || ts.isPropertyAccessExpression(e)) {
+    decl = symbolDecl(project, project.checker.getSymbolAtLocation(ts.isPropertyAccessExpression(e) ? e.name : e));
+  }
+  return decl?.entity.type === "function" ? decl : undefined;
+}
+
+/**
+ * The function a member of an object literal is: a method, or a property whose value is a function the project declares.
+ * A bound literal's property is keyed by the property itself. Any other is found through its value, a lambda or a name.
+ */
+function memberDecl(project: Project, m: ts.ObjectLiteralElementLike): Decl | undefined {
+  if (ts.isMethodDeclaration(m)) return declAt(project, m);
+  if (ts.isPropertyAssignment(m)) return declAt(project, m) ?? functionOf(project, m.initializer);
+  if (ts.isShorthandPropertyAssignment(m)) return symbolDecl(project, project.checker.getShorthandAssignmentValueSymbol(m));
+  return undefined;
+}
+
+/** The function-valued members of an object literal, by name: its methods and its function-valued properties. */
+export function functionMembersOf(project: Project, literal: ts.ObjectLiteralExpression): Map<string, Decl> {
+  const out = new Map<string, Decl>();
+  for (const m of literal.properties) {
+    if (m.name === undefined) continue;
+    const decl = memberDecl(project, m);
+    if (decl?.entity.type === "function") out.set(propName(m.name), decl);
+  }
+  return out;
+}
+
+/** The project-relative path of the file a node is in, when the project indexes that file. */
+function relOf(project: Project, node: ts.Node): string | undefined {
+  const rel = relative(project.root, node.getSourceFile().fileName).split(sep).join("/");
+  return project.rels.has(rel) ? rel : undefined;
+}
+
+/**
+ * The object or array literal an expression names: the literal itself, or the literal a const declaration is bound to.
+ * Only a const counts, so a mutable name is never taken as a fixed registry.
+ */
+function literalOf(project: Project, expr: ts.Expression): ts.ObjectLiteralExpression | ts.ArrayLiteralExpression | undefined {
+  let e = unwrap(expr);
+  if (ts.isIdentifier(e) || ts.isPropertyAccessExpression(e)) {
+    const sym = aliased(project.checker, project.checker.getSymbolAtLocation(ts.isPropertyAccessExpression(e) ? e.name : e));
+    const node = sym?.valueDeclaration ?? sym?.declarations?.[0];
+    if (node === undefined || !ts.isVariableDeclaration(node) || node.initializer === undefined) return undefined;
+    if ((ts.getCombinedNodeFlags(node) & ts.NodeFlags.Const) === 0) return undefined;
+    e = unwrap(node.initializer);
+  }
+  return ts.isObjectLiteralExpression(e) || ts.isArrayLiteralExpression(e) ? e : undefined;
+}
+
+/** The value expressions a literal holds: each property's initializer, or each array element. */
+function valuesOf(lit: ts.ObjectLiteralExpression | ts.ArrayLiteralExpression): ts.Expression[] {
+  if (ts.isArrayLiteralExpression(lit)) return [...lit.elements];
+  const out: ts.Expression[] = [];
+  for (const m of lit.properties) if (ts.isPropertyAssignment(m)) out.push(m.initializer);
+  return out;
+}
+
+/** Keeps the first declaration of each id, sorted by id. */
+function uniqueSorted(decls: Decl[]): Decl[] {
+  const byKey = new Map<string, Decl>();
+  for (const d of decls) byKey.set(d.id, d);
+  return [...byKey.values()].sort(byId);
+}
+
+/**
+ * The functions a registry lookup can run, for a call whose callee is a lookup into a fixed registry. Forms:
+ *  - `X[k](…)`: each function member of the const literal X (or each function element of an array X);
+ *  - `X[k].m(…)`: the member `m` of each literal that X holds.
+ * Undefined when the callee is neither.
+ */
+function lookupTargets(project: Project, callee: ts.Expression, dependOn?: (rel: string) => void): Decl[] | undefined {
+  const e = unwrap(callee);
+  let registry: ts.Expression;
+  let member: string | undefined;
+  if (ts.isElementAccessExpression(e)) {
+    registry = e.expression;
+  } else if (ts.isPropertyAccessExpression(e) && ts.isElementAccessExpression(unwrap(e.expression))) {
+    registry = (unwrap(e.expression) as ts.ElementAccessExpression).expression;
+    member = e.name.text;
+  } else {
+    return undefined;
+  }
+  const lit = literalOf(project, registry);
+  if (lit === undefined) return undefined;
+  const out: Decl[] = [];
+  if (member === undefined) {
+    if (ts.isObjectLiteralExpression(lit)) out.push(...functionMembersOf(project, lit).values());
+    else for (const el of lit.elements) {
+      const fn = functionOf(project, el);
+      if (fn) out.push(fn);
+    }
+  } else {
+    for (const v of valuesOf(lit)) {
+      const inner = literalOf(project, v);
+      if (inner === undefined || !ts.isObjectLiteralExpression(inner)) continue;
+      const fn = functionMembersOf(project, inner).get(member);
+      if (fn) out.push(fn);
+      const rel = relOf(project, inner);
+      if (rel !== undefined) dependOn?.(rel);
+    }
+  }
+  const rel = relOf(project, lit);
+  if (rel !== undefined) dependOn?.(rel);
+  return out.length > 0 ? uniqueSorted(out) : undefined;
+}
+
+/**
+ * The functions a method call may run when its receiver is not typed by an interface, through a fixed registry of functions:
+ * a lookup `X[k](…)` into an object or array the project binds to a const, a `X[k].m(…)` lookup into those objects, a const
+ * bound to either, or a member name that several object literals in the project all declare, such as `t.parse()` over
+ * `Object.values(T)` of an untyped table. Undefined for any other call. `dependOn` receives each project file the answer
+ * was read from.
+ */
+export function registryFor(project: Project, call: ts.CallExpression, dependOn?: (rel: string) => void): Decl[] | undefined {
+  const callee = unwrap(call.expression);
+  // A const bound to a lookup: `const run = impl[k] as F; run(…)`.
+  if (ts.isIdentifier(callee)) {
+    const sym = aliased(project.checker, project.checker.getSymbolAtLocation(callee));
+    const node = sym?.valueDeclaration ?? sym?.declarations?.[0];
+    if (node === undefined || !ts.isVariableDeclaration(node) || node.initializer === undefined) return undefined;
+    if ((ts.getCombinedNodeFlags(node) & ts.NodeFlags.Const) === 0) return undefined;
+    return lookupTargets(project, node.initializer, dependOn);
+  }
+  const looked = lookupTargets(project, callee, dependOn);
+  if (looked !== undefined || !ts.isPropertyAccessExpression(callee)) return looked;
+  // A member several object literals declare, all in project files: the untyped table's `t.parse()`.
+  const decls = project.checker.getSymbolAtLocation(callee.name)?.declarations ?? [];
+  if (decls.length < 2) return undefined;
+  const out: Decl[] = [];
+  for (const d of decls) {
+    if (!(ts.isPropertyAssignment(d) || ts.isMethodDeclaration(d) || ts.isShorthandPropertyAssignment(d)) || !ts.isObjectLiteralExpression(d.parent)) return undefined;
+    const rel = relOf(project, d);
+    if (rel === undefined) return undefined;
+    dependOn?.(rel);
+    const fn = memberDecl(project, d);
+    if (fn?.entity.type === "function") out.push(fn);
+  }
+  return out.length > 0 ? uniqueSorted(out) : undefined;
 }
 
 const hierarchies = new WeakMap<Project, Hierarchy>();

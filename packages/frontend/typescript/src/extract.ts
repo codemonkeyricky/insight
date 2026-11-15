@@ -7,7 +7,7 @@ import { importBindings, matchCall, matchEnvRead, matchExportRoute, matchFetch, 
 import { channelIndex, matchChannelRecv, matchChannelSend } from "./channels.js";
 import { scriptKind } from "./digest.js";
 import { emitState } from "./state.js";
-import { dispatchFor, MAX_DISPATCH_TARGETS, propName } from "./dispatch.js";
+import { dispatchFor, MAX_DISPATCH_TARGETS, propName, registryFor } from "./dispatch.js";
 import { workspaceManifestPaths, workspacePackages, workspaceProgramEntries, workspaceSource, type ProgramEntry, type WorkspacePackage } from "./packages.js";
 
 export const FRONTEND_ID = "frontend-typescript";
@@ -1493,7 +1493,24 @@ export function emitFile(project: Project, rel: string): IRBatch {
       const callee = call.expression;
       const sym = project.checker.getSymbolAtLocation(nameOf(callee));
       const target = declOf(project, sym);
-      if (target?.entity.type === "function") {
+      // A call through a fixed registry runs whichever of its functions the key picks, so every one is a candidate. It takes
+      // precedence over the single function the checker names for it, such as one member of an untyped table.
+      const registry = registryFor(project, call, dependOn);
+      if (registry !== undefined) {
+        const kept = registry.slice(0, MAX_DISPATCH_TARGETS).map((t) => t.id);
+        const [first, ...rest] = kept as [NodeId, ...NodeId[]];
+        const truncated = registry.length > MAX_DISPATCH_TARGETS;
+        pushEdge({
+          from: fn,
+          to: { candidates: [first, ...rest] },
+          facet: "calls",
+          kind: "calls.call",
+          attrs: { callee: callee.getText(sf).slice(0, 200), how: "registry", ...(truncated ? { truncated: true } : {}) },
+          span: spanOf(rel, sf, callee),
+          provenance: { frontend: FRONTEND_ID, confidence: "heuristic" },
+        });
+        for (const t of registry) dependOn(t.rel);
+      } else if (target?.entity.type === "function") {
         const callEdge: IREdge = {
           from: fn,
           to: target.id,
