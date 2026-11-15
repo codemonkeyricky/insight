@@ -100,3 +100,20 @@ describe("withResourcePeers: the resource and the thread label", () => {
   });
 });
 
+describe("withResourcePeers: dynamic locks", () => {
+  it("gives a release row no peer text, though it names a resource the model has sites for", () => {
+    const m = model([res("lock", "queue_mu", [site("src/a.ts#worker", "acquire", 2), site("src/a.ts#reader", "acquire", 14)])]);
+    const release = { ...node("1", "sync", "🔓 queue_mu"), resource: { kind: "lock", name: "queue_mu" } } as unknown as FlowNode;
+    const out = withResourcePeers(chartOf([release]), "src/a.ts#worker", m);
+    expect(out.nodes[0]?.title).toBeUndefined();
+    expect(out.nodes[0]?.label).toBe("🔓 queue_mu");
+  });
+
+  it("gives a <dynamic> lock row no peer text, even when a model lock of that name has sites", () => {
+    const m = model([res("lock", "<dynamic>", [site("src/a.ts#consume", "acquire", 6), site("src/a.ts#worker", "acquire", 2)])]);
+    const chart = chartOf([node("1", "sync", "🔒 <dynamic>")]);
+    const out = withResourcePeers(chart, "src/a.ts#worker", m);
+    expect(out.nodes[0]?.title).toBeUndefined();
+    expect(out.nodes[0]?.label).toBe("🔒 <dynamic>");
+  });
+});

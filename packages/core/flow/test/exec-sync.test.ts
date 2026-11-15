@@ -269,3 +269,36 @@ describe("buildExecScene: atomics pair only by the variable they name", () => {
     expect(twoThreads(undefined, undefined)).toEqual([]);
   });
 });
+
+describe("buildExecScene: dynamic resources never pair", () => {
+  it("draws no sync edge for a <dynamic> condvar, lock or semaphore, though each is listed", () => {
+    const nodes = [
+      fnNode("src/m.ts", "main", 0),
+      spawnNode("src/m.ts", 5, "src/m.ts#main"),
+      fnNode("src/w.ts", "work", 0),
+      lockOf("src/m.ts", 1, "src/m.ts#main", "<dynamic>"),
+      syncNode("src/m.ts", 2, "src/m.ts#main", "sync.condvar", { op: "wait", name: "<dynamic>" }),
+      syncNode("src/m.ts", 3, "src/m.ts#main", "sync.semaphore", { op: "acquire", name: "<dynamic>" }),
+      lockOf("src/w.ts", 1, "src/w.ts#work", "<dynamic>"),
+      syncNode("src/w.ts", 2, "src/w.ts#work", "sync.condvar", { op: "wait", name: "<dynamic>" }),
+      syncNode("src/w.ts", 3, "src/w.ts#work", "sync.semaphore", { op: "acquire", name: "<dynamic>" }),
+    ];
+    const model = execModel(nodes, [spawnEdge("src/m.ts", 5, "src/w.ts#work")], "src");
+    expect(model.resources.map((r) => r.id).sort()).toEqual(["condvar:<dynamic>", "lock:<dynamic>", "semaphore:<dynamic>"]);
+    expect(syncEdges(buildExecScene(model))).toEqual([]);
+  });
+});
+
+describe("resourcesOf: <dynamic> is never shared", () => {
+  it("lists no <dynamic> resource as shared, so two functions with different dynamic locks share nothing", () => {
+    const nodes = [
+      fnNode("src/m.ts", "a", 0),
+      lockOf("src/m.ts", 1, "src/m.ts#a", "<dynamic>"),
+      fnNode("src/m.ts", "b", 10),
+      lockOf("src/m.ts", 11, "src/m.ts#b", "<dynamic>"),
+    ];
+    const model = execModel(nodes, [], "src");
+    expect(resourcesOf(model, "src/m.ts#a")).toEqual([]);
+    expect(resourcesOf(model, "src/m.ts#b")).toEqual([]);
+  });
+});

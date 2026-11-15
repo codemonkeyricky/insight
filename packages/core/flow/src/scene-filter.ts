@@ -171,6 +171,8 @@ export function flattenRoots(cut: Scene, model: ExecModel): Scene {
   const kept = new Map<string, SceneNode>();
   // The box drawn for each function, and the first box drawn inside each container (its thread or coroutine).
   const drawnFor = new Map<string, string>();
+  // The box each function placement is drawn as: its own, or the function's one box when it is placed again.
+  const drawnAt = new Map<string, string>();
   const firstIn = new Map<string, string>();
   const fnNodes = [...cut.nodes.values()].filter((n) => n.kind === "function").sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   for (const n of fnNodes) {
@@ -183,11 +185,13 @@ export function flattenRoots(cut: Scene, model: ExecModel): Scene {
       const detail = ref !== undefined && ref.file !== "" ? `${pathInScope(ref.file, model.scope)}:${ref.line}` : n.detail;
       kept.set(n.id, { ...n, parent: cut.root, children: [], ...(detail !== undefined ? { detail } : {}) });
     }
+    drawnAt.set(n.id, drawn);
     if (n.parent !== undefined && !firstIn.has(n.parent)) firstIn.set(n.parent, drawn);
   }
   const root = cut.nodes.get(cut.root);
   if (root === undefined) return cut;
   const nodes = new Map<string, SceneNode>([[cut.root, { ...root, children: [...kept.keys()].sort() }], ...kept]);
-  const edges = rewireEdges(cut.edges, (id) => kept.has(id), (id) => (kept.has(id) ? id : firstIn.get(id)));
+  // A sync end maps to the box drawn for its placement, so a root placed on a second thread keeps its sync edge.
+  const edges = rewireEdges(cut.edges, (id) => kept.has(id), (id) => (kept.has(id) ? id : drawnAt.get(id) ?? firstIn.get(id)));
   return { root: cut.root, nodes, edges, levels: cut.levels };
 }

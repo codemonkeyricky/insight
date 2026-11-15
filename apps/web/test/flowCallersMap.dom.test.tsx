@@ -345,6 +345,17 @@ describe("unfolding a coupling fold", () => {
     await waitFor(() => expect(document.querySelector('[data-fold="F1"]')).not.toBeNull());
   });
 
+  it("still opens the fold when annotating its chart throws on the unfold", async () => {
+    const throwing = { ...source, annotateChart: (): FunctionFlow => { throw new Error("annotate failed"); } };
+    chartOf.mockImplementation(async () => foldedChart("F", false));
+    render(<ZoomMap id="p" source={throwing} scope="" charts={charts()} flat hint={false} />);
+    await waitFor(() => expect(document.querySelector('[data-fid="nF"]')).not.toBeNull());
+    fireEvent.click(document.querySelector('[data-fid="nF"]')!);
+    await waitFor(() => expect(document.querySelector('[data-fold="F1"]')).not.toBeNull());
+    fireEvent.keyDown(document.querySelector('[data-fold="F1"]')!, { key: "Enter" });
+    await waitFor(() => expect(document.querySelector('[data-fold="F1"].flow-fold-open')).not.toBeNull());
+  });
+
   it("requests the references when its chart has a post step (control)", async () => {
     chartOf.mockImplementation(async () => foldedChart("F", true));
     getRefs.mockResolvedValue({ calledBy: [] });

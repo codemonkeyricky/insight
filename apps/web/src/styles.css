@@ -500,7 +500,6 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 /* Threads that share a lock or a channel. Warm, so they stand apart from calls (neutral) and spawns (accent). */
 .zm-edge.sync { stroke: var(--sync); stroke-dasharray: 2 3; opacity: 0.9; }
 /* A lock, condvar, semaphore or atomic edge is dotted; a channel is solid (it carries data, the others only order). */
-.zm-edge.sync.lock, .zm-edge.sync.condvar, .zm-edge.sync.semaphore, .zm-edge.sync.atomic { stroke-dasharray: 2 3; }
 .zm-edge.sync.channel { stroke-dasharray: none; }
 /* A program is a build target: a heavier frame than a thread. The project root holds programs. */
 .zm-exec .zm-frame.zm-program .zm-frame-head { fill: transparent; }

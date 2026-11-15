@@ -153,11 +153,11 @@ describe("frontend-cpp system and sync facts", () => {
     expect(atomics.some((a) => String(a).includes("unknown"))).toBe(false);
   });
 
-  it("names an atomic by its object as its lock, a plain name or a member path, and leaves an unnamed one without a lock", async () => {
+  it("names an atomic by its object, a plain name or a member path, so every atomic gets a v.channel", async () => {
     const nodes = nodesOf(await extractAll());
     const named = find(nodes, "sync.atomic-op", "src/sync.cc").map((n) => n.attrs.lock);
-    // hits_.fetch_add, hits_++ and hits_.load name hits_. The method on u is not an atomic here (u has no known type).
-    expect(named).toContain("hits_");
+    // hits_.fetch_add, hits_++ and hits_.load name app::Pipeline::hits_, as condvars do. The method on u is not an atomic here (u has no known type).
+    expect(named).toContain("app::Pipeline::hits_");
     expect(named).not.toContain("u");
   });
 

@@ -19,7 +19,7 @@ export interface SceneMapEdge {
   kind: SceneEdgeKind;
   count: number;
   candidate: boolean;
-  /** For a sync edge, what the threads share: "lock" or "channel". Sync edges of different hows are kept apart. */
+  /** For a sync edge, what the threads share: "lock" or "channel". Sync edges between the same two boxes merge into one edge, so their hows are not kept apart. */
   how?: string;
   /** For a sync edge: every resource the two boxes share, merged over the scene edges that climb to them. */
   resources?: SceneSyncResource[];

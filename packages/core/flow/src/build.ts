@@ -45,10 +45,10 @@ export function topLevelName(file: string): string {
   return `${base} · top level`;
 }
 
-/** One fact inside a function that takes part in the flow, reduced to what the chart needs. */
 /** The lock or channel a sync row names. */
 type SyncResource = { kind: "lock" | "channel"; name: string };
 
+/** One fact inside a function that takes part in the flow, reduced to what the chart needs. */
 interface Ev {
   type: "call" | "await" | "spawn" | "effect" | "sync" | "state" | "branch" | "switch" | "arm" | "loop" | "block" | "try" | "return" | "throw" | "break" | "continue";
   start: Pos;
@@ -70,6 +70,8 @@ interface Ev {
   /** A synchronisation or channel operation: the lock it names, and whether it takes (`acquire`) or gives (`release`) it. */
   lock?: string;
   lockOp?: "acquire" | "release";
+  /** An acquire that is a C++ RAII guard: scope-bound, so its frame runs to the end of the list when it has no release. */
+  scoped?: true;
   /** Footprint text of a sync row, without the emoji (`lock queue_mu`, `send jobs`). */
   text?: string;
   /** The lock or channel a sync row names, for peers. Undefined for an unnamed or dynamic one. */
@@ -103,6 +105,8 @@ export type Item =
       /** A sync row: the lock it names and whether it takes or gives it (lock frames are built from these). */
       lock?: string;
       lockOp?: "acquire" | "release";
+      /** A sync row that is a C++ RAII guard (scope-bound). */
+      scoped?: true;
       /** A sync row: its footprint text, without the emoji. */
       text?: string;
       /** A sync row: the lock or channel it names, for peers. */
@@ -172,7 +176,7 @@ const channelName = (v: unknown): string => {
 };
 
 /** The chart label, the footprint text (no emoji), and the lock a sync node names, for a synchronisation or channel node. */
-function syncInfo(n: IRNode): { label: string; text: string; lock?: string; lockOp?: "acquire" | "release" } | undefined {
+function syncInfo(n: IRNode): { label: string; text: string; lock?: string; lockOp?: "acquire" | "release"; scoped?: true } | undefined {
   const a = n.attrs;
   const str = (v: unknown) => (typeof v === "string" ? v : "");
   const trim = (s: string) => s.replace(/\s+/g, " ").trim();
@@ -182,10 +186,16 @@ function syncInfo(n: IRNode): { label: string; text: string; lock?: string; lock
     case "x-cpp.scoped-lock": {
       const lock = str(a.lock);
       const shared = a.mode === "shared" ? " (shared)" : "";
-      return { label: `🔒 ${lock}${shared}`, text: `lock ${lock}${shared}`, lock, lockOp: "acquire" };
+      // An unnamed or <dynamic> lock is a plain row: no lock, so it never frames or pairs with another one.
+      if (lock === "") return { label: `🔒 (unnamed)${shared}`, text: `lock (unnamed)${shared}` };
+      if (lock === "<dynamic>") return { label: `🔒 ${lock}${shared}`, text: `lock ${lock}${shared}` };
+      const scoped = n.kind === "x-cpp.scoped-lock" || n.kind === "sync.rwlock-acquire";
+      return { label: `🔒 ${lock}${shared}`, text: `lock ${lock}${shared}`, lock, lockOp: "acquire", ...(scoped ? { scoped: true as const } : {}) };
     }
     case "sync.lock-release": {
       const lock = str(a.lock);
+      if (lock === "") return { label: "🔓 (unnamed)", text: "unlock (unnamed)" };
+      if (lock === "<dynamic>") return { label: "🔓 <dynamic>", text: "unlock <dynamic>" };
       return { label: `🔓 ${lock}`, text: `unlock ${lock}`, lock, lockOp: "release" };
     }
     case "sync.condvar": {
@@ -224,7 +234,7 @@ function syncResourceOf(n: IRNode): SyncResource | undefined {
     case "x-cpp.scoped-lock":
     case "sync.lock-release": {
       const lock = str(n.attrs.lock);
-      return lock === "" ? undefined : { kind: "lock", name: lock };
+      return lock === "" || lock === "<dynamic>" ? undefined : { kind: "lock", name: lock };
     }
     case "concurrency.channel-send":
     case "concurrency.channel-recv": {
@@ -277,7 +287,7 @@ function toEvent(n: IRNode): Ev | undefined {
       const info = syncInfo(n);
       if (!info) return undefined;
       const resource = syncResourceOf(n);
-      return { ...base, type: "sync", rank: RANK.sync, label: info.label, text: info.text, ...(info.lock !== undefined ? { lock: info.lock } : {}), ...(info.lockOp !== undefined ? { lockOp: info.lockOp } : {}), ...(resource !== undefined ? { resource } : {}) };
+      return { ...base, type: "sync", rank: RANK.sync, label: info.label, text: info.text, ...(info.lock !== undefined ? { lock: info.lock } : {}), ...(info.lockOp !== undefined ? { lockOp: info.lockOp } : {}), ...(info.scoped ? { scoped: true as const } : {}), ...(resource !== undefined ? { resource } : {}) };
     }
     case "concurrency.spawn-process":
       return { ...base, type: "spawn", rank: RANK.spawn, label: `spawn process · ${str(a.target) || str(a.api)}` };
@@ -335,11 +345,14 @@ function convert(ev: Ev, sources: boolean): Item[] {
       return [...convertAll(ev.children, sources), step("call", ev, ev.label, sources)];
     case "sync":
       // One row: a lock, condvar, semaphore, atomic or channel operation. A lock frame is built from the lock it names.
+      // Calls inside the operation's arguments run first, so they are drawn before the operation's row.
       return [
+        ...convertAll(ev.children, sources),
         {
           ...step("sync", ev, ev.label, sources),
           ...(ev.lock !== undefined ? { lock: ev.lock } : {}),
           ...(ev.lockOp !== undefined ? { lockOp: ev.lockOp } : {}),
+          ...(ev.scoped ? { scoped: true as const } : {}),
           ...(ev.text !== undefined ? { text: ev.text } : {}),
           ...(ev.resource !== undefined ? { resource: ev.resource } : {}),
         },
@@ -427,11 +440,12 @@ function convert(ev: Ev, sources: boolean): Item[] {
 }
 
 /**
- * Lock frames. In each list, a lock acquire (or a C++ RAII guard) and the items after it, up to and including the release
- * that closes it, become one `lock` fork: its head is the acquire, its body the rows held under the lock. An acquire with no
- * release later in the list runs to the end of the list. An acquire with nothing after it stays a plain row. Two pairs that
- * cross (they overlap without one holding the other) are not framed: both stay plain rows in source order. Nested blocks are
- * framed first, so frames nest when locks nest.
+ * Lock frames. In each list, a lock acquire and the items after it, up to and including the release that closes it, become
+ * one `lock` fork: its head is the acquire, its body the rows held under the lock. An acquire frames only when it has a
+ * release later in the list, or when it is a C++ RAII guard (scope-bound), which then runs to the end of the list. Any other
+ * acquire with no release (a Web Lock, held only inside its callback) stays a plain row. Two frames that cross (they overlap
+ * without one holding the other) are not framed: both stay plain rows in source order. Nested blocks are framed first, so
+ * frames nest when locks nest.
  */
 export function frameLocks(items: Item[]): Item[] {
   const framed = items.map((item): Item => {
@@ -457,10 +471,14 @@ function frameList(list: Item[]): Item[] {
       if (i !== undefined) release.set(i, j);
     }
   });
-  // An acquire with no release later in the list runs to the end of the list.
+  // A frame head is an acquire with a matched release, or a C++ RAII guard, which runs to the end of the list.
+  const isHead = (i: number): boolean => {
+    const item = list[i];
+    return isAcquire(item) && (release.has(i) || item.scoped === true);
+  };
   const endOf = (i: number): number => (release.has(i) ? (release.get(i) as number) + 1 : list.length);
-  const heads = list.flatMap((x, i) => (isAcquire(x) ? [i] : []));
-  // A pair that crosses another pair (they overlap, and neither holds the other) is not framed.
+  const heads = list.flatMap((_, i) => (isHead(i) ? [i] : []));
+  // A frame that crosses another frame (they overlap, and neither holds the other) is not framed.
   const crosses = (i: number): boolean => {
     const e = endOf(i);
     return heads.some((k) => {
@@ -471,10 +489,10 @@ function frameList(list: Item[]): Item[] {
   };
   const out: Item[] = [];
   for (let i = 0; i < list.length; i++) {
-    const item = list[i] as Item;
+    const item = list[i];
     const e = endOf(i);
-    if (!isAcquire(item) || e === i + 1 || crosses(i)) {
-      out.push(item);
+    if (!isAcquire(item) || !isHead(i) || e === i + 1 || crosses(i)) {
+      out.push(item as Item);
       continue;
     }
     const body = frameList(list.slice(i + 1, e));

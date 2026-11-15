@@ -92,6 +92,12 @@ const DYNAMIC_ARG = "<dynamic>";
  * What an external command runs, named from the spawn's IR facts: the literal command ("git"), or "node <script>" for a
  * forked script. A command with no literal is named "dynamic command".
  */
+function externalLabel(s: ExecSpawn): string {
+  const cmd = s.command !== undefined && s.command !== "" && s.command !== DYNAMIC_ARG ? s.command : undefined;
+  if (s.script !== undefined && s.script !== "" && (s.api === "child_process.fork" || cmd === "node")) return `node ${basename(s.script)}`;
+  return cmd ?? "dynamic command";
+}
+
 /**
  * The name a thread shows: the function it runs, else its script's base name without the extension, else the API that
  * starts it. Shared by the scene's thread boxes and the peers named on a chart's sync rows, so both agree.
@@ -121,12 +127,6 @@ export function threadLabelOf(t: ExecThread, fns: ReadonlyMap<string, ExecFuncti
   const workerFile = script !== undefined && script !== "" ? script : t.spawn?.api === "Worker" ? moduleFile : undefined;
   if (workerFile !== undefined && workerFile !== "") return "Worker";
   return `${KIND_LABEL[t.kind] ?? t.kind} · ${threadNameOf(t, fns)}`;
-}
-
-function externalLabel(s: ExecSpawn): string {
-  const cmd = s.command !== undefined && s.command !== "" && s.command !== DYNAMIC_ARG ? s.command : undefined;
-  if (s.script !== undefined && s.script !== "" && (s.api === "child_process.fork" || cmd === "node")) return `node ${basename(s.script)}`;
-  return cmd ?? "dynamic command";
 }
 
 /** The placements of one function in one thread (or the project, for plain code flow). */
@@ -468,8 +468,8 @@ export function buildExecScene(model: ExecModel): Scene {
     e.resources = addSyncResources(e.resources ?? [], [part]);
   };
   for (const r of model.resources ?? []) {
-    // A channel or atomic whose name the IR could not resolve is one resource for every such site: listed, but never paired.
-    if ((r.kind === "channel" || r.kind === "atomic") && r.name === DYNAMIC_CHANNEL) continue;
+    // A resource whose name the IR could not resolve is one resource for every such site: listed, but never paired.
+    if (r.name === DYNAMIC_CHANNEL) continue;
     const pairs: [string, string][] = [];
     if (r.kind === "lock" || r.kind === "condvar" || r.kind === "semaphore" || r.kind === "atomic") {
       const at = threadKeys.map((k) => firstSite(r.sites, r.kind === "lock" ? ["acquire"] : ["wait", "notify", "acquire", "release", "op"], k));

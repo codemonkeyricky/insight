@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { IREdge, IRNode } from "@insight/ir";
 import { couplingChart, couplingFacts, type Item } from "../src/index.js";
 import { measure } from "../src/layout.js";
+import { indexFixture } from "./coupling-fixture.js";
 
 // Synchronisation and channel rows, lock frames, and their conc coupling. The IR is built by hand (no frontend): one file,
 // functions as `structure.function` nodes, their facts as children of those functions, and calls as `calls.call` edges.
@@ -268,3 +269,77 @@ describe("lock frames that cross, and what they count", () => {
   });
 });
 
+describe("unnamed locks", () => {
+  it("leaves unnamed acquires and releases as plain rows, never framed with each other", () => {
+    const nodes: IRNode[] = [
+      fn("grab", 60, 70),
+      fact("grab:acq1", fid("grab"), "sync", "sync.lock-acquire", 61, {}),
+      write("grab", 62, "a"),
+      fact("grab:rel1", fid("grab"), "sync", "sync.lock-release", 63, {}),
+      fact("grab:acq2", fid("grab"), "sync", "sync.lock-acquire", 64, {}),
+      write("grab", 65, "b"),
+      fact("grab:rel2", fid("grab"), "sync", "sync.lock-release", 66, {}),
+    ];
+    const items = itemsOf(nodes, [], "grab");
+    expect(items.some((i) => i.t === "fork")).toBe(false);
+    expect(labels(items)).toEqual(["🔒 (unnamed)", "write · a", "🔓 (unnamed)", "🔒 (unnamed)", "write · b", "🔓 (unnamed)"]);
+  });
+});
+
+describe("lock frames need a release or a scoped guard", () => {
+  const webLockAcquire = (fnName: string, line: number, lock: string) =>
+    fact(`${fnName}:web:${line}`, fid(fnName), "sync", "sync.lock-acquire", line, { lock, api: "navigator.locks.request" });
+  const guardAcquire = (fnName: string, line: number, lock: string) =>
+    fact(`${fnName}:guard:${line}`, fid(fnName), "sync", "x-cpp.scoped-lock", line, { lock, mode: "exclusive", api: "std::lock_guard" });
+
+  it("leaves two Web Lock requests with no release as plain rows, the second not nested under the first", () => {
+    const nodes: IRNode[] = [fn("work", 10, 20), webLockAcquire("work", 11, "cache"), webLockAcquire("work", 12, "other"), write("work", 13, "x")];
+    const items = itemsOf(nodes, [], "work");
+    expect(items.some((i) => i.t === "fork")).toBe(false);
+    expect(labels(items)).toEqual(["🔒 cache", "🔒 other", "write · x"]);
+  });
+
+  it("frames a C++ scoped guard with no release to the end of the list", () => {
+    const nodes: IRNode[] = [fn("guard", 10, 20), guardAcquire("guard", 11, "m"), write("guard", 12, "x"), write("guard", 13, "y")];
+    const frame = forkOf(itemsOf(nodes, [], "guard"), 0);
+    expect(frame.role).toBe("lock");
+    expect(labels(frame.arms[0]?.body ?? [])).toEqual(["write · x", "write · y"]);
+  });
+
+  it("frames an acquire with a matching release only up to the release", () => {
+    const nodes: IRNode[] = [fn("bounded", 10, 20), lockAcquire("bounded", 11, "m"), write("bounded", 12, "x"), lockRelease("bounded", 13, "m"), write("bounded", 14, "y")];
+    const items = itemsOf(nodes, [], "bounded");
+    const frame = forkOf(items, 0);
+    expect(labels(frame.arms[0]?.body ?? [])).toEqual(["write · x", "🔓 m"]);
+    expect(labels(items)).toEqual(["fork:lock", "write · y"]);
+  });
+
+  it("keeps <dynamic> locks from pairing, so nested <dynamic> acquires stay plain rows", () => {
+    const nodes: IRNode[] = [
+      fn("dyn", 10, 20),
+      lockAcquire("dyn", 11, "<dynamic>"),
+      lockAcquire("dyn", 12, "<dynamic>"),
+      write("dyn", 13, "x"),
+      lockRelease("dyn", 14, "<dynamic>"),
+      lockRelease("dyn", 15, "<dynamic>"),
+    ];
+    const items = itemsOf(nodes, [], "dyn");
+    expect(items.some((i) => i.t === "fork")).toBe(false);
+    expect(labels(items)).toEqual(["🔒 <dynamic>", "🔒 <dynamic>", "write · x", "🔓 <dynamic>", "🔓 <dynamic>"]);
+  });
+
+  it("frames the TS frontend's lockWork: the second request is a plain row, not nested under cache", async () => {
+    const src = [
+      "export function lockWork(name: string): void {",
+      '  navigator.locks.request("cache", async () => undefined);',
+      "  navigator.locks.request(name, async () => undefined);",
+      "}",
+      "",
+    ].join("\n");
+    const { nodes, edges } = await indexFixture({ "src/lib/channels.ts": src });
+    const facts = couplingFacts(nodes, edges).facts.get("src/lib/channels.ts#lockWork");
+    if (facts === undefined) throw new Error("no facts for lockWork");
+    expect(facts.items.some((i) => i.t === "fork")).toBe(false);
+    expect(labels(facts.items)).toEqual(["🔒 cache", "🔒 <dynamic>"]);
+  });
+});

@@ -624,7 +624,7 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
     }
   }
 
-  // Semaphores and condvars are read from the IR: the exec model does not list them.
+  // Semaphores and condvars are read from the IR nodes, keyed by their name, their API, or per site when unnamed.
   for (const node of model.doc.nodes) {
     if (node.kind !== "sync.semaphore" && node.kind !== "sync.condvar") continue;
     const file = model.fileOf(node.id);
@@ -636,8 +636,8 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
     const api = typeof attrs.api === "string" ? attrs.api : "";
     const given = typeof attrs.name === "string" ? attrs.name : typeof attrs.lock === "string" ? attrs.lock : "";
     const kind = node.kind === "sync.semaphore" ? "semaphore" : "condvar";
-    // A wait with no name takes its API's name (Atomics.wait has none, so it is "Atomics"). With no API either it has
-    // nothing shared to key it by, so it is <dynamic> and keyed per site, like the other unnamed sites.
+    // A wait with no name or lock takes its API's name: every Atomics.* wait is keyed "Atomics", since they share one object.
+    // With no API it has nothing shared to key it by, so it is <dynamic> and keyed per site, like the other unnamed sites.
     const named = given !== "" ? given : api.startsWith("Atomics.") ? "Atomics" : api !== "" ? api : "<dynamic>";
     const dyn = named === "<dynamic>";
     const name = dyn ? `<dynamic>@${file}:${node.span?.start.join(":") ?? node.id}` : named;

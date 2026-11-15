@@ -63,7 +63,10 @@ export interface EffectMatch {
 
 const DYNAMIC = "<dynamic>";
 
-/** The text of an argument that names a shared object: a plain identifier or a property access, or <dynamic>. */
+/**
+ * The text of an argument that names a shared object: a plain identifier or a property access, or <dynamic>. TS atomics and
+ * condvars are named by source text (a heuristic), so same-named locals in unrelated modules may pair.
+ */
 function sharedArgValue(call: ts.CallExpression, index: number): string {
   const arg = call.arguments[index];
   return arg !== undefined && (ts.isIdentifier(arg) || ts.isPropertyAccessExpression(arg)) ? arg.getText() : DYNAMIC;
