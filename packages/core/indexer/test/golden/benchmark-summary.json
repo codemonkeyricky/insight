@@ -112,7 +112,7 @@
     {
       "id": "lens-dependencies",
       "status": "ok",
-      "findings": 1
+      "findings": 23
     },
     {
       "id": "lens-effects",
