@@ -591,7 +591,9 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
         const modName = f.module?.name ?? basename;
         const defs = moduleDefs(project, type);
         // A bind directive instantiates into another module, named by its target. Its instances are written here but belong to the target.
-        const bindTarget = n.parent?.type === "bind_directive" ? n.parent.namedChildren.find((c) => c.type === "bind_target_scope")?.text.replace(/\s+/g, "") : undefined;
+        // A target is a module name, or a hierarchical instance path such as `top.u_dut`, which the grammar gives its own node.
+        const bindNode = n.parent?.type === "bind_directive" ? n.parent.namedChildren.find((c) => c.type === "bind_target_scope" || c.type === "bind_target_instance") : undefined;
+        const bindTarget = bindNode?.text.replace(/\s+/g, "");
         for (const hi of n.namedChildren.filter((c) => c.type === "hierarchical_instance")) {
           const inst = hi.namedChildren.find((c) => c.type === "name_of_instance")?.childForFieldName("instance_name")?.text;
           if (!inst) continue;
@@ -634,8 +636,9 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
             continue;
           }
           // A bind is written in the instantiating scope, so its edge comes from the bind target's definition. One definition
-          // is inferred from the name; several give one heuristic edge each; a hierarchical or unknown target stays where it is written.
-          const targets = bindTarget.includes(".") ? [] : moduleDefs(project, bindTarget).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+          // is inferred from the name; several give one heuristic edge each. A hierarchical path names an instance, not a
+          // module, so its edge stays in the container, heuristic, as does a target with no definition.
+          const targets = bindNode?.type === "bind_target_instance" ? [] : moduleDefs(project, bindTarget).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
           const only = targets[0];
           if (targets.length === 0) instantiates(f.container, heuristic);
           else if (targets.length === 1 && only !== undefined) {

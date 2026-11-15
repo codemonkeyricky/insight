@@ -1060,3 +1060,15 @@ describe("bind provenance", () => {
     expect(edges[0]?.provenance?.confidence).toBe("heuristic");
   });
 });
+
+describe("hierarchical bind", () => {
+  it("a bind to a hierarchical path gets the bind id and attribute, and a heuristic edge from its container", async () => {
+    const dir = join(fixturesDir, "bind_hier");
+    const records = allRecords(await extractDir(dir, ["chk.sv", "tb.sv"]));
+    expect(nodesOf(records).find((n) => n.id === "tb.sv#bind:top.u_dut/h")?.attrs).toEqual({ name: "h", module: "chk", bind: "top.u_dut" });
+    const edge = edgesOf(records).find((e) => e.kind === "x-sv.instantiates" && e.attrs?.instance === "h");
+    expect(edge?.from).toBe("tb.sv#tb");
+    expect(edge?.to).toBe("chk.sv#chk");
+    expect(edge?.provenance?.confidence).toBe("heuristic");
+  });
+});
