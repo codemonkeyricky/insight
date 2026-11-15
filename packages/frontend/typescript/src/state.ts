@@ -60,14 +60,14 @@ interface KS {
  * `entry` on the map: keys that are absent still hold their entry value (nothing wrote, tested or awaited since the
  * function started). Without it an absent key is plain unknown.
  */
-type EnvMap = Map<string, KS> & { entry?: boolean };
+type EnvMap = Map<string, KS> & { entry?: boolean; entryStale?: boolean };
 type Env = EnvMap | null;
 const entryEnv = (): EnvMap => {
   const m: EnvMap = new Map();
   m.entry = true;
   return m;
 };
-const entryKS = (r: KS): KS => ({ holder: r.holder, receiver: r.receiver, set: null, stale: false, guards: [], texts: [], entry: true });
+const entryKS = (r: KS, stale = false): KS => ({ holder: r.holder, receiver: r.receiver, set: null, stale, guards: [], texts: [], entry: true });
 const unknownKS = (r: KS): KS => ({ holder: r.holder, receiver: r.receiver, set: null, stale: false, guards: [], texts: [] });
 
 interface Spec {
@@ -177,6 +177,7 @@ function clone(env: Env): Env {
   if (!env) return null;
   const out: EnvMap = new Map();
   if (env.entry) out.entry = true;
+  if (env.entryStale) out.entryStale = true;
   for (const [k, v] of env) out.set(k, cloneKS(v));
   return out;
 }
@@ -185,13 +186,14 @@ function join(a: Env, b: Env): Env {
   if (!b) return a;
   const out: EnvMap = new Map();
   out.entry = !!(a.entry && b.entry);
+  if (out.entry && (a.entryStale || b.entryStale)) out.entryStale = true;
   const keys = new Set([...a.keys(), ...b.keys()]);
   for (const k of keys) {
     const x0 = a.get(k);
     const y0 = b.get(k);
     const ref = (x0 ?? y0)!;
-    const x = x0 ?? (a.entry ? entryKS(ref) : undefined);
-    const y = y0 ?? (b.entry ? entryKS(ref) : undefined);
+    const x = x0 ?? (a.entry ? entryKS(ref, a.entryStale) : undefined);
+    const y = y0 ?? (b.entry ? entryKS(ref, b.entryStale) : undefined);
     if (!x || !y) {
       // Unknown on one side: absent means entry when the result keeps the marker, so spell the unknown out.
       if (out.entry) out.set(k, unknownKS(ref));
@@ -212,7 +214,7 @@ function join(a: Env, b: Env): Env {
 function sig(env: Env): string {
   if (!env) return "dead";
   return (
-    (env.entry ? "E|" : "|") +
+    (env.entry ? (env.entryStale ? "E!|" : "E|") : "|") +
     [...env.entries()]
       .map(([k, v]) => `${k}=${v.set ? [...v.set].sort().join(",") : "*"}${v.stale ? "!" : ""}${v.entry ? "E" : ""}`)
       .sort()
@@ -222,10 +224,10 @@ function sig(env: Env): string {
 /** An await or yield: known sets may be out of date, and the entry value is no longer the current one. */
 function markStale(env: Env): void {
   if (!env) return;
-  env.entry = false;
+  // The entry value stays fillable but stale (E1).
+  if (env.entry) env.entryStale = true;
   for (const v of env.values()) {
-    if (v.set) v.stale = true;
-    v.entry = false;
+    if (v.set || v.entry) v.stale = true;
   }
 }
 
@@ -718,7 +720,7 @@ export function emitState(h: StateHelpers): StateOutput {
     else if (hd.domain) target = new Set(hd.domain.filter((v) => !spec.values.includes(v)));
     else target = null;
     const own = env.get(key);
-    const cur: KS | undefined = own ?? (env.entry ? entryKS({ holder: hd, receiver: spec.receiver } as KS) : undefined);
+    const cur: KS | undefined = own ?? (env.entry ? entryKS({ holder: hd, receiver: spec.receiver } as KS, env.entryStale) : undefined);
     let next: Set<string> | null;
     let stale = false;
     if (target === null) {
@@ -818,6 +820,7 @@ export function emitState(h: StateHelpers): StateOutput {
       if (ks.stale) rec.stale = true;
     } else if (atEntry) {
       rec.fromEntry = true;
+      if (ks ? ks.stale : env?.entryStale) rec.stale = true;
     }
     if (ks && ks.guards.length > 0 && match) {
       rec.guards = [...ks.guards];
@@ -913,7 +916,10 @@ export function emitState(h: StateHelpers): StateOutput {
     for (const hd of declared) {
       if (hd.classId !== cd.id || state[hd.id]) continue;
       const ks = env.get(keyOf(hd, "this"));
-      if (ks ? ks.entry === true : env.entry === true) entry.push(hd.id);
+      if (ks ? ks.entry === true : env.entry === true) {
+        entry.push(hd.id);
+        if (ks ? ks.stale : env.entryStale) stale.push(hd.id);
+      }
     }
     if (Object.keys(state).length === 0 && entry.length === 0) return;
     callAttrs.set(call, {
@@ -1167,6 +1173,7 @@ export function emitState(h: StateHelpers): StateOutput {
     const out = clone(entry);
     if (!out) return out;
     out.entry = false;
+    out.entryStale = false;
     for (const [k, v] of out) out.set(k, unknownKS(v));
     return out;
   };
@@ -1428,9 +1435,15 @@ export function emitState(h: StateHelpers): StateOutput {
     const followed = col.writes.filter((w) => lastThrow >= w.at);
     const touched = new Set(col.writes.map((w) => w.key));
     for (const key of touched) {
-      const base = entry?.get(key);
-      const ws = followed.filter((w) => w.key === key);
       const any = col.writes.find((w) => w.key === key)!;
+      // An absent key still holds the entry value when the env keeps the marker.
+      const base = entry?.get(key) ?? (entry?.entry ? entryKS({ holder: any.hd, receiver: any.receiver } as KS, entry.entryStale) : undefined);
+      const ws = followed.filter((w) => w.key === key);
+      if (base?.entry && base.set === null && ws.length === 0) {
+        // No write can be seen by the catch: it still holds the entry value (E1 keeps it, stale or not).
+        exc.set(key, cloneKS(base));
+        continue;
+      }
       if (!base || base.set === null) {
         exc.set(key, unknownKS({ holder: any.hd, receiver: any.receiver } as KS));
         continue;

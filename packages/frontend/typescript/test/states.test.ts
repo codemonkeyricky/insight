@@ -131,9 +131,18 @@ describe("review fixes", () => {
     expect(c!.attrs.from).toBeUndefined();
     expect(c!.attrs.fromEntry).toBeUndefined();
   });
-  it("entry: a first write is fromEntry, one after an await is not", async () => {
+  it("entry: a first write is fromEntry, one after an await is fromEntry + stale (E1)", async () => {
     expect((await wr("Entry.go"))[0]!.attrs).toMatchObject({ fromEntry: true });
-    expect((await wr("Entry.goAwait"))[0]!.attrs.fromEntry).toBeUndefined();
+    expect((await wr("Entry.go"))[0]!.attrs.stale).toBeUndefined();
+    expect((await wr("Entry.goAwait"))[0]!.attrs).toMatchObject({ fromEntry: true, stale: true });
+  });
+  it("entry: a catch write keeps the stale entry when no try write can be seen (E1)", async () => {
+    const ws = await wr("Entry.tryCatch");
+    expect(ws.find((w) => w.attrs.value === "S.X")!.attrs).toMatchObject({ fromEntry: true, stale: true });
+  });
+  it("entry: a call after an await has knownEntry and knownStale (E1)", async () => {
+    const inner = (await calls("Entry.outerAwait")).find((e) => e.attrs?.knownEntry);
+    expect(inner?.attrs).toMatchObject({ knownEntry: ["states/review.ts#Entry.s"], knownStale: ["states/review.ts#Entry.s"] });
   });
   it("entry: a call before any write has knownEntry; a tested call has knownState", async () => {
     const inner = (await calls("Entry.outer")).find((e) => e.attrs?.knownEntry);

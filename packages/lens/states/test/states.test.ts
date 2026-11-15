@@ -58,11 +58,11 @@ const write = (w: W): IRNode => {
 };
 const test = (id: string, holderId: string, fnName: string, values: string[], extra: Record<string, unknown> = {}): IRNode =>
   fx.node(id, "state", "state.test", { parent: `${FILE}#${fnName}`, span: at(40), attrs: { holder: holderId, values, arm: "arm1", ...extra } });
-const call = (from: string, to: string | string[], known?: Record<string, string[]>, confidence?: "exact" | "inferred", entry?: string[]): IREdge =>
+const call = (from: string, to: string | string[], known?: Record<string, string[]>, confidence?: "exact" | "inferred", entry?: string[], stale?: string[]): IREdge =>
   fx.edge(`${FILE}#${from}`, Array.isArray(to) ? to.map((t) => `${FILE}#${t}`) : `${FILE}#${to}`, "calls", "calls.call", {
     span: at(60),
     ...(confidence ? { confidence } : {}),
-    ...(known || entry ? { attrs: { ...(known ? { knownState: known } : {}), ...(entry ? { knownEntry: Object.fromEntries(entry.map((h) => [h, true])) } : {}) } } : {}),
+    ...(known || entry ? { attrs: { ...(known ? { knownState: known } : {}), ...(stale ? { knownStale: stale } : {}), ...(entry ? { knownEntry: Object.fromEntries(entry.map((h) => [h, true])) } : {}) } } : {}),
   });
 
 const q = (v: string) => JSON.stringify(v);
@@ -228,6 +228,29 @@ describe("cross-call entry sets", () => {
     const m = stateMachines(fx.view({ nodes, edges })).machines[0] as Machine;
     const arcs2 = m.transitions.filter((t) => t.to === D("Disconnected")).map((t) => `${displayValue(t.from)}>${displayValue(t.to)}:${t.confidence}`);
     expect(arcs2.sort()).toEqual(["Connected>Disconnected:inferred", "Disconnecting>Disconnected:inferred"]);
+  });
+
+  it("fills a stale-entry write from a caller's knownState: inferred arc, no star (E1)", () => {
+    const nodes = [
+      fileNode(), fn("go", 10), fn("caller", 20),
+      holder(G, "Conn.state", [q("A"), q("X")]),
+      write({ holder: G, fn: "caller", value: q("A"), op: "init" }),
+      write({ holder: G, fn: "go", value: q("X"), fromEntry: true, stale: true }),
+    ];
+    const m = stateMachines(fx.view({ nodes, edges: [call("caller", "go", { [G]: [q("A")] })] })).machines[0] as Machine;
+    expect(m.transitions.filter((t) => t.to === q("X")).map((t) => `${displayValue(t.from)}>${displayValue(t.to)}:${t.confidence}`)).toEqual(["A>X:inferred"]);
+  });
+
+  it("recurses through a caller with knownEntry together with knownStale (E1)", () => {
+    const nodes = [
+      fileNode(), fn("go", 10), fn("mid", 20), fn("top", 30),
+      holder(G, "Conn.state", [q("A"), q("X")]),
+      write({ holder: G, fn: "top", value: q("A"), op: "init" }),
+      write({ holder: G, fn: "go", value: q("X"), fromEntry: true, stale: true }),
+    ];
+    const edges = [call("mid", "go", undefined, undefined, [G], [G]), call("top", "mid", { [G]: [q("A")] })];
+    const m = stateMachines(fx.view({ nodes, edges })).machines[0] as Machine;
+    expect(m.transitions.filter((t) => t.to === q("X")).map((t) => `${displayValue(t.from)}>${displayValue(t.to)}:${t.confidence}`)).toEqual(["A>X:inferred"]);
   });
 
   it("terminates on a knownEntry cycle a -> b -> a and keeps the star (c)", () => {

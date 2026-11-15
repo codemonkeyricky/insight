@@ -87,7 +87,9 @@ export function MachineSvg({ view, laid, hot = null, selected = null, viewBox, s
     >
       <g className="sm-arcs">
         {laid.arcs.map((a) => {
-          const t = byTransition.get(a.id) as StateMachineTransition;
+          // A layout of another view (the view changed and the new layout is not ready) has arcs this view lacks: skip them.
+          const t = byTransition.get(a.id);
+          if (!t) return null;
           const pickOf = (x: StateMachineTransition) => onPick?.({ ...(x.sites[0]?.span ? { span: x.sites[0].span } : {}), label: arcName(view, x), transition: x });
           const pick = () => pickOf(t);
           // Two lines can sit under one pointer (a crossing, parallel runs): the line nearest the pointer is the one meant.
@@ -204,7 +206,9 @@ interface Box {
 
 /** One machine, laid out with elkjs and drawn as SVG. Zoom-to-fit by default; drag to pan, ctrl+wheel to zoom. */
 export function StateDiagram({ view, onPick, selected = null, solve = solveInWorker }: StateDiagramProps): ReactElement {
-  const [laid, setLaid] = useState<LaidMachine | null>(null);
+  // The layout is kept with the view it was made for: for one render after `view` changes it still belongs to the old view.
+  const [laidFor, setLaid] = useState<{ view: StateMachineView; laid: LaidMachine } | null>(null);
+  const laid = laidFor && laidFor.view === view ? laidFor.laid : null;
   const [failed, setFailed] = useState<string | null>(null);
   const [hot, setHot] = useState<string | null>(null);
   const [box, setBox] = useState<Box | null>(null);
@@ -219,7 +223,7 @@ export function StateDiagram({ view, onPick, selected = null, solve = solveInWor
     setBox(null);
     layoutMachine(view, withTimeout(solve)).then(
       (l) => {
-        if (!cancelled) setLaid(l);
+        if (!cancelled) setLaid({ view, laid: l });
       },
       (e: Error) => {
         if (!cancelled) setFailed(e.message);

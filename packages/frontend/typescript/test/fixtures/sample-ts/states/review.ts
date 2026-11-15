@@ -34,6 +34,18 @@ export class Entry {
   outerTested() {
     if (this.s === S.A) this.inner();
   }
+  async outerAwait() {
+    await a();
+    this.inner();
+  }
+  async tryCatch() {
+    try {
+      await a();
+      this.s = S.B;
+    } catch {
+      this.s = S.X;
+    }
+  }
   inner() {}
 }
 

@@ -93,6 +93,13 @@ describe("MachineSvg", async () => {
     expect(hot).toContain("sm-state--hot");
   });
 
+  it("draws a layout of another view without throwing: arcs the view lacks are skipped (first-load error)", () => {
+    // The page keeps the old layout for one render after the view changes; reading `.confidence` of the missing transition threw.
+    const other = { ...twoStateMachine, transitions: [] };
+    expect(() => renderToStaticMarkup(<MachineSvg view={other} laid={laid} />)).not.toThrow();
+    expect(findAll(<MachineSvg view={other} laid={laid} />, (e) => hasClass(e, "sm-arc")).length).toBe(0);
+  });
+
   it("shows a legend for the kinds in use", () => {
     const l = renderToStaticMarkup(<Legend view={hubConnectionMachine} />);
     expect(l).toContain("exact write");
