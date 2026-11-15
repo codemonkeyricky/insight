@@ -152,6 +152,8 @@ function writeShift(root: SVGGElement, sh: ShiftState) {
     const x = Number(el.getAttribute("data-sx"));
     const w = Number(el.getAttribute("data-sw"));
     const dw = displayShift(sh, x + w) - displayShift(sh, x);
+    if (dw === 0 && el.getAttribute("data-dw") === "0") continue;
+    el.setAttribute("data-dw", String(dw));
     for (const r of el.querySelectorAll<SVGRectElement>("rect.zm-frame-body, rect.zm-frame-head")) r.setAttribute("width", String(w + dw));
     for (const t of el.querySelectorAll<SVGTextElement>("text[data-cx]")) t.setAttribute("x", String(Number(t.getAttribute("data-cx")) + dw));
   }
@@ -176,7 +178,10 @@ function writeShift(root: SVGGElement, sh: ShiftState) {
 function endsOf(e: Expansion, list: readonly Expansion[]): CalloutEnds | undefined {
   const c = calloutOf(e, list);
   if (c === undefined) return undefined;
-  return { ...c, s1: e.anchor.kind === "box" ? e.anchor.rect.x : e.pivot, s2: e.pivot };
+  // The anchor's edge shifts with the anchor: a card by its own x, a step by its parent expansion's pivot.
+  const anchorId = e.anchor.kind === "step" ? e.anchor.fnId : undefined;
+  const s1 = e.anchor.kind === "box" ? e.anchor.rect.x : (list.find((p) => p.fnId === anchorId)?.pivot ?? e.pivot);
+  return { ...c, s1, s2: e.pivot };
 }
 
 /** What the map has selected, for the page's source panel: the function, its build, and the construct picked in its chart. */
@@ -410,7 +415,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
       }
     }
     const gone = expRef.current.filter((e) => !list.some((x) => x.fnId === e.fnId));
-    // A control of a box that closes (its ×, a row, a ▸, or a control of a box chained from it) unmounts with the box, and
+    // A control of a box that closes (its ×, a row, a ◂, or a control of a box chained from it) unmounts with the box, and
     // the focus would fall to the page, where the map's keys no longer reach. Whether the focus is in the map is noted now,
     // before the box goes; the stage takes it back after the commit (see refocusIfLost).
     if (gone.length > 0 && focusInMap()) refocusRef.current = true;
@@ -1880,16 +1885,17 @@ export function BoxShape({
   if (card && !small && !bare) {
     // A card: its name alone, centred vertically, fitted to the card's width on screen.
     // Two characters of the budget go to the leading function glyph (ƒ), so the name stays inside the card.
-    // A card tall enough for it takes a Callers button at its top-right, and its name keeps clear of the button. The name
+    // A card tall enough for it takes a Callers button at its left, and its name keeps clear of the button. The name
     // comes first: when it would not fit whole beside the full button, the button is compact (the ◂ alone).
     const showCallers = onCallers !== undefined && rect.h >= CALLERS_BTN_H + 12 && k >= GLYPH_K;
     // The name's font is 13 px on screen until 11 world units grow past it (above about 1.2×), and a character takes about
     // 0.6 of the font: the fit follows the font as it grows with the zoom.
     const charPx = Math.max(8, 6.8 * k);
+    // The name starts 12 units in (after the chip, when there is one) and keeps 12 clear of the card's right edge.
     const nameIn = (room: number) => fitLabel(shown, Math.max(1, labelChars((rect.w - room) * k, charPx, 20) - 2));
-    const fullName = nameIn(showCallers ? CALLERS_BTN_W + 12 : 0);
+    const fullName = nameIn(showCallers ? CALLERS_BTN_W + 26 : 24);
     const compactCallers = showCallers && (fullName !== shown || k < FULL_K);
-    const name = compactCallers ? nameIn(CALLERS_COMPACT_W + 12) : fullName;
+    const name = compactCallers ? nameIn(CALLERS_COMPACT_W + 26) : fullName;
     return (
       <g className={`zm-box zm-${node.kind} zm-card ${lineClass(line)}${holdsChart ? " zm-has-chart" : ""}${chartOpen ? " expanded" : ""}`} data-sx={rect.x} data-fid={item.id} onClick={() => onOpen(item.id)}>
         <title>{node.detail !== undefined ? `${node.label} (${node.detail})` : node.title || node.label}</title>

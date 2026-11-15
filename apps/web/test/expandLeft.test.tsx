@@ -97,15 +97,16 @@ describe("left-side expansions", () => {
     expect(shiftOf({ x: 1500 }, 1000, 300)).toBe(300 + EXPAND_GAP);
   });
 
-  it("what hangs from an unslotted left box adds no shift and goes further left", () => {
+  it("what hangs from an unslotted left box shares its pivot: the card slides by the whole chain's room", () => {
     const callers = openCallers([], "A", boxAnchor, "A", 3, view);
     const row = { kind: "step" as const, fnId: callersKey("A"), stepId: "b", rect: callerRowRect(1) };
     const all = openExpansion(callers, "B", row, chart("B", 240, 120), view);
     const c = find(all, callersKey("A"));
     const b = find(all, "B");
     expect(b.side).toBe("left");
-    expect(b.x + b.w + EXPAND_GAP).toBe(c.x);
-    for (const x of [100, box.x, 1500]) expect(shiftAt(all, x)).toBe(shiftAt(callers, x));
+    expect(b.pivot).toBe(c.pivot);
+    expect(shiftAt(all, box.x)).toBe(c.w + b.w + 2 * EXPAND_GAP);
+    expect(shiftAt(all, 100)).toBe(0);
   });
 
   it("a slotted map (no view) shifts nothing, left or right", () => {
@@ -225,5 +226,70 @@ describe("callers boxes inside a right-side chart open right", () => {
     // A callers box from the in-place chart's own header still opens left.
     const root = find(openCallers(withC, "C", headerAnchor(find(withC, "C")), "C", 2, undefined), callersKey("C"));
     expect(root.side).toBe("left");
+  });
+});
+
+/** Where an item is drawn: its placed x plus the shift of its group (writeShift shifts a group by shiftAt at its pivot). */
+const drawn = (list: readonly Expansion[], e: Expansion): Rect => ({ x: e.x + shiftAt(list, e.pivot), y: e.y, w: e.w, h: e.h });
+const cardDrawn = (list: readonly Expansion[], r: Rect = box): Rect => ({ ...r, x: r.x + shiftAt(list, r.x) });
+const hit = (a: Rect, b: Rect) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+const row = (i: number) => ({ kind: "step" as const, fnId: callersKey("A"), stepId: `r${i}`, rect: callerRowRect(i) });
+
+describe("unslotted left chains, by their drawn x", () => {
+  const noOverlap = (rects: Rect[]) => {
+    for (const a of rects) for (const b of rects) if (a !== b) expect(hit(a, b)).toBe(false);
+  };
+
+  it("card + callers box + a caller's chart: adjacent, in order, no overlap", () => {
+    const callers = openCallers([], "A", boxAnchor, "A", 3, view);
+    const list = openExpansion(callers, "B", row(1), chart("B", 264, 120), view);
+    const c = find(list, callersKey("A"));
+    const b = find(list, "B");
+    const R = c.w + b.w + 2 * EXPAND_GAP;
+    const card = cardDrawn(list);
+    const dc = drawn(list, c);
+    const db = drawn(list, b);
+    expect(card.x).toBe(box.x + R);
+    expect(dc.x + dc.w + EXPAND_GAP).toBe(card.x);
+    expect(db.x + db.w + EXPAND_GAP).toBe(dc.x);
+    expect(db.x).toBe(box.x);
+    noOverlap([card, dc, db]);
+    // Callouts connect the drawn edges.
+    const g = calloutOf(c, list)!;
+    expect(g.ax + shiftAt(list, box.x)).toBe(card.x);
+    expect(g.ex + shiftAt(list, c.pivot)).toBe(dc.x + dc.w);
+    const gb = calloutOf(b, list)!;
+    expect(gb.ex + shiftAt(list, b.pivot)).toBe(db.x + db.w);
+    expect(gb.ax + shiftAt(list, c.pivot)).toBeGreaterThan(db.x + db.w);
+  });
+
+  it("a three-deep chain fills the room from the card's original x", () => {
+    const callers = openCallers([], "A", boxAnchor, "A", 3, view);
+    const b = openExpansion(callers, "B", row(0), chart("B", 240, 120), view);
+    const bStep = { kind: "step" as const, fnId: "B", stepId: "n1", rect: { x: 10, y: 20, w: 80, h: 20 } };
+    const list = openExpansion(b, "C", bStep, chart("C", 200, 100), view);
+    const [c, bb, cc] = [find(list, callersKey("A")), find(list, "B"), find(list, "C")];
+    expect([bb.side, cc.side]).toEqual(["left", "left"]);
+    const R = c.w + bb.w + cc.w + 3 * EXPAND_GAP;
+    const card = cardDrawn(list);
+    expect(card.x).toBe(box.x + R);
+    const d = [c, bb, cc].map((e) => drawn(list, e));
+    expect(d[0]!.x + d[0]!.w + EXPAND_GAP).toBe(card.x);
+    expect(d[1]!.x + d[1]!.w + EXPAND_GAP).toBe(d[0]!.x);
+    expect(d[2]!.x + d[2]!.w + EXPAND_GAP).toBe(d[1]!.x);
+    expect(d[2]!.x).toBe(box.x);
+    noOverlap([card, ...d]);
+  });
+
+  it("a second card left of the anchor card is not covered, and one right of it slides clear", () => {
+    const left: Rect = { x: 560, y: 50, w: 230, h: 44 };
+    const right: Rect = { x: 1200, y: 50, w: 230, h: 44 };
+    const callers = openCallers([], "A", boxAnchor, "A", 3, view);
+    const list = openExpansion(callers, "B", row(1), chart("B", 264, 120), view);
+    const items = [find(list, callersKey("A")), find(list, "B")].map((e) => drawn(list, e));
+    const card = cardDrawn(list);
+    expect(cardDrawn(list, left)).toEqual(left);
+    noOverlap([cardDrawn(list, left), ...items, card, cardDrawn(list, right)]);
+    expect(items.every((r) => r.x >= left.x + left.w)).toBe(true);
   });
 });

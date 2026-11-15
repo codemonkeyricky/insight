@@ -1,9 +1,9 @@
 // The callers of a function as the callers box lists them: one row per caller, however many reference rows join them
 // (a call and a dispatch of the same caller are one row with both kinds). A reference row is a caller too when it invokes
-// the function: `new X()`, JSX `<X/>` or an event handler registration (INVOKING_REFS). Any other reference (a function
+// the function: `new X()`, JSX `<X/>` or an event handler registration (INVOKING_HOWS). Any other reference (a function
 // passed around as a value) is not listed; it is counted instead (valueRefCount), so the box can say it is called through.
 // Pure, so the merge is unit tested.
-import type { RefRow } from "@insight/model";
+import { INVOKING_HOWS, type RefRow } from "@insight/model";
 
 /**
  * One caller row: the caller's id and name, where it is, whether it is a function, the kinds of its edges except a plain
@@ -34,12 +34,6 @@ export const refOfCallersKey = (key: string): string => (isCallersKey(key) ? key
 /** The edge kinds a caller row lists: a call, a dispatch and a spawn. */
 const CALLER_KINDS: ReadonlySet<RefRow["kind"]> = new Set(["call", "dispatch", "spawn"]);
 
-/**
- * The `how` values of a reference row that invoke the function, so its row is a caller: a construction (`new`), a JSX
- * render (`jsx`) or an event handler registration (`handler`). Other reference rows are not callers.
- */
-export const INVOKING_REFS: ReadonlySet<string> = new Set(["new", "jsx", "handler"]);
-
 /** The badge each invoking reference shows: a JSX render reads "renders"; "new" and "handler" show as they are. */
 const REF_BADGE: ReadonlyMap<string, string> = new Map([
   ["new", "new"],
@@ -47,8 +41,8 @@ const REF_BADGE: ReadonlyMap<string, string> = new Map([
   ["handler", "handler"],
 ]);
 
-/** Whether a reference row is a caller: it invokes the function (INVOKING_REFS). */
-const isInvokingRef = (r: Pick<RefRow, "kind" | "how">): boolean => r.kind === "reference" && r.how !== undefined && INVOKING_REFS.has(r.how);
+/** Whether a reference row is a caller: it invokes the function (INVOKING_HOWS). */
+const isInvokingRef = (r: Pick<RefRow, "kind" | "how">): boolean => r.kind === "reference" && r.how !== undefined && INVOKING_HOWS.has(r.how);
 
 /** Whether a row is a caller row at all: a call, dispatch or spawn, or a reference that invokes the function. */
 const isCallerRow = (r: Pick<RefRow, "kind" | "how">): boolean => CALLER_KINDS.has(r.kind) || isInvokingRef(r);
@@ -92,12 +86,14 @@ export function mergeCallers(rows: readonly RefRow[], lambdas: boolean): CallerR
 
 /**
  * The number of distinct places that pass the function as a value: the ids of the reference rows that do not invoke it
- * (not in INVOKING_REFS). Anonymous (λ) places are left out unless `lambdas` is set, as mergeCallers leaves them out.
+ * (not in INVOKING_HOWS). Anonymous (λ) places are left out unless `lambdas` is set, as mergeCallers leaves them out.
  */
 export function valueRefCount(rows: readonly RefRow[], lambdas: boolean): number {
   const ids = new Set<string>();
+  // A place that also invokes the function is a caller (it has a row), so it is not counted as only passing it.
+  const callers = new Set(rows.filter(isCallerRow).map((r) => r.id));
   for (const r of rows) {
-    if (r.kind !== "reference" || isInvokingRef(r)) continue;
+    if (r.kind !== "reference" || isInvokingRef(r) || callers.has(r.id)) continue;
     if (hiddenLambda(r, lambdas)) continue;
     ids.add(r.id);
   }

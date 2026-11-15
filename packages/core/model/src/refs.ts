@@ -1,6 +1,6 @@
 import type { NodeId } from "@insight/ir";
 import type { Rel, RelKind } from "./model.js";
-import { anonymousOwned, describe, folded, order } from "./refs-common.js";
+import { anonymousOwned, describe, folded, INVOKING_HOWS, order } from "./refs-common.js";
 import type { ScopeView } from "./view.js";
 
 /**
@@ -16,7 +16,7 @@ export interface RefRow {
   /** True when the row is a function. A file row (module-level code) and any other node are not. */
   isFunction: boolean;
   kind: RelKind;
-  /** The edge's `how`, from the first relation of the row, when the edge has one. */
+  /** The edge's `how`, from the first relation of the row, when the edge has one; an invoking how (INVOKING_HOWS) wins over a non-invoking one. */
   how?: string;
   /** True when every relation of the row is a candidate of a candidate set. */
   candidate: boolean;
@@ -62,6 +62,9 @@ function rowsOf(view: ScopeView, items: Array<{ rel: Rel; other: NodeId; label?:
     if (group) {
       group.row.count++;
       group.row.candidate &&= rel.candidate;
+      // The row keeps the first relation's how, unless a later one invokes the function and the first does not: a caller
+      // that both renders <F/> and passes F as a value stays a caller whichever comes first.
+      if (rel.how !== undefined && INVOKING_HOWS.has(rel.how) && !(group.row.how !== undefined && INVOKING_HOWS.has(group.row.how))) group.row.how = rel.how;
       if (site && (!group.site || site.file < group.site.file || (site.file === group.site.file && site.line < group.site.line))) group.site = site;
       continue;
     }

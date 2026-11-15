@@ -109,8 +109,10 @@ export interface Expansion {
   index: number;
   /**
    * The x (world units, before any shift) the columns slide from. A right-side detail pushes the columns right of the pivot
-   * (the right edge of the function box its chain starts at) to the right. A left-side one pushes the columns left of its
-   * pivot (the left edge of its box) to the left. A call step's detail shares its parent's pivot, so a chain slides as one.
+   * (the right edge of the function box its chain starts at) to the right. A left-side one (in an unslotted map) takes the
+   * room starting at its card's left edge, and its pivot is just left of that edge, so the card and the columns right of it
+   * slide right; everything hung from it shares the pivot, so the chain's room adds up. A call step's detail on the right
+   * shares its parent's pivot, so a chain slides as one.
    */
   pivot: number;
   /**
@@ -216,7 +218,6 @@ export function reflow(list: readonly Expansion[], view: Rect | undefined): Expa
     const done = placed.get(e.fnId);
     if (done !== undefined) return done;
     if (hops > list.length) return undefined;
-    let at: { x: number; y: number; pivot: number };
     let from: Expansion | undefined;
     if (e.anchor.kind === "step") {
       const parent = byFn.get(e.anchor.fnId);
@@ -225,39 +226,68 @@ export function reflow(list: readonly Expansion[], view: Rect | undefined): Expa
     }
     const isLeft = opensLeft(e, from);
     // The side is rebuilt each time: a stale `side` never survives a move.
-    const { side: _stale, ...plain } = e;
-    const withSide = (o: Omit<Expansion, "side">): Expansion => (isLeft ? { ...o, side: "left" } : o);
+    const build = (o: Expansion): Expansion => {
+      const out: Expansion = { ...o };
+      if (isLeft) out.side = "left";
+      else delete out.side;
+      placed.set(e.fnId, out);
+      return out;
+    };
     const left = isLeft ? e : undefined;
     // A slotted map's expansions never shift the columns: the layout keeps their room, so the pivot is past every box. In
-    // an unslotted map a left box on a card pivots just left of the card (the card and what is right of it slide right);
-    // what hangs from a left box adds no shift of its own.
+    // an unslotted map a left box pivots just left of the card its chain starts at (the card and what is right of it slide
+    // right by the whole chain's room); what hangs from a left box shares that pivot (see placeLeftChains for its place).
     if (e.anchor.kind === "box") {
       // An in-place expansion takes the card's own top-left corner: it is the card, grown.
       const where = e.anchor.inPlace === true ? { x: e.anchor.rect.x, y: e.anchor.rect.y } : placeOnBox(e.anchor.rect, view, left);
       const pivot = view === undefined ? Infinity : isLeft ? e.anchor.rect.x - LEFT_PIVOT_EPS : e.anchor.rect.x + e.anchor.rect.w;
-      at = { ...where, pivot };
-    } else {
-      if (from === undefined) return undefined;
-      // A box hung from a header takes its rect from the parent's current width, so it follows a resized parent. The
-      // anchor is rebuilt only when the parent's width changed.
-      const head = e.anchor.stepId === HEADER_STEP ? headerRect(from.w, isLeft) : undefined;
-      const rect = head !== undefined && !sameRect(head, e.anchor.rect) ? head : e.anchor.rect;
-      const pivot = view === undefined || isLeft ? Infinity : from.pivot;
-      at = { ...placeOnStep(from, rect, view, left), pivot };
-      if (rect !== e.anchor.rect) {
-        const out = withSide({ ...plain, ...at, anchor: { ...e.anchor, rect } });
-        placed.set(e.fnId, out);
-        return out;
-      }
+      return build({ ...e, ...where, pivot });
     }
-    const out = withSide({ ...plain, ...at });
-    placed.set(e.fnId, out);
-    return out;
+    if (from === undefined) return undefined;
+    // A box hung from a header takes its rect from the parent's current width, so it follows a resized parent. The
+    // anchor is rebuilt only when the parent's width changed.
+    const head = e.anchor.stepId === HEADER_STEP ? headerRect(from.w, isLeft) : undefined;
+    const rect = head !== undefined && !sameRect(head, e.anchor.rect) ? head : e.anchor.rect;
+    const pivot = view === undefined ? Infinity : isLeft ? (from.side === "left" ? from.pivot : from.x - LEFT_PIVOT_EPS) : from.pivot;
+    const out = { ...e, ...placeOnStep(from, rect, view, left), pivot };
+    return build(rect !== e.anchor.rect ? { ...out, anchor: { ...e.anchor, rect } } : out);
   };
-  return list.flatMap((e) => {
+  const out = list.flatMap((e) => {
     const p = place(e, 0);
     return p === undefined ? [] : [p];
   });
+  return view === undefined ? out : placeLeftChains(out);
+}
+
+/**
+ * Lays out each left chain of an unslotted map. A chain is the callers box next to a card (L1) and what hangs from it
+ * (L2, L3 ...). The chain's room starts at the card's original left edge and the card slides right past all of it (every
+ * item shares the card's pivot, so the card's shift is the sum of their widths plus gaps): the deepest item sits at the
+ * card's original x, and each one before it follows to the right, EXPAND_GAP apart, L1 next to the shifted card. The
+ * chain's items get no shift from their own chain, their pivot being their own x.
+ */
+function placeLeftChains(list: Expansion[]): Expansion[] {
+  const xs = new Map<string, number>();
+  const isLeft = (e: Expansion) => e.side === "left";
+  for (const root of list) {
+    if (!isLeft(root)) continue;
+    // The chain's first item hangs from a card (a box anchor) or from a right-opening chart (its parent is not left).
+    const parent = root.anchor.kind === "step" ? list.find((p) => p.fnId === (root.anchor as { fnId: string }).fnId) : undefined;
+    if (root.anchor.kind === "step" && (parent === undefined || isLeft(parent))) continue;
+    const x0 = root.anchor.kind === "box" ? root.anchor.rect.x : parent!.x;
+    const chain: Expansion[] = [root];
+    for (let cur: Expansion | undefined = root; cur !== undefined; ) {
+      const id: string = cur.fnId;
+      cur = list.find((c) => isLeft(c) && c.anchor.kind === "step" && c.anchor.fnId === id && !chain.includes(c));
+      if (cur !== undefined) chain.push(cur);
+    }
+    let x = x0;
+    for (let i = chain.length - 1; i >= 0; i--) {
+      xs.set(chain[i]!.fnId, x);
+      x += chain[i]!.w + EXPAND_GAP;
+    }
+  }
+  return list.map((e) => (xs.has(e.fnId) ? { ...e, x: xs.get(e.fnId)! } : e));
 }
 
 /**

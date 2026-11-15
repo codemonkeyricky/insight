@@ -84,7 +84,8 @@ export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClic
   const own = displayName(chart.name, chart.id);
   // The header's Callers button sits at the left, before the name; the name is fitted to the room between it and the close × (CHART_HEAD square).
   const chipW = onCallers !== undefined ? callersChipW(k) : 0;
-  const headRoom = onCallers !== undefined ? CHART_HEAD + 4 + (chipW > 0 ? chipW + 8 : 0) : 0;
+  // The name starts 14 in (after the chip and a 6 gap) and ends before the close × (CHART_HEAD square, 4 clear).
+  const headRoom = 14 + (chipW > 0 ? chipW + 6 : 0) + CHART_HEAD + 4;
   const label = fitLabel(runtime === undefined ? own : runtime.label.endsWith(own) ? runtime.label : `${runtime.label} · ${own}`, labelChars((w - headRoom) * k));
   return (
     <g className={`zm-expansion${runtime !== undefined ? " is-runtime" : ""}`} role="group" aria-label={`Detail ${detailLetter(expansion.index)}: ${chart.name}`}>

@@ -25,6 +25,7 @@ import {
   refusedCallersPlan,
   openExpansion,
   reflow,
+  shiftAt,
   setInline,
   stillOpen,
   resizeCallers,
@@ -130,6 +131,21 @@ describe("merging callers", () => {
     expect(valueRefCount([], true)).toBe(0);
   });
 
+  it("a row that both renders and passes the function keeps its caller and the renders badge, whichever order the rows came in", () => {
+    // refsOf merges one caller's references into one row whose how is the invoking one (jsx), in either relation order.
+    const rows = [row({ id: "f#k", kind: "reference", how: "jsx", count: 2 })];
+    const merged = mergeCallers(rows, true);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({ id: "f#k", kinds: ["renders"] });
+    expect(valueRefCount(rows, true)).toBe(0);
+    // Unmerged rows in both orders still resolve to one caller row with the badge, and the value row does not count.
+    for (const order of [["value", "jsx"], ["jsx", "value"]] as const) {
+      const two = order.map((how) => row({ id: "f#k", kind: "reference", how }));
+      expect(mergeCallers(two, true)).toMatchObject([{ id: "f#k", kinds: ["renders"] }]);
+      expect(valueRefCount(two, true)).toBe(0);
+    }
+  });
+
   it("applies the lambda filter to value references as it does to callers", () => {
     const rows = [row({ id: "f#λ", kind: "reference", how: "value", name: "λ cb" }), row({ id: "f#p", kind: "reference", how: "value" })];
     expect(valueRefCount(rows, false)).toBe(1);
@@ -166,7 +182,9 @@ describe("callers box placement", () => {
     const p = find(list, "A");
     const grown = reflow(list.map((e) => (e.fnId === "A" ? { ...e, w: p.w + 200 } : e)), view);
     const c = find(grown, callersKey("A"));
-    expect(c.x).toBe(p.x - c.w - EXPAND_GAP);
+    // Unslotted: the box takes the room from the chart's original x, and the chart slides right past it.
+    const pg = find(grown, "A");
+    expect(c.x + shiftAt(grown, c.pivot) + c.w + EXPAND_GAP).toBe(pg.x + shiftAt(grown, pg.pivot));
     expect(c.anchor).toMatchObject({ kind: "step", stepId: HEADER_STEP, rect: { x: -CHART_PAD } });
   });
 
@@ -372,7 +390,8 @@ describe("hanging a card's callers box (N3)", () => {
     const withBox = openCallers(a, "A", boxAnchor, "A", 3, view);
     const hung = hangCallersFrom(withBox, "A", "n", view);
     expect(find(hung, callersKey("A")).anchor).toMatchObject({ kind: "step", fnId: "A", stepId: HEADER_STEP });
-    for (const x of hung) for (const y of hung) if (x !== y) expect(overlaps(x, y)).toBe(false);
+    const shown = hung.map((e) => ({ ...e, x: e.x + shiftAt(hung, e.pivot) }));
+    for (const x of shown) for (const y of shown) if (x !== y) expect(overlaps(x, y)).toBe(false);
   });
 
   it("the box hung on the header does not overlap a step child that stays open beside it (M2)", () => {

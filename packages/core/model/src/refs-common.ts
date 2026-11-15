@@ -4,6 +4,13 @@ import type { RefRow } from "./refs.js";
 import type { ScopeView } from "./view.js";
 
 /**
+ * The `how` values of a reference that invoke the referenced function, so the reference is a caller in effect: a
+ * construction (`new`), a JSX render (`jsx`) or an event handler registration (`handler`). Any other reference passes the
+ * function around as a value. Shared by the caller chain, the reference rows and the callers box.
+ */
+export const INVOKING_HOWS: ReadonlySet<string> = new Set(["new", "jsx", "handler"]);
+
+/**
  * The function (or file) a relation's caller folds into, shared by the "Called by" list and the caller chain so the two
  * cannot drift. A spawn is not a function: its caller is the function (or file) that starts the thread, labelled with the
  * API. Any other relation folds an anonymous caller into its nearest named parent.
