@@ -79,8 +79,8 @@ The Flow tab draws the execution canvas of the scope: program, threads, coroutin
   with `api.getRefs` when the box opens, and the box grows to hold up to 12 rows plus a "+N more" row. A chart has
   one right-hand child: the callers box hung from its header and a call step's callee replace each other, and two rows'
   charts never sit side by side. Opening a card's chart moves the callers box hung from that card to the chart's
-  header (so closing the chart closes it too), unless the chart already has a callee open to its right: the chart
-  keeps its callees and the box closes. A box hung from a nested frame closes when the frame folds. A caller's chart
+  header (so closing the chart closes it too), unless the chart already has a box open to its right (a callee, or a
+  nested frame's callers box): the chart keeps it and the card's box closes. A box hung from a nested frame closes when the frame folds. A caller's chart
   gets no async frame. Below about 0.8× the button shows only ◂, and below about 0.45× it is hidden. Not persisted
   in the URL.
 - Retired: the Hierarchy and Entry points views, and the Execution lens tab. An old `lens-execution` link (under

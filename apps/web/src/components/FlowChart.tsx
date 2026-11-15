@@ -6,7 +6,7 @@ import { hrefFile, hrefView } from "../router";
 import { backEdgeFlags, prefersReducedMotion, useOnScreen, usePageVisible } from "../zoom/flowMotion";
 import { runFlowToken, useTokenSlot } from "../zoom/flowToken";
 import { popDelay } from "../zoom/pop";
-import { CALLERS_BTN_H, CALLERS_BTN_W, CallersButton, GLYPH_K } from "./zoom/CallersControl";
+import { CALLERS_BTN_H, CALLERS_BTN_W, CallersButton, callersChipW } from "./zoom/CallersControl";
 
 /** The width of one character of a step's label, in chart units: the label's 12 px code font. */
 const NEST_CHAR_W = 7.3;
@@ -167,8 +167,9 @@ function NestFrame({ node, onNodeClick, onNodeOpen, onCallers, callersOpen, k, s
   const lc = laneOf(node.lane);
   const [cx, cy] = station(node);
   // With a Callers button in the header, the label is cut to the room left of it (the full name stays in the tooltip).
-  const callers = onCallers !== undefined && node.target !== undefined && k >= GLYPH_K;
-  const room = x + w - CHEV_INSET - CHEV_HIT - 4 - CALLERS_BTN_W - 6 - labelAt(node);
+  const chipW = onCallers !== undefined && node.target !== undefined ? callersChipW(k) : 0;
+  const callers = chipW > 0;
+  const room = x + w - CHEV_INSET - CHEV_HIT - 4 - chipW - 6 - labelAt(node);
   const tagChars = node.tag !== undefined ? node.tag.length + 1 : 0;
   const maxChars = Math.max(1, Math.floor(room / NEST_CHAR_W) - tagChars);
   const label = callers && node.label.length > maxChars ? `${node.label.slice(0, Math.max(0, maxChars - 1))}…` : node.label;

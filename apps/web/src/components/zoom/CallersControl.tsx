@@ -20,6 +20,12 @@ const GLYPH_PX = 10;
 export const FULL_K = LABEL_PX / CALLERS_BTN_W;
 export const GLYPH_K = GLYPH_PX / CALLERS_BTN_H;
 
+/** The width the button takes at scale `k`: the full pill, the compact one, or none when it is not drawn (see GLYPH_K). */
+export function callersChipW(k: number, compact = false): number {
+  if (k < GLYPH_K) return 0;
+  return compact || k < FULL_K ? CALLERS_COMPACT_W : CALLERS_BTN_W;
+}
+
 /**
  * `x` is the left of the full button's slot (CALLERS_BTN_W wide); a compact button keeps the slot's right edge. `k` is the
  * map's label scale (lod.ts): the pill's size on screen is its size times `k`. `compact` asks for the ◂ alone at any scale.

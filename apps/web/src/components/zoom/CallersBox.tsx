@@ -4,7 +4,7 @@
 // already open above it (a recursion) shows ↺ instead: its ▸ selects that chart rather than opening it again. The rows are
 // fetched when the box opens; the box reports how many rows it shows, so the box grows to hold them. Every control is a
 // keyboard control too (Tab, then Enter or Space).
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { CHART_HEAD, CHART_PAD } from "@insight/flow";
 import { CALLOUT_INSET, callerRowRect, callersLines, CALLERS_CAP, CALLER_ROW_H, CALLERS_W, type Expansion } from "../../zoom/expand";
 import { mergeCallers, refOfCallersKey, type CallerRow } from "../../zoom/callers";
@@ -36,45 +36,49 @@ interface Props {
    * rows show, in order (undefined while they load or failed), so the charts opened from them follow their rows.
    */
   onLines: (lines: number, ids: readonly string[] | undefined) => void;
+  /** The focus was on a row that the new rows no longer have, and fell to the page: the map gives it back to its stage. */
+  onFocusLost?: () => void;
 }
 
 type Loaded = { key: string; rows?: CallerRow[]; error?: string };
 
 /**
- * The rows each box last loaded, by project, scope, function and the Lambdas choice. A box that opens again starts from
- * them (and fetches afresh), and a closing box keeps showing them while it fades. Kept small: the oldest entry goes first.
+ * What each box last showed, by project, scope, function and the Lambdas choice: its rows, its error, or that it was
+ * loading. A box that opens again starts from its rows (and fetches afresh), and a closing box shows what the open box
+ * last showed while it fades. Kept small: the least recently used entry goes first.
  */
-const lastRows = new Map<string, CallerRow[]>();
-const LAST_ROWS_MAX = 64;
-/** Forgets every box's last rows (for tests, which mount boxes of one function with different rows). */
+const lastShown = new Map<string, Loaded>();
+const LAST_SHOWN_MAX = 64;
+/** Forgets what every box showed (for tests, which mount boxes of one function with different rows). */
 export function forgetCallerRows(): void {
-  lastRows.clear();
+  lastShown.clear();
 }
-function remember(key: string, rows: CallerRow[]) {
-  lastRows.delete(key);
-  lastRows.set(key, rows);
-  if (lastRows.size > LAST_ROWS_MAX) lastRows.delete(lastRows.keys().next().value as string);
+function remember(key: string, state: Loaded) {
+  lastShown.delete(key);
+  lastShown.set(key, state);
+  if (lastShown.size > LAST_SHOWN_MAX) lastShown.delete(lastShown.keys().next().value as string);
+}
+/** The rows a box of `key` last showed, as a loaded state, when it showed rows. Reading it makes the entry recent. */
+function recall(key: string): Loaded | undefined {
+  const got = lastShown.get(key);
+  if (got?.rows === undefined) return undefined;
+  remember(key, got);
+  return got;
 }
 
-export function CallersBox({ id, scope, expansion, k, closing = false, inChain, onClose, onOpen, onSelect, onLines }: Props) {
+export function CallersBox({ id, scope, expansion, k, closing = false, inChain, onClose, onOpen, onSelect, onLines, onFocusLost }: Props) {
   const ref = refOfCallersKey(expansion.fnId);
   const { x, y, w, h } = expansion;
   // The Lambdas choice is read once: the Flow view mounts the map afresh when it changes, so a box never outlives it.
   const lambdas = readLambdas();
   const key = `${id}\0${scope}\0${ref}\0${lambdas ? "1" : "0"}`;
-  const [loaded, setLoaded] = useState<Loaded | undefined>(() => {
-    const rows = lastRows.get(key);
-    return rows === undefined ? undefined : { key, rows };
-  });
+  const [loaded, setLoaded] = useState<Loaded | undefined>(() => (closing ? undefined : recall(key)));
   useEffect(() => {
     if (closing) return;
     let cancelled = false;
     api.getRefs(id, scope, ref).then(
       (refs) => {
-        if (cancelled) return;
-        const rows = mergeCallers(refs.calledBy, lambdas);
-        remember(key, rows);
-        setLoaded({ key, rows });
+        if (!cancelled) setLoaded({ key, rows: mergeCallers(refs.calledBy, lambdas) });
       },
       (e: unknown) => {
         if (!cancelled) setLoaded({ key, error: e instanceof Error ? e.message : String(e) });
@@ -85,9 +89,13 @@ export function CallersBox({ id, scope, expansion, k, closing = false, inChain, 
       cancelled = true;
     };
   }, [id, scope, ref, key, lambdas, closing]);
-  const shown = loaded?.key === key ? loaded : undefined;
-  // A closing box is a fresh copy drawn for the fade: it shows the rows the open box last showed.
-  const rows = closing ? lastRows.get(key) : shown?.rows;
+  // An open box shows what it loaded for its key, else the rows a box of the key last showed (a new scope, a reopen). A
+  // closing box is a fresh copy drawn for the fade: it shows what the open box last showed.
+  const shown: Loaded = closing ? (lastShown.get(key) ?? { key }) : loaded?.key === key ? loaded : (recall(key) ?? { key });
+  useEffect(() => {
+    if (!closing) remember(key, shown);
+  }, [closing, key, shown.rows, shown.error]);
+  const rows = shown.rows;
   const lines = callersLines(rows?.length);
   const ids = rows?.map((r) => r.id);
   const idsKey = ids?.join("\0");
@@ -95,6 +103,17 @@ export function CallersBox({ id, scope, expansion, k, closing = false, inChain, 
     if (!closing) onLines(lines, ids);
     // `ids` is new on every render: its joined key stands for it.
   }, [lines, idsKey, closing]);
+  // A row that had the focus and is gone after the rows changed (a refetch) drops the focus to the page: the map takes it
+  // back. Whether the focus was in the box is read as the box renders, before the rows change.
+  const rootRef = useRef<SVGGElement>(null);
+  const hadFocus = useRef(false);
+  const active = typeof document === "undefined" ? null : document.activeElement;
+  hadFocus.current = rootRef.current !== null && active !== null && rootRef.current.contains(active);
+  useLayoutEffect(() => {
+    if (closing || !hadFocus.current) return;
+    const now = document.activeElement;
+    if (now === null || now === document.body || !now.isConnected) onFocusLost?.();
+  }, [idsKey, closing]);
 
   const o = { x: x + CHART_PAD, y: y + CHART_HEAD + CHART_PAD };
   const rowW = CALLERS_W - 2 * CHART_PAD;
@@ -104,7 +123,7 @@ export function CallersBox({ id, scope, expansion, k, closing = false, inChain, 
   const shownRows = rows === undefined ? [] : rows.slice(0, CALLERS_CAP);
   const hidden = rows === undefined ? 0 : rows.length - shownRows.length;
   return (
-    <g className="zm-expansion zm-callers" role="group" aria-label={`Callers of ${name}`}>
+    <g ref={rootRef} className="zm-expansion zm-callers" role="group" aria-label={`Callers of ${name}`}>
       <title>{`Callers of ${ref}`}</title>
       <rect x={x} y={y} width={w} height={h} rx={14} className="zm-expansion-body" />
       <rect x={x} y={y + CALLOUT_INSET} width={3} height={Math.max(0, h - 2 * CALLOUT_INSET)} rx={1.5} className="zm-expansion-accent" />
@@ -140,8 +159,8 @@ export function CallersBox({ id, scope, expansion, k, closing = false, inChain, 
         </text>
       </g>
       <g transform={`translate(${o.x} ${o.y})`}>
-        {!closing && rows === undefined && (
-          <CallersNote y={0} rowW={rowW} text={shown?.error !== undefined ? `Callers are not available: ${shown.error}` : "Loading callers…"} />
+        {rows === undefined && (
+          <CallersNote y={0} rowW={rowW} text={shown.error !== undefined ? `Callers are not available: ${shown.error}` : "Loading callers…"} />
         )}
         {rows !== undefined && rows.length === 0 && (
           <CallersNote y={0} rowW={rowW} text="No callers found" note="Entry point, or called from outside the index." />

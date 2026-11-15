@@ -11,7 +11,7 @@ import { CALLOUT_INSET, detailLetter, type CalloutGeometry, type Expansion } fro
 import { displayName } from "../../zoom/names";
 import { fitLabel, labelChars } from "../../zoom/lod";
 import { FlowChart, type FlowNodeCallers } from "../FlowChart";
-import { CALLERS_BTN_H, CALLERS_BTN_W, CallersButton } from "./CallersControl";
+import { CALLERS_BTN_H, CALLERS_BTN_W, CallersButton, callersChipW } from "./CallersControl";
 import { keyActivates } from "./keys";
 
 interface Props {
@@ -83,7 +83,8 @@ export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClic
   // A box on another thread or in another process names its runtime first: "Worker · print.worker", then the function.
   const own = displayName(chart.name, chart.id);
   // The header's Callers button takes the room left of the close × (CHART_HEAD square), so the name is fitted to what is left.
-  const headRoom = onCallers !== undefined ? CHART_HEAD + 4 + CALLERS_BTN_W + 8 : 0;
+  const chipW = onCallers !== undefined ? callersChipW(k) : 0;
+  const headRoom = onCallers !== undefined ? CHART_HEAD + 4 + (chipW > 0 ? chipW + 8 : 0) : 0;
   const label = fitLabel(runtime === undefined ? own : runtime.label.endsWith(own) ? runtime.label : `${runtime.label} · ${own}`, labelChars((w - headRoom) * k));
   return (
     <g className={`zm-expansion${runtime !== undefined ? " is-runtime" : ""}`} role="group" aria-label={`Detail ${detailLetter(expansion.index)}: ${chart.name}`}>

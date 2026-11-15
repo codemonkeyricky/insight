@@ -497,3 +497,20 @@ describe("the Callers chip on a roots-only card", () => {
     expect(html).toContain("◂ callers");
   });
 });
+
+describe("a card's name when zoomed in (review 2, finding 4)", () => {
+  it("fits the name to the font as it grows with the zoom, so it stays inside the card left of the chip", () => {
+    const long = "aVeryLongFunctionNameOfThirtyChars";
+    for (const k of [1, 2, 3]) {
+      const html = renderToStaticMarkup(
+        <svg>
+          <BoxShape item={{ id: "n", kind: "box", rect: { x: 0, y: 0, w: 220, h: 56 }, depth: 1 }} node={{ id: "n", kind: "function", label: long, ref: "f#x" }} line="none" k={k} onOpen={() => undefined} chartOpen={false} card onCallers={() => undefined} />
+        </svg>,
+      );
+      const name = html.match(/zm-card-glyph">ƒ<\/tspan> ([^<]*)<\/text>/)?.[1] ?? "";
+      // The font is max(13 px, 11 world units) on screen; a character is about 0.6 of it, plus the glyph and its space.
+      const charPx = 0.6 * Math.max(13, 11 * k);
+      expect((name.length + 2) * charPx + 12 * k).toBeLessThanOrEqual((220 - 26 - 12) * k);
+    }
+  });
+});

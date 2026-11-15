@@ -45,7 +45,10 @@ const source: MapSource = {
 };
 
 /** A small real chart, so an opened chart draws as it does in the app. */
-const flow = (id: string): FunctionFlow => layoutFunction({ id, name: id, async: false, items: [{ t: "step", role: "call", label: "x()", target: "X" }] });
+const flow = (id: string, targets: readonly string[] = ["X"]): FunctionFlow =>
+  layoutFunction({ id, name: id, async: false, items: targets.map((t) => ({ t: "step" as const, role: "call" as const, label: `${t.toLowerCase()}()`, target: t })) });
+/** A chart that cannot nest in a call step (it has no pre-layout steps): its call opens beside the step instead. */
+const flat = (id: string): FunctionFlow => ({ ...flow(id), items: undefined }) as FunctionFlow;
 
 let chartOf: ReturnType<typeof vi.fn>;
 const charts = () => ({ id: "p", scope: "", store: { chartOf } as unknown as ZoomStore });
@@ -89,7 +92,8 @@ const chip = (name: string) => screen.queryByRole("button", { name: `Show caller
 const callersBox = (name: string) => screen.queryByRole("group", { name: `Callers of ${name}` });
 const stage = () => screen.getByRole("application", { name: "Execution map of the scope" });
 /** The chart box of a function, by its accessible name ("Detail A: F"). */
-const chartBox = (name: string) => [...document.querySelectorAll(".zm-expansion[aria-label]")].find((g) => /^Detail [A-Z]+: /.test(g.getAttribute("aria-label") ?? "") && g.getAttribute("aria-label")!.endsWith(`: ${name}`));
+const chartBox = (name: string) =>
+  [...document.querySelectorAll(".zm-expansion[aria-label]")].find((g) => g.closest(".is-leaving") === null && /^Detail [A-Z]+: /.test(g.getAttribute("aria-label") ?? "") && g.getAttribute("aria-label")!.endsWith(`: ${name}`));
 const pressed = (name: string) => chip(name)?.getAttribute("aria-pressed");
 const deferred = <T,>() => {
   let resolve: (v: T) => void = () => {};
@@ -171,6 +175,32 @@ describe("the map's callers wiring", () => {
     await waitFor(() => expect(document.activeElement).toBe(stage()));
   });
 
+  it("a close keeps the focus on a control of a box that stays open (item 7)", async () => {
+    getRefs.mockResolvedValue({ calledBy: [refRow("P")] });
+    await mount();
+    fireEvent.click(chip("F")!);
+    fireEvent.click(chip("G")!);
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Open the chart of P" })).toHaveLength(2));
+    const kept = callersBox("F")!.querySelector(".zm-caller-chev") as SVGElement;
+    kept.focus();
+    fireEvent.click(chip("G")!);
+    await waitFor(() => expect(callersBox("G")).toBeNull());
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(document.activeElement).toBe(kept);
+  });
+
+  it("the box's own × pressed from the keyboard gives the focus back to the stage (item 7)", async () => {
+    getRefs.mockResolvedValue({ calledBy: [refRow("P")] });
+    await mount();
+    fireEvent.click(chip("F")!);
+    await waitFor(() => expect(callersBox("F")).not.toBeNull());
+    const close = screen.getByRole("button", { name: "Close the callers of F" }) as unknown as SVGElement;
+    close.focus();
+    fireEvent.keyDown(close, { key: "Enter" });
+    await waitFor(() => expect(callersBox("F")).toBeNull());
+    expect(document.activeElement).toBe(stage());
+  });
+
   it("a close never takes the focus from outside the map (item 7)", async () => {
     getRefs.mockResolvedValue({ calledBy: [refRow("P")] });
     await mount();
@@ -184,5 +214,76 @@ describe("the map's callers wiring", () => {
     await act(async () => new Promise((r) => setTimeout(r, 40)));
     expect(document.activeElement).toBe(input);
     input.remove();
+  });
+
+  it("two quick opens of two call steps open the step clicked last, whichever callee loads last (review 2, finding 1)", async () => {
+    const slowA = deferred<FunctionFlow>();
+    chartOf.mockImplementation(async (id: string) => (id === "F" ? flow("F", ["A", "B"]) : id === "A" ? slowA.promise : flat(id)));
+    await mount();
+    fireEvent.click(document.querySelector('[data-fid="nF"]')!);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Open b()" })).not.toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Open a()" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open b()" }));
+    await waitFor(() => expect(chartBox("B")).toBeDefined());
+    await act(async () => slowA.resolve(flat("A")));
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(chartBox("A")).toBeUndefined();
+    expect(chartBox("B")).toBeDefined();
+  });
+
+  it("a callers box opened on a chart while a callee loads there keeps its place (review 2, finding 1)", async () => {
+    getRefs.mockResolvedValue({ calledBy: [refRow("P")] });
+    const slowX = deferred<FunctionFlow>();
+    chartOf.mockImplementation(async (id: string) => (id === "X" ? slowX.promise : flow(id)));
+    await mount();
+    fireEvent.click(document.querySelector('[data-fid="nF"]')!);
+    await waitFor(() => expect(chartBox("F")).toBeDefined());
+    fireEvent.click(screen.getByRole("button", { name: "Open x()" }));
+    const header = chartBox("F")!.querySelector(".zm-callers-btn")!;
+    fireEvent.click(header);
+    await waitFor(() => expect(callersBox("F")).not.toBeNull());
+    await act(async () => slowX.resolve(flat("X")));
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(chartBox("X")).toBeUndefined();
+    expect(callersBox("F")).not.toBeNull();
+  });
+
+  it("closing a callers box does not cancel a callee loading on its chart (review 2, finding 3)", async () => {
+    getRefs.mockResolvedValue({ calledBy: [refRow("P")] });
+    const slowX = deferred<FunctionFlow>();
+    chartOf.mockImplementation(async (id: string) => (id === "X" ? slowX.promise : flow(id)));
+    await mount();
+    fireEvent.click(document.querySelector('[data-fid="nF"]')!);
+    await waitFor(() => expect(chartBox("F")).toBeDefined());
+    const header = () => chartBox("F")!.querySelector(".zm-callers-btn")!;
+    fireEvent.click(header());
+    await waitFor(() => expect(callersBox("F")).not.toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Open x()" }));
+    fireEvent.click(header());
+    await waitFor(() => expect(callersBox("F")).toBeNull());
+    await act(async () => slowX.resolve(flat("X")));
+    await waitFor(() => expect(chartBox("X")).toBeDefined());
+  });
+
+  it("a caller's chart whose row is gone from the fresh rows does not open (review 2, finding 2)", async () => {
+    getRefs.mockResolvedValue({ calledBy: [refRow("A"), refRow("B")] });
+    await mount();
+    fireEvent.click(chip("F")!);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Open the chart of A" })).not.toBeNull());
+    fireEvent.click(chip("F")!);
+    await waitFor(() => expect(callersBox("F")).toBeNull());
+    // Reopen: the box shows its last rows at once, while the fresh ones (without A) and A's chart load.
+    const fresh = deferred<{ calledBy: RefRow[] }>();
+    getRefs.mockReturnValue(fresh.promise);
+    const slowA = deferred<FunctionFlow>();
+    chartOf.mockImplementation(async (id: string) => (id === "A" ? slowA.promise : flow(id)));
+    fireEvent.click(chip("F")!);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Open the chart of A" })).not.toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Open the chart of A" }));
+    await act(async () => fresh.resolve({ calledBy: [refRow("B")] }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Open the chart of A" })).toBeNull());
+    await act(async () => slowA.resolve(flow("A")));
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(chartBox("A")).toBeUndefined();
   });
 });

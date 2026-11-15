@@ -170,3 +170,66 @@ describe("the Callers button when zoomed out", () => {
     expect(screen.queryByRole("button", { name: "Show callers of pump" })).toBeNull();
   });
 });
+
+describe("review 2 follow-ups in the callers box", () => {
+  it("a closing box shows the error the open box showed, not rows from an earlier open (finding 7)", async () => {
+    getRefs.mockResolvedValueOnce({ calledBy: [refRow({ id: "f#a", name: "alpha" })] });
+    const first = mount();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Select alpha" })).toBeTruthy());
+    first.unmount();
+    getRefs.mockRejectedValueOnce(new Error("offline"));
+    const { props, rerender } = mount();
+    await waitFor(() => expect(screen.getByText(/Callers are not available: offline/)).toBeTruthy());
+    rerender(
+      <svg>
+        <CallersBox {...props} closing />
+      </svg>,
+    );
+    expect(screen.getByText(/Callers are not available: offline/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Select alpha" })).toBeNull();
+  });
+
+  it("a focused row that is gone after the rows change reports the focus lost (finding 5)", async () => {
+    getRefs.mockResolvedValueOnce({ calledBy: [refRow({ id: "f#a", name: "alpha" })] });
+    const onFocusLost = vi.fn();
+    const { props, rerender } = mount({ onFocusLost });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Select alpha" })).toBeTruthy());
+    (screen.getByRole("button", { name: "Select alpha" }) as unknown as SVGElement).focus();
+    getRefs.mockReturnValue(new Promise(() => {}));
+    // Another scope: the box's rows change (to loading) and the focused row goes.
+    rerender(
+      <svg>
+        <CallersBox {...props} scope="lib" />
+      </svg>,
+    );
+    expect(screen.queryByRole("button", { name: "Select alpha" })).toBeNull();
+    expect(onFocusLost).toHaveBeenCalledTimes(1);
+  });
+
+  it("a row that keeps the focus reports nothing when other rows change", async () => {
+    getRefs.mockResolvedValueOnce({ calledBy: [refRow({ id: "f#a", name: "alpha" })] });
+    const onFocusLost = vi.fn();
+    mount({ onFocusLost });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Select alpha" })).toBeTruthy());
+    expect(onFocusLost).not.toHaveBeenCalled();
+  });
+});
+
+describe("double-clicks on map controls (real DOM)", () => {
+  it("zoomTakes leaves a double-click on a chip, inside a callers box, or on a close × to the control", async () => {
+    const { zoomTakes } = await import("../src/zoom/gesture");
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    const make = (cls: string) => {
+      const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      g.setAttribute("class", cls);
+      const inner = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      g.append(inner);
+      svg.append(g);
+      return inner;
+    };
+    document.body.append(svg);
+    for (const cls of ["zm-callers-btn", "zm-expansion zm-callers", "zm-expansion-close"]) expect(zoomTakes({ type: "dblclick", target: make(cls) })).toBe(false);
+    expect(zoomTakes({ type: "dblclick", target: make("zm-box zm-function") })).toBe(true);
+    svg.remove();
+  });
+});

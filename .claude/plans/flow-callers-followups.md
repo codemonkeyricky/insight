@@ -16,7 +16,7 @@ items are now fixed or explicitly deferred below.
 | 6 | Chip text overflowed its pill when zoomed out | Below 0.82× the chip is compact (◂ alone, 26 wide, right-aligned in its slot); below 0.45× it is hidden. Browser-checked at 1.3×, 0.77×, 0.51× and 0.34×. | `flowCallers.dom.test.tsx` (zoom) |
 | 7 | Focus lost after Escape or a close | `setExp` refocuses the stage after the re-render only when the focus was in the map and is now lost; the ↺ path no longer steals focus | `flowCallersMap.dom.test.tsx` (item 7, both directions) |
 | 8 | Connector pointed at the wrong row after rows reloaded | `syncCallerRows`: caller charts follow their row by caller id; a gone or capped row closes its chart. CallersBox reports the row ids with its size. | `flowCallers.test.tsx` (item 8) |
-| 9 | No test reached the map wiring | `flowCallersMap.dom.test.tsx`: ZoomMap mounted in jsdom with a fake source. Each test fails with its fix reverted. | |
+| 9 | No test reached the map wiring | `flowCallersMap.dom.test.tsx`: ZoomMap mounted in jsdom with a fake source. Each fix's test fails with that fix reverted. The "never takes the focus from outside the map" test only guards the `stage.contains` condition (it passes on the old code too). | |
 | 10 | Quality | `callersKey`/`isCallersKey`/`refOfCallersKey` in `zoom/callers.ts`, used everywhere; dead `onClick` removed; a closing box keeps its last rows (a small per-key cache, also used when a box reopens); `reflow` reuses an unchanged header anchor. `readLambdas()` needs no reactivity: the Flow view remounts the map when Lambdas changes, so the read is keyed into the rows cache. | |
 | R4 | `docs/zoom-map.md` said opening a card's chart closed its callers box | Paragraph rewritten (one right-hand child, header move, fold, async frame, zoom) | |
 | R5 | A callers box on a nested frame was orphaned when the frame folded | `setInline` closes a callers child whose step is no longer `nest`/`fork` | `flowCallers.test.tsx` (review 5) |
@@ -30,6 +30,21 @@ Found in the browser check (not in either review):
 - The callers box's row text was fitted at the screen scale, but its fonts are in world units, so a note ran past the
   box's edge. Rows are now fitted to their world width with measured character widths.
 - A chart header's name was fitted without the ×'s room, so on a phone it ran into the chip.
+
+## Second Opus review (of the fixes above)
+
+| # | Finding | Fix | Test |
+|---|---------|-----|------|
+| 1 | The call-step race was still open: `inlineStep` awaited the callee with no token | `inlineStep` starts the load token before its await and passes it to `openStep` | two map tests (chevron path; a callers box opened while a callee loads) |
+| 2 | A chart could open beside a row the fresh rows no longer had | The map keeps each box's last row ids; `openCallerChart` places the chart at its row's current index, or opens nothing | map test (reopen with cached rows, then fresh rows without A) |
+| 3 | A toggle that closed or was refused cancelled a pending callee load | The token is taken only when the box opens or moves onto the chart | map test |
+| 4 | Card names overflowed above about 1.2× (the font grows with the zoom there) | The fit's character width follows the font: `max(8, 6.8k)` px | `flowCallers.test.tsx` at 1×, 2×, 3× |
+| 5 | Focus restore ran in a frame that could come before the commit; a row gone after a refetch was not covered | Restore in a layout effect after the commit; CallersBox reports a focused row lost when its rows change (`onFocusLost`) | map and DOM tests |
+| 6 | Item 7's tests covered only the closing box and outside focus; `chartBox` matched leaving copies | Added "focus stays on a surviving box's ▸" and the keyboard × path; `chartBox` skips `.is-leaving` | |
+| 7 | The closing copy showed rows from an earlier open after a failed fetch | The cache keeps what the open box showed (rows, error or loading), recency is refreshed on reads, and a new key starts from its cached rows | DOM test |
+| 8 | Labels reserved the full chip's room when it was compact or hidden | `callersChipW(k)` gives the chip's real width to the header and frame label fits | |
+| 9 | The doc said "a callee" where any right-hand box counts | Doc wording | |
+| 10 | The R6 test faked `closest` | A jsdom test with real elements | `flowCallers.dom.test.tsx` |
 
 ## Known gaps (accepted)
 - The chip has no count ("◂ N"). Open callers boxes aren't saved in the URL.
