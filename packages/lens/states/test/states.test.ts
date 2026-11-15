@@ -24,6 +24,7 @@ interface W {
   value?: string;
   op?: "init" | "set";
   from?: string[];
+  fromEntry?: boolean;
   stale?: boolean;
   dynamic?: boolean;
   guardMatch?: string;
@@ -46,6 +47,7 @@ const write = (w: W): IRNode => {
       ...(w.value !== undefined ? { value: w.value } : {}),
       ...(w.dynamic ? { dynamic: true } : {}),
       ...(w.from ? { from: w.from } : {}),
+      ...(w.fromEntry ? { fromEntry: true } : {}),
       ...(w.stale ? { stale: true } : {}),
       ...(w.guardMatch ? { guardMatch: w.guardMatch } : {}),
       ...(w.event ? { event: w.event } : {}),
@@ -56,11 +58,11 @@ const write = (w: W): IRNode => {
 };
 const test = (id: string, holderId: string, fnName: string, values: string[], extra: Record<string, unknown> = {}): IRNode =>
   fx.node(id, "state", "state.test", { parent: `${FILE}#${fnName}`, span: at(40), attrs: { holder: holderId, values, arm: "arm1", ...extra } });
-const call = (from: string, to: string | string[], known?: Record<string, string[]>, confidence?: "exact" | "inferred"): IREdge =>
+const call = (from: string, to: string | string[], known?: Record<string, string[]>, confidence?: "exact" | "inferred", entry?: string[]): IREdge =>
   fx.edge(`${FILE}#${from}`, Array.isArray(to) ? to.map((t) => `${FILE}#${t}`) : `${FILE}#${to}`, "calls", "calls.call", {
     span: at(60),
     ...(confidence ? { confidence } : {}),
-    ...(known ? { attrs: { knownState: known } } : {}),
+    ...(known || entry ? { attrs: { ...(known ? { knownState: known } : {}), ...(entry ? { knownEntry: Object.fromEntries(entry.map((h) => [h, true])) } : {}) } } : {}),
   });
 
 const q = (v: string) => JSON.stringify(v);
@@ -161,7 +163,7 @@ describe("cross-call entry sets", () => {
     holder(G, "Conn.state", [q("Closed"), q("Open"), q("Busy")]),
     write({ holder: G, fn: "ctor", value: q("Closed"), op: "init" }),
     write({ holder: G, fn: "open", value: q("Open"), from: [q("Closed")] }),
-    write({ holder: G, fn: "close", value: q("Closed") }),
+    write({ holder: G, fn: "close", value: q("Closed"), fromEntry: true }),
   ];
 
   it("takes the entry set from its only exact caller: inferred, no star", () => {
@@ -189,10 +191,60 @@ describe("cross-call entry sets", () => {
   });
 
   it("lets an unguarded caller inherit its own entry set from its callers (depth 2)", () => {
-    const edges = [call("viaCallback", "close"), call("viaArm", "viaCallback", { [G]: [q("Busy")] })];
+    const edges = [call("viaCallback", "close", undefined, undefined, [G]), call("viaArm", "viaCallback", { [G]: [q("Busy")] })];
     const m = stateMachines(fx.view({ nodes: base(), edges })).machines[0] as Machine;
     const closeArcs = m.transitions.filter((t) => t.label === "close").map((t) => `${displayValue(t.from)}>${displayValue(t.to)}:${t.confidence}`);
     expect(closeArcs).toEqual(["Busy>Closed:inferred"]);
+  });
+
+  it("keeps the star for a write without fromEntry, even under a known caller (a)", () => {
+    const nodes = [
+      fileNode(), fn("step", 10), fn("caller", 20),
+      holder(G, "Conn.state", [q("A"), q("B"), q("C")]),
+      write({ holder: G, fn: "step", value: q("B"), fromEntry: true }),
+      write({ holder: G, fn: "step", value: q("C") }),
+      write({ holder: G, fn: "caller", value: q("A"), op: "init" }),
+    ];
+    const m = stateMachines(fx.view({ nodes, edges: [call("caller", "step", { [G]: [q("A")] })] })).machines[0] as Machine;
+    const toC = m.transitions.filter((t) => t.to === q("C")).map((t) => displayValue(t.from));
+    expect(toC).toEqual(["any state"]);
+    expect(m.transitions.some((t) => t.from === q("A") && t.to === q("C"))).toBe(false);
+  });
+
+  it("follows knownEntry up to _reconnect (b: SignalR shape), no star", () => {
+    const D = (v: string) => q(v);
+    const nodes = [
+      fileNode(), fn("ctor", 2), fn("_completeClose", 10), fn("_reconnect", 20), fn("_closing", 30), fn("_conn", 40),
+      holder(G, "Hub.state", [D("Connected"), D("Disconnecting"), D("Disconnected")]),
+      write({ holder: G, fn: "ctor", value: D("Connected"), op: "init" }),
+      write({ holder: G, fn: "_completeClose", value: D("Disconnected"), fromEntry: true }),
+      write({ holder: G, fn: "_closing", value: D("Disconnecting"), from: [D("Connected")] }),
+    ];
+    const edges = [
+      call("_closing", "_completeClose", { [G]: [D("Disconnecting")] }),
+      call("_reconnect", "_completeClose", undefined, undefined, [G]),
+      call("_conn", "_reconnect", { [G]: [D("Connected")] }),
+    ];
+    const m = stateMachines(fx.view({ nodes, edges })).machines[0] as Machine;
+    const arcs2 = m.transitions.filter((t) => t.to === D("Disconnected")).map((t) => `${displayValue(t.from)}>${displayValue(t.to)}:${t.confidence}`);
+    expect(arcs2.sort()).toEqual(["Connected>Disconnected:inferred", "Disconnecting>Disconnected:inferred"]);
+  });
+
+  it("terminates on a knownEntry cycle a -> b -> a and keeps the star (c)", () => {
+    const edges = [call("viaArm", "close", undefined, undefined, [G]), call("close", "viaArm", undefined, undefined, [G])];
+    const m = stateMachines(fx.view({ nodes: base(), edges })).machines[0] as Machine;
+    expect(m.transitions.some((t) => t.label === "close" && t.from === "*")).toBe(true);
+  });
+
+  it("keeps the star when the knownState is three callers up (d)", () => {
+    const edges = [
+      call("viaArm", "close", undefined, undefined, [G]),
+      call("viaCallback", "viaArm", undefined, undefined, [G]),
+      call("register", "viaCallback", { [G]: [q("Busy")] }),
+    ];
+    const m = stateMachines(fx.view({ nodes: base(), edges })).machines[0] as Machine;
+    expect(m.transitions.some((t) => t.label === "close" && t.from === "*")).toBe(true);
+    expect(m.transitions.some((t) => t.label === "close" && t.from === q("Busy"))).toBe(false);
   });
 
   it("terminates on recursion and callback cycles", () => {
@@ -245,7 +297,7 @@ describe("HttpConnection._connectionState", () => {
     write({ file: F, holder: HC, fn: "start", value: CS("Connecting"), from: [CS("Disconnected")], line: 149 }),
     write({ file: F, holder: HC, fn: "_startInternal", value: CS("Connected"), from: [CS("Connecting")], line: 314 }),
     // catch: entry from the one caller, plus the spurious try-written twin (S2).
-    write({ file: F, holder: HC, fn: "_startInternal", value: CS("Disconnected"), line: 322 }),
+    write({ file: F, holder: HC, fn: "_startInternal", value: CS("Disconnected"), fromEntry: true, line: 322 }),
     write({ file: F, holder: HC, fn: "_startInternal", value: CS("Disconnected"), from: [CS("Connected")], stale: true, line: 322 }),
     write({ file: F, holder: HC, fn: "stop", value: CS("Disconnecting"), from: [CS("Connecting"), CS("Connected")], line: 198 }),
     write({ file: F, holder: HC, fn: "_stopConnection", value: CS("Disconnected"), from: [CS("Connected"), CS("Disconnecting")], line: 662 }),
@@ -324,6 +376,11 @@ describe("findings", () => {
     ]);
     const m = (r.views.find((v) => v.type === "state-machine") as StateMachineView).states;
     expect(m.find((s) => s.id === `${H}|${q("fail")}`)?.kind).toBe("unentered");
+  });
+
+  it("raises no never-set or dead-test finding for a holder with a dynamic write (risk 13)", async () => {
+    const r = await lensStates.run(fx.view({ nodes: [...nodes(), write({ holder: H, fn: "b", dynamic: true })] }), ctx());
+    expect(r.findings).toEqual([]);
   });
 
   it("raises no value-coverage finding for a holder that is not a machine (A7)", async () => {

@@ -73,6 +73,7 @@ interface Write {
   value?: string;
   dynamic: boolean;
   from?: string[];
+  fromEntry: boolean;
   stale: boolean;
   guardMatch?: string;
   event?: string;
@@ -118,7 +119,7 @@ const nameOfFn = (n: IRNode | undefined): string | undefined => {
 /**
  * State machines from state facts. For each holder with in-scope writes or tests, a write becomes arcs
  * `f -> value` for each `f` in its `from`, `* -> value` when nothing bounds the entry state, and `● -> value`
- * for an init. A write with no `from` takes its entry set from the exact callers' `knownState` (depth <= 2);
+ * for an init. A write with no `from` but `fromEntry` takes its entry set from the exact callers' `knownState`, or a caller's callers when the call has `knownEntry` (depth <= 2);
  * any caller without one keeps `*` in the set, and the arcs are inferred.
  *
  * Limits: a holder is the one id on `attrs.holder`; instances of a type share a machine. Dynamic writes give
@@ -142,6 +143,7 @@ export function stateMachines(view: IRView): StateModel {
       holder,
       op,
       dynamic: dynamic || value === undefined,
+      fromEntry: n.attrs.fromEntry === true,
       stale: n.attrs.stale === true,
       owner: ownerOf(view, n.id),
     };
@@ -164,20 +166,19 @@ export function stateMachines(view: IRView): StateModel {
     .filter((n) => !isExternal(n) && str(n.attrs.holder) !== undefined)
     .sort(compareNodes);
 
-  // (function, holder) pairs that write or test the holder themselves.
-  const touches = new Set<string>();
-  for (const w of writes) if (w.owner) touches.add(`${w.owner.id}\0${w.holder}`);
-  for (const t of tests) {
-    const o = ownerOf(view, t.id);
-    if (o) touches.add(`${o.id}\0${t.attrs.holder as string}`);
-  }
-
   // ---- cross-call entry sets -------------------------------------------------------------
   interface Entry {
     vals: Set<string>;
     star: boolean;
     any: boolean;
   }
+  /** `knownEntry` mirrors `knownState`: a map keyed by holder id (a list of holder ids is read too). */
+  const hasKnownEntry = (e: IREdge, holder: string): boolean => {
+    const ke = (e as IREdge & { attrs?: Record<string, unknown> }).attrs?.knownEntry;
+    if (Array.isArray(ke)) return ke.includes(holder);
+    if (ke && typeof ke === "object") return Boolean((ke as Record<string, unknown>)[holder]);
+    return false;
+  };
   const hasCalls = view.hasFacet("calls");
   const entryCache = new Map<string, Entry>();
   const entryOf = (fn: NodeId, holder: string, depth: number, visiting: Set<NodeId>): Entry => {
@@ -195,7 +196,7 @@ export function stateMachines(view: IRView): StateModel {
       if (exact && known && known.length > 0) {
         for (const v of known) out.vals.add(v);
         out.any = true;
-      } else if (exact && depth < 1 && !next.has(e.from) && !touches.has(`${e.from}\0${holder}`)) {
+      } else if (exact && depth < 1 && !next.has(e.from) && hasKnownEntry(e, holder)) {
         const sub = entryOf(e.from, holder, depth + 1, next);
         for (const v of sub.vals) out.vals.add(v);
         if (sub.star) out.star = true;
@@ -286,7 +287,7 @@ export function stateMachines(view: IRView): StateModel {
         continue;
       }
       unguarded++;
-      const entry = w.owner && w.owner.kind === "structure.function" ? entryOf(w.owner.id, holderId, 0, new Set()) : undefined;
+      const entry = w.fromEntry && w.owner && w.owner.kind === "structure.function" ? entryOf(w.owner.id, holderId, 0, new Set()) : undefined;
       if (entry?.any) {
         const conf = weaker(base, "inferred");
         for (const v of [...entry.vals].sort()) addArc(v, w.value, label, site(conf));
@@ -366,10 +367,22 @@ function findingsFor(view: IRView, model: StateModel): LensFinding[] {
     const h = str(w.attrs.holder);
     if (h) writeCount.set(h, (writeCount.get(h) ?? 0) + 1);
   }
+  const testsBy = new Map<string, IRNode[]>();
+  for (const t of view.nodes({ facet: "state", kind: "state.test" })) {
+    const h = str(t.attrs.holder);
+    if (isExternal(t) || !h) continue;
+    testsBy.set(h, [...(testsBy.get(h) ?? []), t]);
+  }
+  const dynamicHolders = new Set<string>();
+  for (const w of view.nodes({ facet: "state", kind: "state.write" })) {
+    const h = str(w.attrs.holder);
+    if (!isExternal(w) && h && (w.attrs.dynamic === true || str(w.attrs.value) === undefined)) dynamicHolders.add(h);
+  }
   // Only holders drawn as machines (A7) can have value-coverage findings.
   const drawn = new Set(model.machines.map((m) => m.holderId));
   for (const [holderId, holder] of holders) {
     if (!drawn.has(holderId)) continue;
+    if (dynamicHolders.has(holderId)) continue;
     if (holder.attrs.domainKind === "open" || (writeCount.get(holderId) ?? 0) === 0) continue;
     const writtenValues = model.written.get(holderId) ?? new Set<string>();
     // A4: a narrowed use of a shared enum is not a bug, so ask for at least three distinct written values.
@@ -386,8 +399,7 @@ function findingsFor(view: IRView, model: StateModel): LensFinding[] {
         });
       }
     }
-    for (const t of view.nodes({ facet: "state", kind: "state.test" })) {
-      if (isExternal(t) || t.attrs.holder !== holderId) continue;
+    for (const t of testsBy.get(holderId) ?? []) {
       const dead = (strs(t.attrs.values) ?? []).filter((v) => !writtenValues.has(v));
       if (dead.length === 0) continue;
       out.push({
@@ -429,7 +441,7 @@ export const lensStates: Lens = {
             to: `${m.holderId}|${t.to}`,
             label: t.label,
             confidence: t.confidence,
-            sites: t.sites.map((s) => ({ ...(s.span ? { span: s.span } : {}), ...(s.fn ? { fn: s.fn } : {}), ...(s.guard ? { guard: s.guard } : {}) })),
+            sites: t.sites.map((s) => ({ ...(s.span ? { span: s.span } : {}), ...(s.fn ? { fn: s.fn } : {}), ...(s.guard ? { guard: s.guard } : {}), confidence: s.confidence })),
           })),
           ...(m.notes.length > 0 ? { notes: m.notes } : {}),
         };

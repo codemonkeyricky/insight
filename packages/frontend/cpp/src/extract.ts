@@ -786,5 +786,21 @@ export function emitUnit(project: Project, rel: string): IRBatch {
     records.push({ finding });
   }
 
+  // A guard id must name a state.test node that was emitted; drop the rest (the narrowing is still used for `from`).
+  const testIds = new Set<string>();
+  for (const r of records) if ("node" in r && r.node.kind === "state.test") testIds.add(r.node.id);
+  for (const r of records) {
+    if (!("node" in r) || r.node.kind !== "state.write") continue;
+    const attrs = r.node.attrs as Record<string, unknown>;
+    if (!Array.isArray(attrs.guards)) continue;
+    const kept = (attrs.guards as string[]).filter((g) => testIds.has(g));
+    if (kept.length === attrs.guards.length) continue;
+    if (kept.length > 0) attrs.guards = kept;
+    else {
+      delete attrs.guards;
+      delete attrs.guardMatch;
+    }
+  }
+
   return { file: rel, records, dependsOn: [...deps].sort() };
 }

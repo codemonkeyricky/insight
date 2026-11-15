@@ -349,3 +349,23 @@ export function nearestArc(arcs: readonly LaidArc[], x: number, y: number, max =
   }
   return best;
 }
+
+/** Layout gives up after this long: a worker that failed to load never answers. */
+export const LAYOUT_TIMEOUT_MS = 15_000;
+
+/** `solve`, rejecting when it throws, rejects, or does not settle within `ms`. */
+export function withTimeout(solve: Solve, ms = LAYOUT_TIMEOUT_MS): Solve {
+  return (graph) =>
+    new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`layout timed out after ${Math.round(ms / 1000)} s`)), ms);
+      const done = <T,>(f: (v: T) => void) => (v: T) => {
+        clearTimeout(timer);
+        f(v);
+      };
+      try {
+        solve(graph).then(done(resolve), done(reject));
+      } catch (e) {
+        done(reject)(e);
+      }
+    });
+}

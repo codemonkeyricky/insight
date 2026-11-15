@@ -121,7 +121,7 @@ export interface StateMachineTransition {
   to: string;
   label?: string;
   confidence: Confidence;
-  sites: { span?: ViewSpan; fn?: string; guard?: string }[];
+  sites: { span?: ViewSpan; fn?: string; guard?: string; confidence?: Confidence }[];
 }
 
 /** A finite state holder drawn as a state diagram: states are its values, transitions are its writes. */
