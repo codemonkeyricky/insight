@@ -125,8 +125,19 @@ export function globRegex(pattern: string): RegExp {
   return new RegExp(`^${re}$`);
 }
 
+/**
+ * A label that names the main repository, `@//p:t` or `@@//p:t`, or `@root//p:t` where root is one of
+ * `mainRepos`, is the in-repository label `//p:t`. Any other label is returned as it is.
+ */
+export function normalizeMainLabel(text: string, mainRepos: readonly string[] = []): string {
+  const m = /^@@?([^/]*)(\/\/.*)$/.exec(text);
+  if (m && (m[1] === "" || mainRepos.includes(m[1] ?? ""))) return m[2] ?? text;
+  return text;
+}
+
 /** A label to a target id, or to an external repository when it starts with @. */
-export function labelOf(text: string, pkg: string): { id: string } | { external: string } {
+export function labelOf(raw: string, pkg: string, mainRepos: readonly string[] = []): { id: string } | { external: string } {
+  const text = normalizeMainLabel(raw, mainRepos);
   if (text.startsWith("@")) return { external: text };
   if (text.startsWith("//")) {
     const body = text.slice(2);
@@ -208,11 +219,22 @@ export function moduleVariables(toks: Tok[]): ModuleVars {
     else if (t.kind === "op" && [")", "]", "}"].includes(t.value)) depth--;
     if (depth !== 0 || t.kind !== "id") continue;
     const next = toks[i + 1];
-    if (!(next?.kind === "op" && next.value === "=")) continue;
+    const after = toks[i + 2];
+    // `NAME += ...` is two tokens, `+` and `=`, written side by side.
+    const augmented =
+      next?.kind === "op" && next.value === "+" && after?.kind === "op" && after.value === "=" && after.line === next.line && after.col === next.col + 1;
+    const plain = next?.kind === "op" && next.value === "=";
+    if (!augmented && !plain) continue;
     const count = (assigned.get(t.value) ?? 0) + 1;
     assigned.set(t.value, count);
+    // Only a first, plain assignment at column 0 binds the name. An augmented assignment, a reassignment, or one
+    // inside a block (if, for, def, indented at column > 0) leaves the name unknown.
+    if (augmented || count > 1 || t.col !== 0) {
+      vars.set(t.value, undefined);
+      continue;
+    }
     const { value, end } = evalExpr(toks, i + 2, vars);
-    vars.set(t.value, count === 1 && end > i + 2 ? value : undefined);
+    vars.set(t.value, end > i + 2 ? value : undefined);
   }
   return vars;
 }
@@ -252,10 +274,17 @@ function fileList(toks: Tok[], pkg: string, files: string[], subpackages: Set<st
  * Reads one BUILD file and returns the targets it declares: the cc_* rules, the *_binary rules of
  * other languages, and macro or custom rules that look like C++ targets. A non-cc binary's `main` file is one of its sources.
  */
-export function parseBuildFile(buildFile: string, text: string, files: string[], subpackages: Set<string>): BazelTarget[] {
+export function parseBuildFile(
+  buildFile: string,
+  text: string,
+  files: string[],
+  subpackages: Set<string>,
+  mainRepos: readonly string[] = [],
+): BazelTarget[] {
   const pkg = packageOf(buildFile);
   const targets: BazelTarget[] = [];
-  const toks = tokenize(text);
+  // Labels that name the main repository are read as in-repository labels, everywhere they appear.
+  const toks = tokenize(text).map((t) => (t.kind === "str" ? { ...t, value: normalizeMainLabel(t.value, mainRepos) } : t));
   const vars = moduleVariables(toks);
   const calls = topLevelCalls(toks);
   const pkgCall = calls.find((c) => c.name === "package");
@@ -313,11 +342,11 @@ export function parseBuildFile(buildFile: string, text: string, files: string[],
 }
 
 /** Every BUILD file in the project, read into one model. */
-export function buildModel(buildTexts: Map<string, string>, files: string[]): BazelModel {
+export function buildModel(buildTexts: Map<string, string>, files: string[], mainRepos: readonly string[] = []): BazelModel {
   const subpackages = new Set([...buildTexts.keys()].map(packageOf));
   const targets = new Map<string, BazelTarget>();
   for (const [file, text] of [...buildTexts].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
-    for (const target of parseBuildFile(file, text, files, subpackages)) {
+    for (const target of parseBuildFile(file, text, files, subpackages, mainRepos)) {
       if (!targets.has(target.id)) targets.set(target.id, target);
     }
   }

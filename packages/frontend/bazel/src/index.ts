@@ -3,7 +3,7 @@ import { join, posix } from "node:path";
 import type { IRRecord, NodeId } from "@insight/ir";
 import type { ExtractContext, Frontend, IRBatch, ProjectRoot } from "@insight/sdk";
 import { buildModel, isBuildFile, outputOf, type BazelModel, type BazelTarget } from "./model.js";
-import { EXTERNAL_FILES, externalIdOf, parseExternals, repoOf, type Externals } from "./externals.js";
+import { EXTERNAL_FILES, externalIdOf, mainRepoNames, parseExternals, repoOf, type Externals } from "./externals.js";
 
 export { resolver } from "./resolve.js";
 
@@ -131,12 +131,12 @@ export const frontend: Frontend = {
 
   async *extract(ctx: ExtractContext) {
     const all = ctx.listFiles();
-    const texts = new Map<string, string>();
-    for (const f of all) if (isBuildFile(f)) texts.set(f, await ctx.readFile(f));
-    const model = buildModel(texts, all);
     // The external declarations are read whole, even when only some files are requested this run.
     const externalTexts = new Map<string, string>();
     for (const f of EXTERNAL_FILES) if (all.includes(f)) externalTexts.set(f, await ctx.readFile(f));
+    const texts = new Map<string, string>();
+    for (const f of all) if (isBuildFile(f)) texts.set(f, await ctx.readFile(f));
+    const model = buildModel(texts, all, mainRepoNames(externalTexts));
     const externals = parseExternals(externalTexts);
     // Every external is emitted once, in the module file's batch, or in the workspace file's when there is no module file.
     const anchor = ["MODULE.bazel", "WORKSPACE", "WORKSPACE.bazel"].find((f) => all.includes(f));

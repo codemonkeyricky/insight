@@ -49,4 +49,16 @@ describe("frontend-bazel freshness", () => {
     expect(third.extracted.filter((e) => e.frontend === "frontend-bazel")).toEqual([]);
     expect(third.reused).toBeGreaterThan(0);
   }, 120_000);
+
+  it("re-extracts the Bazel BUILD files when a header in .inl or a .py file is added, which the inputs cover", async () => {
+    await runIndex(options(false));
+    writeFileSync(join(project, "lib", "src", "extra.inl"), "inline int extra_inl() { return 2; }\n");
+    const inl = await runIndex(options(false));
+    expect(inl.extracted).toContainEqual({ frontend: "frontend-bazel", file: "lib/BUILD" });
+
+    mkdirSync(join(project, "tools"), { recursive: true });
+    writeFileSync(join(project, "tools", "gen.py"), "print('gen')\n");
+    const py = await runIndex(options(false));
+    expect(py.extracted).toContainEqual({ frontend: "frontend-bazel", file: "lib/BUILD" });
+  }, 120_000);
 });

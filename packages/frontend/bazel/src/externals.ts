@@ -194,18 +194,45 @@ export function parseExternals(texts: Map<string, string>): Externals {
   return { entries: new Map([...entries].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) };
 }
 
-/** The repository a label names, by its apparent name: `@@name~x//p:t`, `@@name+//p`, `@name` all give `name`. */
+/**
+ * The repository a label names, by its apparent name. A module's canonical name is the module name and a
+ * version or nothing (`@@name+//p`, `@@name~1.0//p`), which gives `name`. An extension's canonical name has
+ * more segments (`@@rules_cc++ext+foo//:x`, `@@+ext+foo//p`, the older `@@rules_cc~0.1.5~cc~foo//:x`), and
+ * its apparent name is the last one, `foo`. `@//p` and `@@//p` name the main repository, which has no
+ * repository here: see mainRepoNames.
+ */
 export function repoOf(label: string): string | undefined {
   if (!label.startsWith("@")) return undefined;
   const body = label.replace(/^@@?/, "");
-  const repo = (body.split(/\/\/|:/)[0] ?? "").split(/[~+]/)[0] ?? "";
-  return repo === "" ? undefined : repo;
+  const canonical = body.split(/\/\/|:/)[0] ?? "";
+  const segments = canonical.split(/[+~]/);
+  const repo = segments.length >= 3 ? segments.filter((s) => s !== "").pop() : segments[0];
+  return repo === undefined || repo === "" ? undefined : repo;
 }
 
-/** The external id a repository name refers to, or undefined when no declaration matches it. */
+/**
+ * The external id a repository name refers to, or undefined when no declaration matches it. A declared
+ * repo_name matches first. Otherwise a module's canonical name matches the module name, whatever its source
+ * (bzlmod, or lockfile once the lock has pinned it).
+ */
 export function externalIdOf(repo: string, externals: Externals): string | undefined {
   if (externals.entries.has(`@${repo}`)) return `@${repo}`;
   // A canonical name (@@googletest+) names the module, which may be declared under another repo_name.
-  for (const [id, decl] of externals.entries) if (decl.attrs.name === repo && decl.attrs.source === "bzlmod") return id;
+  for (const [id, decl] of externals.entries) if (decl.attrs.name === repo) return id;
   return undefined;
+}
+
+/**
+ * The names by which a BUILD label reaches the main repository besides `@//` and `@@//`: the root module's name
+ * from MODULE.bazel's module(name = ...), so `@sample//lib:x` is `//lib:x` in the sample module.
+ */
+export function mainRepoNames(texts: Map<string, string>): string[] {
+  const text = texts.get("MODULE.bazel");
+  if (text === undefined) return [];
+  for (const call of topLevelCalls(tokenize(text))) {
+    if (call.name !== "module") continue;
+    const name = str(call, "name");
+    return name === undefined ? [] : [name];
+  }
+  return [];
 }

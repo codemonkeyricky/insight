@@ -107,7 +107,7 @@ export interface ArchExternalPackage {
   name: string;
   version?: string;
   source: string;
-  /** The package manager that declares it ("bzlmod", "npm"), from the node's attrs. Absent when the node names none. */
+  /** The build system that declares it ("bazel", "cmake"), from the node's attrs. Absent when the node names none. */
   manager?: string;
   dev?: boolean;
   override?: string;
