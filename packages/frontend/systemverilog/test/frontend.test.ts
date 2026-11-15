@@ -858,6 +858,14 @@ describe("include matching", () => {
 });
 
 describe("the resolver's include index", () => {
+  it("a new array of the same names gets a new index: the cache is keyed by the array, not its contents", async () => {
+    const ctx = (list: string[]) => ({ root: { path: "/", name: "x", allowBuildTools: false }, fromFile: "rtl/p.sv", hasFile: () => false, hasNode: () => false, listFiles: () => list });
+    const before = resolveStats.indexBuilds;
+    await resolver.resolve({ scheme: "sv.include", text: "x.svh" } as never, ctx(["vendor/x.svh"]) as never);
+    await resolver.resolve({ scheme: "sv.include", text: "x.svh" } as never, ctx(["vendor/x.svh"]) as never);
+    expect(resolveStats.indexBuilds - before).toBe(2);
+  });
+
   it("two resolve calls over the same file list build the index once", async () => {
     const list = ["rtl/p.sv", "vendor/x.svh"];
     const ctx = { root: { path: "/", name: "x", allowBuildTools: false }, fromFile: "rtl/p.sv", hasFile: () => false, hasNode: () => false, listFiles: () => list };
@@ -1163,11 +1171,20 @@ describe("detection past several Coq .v files", () => {
   });
 });
 
+/** Root reads an unreadable file, so the unreadable-file tests need a process that is not root. */
+const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
+
 describe("detect reads a bounded head of each .v file", () => {
   it("a Coq-looking .v file whose only HDL end keyword starts past 64 KiB is not accepted", async () => {
     const dir = makeTemp("sv-head-");
     writeFileSync(join(dir, "late.v"), `Require Import Coq.Lists.List.\n${"// padding line\n".repeat(6000)}module m;\nendmodule\n`);
     expect(await frontend.detect({ path: dir, name: "late", allowBuildTools: false })).toBeNull();
+  });
+
+  it("a .v fragment whose block comment has a `Module Name: cfg` line, and no end keyword, is HDL", () => {
+    expect(isHdlText("frag.v", "/*\nModule Name: cfg\n*/\nwire a;\nassign a = 1'b0;\n")).toBe(true);
+    expect(isHdlText("frag2.v", "(*\nModule Name: cfg\n*)\nparameter W = 8;\n")).toBe(true);
+    expect(isHdlText("coq3.v", "(* header *)\nRequire Import Coq.Lists.List.\n")).toBe(false);
   });
 
   it("the same Coq-looking .v file with its end keyword inside the first 64 KiB is accepted", async () => {
@@ -1176,7 +1193,6 @@ describe("detect reads a bounded head of each .v file", () => {
     expect(await frontend.detect({ path: dir, name: "near", allowBuildTools: false })).toEqual({ reason: "found near.v" });
   });
 
-  const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
   it.skipIf(isRoot)("an unreadable .v file makes detect return without throwing, and the search goes on to the next file", async () => {
     const dir = makeTemp("sv-unreadable-");
     writeFileSync(join(dir, "bad.v"), "module m;\nendmodule\n");
@@ -1190,8 +1206,7 @@ describe("detect reads a bounded head of each .v file", () => {
     }
   });
 
-  it("an unreadable .v file alone gives no detection, and no throw", async () => {
-    if (typeof process.getuid === "function" && process.getuid() === 0) return;
+  it.skipIf(isRoot)("an unreadable .v file alone gives no detection, and no throw", async () => {
     const dir = makeTemp("sv-unreadable-only-");
     writeFileSync(join(dir, "bad.v"), "module m;\nendmodule\n");
     chmodSync(join(dir, "bad.v"), 0o000);

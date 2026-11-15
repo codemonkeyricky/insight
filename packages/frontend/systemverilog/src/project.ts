@@ -8,7 +8,9 @@ export const FRONTEND_ID = "frontend-systemverilog";
 export const SV_RE = /\.(?:v|sv|svh|vh)$/i;
 
 /** A whole word that ends a Verilog or SystemVerilog definition. Anywhere in the text, it makes the text HDL. */
-const HDL_END_RE = /\b(?:endmodule|endfunction|endtask|endprimitive|endpackage|endinterface|endprogram|endclass|endgenerate|endconfig|endtable|endspecify|endchecker|endclocking|endcase)\b/;
+const HDL_END_RE = /\b(?:endmodule|endfunction|endtask|endprimitive|endpackage|endinterface|endprogram|endclass|endgenerate|endconfig|endtable|endspecify|endchecker|endclocking|endcase|endproperty|endsequence|endgroup)\b/;
+/** Comments in Verilog (line and block) and in Coq. A marker inside one does not count. Line breaks are kept. */
+const COMMENT_RE = /\/\*[\s\S]*?\*\/|\(\*[\s\S]*?\*\)|\/\/[^\n]*/g;
 /** A Coq marker at a line start. Verilog fragments that are included into a module body have none of these. */
 const COQ_START_RE = /^[ \t]*(?:(?:Require|From\s+\S+\s+Require|Definition|Lemma|Theorem|Inductive|Fixpoint|CoInductive|Section|Instance|Record|Ltac|Notation|Axiom|Hypothesis|Variable|Class|Context|Arguments|Set\s+Implicit)\b|Module [A-Z]|Proof\.|Qed\.|Defined\.)/m;
 
@@ -20,7 +22,8 @@ const COQ_START_RE = /^[ \t]*(?:(?:Require|From\s+\S+\s+Require|Definition|Lemma
 export function isHdlText(rel: string, text: string): boolean {
   if (!/\.v$/i.test(rel)) return true;
   const body = text.replace(/^\uFEFF/, "");
-  return !(COQ_START_RE.test(body) && !HDL_END_RE.test(body));
+  const code = body.replace(COMMENT_RE, (c) => c.replace(/[^\n]/g, " "));
+  return !(COQ_START_RE.test(code) && !HDL_END_RE.test(body));
 }
 
 /** Most candidates an edge names. Past this the set is cut. */
@@ -599,8 +602,9 @@ export async function indexProject(texts: Map<string, string>): Promise<Project>
 /**
  * Maps each file a package includes to that package (see Project.includedIn). The include names a file relative to
  * the including file's directory first. Failing that, it names a file whose path ends with its text, but only when
- * exactly one project file does. The match is taken over every SV path, as the resolver sees them. A match that is
- * not an indexed unit (a file dropped as not HDL) links nothing, and no other file is tried in its place.
+ * exactly one project file does. The index covers every SV path given to the project, dropped files included. The
+ * resolver's index covers every project file, so an include that names a non-SV file can resolve there and not here.
+ * A match that is not an indexed unit (a file dropped as not HDL) links nothing, and no other file is tried in its place.
  */
 function linkIncludes(p: Project, allRels: string[]): void {
   const index = indexIncludes(allRels);

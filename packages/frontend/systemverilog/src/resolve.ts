@@ -4,7 +4,10 @@ import { indexIncludes, matchInclude, type IncludeIndex } from "./include-match.
 /** Past this many matches a bare file name says nothing useful, so the include stays unresolved. */
 const MAX_MATCHES = 8;
 
-/** The include index of each project's file list, keyed by the list's object. The core passes the same list on every call. */
+/**
+ * The include index of each project's file list, keyed by the list's object. The core passes the same list on every
+ * call. The cache assumes the list is never changed in place: a changed list must be a new array, which gets a new index.
+ */
 const indexes = new WeakMap<string[], IncludeIndex>();
 
 /** How many include indexes the resolver has built. Tests read it to check the cache. */
