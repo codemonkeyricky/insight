@@ -313,12 +313,53 @@ function manifestScripts(text: string): Set<string> {
   return out;
 }
 
+/** A main-module guard: `require.main === module` or `import.meta.main`. */
+const MAIN_GUARD = /\brequire\.main\s*===\s*module\b|\bimport\.meta\.main\b/;
+
+/** Statements that run when the module loads, so a call or assignment among them is a script's work. */
+const RUNNING_STATEMENTS = new Set<ts.SyntaxKind>([
+  ts.SyntaxKind.ExpressionStatement,
+  ts.SyntaxKind.IfStatement,
+  ts.SyntaxKind.ForStatement,
+  ts.SyntaxKind.ForInStatement,
+  ts.SyntaxKind.ForOfStatement,
+  ts.SyntaxKind.WhileStatement,
+  ts.SyntaxKind.DoStatement,
+  ts.SyntaxKind.TryStatement,
+  ts.SyntaxKind.SwitchStatement,
+  ts.SyntaxKind.Block,
+  ts.SyntaxKind.LabeledStatement,
+]);
+
 /**
- * The Node script entries: a module file, not a test, that is under scripts/ or bin/ with a shebang or a read of
- * process.argv, or that a package.json "bin" or "scripts" entry names (the root's by name, every workspace package's
- * through its build-to-source map). `texts` is keyed by absolute path.
+ * True when a top-level statement runs code on load: a call, `new`, `await` or assignment outside any function body.
+ * Declarations, imports and exports alone do not count, so a library that only exports and builds constants is not an
+ * entry.
  */
-function nodeEntryFiles(root: string, rels: string[], texts: Map<string, string>, manifests: Map<string, string>, packageEntries: ReadonlySet<string>): Set<string> {
+function runsTopLevelStatement(sf: ts.SourceFile): boolean {
+  const runs = (node: ts.Node): boolean => {
+    if (ts.isFunctionLike(node)) return false;
+    if (ts.isCallExpression(node) || ts.isNewExpression(node) || ts.isAwaitExpression(node)) return true;
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) return true;
+    return ts.forEachChild(node, (child) => (runs(child) ? true : undefined)) === true;
+  };
+  return sf.statements.some((s) => RUNNING_STATEMENTS.has(s.kind) && runs(s));
+}
+
+/**
+ * The Node script entries: a module file, not a test, that is under a scripts/ or bin/ folder (at any depth) and either
+ * has a shebang, reads process.argv, has a main-module guard, or runs code on load; or that a package.json "bin" or
+ * "scripts" entry names (the root's by name, every workspace package's through its build-to-source map). `texts` is
+ * keyed by absolute path; `sourceOf` gives a file's parsed source, when the program has it.
+ */
+function nodeEntryFiles(
+  root: string,
+  rels: string[],
+  texts: Map<string, string>,
+  manifests: Map<string, string>,
+  packageEntries: ReadonlySet<string>,
+  sourceOf: (rel: string) => ts.SourceFile | undefined,
+): Set<string> {
   const named = new Set<string>();
   for (const text of manifests.values()) for (const f of manifestScripts(text)) named.add(f);
   // Every workspace package's bin and script targets, mapped from build output to source (see workspaceProgramEntries).
@@ -330,10 +371,15 @@ function nodeEntryFiles(root: string, rels: string[], texts: Map<string, string>
       out.add(rel);
       continue;
     }
-    const first = rel.split("/")[0] ?? "";
-    if (rel.includes("/") && (first === "scripts" || first === "bin")) {
+    const folders = rel.split("/").slice(0, -1);
+    if (folders.some((f) => f === "scripts" || f === "bin")) {
       const text = texts.get(join(root, rel)) ?? "";
-      if (text.startsWith("#!") || /\bprocess\.argv\b/.test(text)) out.add(rel);
+      if (text.startsWith("#!") || /\bprocess\.argv\b/.test(text) || MAIN_GUARD.test(text)) {
+        out.add(rel);
+        continue;
+      }
+      const sf = sourceOf(rel);
+      if (sf !== undefined && runsTopLevelStatement(sf)) out.add(rel);
     }
   }
   return out;
@@ -449,7 +495,7 @@ export function buildProject(
   const htmlEntries = htmlScriptEntries(html, relSet);
   // The programs the workspace packages name, as source files. A test or declaration file is never a program.
   const packageEntries = new Map([...workspaceProgramEntries(packageJsons, relSet)].filter(([f]) => !TEST_PATH.test(f) && !f.endsWith(".d.ts")));
-  const nodeEntries = nodeEntryFiles(root, rels, texts, manifests, new Set(packageEntries.keys()));
+  const nodeEntries = nodeEntryFiles(root, rels, texts, manifests, new Set(packageEntries.keys()), (rel) => program.getSourceFile(abs(rel)));
   for (const rel of rels) {
     const sf = program.getSourceFile(abs(rel));
     if (sf) assignDecls(rel, sf, decls, htmlEntries.has(rel), nodeEntries.has(rel), packageEntries.get(rel));
