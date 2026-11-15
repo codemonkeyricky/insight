@@ -187,14 +187,15 @@ describe("sign-in: the session of a request", () => {
   it("signs out when the refresh token is no longer valid", async () => {
     const fake = fakeApp({}, TARBALL);
     const stale = sessionCookie({ t: "tok-alice-old", r: "rejected-token", e: NOW - 1000, re: NOW + 86_400_000 });
-    const res = await handleMe(get("/api/auth/me", { cookie: stale }), AUTH_ENV, fake.fetch);
+    const res = await handleMe(get("/api/auth/me", { cookie: stale }), AUTH_ENV, fake.fetch, () => NOW);
+    expect(fake.calls.find((c) => c.url === "https://github.com/login/oauth/access_token")).toBeDefined();
     expect(await res.json()).toMatchObject({ signedIn: false });
   });
 
   it("signs out when the refresh token has expired too, without calling GitHub", async () => {
     const fake = fakeApp({}, TARBALL);
     const dead = sessionCookie({ t: "tok-alice-old", r: "ref-alice", e: NOW - 1000, re: NOW - 1 });
-    const res = await handleMe(get("/api/auth/me", { cookie: dead }), AUTH_ENV, fake.fetch);
+    const res = await handleMe(get("/api/auth/me", { cookie: dead }), AUTH_ENV, fake.fetch, () => NOW);
     expect(await res.json()).toMatchObject({ signedIn: false });
     expect(fake.calls).toHaveLength(0);
   });
