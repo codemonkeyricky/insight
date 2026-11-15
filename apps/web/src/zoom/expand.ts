@@ -270,9 +270,23 @@ export function hangCallersFrom(list: readonly Expansion[], ref: string, nodeId:
   const kept = list.find((e) => e.fnId === callersKey(ref));
   if (head === undefined || kept === undefined) return list as Expansion[];
   if (kept.anchor.kind !== "box" || kept.anchor.nodeId !== nodeId) return list as Expansion[];
-  // Reattached in place, not opened: the chart's other children stay open (openExpansion would close them as siblings).
-  const moved = { ...kept, anchor: headerAnchor(head), x: 0, y: 0, pivot: 0 };
-  return reflow([...list.filter((e) => e !== kept), moved], view);
+  // The card's other right-hand children close first, with their chains, so the box never lands on one (M2). The box is
+  // reattached in place, not opened: openExpansion would also close the chart's siblings, and this is the same rule.
+  const anchor = headerAnchor(head);
+  const cleared = closeSiblings(list, kept.fnId, anchor);
+  const moved = { ...kept, anchor, x: 0, y: 0, pivot: 0 };
+  return reflow([...cleared.filter((e) => e !== kept), moved], view);
+}
+
+/** The ids a selection of a refused callers click uses: the box is revealed by its key, its function is selected. */
+export function refusedCallersPlan(ref: string): { box: string; select: string } {
+  return { box: callersKey(ref), select: ref };
+}
+
+/** The function's chart from `store`. A callers box is no function, so its id asks the store for nothing. */
+export async function loadFunctionChart(store: { chartOf(fnId: string): Promise<FunctionFlow | undefined> }, fnId: string): Promise<FunctionFlow | undefined> {
+  if (fnId.startsWith("callers:")) return undefined;
+  return store.chartOf(fnId);
 }
 
 /** The list with the callers box of `ref` resized to `lines` rows, placed again. Returns `list` itself when its size is unchanged. */

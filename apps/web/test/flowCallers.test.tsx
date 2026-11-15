@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { layoutFunction, relayout, type FunctionFlow, type Rect } from "@insight/flow";
 import type { RefRow } from "@insight/model";
 import { FlowChart } from "../src/components/FlowChart";
@@ -16,7 +16,9 @@ import {
   closeExpansion,
   headerAnchor,
   hangCallersFrom,
+  loadFunctionChart,
   openCallers,
+  refusedCallersPlan,
   openExpansion,
   reflow,
   stillOpen,
@@ -292,13 +294,23 @@ describe("hanging a card's callers box (N3)", () => {
     expect(hangCallersFrom(withBox, "A", "n", view)).toBe(withBox);
   });
 
-  it("does not close the new chart's own step children", () => {
+  it("closes the card's other step children with their chains, so the box never lands on one (M2)", () => {
     const a = openExpansion([], "A", boxAnchor, chart("A", 300, 200), view);
     const withChild = openExpansion(a, "B", at("A", "s1"), chart("B", 200, 100), view);
-    const withBox = openCallers(withChild, "A", boxAnchor, "A", 3, view);
+    const withGrand = openExpansion(withChild, "C", at("B", "bs"), chart("C", 100, 100), view);
+    const withBox = openCallers(withGrand, "A", boxAnchor, "A", 3, view);
     const hung = hangCallersFrom(withBox, "A", "n", view);
-    expect(hung.map((e) => e.fnId).sort()).toEqual(["A", "B", callersKey("A")].sort());
+    expect(hung.map((e) => e.fnId).sort()).toEqual(["A", callersKey("A")].sort());
     expect(find(hung, callersKey("A")).anchor).toMatchObject({ kind: "step", fnId: "A", stepId: HEADER_STEP });
+    for (const x of hung) for (const y of hung) if (x !== y) expect(overlaps(x, y)).toBe(false);
+  });
+
+  it("the box hung on the header does not overlap a step child that stays open beside it (M2)", () => {
+    const a = openExpansion([], "A", boxAnchor, chart("A", 300, 200), view);
+    const withBox = openCallers(a, "A", boxAnchor, "A", 3, view);
+    const withChild = openExpansion(withBox, "B", at("A", "s1"), chart("B", 200, 100), view);
+    const hung = hangCallersFrom(withChild, "A", "n", view);
+    for (const x of hung) for (const y of hung) if (x !== y) expect(overlaps(x, y)).toBe(false);
   });
 
   const at = (fnId: string, stepId: string) => ({ kind: "step" as const, fnId, stepId, rect: { x: 0, y: 40, w: 10, h: 10 } });
@@ -317,5 +329,22 @@ describe("a loaded chart opens only while the map still shows its context (N2)",
     expect(stillOpen(a, "A", started, { context: "p\u0001", path: "lib" })).toBe(false);
     expect(stillOpen(a, "A", started, { context: "p\u0001", path: undefined })).toBe(false);
     expect(stillOpen([], "A", started, { context: "p\u0001", path: "src" })).toBe(false);
+  });
+});
+
+describe("a refused callers click and off-map loads (M1)", () => {
+  it("a refused click reveals the box by its key and selects only its function", () => {
+    expect(refusedCallersPlan("A")).toEqual({ box: callersKey("A"), select: "A" });
+  });
+
+  it("the function a refused click selects is loaded; a callers key never reaches the store", async () => {
+    const chartOf = vi.fn(async () => undefined);
+    const store = { chartOf };
+    const plan = refusedCallersPlan("A");
+    await loadFunctionChart(store, plan.box);
+    expect(chartOf).not.toHaveBeenCalled();
+    await loadFunctionChart(store, plan.select);
+    expect(chartOf).toHaveBeenCalledTimes(1);
+    expect(chartOf).toHaveBeenCalledWith("A");
   });
 });

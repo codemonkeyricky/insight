@@ -11,7 +11,7 @@ import { CHART_FIT_MAX_K, CHART_HEAD, MORE_SUFFIX, ZOOM_SIZE, fitCamera, fitChar
 import { nameOfId, runtimeLabel, stepRuntime } from "../../flowTargets";
 import { hrefView } from "../../router";
 import { CHART_MIN_PX } from "../../zoom/chart";
-import { anchoredTo, callerRowRect, callersAt, callersKey, chainHas, hangCallersFrom, expandCamera, headerAnchor, isInPlace, calloutOf, closeExpansion, footprintOf, isNested, NARROW_VIEW_PX, openExpansion, ownerOf, REVEAL_MIN_K, refresh, resizeCallers, revealCamera, rootBoxOf, sameFootprint, sceneCamera, setInline, SLOT_PAD, shiftAt, stepRect, stillOpen, toggleCallers, type Expansion, type ExpandAnchor } from "../../zoom/expand";
+import { anchoredTo, callerRowRect, callersAt, callersKey, chainHas, hangCallersFrom, expandCamera, headerAnchor, isInPlace, calloutOf, closeExpansion, footprintOf, isNested, loadFunctionChart, NARROW_VIEW_PX, openExpansion, ownerOf, REVEAL_MIN_K, refresh, refusedCallersPlan, resizeCallers, revealCamera, rootBoxOf, sameFootprint, sceneCamera, setInline, SLOT_PAD, shiftAt, stepRect, stillOpen, toggleCallers, type Expansion, type ExpandAnchor } from "../../zoom/expand";
 import type { CallerRow } from "../../zoom/callers";
 import { CallersBox } from "./CallersBox";
 import { fileTarget, useCodeTarget } from "../../codeTarget";
@@ -610,7 +610,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   const loadChart = async (fnId: string): Promise<FunctionFlow | undefined> => {
     if (charts === undefined) return undefined;
     try {
-      const f = await charts.store.chartOf(fnId);
+      const f = await loadFunctionChart(charts.store, fnId);
       return f === undefined || f.tooLarge || f.nodes.length === 0 ? undefined : f;
     } catch {
       return undefined;
@@ -763,10 +763,15 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     requestAnimationFrame(() => stageRef.current?.focus({ preventScroll: true }));
   };
 
-  /** Reveals an open expansion (the camera moves to it) and selects its function. Used where a click is refused as a cycle. */
-  const revealOpen = (fnId: string) => {
-    const open = expRef.current.find((e) => e.fnId === fnId);
+  /** Moves the camera to an open expansion, by its id, and nothing else: a callers box is revealed this way without selecting it. */
+  const revealBox = (id: string) => {
+    const open = expRef.current.find((e) => e.fnId === id);
     if (open !== undefined) moveTo(revealOf(cameraRef.current, open, 0), true);
+  };
+
+  /** Reveals an open expansion (the camera moves to it) and selects its function. For a function's own expansion only. */
+  const revealOpen = (fnId: string) => {
+    revealBox(fnId);
     void selectFunction(fnId);
   };
 
@@ -785,8 +790,10 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     const next = toggleCallers(list, ref, anchor, nameOfId(ref), placeView(b));
     // Refused only for a cycle: the box is open above this anchor. It is revealed and its function selected.
     if (next === list) {
-      revealOpen(key);
-      void selectFunction(ref);
+      // The box is revealed by its key; only its function is ever selected (a callers key is no function).
+      const plan = refusedCallersPlan(ref);
+      revealBox(plan.box);
+      void selectFunction(plan.select);
       return;
     }
     setExp(next);
@@ -847,6 +854,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   const selectFunction = async (fnId: string) => {
     const b = buildRef.current;
     if (!b) return;
+    // A callers box is no function: nothing places it, loads it or selects it.
+    if (fnId.startsWith("callers:")) return;
     const node = source.placeFunction?.(b, fnId);
     if (node !== undefined) {
       if (node === b.nodeId && offMapRef.current === undefined) return;
@@ -857,7 +866,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     const seq = ++seqRef.current;
     let fn: FunctionFlow | undefined;
     try {
-      fn = await charts.store.chartOf(fnId);
+      fn = await loadFunctionChart(charts.store, fnId);
     } catch {
       return;
     }
