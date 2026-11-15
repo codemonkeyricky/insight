@@ -626,11 +626,14 @@ function linkIncludes(p: Project): void {
   }
 }
 
-/** The project file an include names, or undefined when none or several match by suffix. `text` may start with "./" or "../". */
+/**
+ * The project file an include names, or undefined when none or several match by suffix. The directory-relative
+ * path uses the text as written. The suffix match drops leading "./" and "../" segments first.
+ */
 function includeTarget(known: Set<string>, rels: string[], from: string, text: string): string | undefined {
-  const t = text.replace(/^\.\//, "");
-  const relative = posix.normalize(`${dirOf(from)}${t}`);
+  const relative = posix.normalize(`${dirOf(from)}${text}`);
   if (known.has(relative)) return relative;
+  const t = text.replace(/^(?:\.{1,2}\/)+/, "");
   const matches = rels.filter((r) => r === t || r.endsWith(`/${t}`));
   return matches.length === 1 ? matches[0] : undefined;
 }

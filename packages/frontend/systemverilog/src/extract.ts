@@ -642,7 +642,7 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
               to: { candidates: cands },
               facet: "packaging",
               kind: "packaging.import",
-              attrs: { specifier: pkg },
+              attrs: { specifier: pkg, ...(pkgs.length > MAX_CANDIDATES ? { truncated: true } : {}) },
               span,
               provenance: heuristic,
             });

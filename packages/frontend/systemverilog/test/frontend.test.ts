@@ -833,6 +833,11 @@ describe("include matching", () => {
   it("an include with ../ resolves against the including file's directory", async () => {
     expect(await callTo("p3b::xf")).toBe("inc/x.svh#xf");
   });
+
+  it("an include that climbs out of its directory links by the suffix of the file it names, without the ../ segments", async () => {
+    const batches = await extractDir(join(fixturesDir, "include_updir"), ["rtl/p.sv", "rtl/t.sv", "vendor/inc/y.svh"]);
+    expect(edgesOf(allRecords(batches)).find((e) => e.kind === "calls.call" && e.attrs?.callee === "p::fy")?.to).toBe("vendor/inc/y.svh#fy");
+  });
 });
 
 describe("package declared in several files", () => {
@@ -841,6 +846,22 @@ describe("package declared in several files", () => {
     const imp = edges.find((e) => e.kind === "packaging.import" && e.from === "user.sv#user_m");
     expect(imp?.to).toEqual({ candidates: ["cfg_a.sv#cfg_pkg", "cfg_b.sv#cfg_pkg"] });
     expect(imp?.provenance?.confidence).toBe("heuristic");
+  });
+
+  it("an import of a package that more than 32 files declare is cut to 32 candidates and marked truncated", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "sv-many-pkgs-"));
+    const rels: string[] = [];
+    for (let i = 0; i <= 32; i++) {
+      writeFileSync(join(dir, `pk${i}.sv`), "package pk;\nendpackage\n");
+      rels.push(`pk${i}.sv`);
+    }
+    writeFileSync(join(dir, "u.sv"), "module u;\n  import pk::*;\nendmodule\n");
+    rels.push("u.sv");
+    const edges = edgesOf(allRecords(await extractDir(dir, rels)));
+    const imp = edges.find((e) => e.kind === "packaging.import" && e.attrs?.specifier === "pk");
+    expect(imp?.to).toEqual({ candidates: expect.any(Array) });
+    expect((imp?.to as { candidates: string[] }).candidates).toHaveLength(32);
+    expect(imp?.attrs?.truncated).toBe(true);
   });
 });
 
