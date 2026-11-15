@@ -580,34 +580,56 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
         if (!type) break;
         const modName = f.module?.name ?? basename;
         const defs = moduleDefs(project, type);
+        // A bind directive instantiates into another module, named by its target. Its instances are written here but belong to the target.
+        const bindTarget = n.parent?.type === "bind_directive" ? n.parent.namedChildren.find((c) => c.type === "bind_target_scope")?.text.replace(/\s+/g, "") : undefined;
         for (const hi of n.namedChildren.filter((c) => c.type === "hierarchical_instance")) {
           const inst = hi.namedChildren.find((c) => c.type === "name_of_instance")?.childForFieldName("instance_name")?.text;
           if (!inst) continue;
           const local = f.gen.length > 0 ? `${f.gen.join(".")}.${inst}` : inst;
-          const id = ids.take(`${rel}#${modName}/${local}`);
+          const id = ids.take(bindTarget !== undefined ? `${rel}#bind:${bindTarget}/${local}` : `${rel}#${modName}/${local}`);
           node({
             id,
             facet: "structure",
             kind: "x-sv.instance",
             parent: f.container,
-            attrs: { name: inst, module: type, ...(f.gen.length > 0 ? { generate: f.gen.join(".") } : {}) },
+            attrs: { name: inst, module: type, ...(f.gen.length > 0 ? { generate: f.gen.join(".") } : {}), ...(bindTarget !== undefined ? { bind: bindTarget } : {}) },
             span: spanOf(rel, hi),
             provenance: prov,
           });
           const span = spanOf(rel, hi);
           const attrs = { instance: inst };
-          const from = f.container;
-          const [first, ...rest] = defs.map((d) => d.id) as NodeId[];
-          if (first === undefined) {
-            edge({ from, to: { unresolved: { scheme: "sv.module", text: type } }, facet: "structure", kind: "x-sv.instantiates", attrs, span, provenance: prov });
-          } else if (rest.length === 0) {
-            for (const d of defs) depend(d.file);
-            // A target found by text scan is a heuristic match, whatever the file's own parse.
-            edge({ from, to: first, facet: "structure", kind: "x-sv.instantiates", attrs, span, provenance: defs[0]?.scanned ? heuristic : prov });
+          // The instantiates edge to the module's definition. `pinned` sets the provenance, which otherwise follows the target.
+          const instantiates = (from: NodeId, pinned?: Provenance): void => {
+            const [first, ...rest] = defs.map((d) => d.id) as NodeId[];
+            if (first === undefined) {
+              edge({ from, to: { unresolved: { scheme: "sv.module", text: type } }, facet: "structure", kind: "x-sv.instantiates", attrs, span, provenance: pinned ?? prov });
+            } else if (rest.length === 0) {
+              for (const d of defs) depend(d.file);
+              // A target found by text scan is a heuristic match, whatever the file's own parse.
+              edge({ from, to: first, facet: "structure", kind: "x-sv.instantiates", attrs, span, provenance: pinned ?? (defs[0]?.scanned ? heuristic : prov) });
+            } else {
+              for (const d of defs) depend(d.file);
+              const cands = [...defs.map((d) => d.id)].sort().slice(0, MAX_CANDIDATES) as [NodeId, ...NodeId[]];
+              edge({ from, to: { candidates: cands }, facet: "structure", kind: "x-sv.instantiates", attrs, span, provenance: pinned ?? heuristic });
+            }
+          };
+          if (bindTarget === undefined) {
+            instantiates(f.container);
+            continue;
+          }
+          // A bind is written in the instantiating scope, so its edge comes from the bind target's definition. One definition
+          // is inferred from the name; several give one heuristic edge each; a hierarchical or unknown target stays where it is written.
+          const targets = bindTarget.includes(".") ? [] : moduleDefs(project, bindTarget).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+          const only = targets[0];
+          if (targets.length === 0) instantiates(f.container, heuristic);
+          else if (targets.length === 1 && only !== undefined) {
+            depend(only.file);
+            instantiates(only.id, only.scanned ? heuristic : { frontend: FRONTEND_ID, confidence: "inferred" });
           } else {
-            for (const d of defs) depend(d.file);
-            const cands = [...defs.map((d) => d.id)].sort().slice(0, MAX_CANDIDATES) as [NodeId, ...NodeId[]];
-            edge({ from, to: { candidates: cands }, facet: "structure", kind: "x-sv.instantiates", attrs, span, provenance: heuristic });
+            for (const d of targets.slice(0, MAX_CANDIDATES)) {
+              depend(d.file);
+              instantiates(d.id, heuristic);
+            }
           }
         }
         visitChildren(n, f);

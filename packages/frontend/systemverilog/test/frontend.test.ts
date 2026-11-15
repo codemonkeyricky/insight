@@ -948,3 +948,29 @@ describe("class-scoped calls in statement form", () => {
     expect((await calls()).find((e) => e.attrs?.callee === "p::C::m")?.to).toBe("p.sv#C.m");
   });
 });
+
+describe("bind directives", () => {
+  const dir = join(fixturesDir, "bind_scope");
+  const files = ["dut.sv", "chk.sv", "tb.sv", "bindf.sv"];
+  const records = async () => allRecords(await extractDir(dir, files));
+
+  it("a bind in a module is an instance of its target, written in the module but id'd under the bind target", async () => {
+    const inst = nodesOf(await records()).find((n) => n.id === "tb.sv#bind:dut/u_chk");
+    expect(inst?.kind).toBe("x-sv.instance");
+    expect(inst?.parent).toBe("tb.sv#tb");
+    expect(inst?.attrs).toEqual({ name: "u_chk", module: "chk", bind: "dut" });
+  });
+
+  it("a file-level bind keeps the bind target in its instance id, not the file basename", async () => {
+    expect(nodesOf(await records()).find((n) => n.id === "bindf.sv#bind:dut/u_chk2")?.parent).toBe("bindf.sv");
+    expect(nodesOf(await records()).some((n) => n.id === "bindf.sv#bind/u_chk2")).toBe(false);
+  });
+
+  it("the bind's instantiates edge goes from dut's definition to chk's, inferred from the single definition of dut", async () => {
+    const edges = edgesOf(await records()).filter((e) => e.kind === "x-sv.instantiates" && e.from === "dut.sv#dut");
+    expect(edges.map((e) => [e.to, e.provenance?.confidence])).toEqual([
+      ["chk.sv#chk", "inferred"],
+      ["chk.sv#chk", "inferred"],
+    ]);
+  });
+});
