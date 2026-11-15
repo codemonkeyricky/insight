@@ -5,7 +5,7 @@ import type { RefRow } from "@insight/model";
 import { FlowChart } from "../src/components/FlowChart";
 import { ExpansionShape } from "../src/components/zoom/Expansion";
 import { BoxShape } from "../src/components/zoom/ZoomMap";
-import { callersKey as keyOf, isCallersKey, mergeCallers, refOfCallersKey } from "../src/zoom/callers";
+import { callersKey as keyOf, isCallersKey, kindBadge, mergeCallers, refOfCallersKey, valueRefCount } from "../src/zoom/callers";
 import { LatestLoad } from "../src/zoom/latestLoad";
 import {
   CALLERS_W,
@@ -84,6 +84,58 @@ describe("merging callers", () => {
     expect(merged[0]).toMatchObject({ candidate: true, kinds: [] });
     expect(merged[1]).toMatchObject({ candidate: false, kinds: ["dispatch"] });
     expect(merged[2]).toMatchObject({ candidate: false, kinds: ["spawn"] });
+  });
+
+  it("a new, JSX or handler reference is a caller, badged new, renders or handler", () => {
+    const rows = [
+      row({ id: "f#n", kind: "reference", how: "new" }),
+      row({ id: "f#j", kind: "reference", how: "jsx" }),
+      row({ id: "f#h", kind: "reference", how: "handler" }),
+    ];
+    const merged = mergeCallers(rows, true);
+    expect(merged.map((r) => [r.id, r.kinds])).toEqual([
+      ["f#n", ["new"]],
+      ["f#j", ["renders"]],
+      ["f#h", ["handler"]],
+    ]);
+  });
+
+  it("keeps the badges of the other kinds as they were: a plain call has none, a message dispatch is message", () => {
+    expect(kindBadge({ kind: "call", how: undefined })).toBeUndefined();
+    expect(kindBadge({ kind: "dispatch", how: "message" })).toBe("message");
+    expect(kindBadge({ kind: "spawn", how: undefined })).toBe("spawn");
+    expect(kindBadge({ kind: "reference", how: "new" })).toBe("new");
+    expect(kindBadge({ kind: "reference", how: "jsx" })).toBe("renders");
+    expect(kindBadge({ kind: "reference", how: "handler" })).toBe("handler");
+  });
+
+  it("a caller with both a call and a new row is one row, badged new (the call adds no badge)", () => {
+    const rows = [row({ id: "f#c", kind: "call" }), row({ id: "f#c", kind: "reference", how: "new" })];
+    const merged = mergeCallers(rows, true);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({ id: "f#c", kinds: ["new"] });
+  });
+
+  it("drops a value reference from the rows but counts its distinct places in valueRefCount", () => {
+    const rows = [
+      row({ id: "f#v", kind: "reference", how: "value" }),
+      row({ id: "f#v", kind: "reference", how: "closure" }),
+      row({ id: "f#w", kind: "reference" }),
+      row({ id: "f#n", kind: "reference", how: "new" }),
+    ];
+    expect(mergeCallers(rows, true).map((r) => r.id)).toEqual(["f#n"]);
+    expect(valueRefCount(rows, true)).toBe(2);
+    expect(valueRefCount([row({ id: "f#n", kind: "reference", how: "new" })], true)).toBe(0);
+    expect(valueRefCount([], true)).toBe(0);
+  });
+
+  it("applies the lambda filter to value references as it does to callers", () => {
+    const rows = [row({ id: "f#λ", kind: "reference", how: "value", name: "λ cb" }), row({ id: "f#p", kind: "reference", how: "value" })];
+    expect(valueRefCount(rows, false)).toBe(1);
+    expect(valueRefCount(rows, true)).toBe(2);
+    const handlers = [row({ id: "f#λh", kind: "reference", how: "handler", name: "λ onClick" })];
+    expect(mergeCallers(handlers, false)).toEqual([]);
+    expect(mergeCallers(handlers, true).map((r) => r.id)).toEqual(["f#λh"]);
   });
 });
 
