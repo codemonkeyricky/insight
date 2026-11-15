@@ -52,13 +52,19 @@ export interface FrameOptions {
   collapsed?: ReadonlySet<string>;
   /** Frames whose "+N more" chip was clicked: every slice is drawn. */
   widened?: ReadonlySet<string>;
-  /** Auto-collapsed groups the user opened: a thread id (its coroutines are drawn one by one) or an unthreaded frame id. */
+  /**
+   * Folds the user toggled. An unthreaded frame id opens a frame that is collapsed by default (more than GROUP_MIN slices).
+   * `group:<holder id>` folds the coroutines of a thread (or process) into one summary row: coroutines are never folded by default.
+   */
   open?: ReadonlySet<string>;
   /** The viewport the grid of process frames aims at, in px (default 1280 x 750). */
   viewport?: { w: number; h: number };
 }
 
-/** A thread with more coroutines than this, or an unthreaded frame with more slices, is drawn as one summary row. */
+/**
+ * An unthreaded frame with more slices than this is drawn collapsed by default ("Not on a thread" is not a runtime construct).
+ * A holder with more coroutines than this can be folded into one summary row by hand; coroutines are never folded by default.
+ */
 export const GROUP_MIN = 3;
 
 /** A frame of the drawing tree, before its size and position are known. */
@@ -94,6 +100,35 @@ const isInferred = (e: SystemEdge): boolean => e.confidence === "inferred" && e.
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 const plural = (n: number, one: string): string => `${n} ${n === 1 ? one : `${one}s`}`;
 
+/** `text` cut to `max` characters with an ellipsis at the END ("inbox (unkno…"). Unlike shortLabel, which keeps the tail of a path. */
+export function clipEnd(text: string, max: number): string {
+  if (text.length <= max) return text;
+  return max <= 1 ? "…".slice(0, Math.max(0, max)) : `${text.slice(0, max - 1)}…`;
+}
+
+// Character widths of the frame header fonts: title 600 15px, sub 13px.
+const HDR_TITLE_CH = 8.6;
+const HDR_SUB_CH = 7.2;
+const HDR_SIDE = 14;
+const HDR_GAP = 14;
+/**
+ * What a frame header writes: the title clipped so that at least a few characters of the subtitle fit, and the subtitle
+ * clipped (with an ellipsis, at the end) to the room right of the title, so the two never overlap or leave the frame.
+ * `subFull` is the whole subtitle, for a tooltip. The sub is "" when no useful part of it fits. `sub` includes the fold arrow.
+ */
+export function frameHeaderText(title: string, sub: string, w: number, collapsed: boolean): { title: string; sub: string; subFull: string; titleFull: string } {
+  const arrow = collapsed ? "▸" : "▾";
+  const room = w - 2 * HDR_SIDE;
+  const MIN_SUB = 10; // characters worth showing
+  const maxTitle = Math.max(4, Math.floor((room - HDR_GAP - MIN_SUB * HDR_SUB_CH) / HDR_TITLE_CH));
+  const t = clipEnd(title, maxTitle);
+  const left = room - t.length * HDR_TITLE_CH - HDR_GAP;
+  const chars = Math.floor(left / HDR_SUB_CH) - 2; // "▾ "
+  const full = `${arrow} ${sub}`;
+  const shown = chars < 4 ? arrow : `${arrow} ${clipEnd(sub, chars)}`;
+  return { title: t, sub: shown, subFull: full, titleFull: title };
+}
+
 /** The glyph of a resource card: a queue, a lock (drawn by the view), a semaphore, a condvar, the env "$", or a kernel op. */
 export function resourceGlyph(kind: SystemResource["kind"]): string {
   return kind === "queue" ? "queue" : kind === "lock" ? "lock" : kind === "semaphore" ? "semaphore" : kind === "condvar" ? "condvar" : kind === "env" ? "$" : "os";
@@ -111,7 +146,7 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
   const collapsed = opts.collapsed ?? new Set<string>();
   const widened = opts.widened ?? new Set<string>();
   const open = opts.open ?? new Set<string>();
-  // Frames collapsed by default (a coroutine summary, a big unthreaded frame), until the user opens them.
+  // Frames collapsed by default (a big unthreaded frame, a coroutine summary the user asked for).
   const autoCollapsed = new Set<string>();
   const isCol = (id: string): boolean => collapsed.has(id) || autoCollapsed.has(id);
   const coGroups = new Map<string, { count: number; open: boolean }>(); // thread id -> its coroutine summary
@@ -236,8 +271,8 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
       node.resources.push(r);
       frameOfItem.set(r.id, node.id);
     }
-    // A holder (thread or process) with many coroutines draws one summary row for them, until opened. Their slices' and
-    // their own edges sit on the summary's header.
+    // A holder (thread or process) with many coroutines can draw one summary row for them, when the user folds them
+    // ("group:<holder>" in `open`). Their slices' and their own edges sit on the summary's header.
     {
       const byHolder = new Map<string, FNode[]>();
       for (const n of nodes) {
@@ -256,7 +291,7 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
       const gone = new Set<FNode>();
       for (const [holderId, list] of byHolder) {
         if (list.length <= GROUP_MIN) continue;
-        const isOpen = open.has(holderId);
+        const isOpen = !open.has(`group:${holderId}`);
         coGroups.set(holderId, { count: list.length, open: isOpen });
         if (isOpen) continue;
         const gid = `cogroup:${holderId}`;
@@ -269,7 +304,7 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
           slices: [],
           resources: [],
           h: 0, x: 0, y: 0, w: 0, visible: [], hidden: 0,
-          openKey: holderId,
+          openKey: `group:${holderId}`,
           groupCount: list.length,
         };
         frameById.set(gid, g);
@@ -421,9 +456,24 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
         cursor += c.h + FRAME_GAP;
       }
     };
+    // The thread frames and slices in a frame and everything nested in it.
+    const countBelow = (n: FNode): { threads: number; slices: number } => {
+      let threads = 0;
+      let sl = n.slices.length;
+      for (const c of n.children) {
+        const t = countBelow(c);
+        threads += t.threads + (c.kind === "thread" ? 1 : 0);
+        sl += t.slices;
+      }
+      return { threads, slices: sl };
+    };
     const subOf = (n: FNode): string => {
       if (n.groupCount !== undefined) return `${plural(n.slices.length, "own slice")} · open to see them`;
-      if (n.kind === "process") return n.rt?.spawn !== undefined ? spawnSub(n.rt) : plural(n.slices.length, "slice");
+      if (n.kind === "process") {
+        const tally = countBelow(n);
+        const counts = [tally.threads > 0 ? plural(tally.threads, "thread") : "", plural(tally.slices, "slice")].filter(Boolean).join(" · ");
+        return n.rt?.spawn !== undefined ? `${spawnSub(n.rt)} · ${counts}` : counts;
+      }
       if (n.kind === "unthreaded") return plural(n.slices.length, "slice");
       if (n.kind === "coroutine") {
         const sharedNote = n.shared !== undefined ? `also runs ${plural(n.shared, "component")} of ${n.sharedWith ?? "its thread"}` : "";
@@ -535,12 +585,13 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
   let need = BAND_MIN_W - 20;
   for (const l of chipLabels) need = Math.max(need, 28 + l.length * CODE_CH);
   for (const r of osRes) need = Math.max(need, 16 + r.label.length * NAME_CH + 36, 50 + ((r.names ?? [])[0]?.length ?? 0) * SUB_CH);
-  const bandW = Math.min(BAND_MAX_W, Math.ceil(need + 20));
+  const hasBand = osRes.length > 0 || chipLabels.size > 0;
+  const bandW = hasBand ? Math.min(BAND_MAX_W, Math.ceil(need + 20)) : 0;
   osRes.forEach((r, i) => boxes.push(resourceBox(r, bandX + 10, TOP + BAND_TITLE_H + i * (RES_H + RES_GAP), bandW - 20, "band")));
   const chipTop = TOP + BAND_TITLE_H + osRes.length * (RES_H + RES_GAP) + 14;
 
   // Outside column: externals by category, the config external dropped where an env resource draws the environment.
-  const outX = bandX + bandW + GAP_X;
+  const outX = hasBand ? bandX + bandW + GAP_X : bandX;
   const groups: SysGroup[] = [];
   let outBottom = TOP;
   if (ext.length > 0) {
@@ -664,7 +715,8 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
 
   const bandBottom = Math.max(H, outBottom, ...boxes.map((b) => b.y + b.h), prevBottom) + MARGIN;
   const bandContent = Math.max(prevBottom, ...boxes.filter((b) => b.frame === "band").map((b) => b.y + b.h));
-  const band: SysBand = { x: bandX, y: 0, w: bandW, h: Math.min(bandBottom, bandContent + 24) };
+  // A scope with no kernel op and no chip draws no band (nothing to put in it).
+  const band: SysBand | undefined = !hasBand ? undefined : { x: bandX, y: 0, w: bandW, h: Math.min(bandBottom, bandContent + 24) };
   const outRight = ext.length > 0 ? outX + OUT_W : bandX + bandW;
   const width = outRight + MARGIN;
   const height = bandBottom;
@@ -774,7 +826,8 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
     let samples = bezierSamples(segs);
     // A curve that crosses a card or a frame header it does not end at is redrawn as an orthogonal route around them,
     // in the gutters, entering each end from its side. Headers are obstacles, so no edge runs through a frame's title band.
-    if (samples.slice(1, -1).some((q) => obstacles.contains(q, p.fromNode, p.toNode))) {
+    // Checked on a dense sampling (a header is 30 px tall; the curve may be thousands of px long).
+    if (bezierSamples(segs, 10).slice(1, -1).some((q) => obstacles.contains(q, p.fromNode, p.toNode, 3))) {
       const pts = routeAround([x1, y1], [x2, y2], obstacles, p.fromNode, p.toNode);
       if (pts !== undefined) {
         d = `M${pts.map((q) => `${num(q[0])} ${num(q[1])}`).join(" L")}`;
@@ -799,6 +852,12 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
 
   // Bundles: per process, ports run down its right edge in the order of their targets (so trunks do not cross), each as near
   // its sources as the spacing allows.
+  // Whole top-level frames: a trunk must not run through another process's frame (its cards and its header). When its curve
+  // would, it runs in the gutters instead: out of its own column's right edge, along the free channels, to the band.
+  const frameObs = new ObstacleGrid();
+  for (const f of frames.filter((f) => f.parent === undefined)) frameObs.add(f.id, { x: f.x, y: f.y, w: f.w, h: f.h });
+  const inOtherFrame = (samples: Array<{ x: number; y: number }>, own: string): boolean =>
+    samples.slice(1, -1).some((q) => frameObs.contains({ x: q.x, y: q.y }, own, ""));
   const byTop = new Map<string, Bundled[]>();
   for (const b of bundles.values()) byTop.set(b.top.id, [...(byTop.get(b.top.id) ?? []), b]);
   for (const [topId, list] of byTop) {
@@ -825,7 +884,16 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
       const tx = target.x;
       const ty = target.y + target.h / 2;
       const kk = Math.max(40, (tx - port.x) * 0.5);
-      const trunkSamples = bezierSamples([port.x, port.y, port.x + kk, port.y, tx - kk, ty, tx, ty]);
+      let trunkSamples = bezierSamples([port.x, port.y, port.x + kk, port.y, tx - kk, ty, tx, ty]);
+      let trunkD = `M${num(port.x)} ${num(port.y)} C${num(port.x + kk)} ${num(port.y)} ${num(tx - kk)} ${num(ty)} ${num(tx)} ${num(ty)}`;
+      if (grounded && inOtherFrame(trunkSamples, top.id)) {
+        const out0: [number, number] = [port.x + 12, port.y];
+        const in0: [number, number] = [tx - 20, ty];
+        const mid = routeAround(out0, in0, frameObs, top.id, "") ?? [out0, [out0[0], H + 12], [in0[0], H + 12], in0];
+        const pts: Array<[number, number]> = [[port.x, port.y], ...mid, [tx, ty]];
+        trunkD = `M${pts.map((q) => `${num(q[0])} ${num(q[1])}`).join(" L")}`;
+        trunkSamples = polyline(pts);
+      }
       const arrowIds: string[] = [];
       for (const p of b.items) {
         const from = p.from;
@@ -860,7 +928,7 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
         process: top.id,
         to: target.id,
         port,
-        d: `M${num(port.x)} ${num(port.y)} C${num(port.x + kk)} ${num(port.y)} ${num(tx - kk)} ${num(ty)} ${num(tx)} ${num(ty)}`,
+        d: trunkD,
         samples: trunkSamples,
         edges: arrowIds,
         count: b.items.length,
@@ -885,7 +953,7 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
       for (const off of NUDGES) {
         const c = at(t);
         const r = { x: c.x - w / 2, y: c.y + off - PILL_H / 2, w, h: PILL_H };
-        const homed = !constrain || frames.length === 0 || topFrames.some((f) => c.x > f.x && c.x < f.x + f.w && c.y + off > f.y && c.y + off < f.y + f.h) || c.x >= band.x;
+        const homed = !constrain || frames.length === 0 || topFrames.some((f) => c.x > f.x && c.x < f.x + f.w && c.y + off > f.y && c.y + off < f.y + f.h) || (band !== undefined && c.x >= band.x);
         if (homed && !taken.overlapsAny(r)) {
           chosen = { x: c.x, y: c.y + off };
           break;
@@ -920,7 +988,7 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
     arrows,
     frames,
     strips,
-    band,
+    ...(band !== undefined ? { band } : {}),
     ...(trunks.length > 0 ? { trunks } : {}),
   };
 
@@ -978,7 +1046,7 @@ function resourceBox(r: SystemResource, x: number, y: number, w: number, frame: 
   const sub = names.length === 0 ? r.kind : `${names.slice(0, 2).join(", ")}${names.length > 2 ? ` +${names.length - 2}` : ""}`;
   // A narrow box (a process strip) keeps its title and subtitle short enough to clear the glyph.
   const narrow = w < 200;
-  return { id: r.id, kind: "resource", column: 0, x, y, w, h: RES_H, title: shortLabel(r.label, narrow ? 12 : 24), sub: shortLabel(sub, narrow ? 15 : 26), chips: [], frame, resource: r, glyph: resourceGlyph(r.kind) };
+  return { id: r.id, kind: "resource", column: 0, x, y, w, h: RES_H, title: clipEnd(r.label, narrow ? 12 : 24), sub: clipEnd(sub, narrow ? 15 : 26), chips: [], frame, resource: r, glyph: resourceGlyph(r.kind) };
 }
 
 /**
@@ -1080,9 +1148,9 @@ class ObstacleGrid {
     }
   }
   /** True when the point is inside (or on the border of) an obstacle other than the two ends. */
-  contains(q: { x: number; y: number }, a: string, b: string): boolean {
+  contains(q: { x: number; y: number }, a: string, b: string, m = 0): boolean {
     const l = this.cells.get(cellKey(Math.floor(q.x / GRID_CELL), Math.floor(q.y / GRID_CELL)));
-    return l !== undefined && l.some((r) => r.id !== a && r.id !== b && q.x >= r.x && q.x <= r.x + r.w && q.y >= r.y && q.y <= r.y + r.h);
+    return l !== undefined && l.some((r) => r.id !== a && r.id !== b && q.x >= r.x - m && q.x <= r.x + r.w + m && q.y >= r.y - m && q.y <= r.y + r.h + m);
   }
   /** The obstacles other than the two ends that reach into the window. */
   within(minX: number, maxX: number, minY: number, maxY: number, a: string, b: string): Rect[] {
@@ -1108,7 +1176,24 @@ class ObstacleGrid {
  * rectangle's edges, and a Dijkstra search over those lines charges a fixed cost per bend. Undefined when none exists.
  */
 function routeAround(a: [number, number], b: [number, number], obs: ObstacleGrid, fromId: string, toId: string): Array<[number, number]> | undefined {
-  const M = 80;
+  // The search looks at the obstacles near the two ends first; when they box the route in, it looks wider.
+  // A route that detours outside the window may meet an obstacle the window left out; that one is checked and widened too.
+  let last: Array<[number, number]> | undefined;
+  for (const margin of [80, 600, 4000]) {
+    const r = routeWithin(a, b, obs, fromId, toId, margin);
+    if (r === undefined) continue;
+    last = r;
+    let clean = true;
+    for (let i = 0; clean && i + 1 < r.length; i++) {
+      const p = r[i] as [number, number], q = r[i + 1] as [number, number];
+      clean = obs.within(Math.min(p[0], q[0]), Math.max(p[0], q[0]), Math.min(p[1], q[1]), Math.max(p[1], q[1]), fromId, toId).length === 0;
+    }
+    if (clean) return r;
+  }
+  return last;
+}
+
+function routeWithin(a: [number, number], b: [number, number], obs: ObstacleGrid, fromId: string, toId: string, M: number): Array<[number, number]> | undefined {
   const minX = Math.min(a[0], b[0]) - M, maxX = Math.max(a[0], b[0]) + M;
   const minY = Math.min(a[1], b[1]) - M, maxY = Math.max(a[1], b[1]) + M;
   const near = obs.within(minX, maxX, minY, maxY, fromId, toId);
@@ -1246,10 +1331,17 @@ function polyline(pts: Array<[number, number]>): Array<{ x: number; y: number }>
   out.push({ x: last[0], y: last[1] });
   return out;
 }
-function bezierSamples(p: number[]): Array<{ x: number; y: number }> {
+function bezierSamples(p: number[], step = 0): Array<{ x: number; y: number }> {
   const out: Array<{ x: number; y: number }> = [];
-  for (let j = 0; j <= 24; j++) {
-    const t = j / 24;
+  // 24 intervals; with a step, one per `step` px of the control polygon (capped), so thin obstacles are not skipped.
+  let n = 24;
+  if (step > 0) {
+    let len = 0;
+    for (let i = 0; i < 6; i += 2) len += Math.hypot((p[i + 2] as number) - (p[i] as number), (p[i + 3] as number) - (p[i + 1] as number));
+    n = Math.min(600, Math.max(24, Math.ceil(len / step)));
+  }
+  for (let j = 0; j <= n; j++) {
+    const t = j / n;
     const u = 1 - t;
     const a = u * u * u;
     const b = 3 * u * u * t;

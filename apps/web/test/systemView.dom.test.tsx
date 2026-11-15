@@ -74,17 +74,19 @@ describe("keyboard on a frame header", () => {
     const m = model();
     const sys: SystemModel = { ...m, runtimes: [...runtimes, ...cos], slices: [...(m.slices ?? []), ...cos.map((c) => slice(c.id, C, 1, { root: true }))] };
     render(<SystemDiagram id="p" sys={sys} tests={false} onTests={() => {}} />);
-    // The thread has six coroutines: they show as one summary until the thread's group is opened.
+    // The thread has six coroutines: all are drawn by default, and nothing is grouped until the user asks.
+    expect(document.querySelector('[data-frame="cogroup:thread:worker"]')).toBeNull();
+    expect(document.querySelectorAll('[data-frame^="coroutine:worker:"]').length).toBe(6);
+    const thread = document.querySelector('[data-frame="thread:worker"]') as HTMLElement;
+    thread.focus();
+    await user.keyboard("{Enter}");
+    await user.click(screen.getByRole("button", { name: /Group the \d+ coroutines/ }));
     const summary = document.querySelector('[data-frame="cogroup:thread:worker"]') as HTMLElement;
     expect(summary).not.toBeNull();
     summary.focus();
     await user.keyboard("{Enter}");
     expect(document.querySelector('[data-frame="cogroup:thread:worker"]')).toBeNull();
-    const thread = document.querySelector('[data-frame="thread:worker"]') as HTMLElement;
-    thread.focus();
-    await user.keyboard("{Enter}");
-    await user.click(screen.getByRole("button", { name: /Group the \d+ coroutines/ }));
-    expect(document.querySelector('[data-frame="cogroup:thread:worker"]')).not.toBeNull();
+    expect(document.querySelectorAll('[data-frame^="coroutine:worker:"]').length).toBe(6);
   });
 
   it("Enter and Space on a '+N more' chip widen the frame instead of selecting it", async () => {

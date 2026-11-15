@@ -28,10 +28,10 @@ The diagram is nested. A frame is a box that holds other boxes.
 
 | Frame | What it is | Where it sits |
 | --- | --- | --- |
-| **Process** | A program: a Node or browser program, or a native executable. Labelled with the program name (`insight-server · Node`). | Left of the kernel band, stacked in a grid of 1 to 4 columns that fits the viewport. |
-| **Thread** | One thread of a process. The process's first thread is drawn as "Main thread". | Rows inside the process frame. |
+| **Process** | A program: a Node or browser program, or a native executable. Labelled with its entry file's path as the exec model names it (`apps/server/src/main.ts`, `scripts/capture-demo.mjs`); a browser page is `index.html` or its file, a child process is the file of the function it starts, and a native executable is its target name. The subtitle counts everything below the frame, not just its own slices: `2 threads · 18 slices` (a spawned process leads with how it was spawned). | Left of the kernel band, stacked in a grid of 1 to 4 columns that fits the viewport. |
+| **Thread** | One thread of a process. The process's first thread is drawn as "Main thread". A C++ thread is labelled by the API that started it (`std::thread`, `pthread_create`, `std::jthread`, ...). | Rows inside the process frame. |
 | **Coroutine** | A task that runs concurrently: a started async function, a generator or a C++ coroutine. | Inside its thread, or directly inside its process when the process has only the main thread. |
-| **Not on a thread** | Code in the scope that no grounded thread reaches. | Inside its program, or at the bottom when no program owns it. Expanded like any other frame. |
+| **Not on a thread** | Code in the scope that no grounded thread reaches. | Inside its program, or at the bottom when no program owns it. It is not a runtime construct, so a frame with more than 3 slices (`GROUP_MIN`) starts collapsed to its header; click it or press Enter to open it. |
 
 The rules:
 
@@ -52,10 +52,12 @@ The rules:
 - Started coroutines (`how: start`) are drawn one frame each.
 - Awaited coroutines run inline in the caller's sequence. They stay inside the caller's slice with an await marker,
   and show as a count, not a frame.
-- A thread or process with **more than 3** coroutine frames (`GROUP_MIN = 3`, so four or more) draws one summary row,
-  "N coroutines", instead of N frames. Its slices and its edges sit on the summary's header, so nothing is hidden.
-- To open the group, click its row, or select the thread and press **Show the N coroutines** in the side panel. Press
-  the same control again (**Group the N coroutines**) to fold it back.
+- Coroutine frames are **always expanded by default**, however many there are. Nothing is folded behind a toggle: a
+  coroutine is a runtime construct, so it is drawn.
+- You can still fold them by hand. Select a thread (or process) with more than 3 coroutine frames (`GROUP_MIN = 3`, so four
+  or more) and press **Group the N coroutines** in the side panel. They become one summary row, "N coroutines", whose header
+  carries their slices and edges, so nothing is hidden. Click the row (or press Enter on it), or press **Show the N
+  coroutines**, to draw them one by one again.
 
 ## Slices
 
@@ -75,7 +77,7 @@ Each process frame has an **In process** strip on its right edge. It holds the r
 
 | Resource | Glyph | Comes from |
 | --- | --- | --- |
-| Queue (message inbox) | ▤ | `postMessage` and `onmessage` between a page and its workers. Each receiver has one inbox. An unresolved peer gives "inbox (unknown peer)". |
+| Queue (message inbox) | ▤ | `postMessage` and `onmessage` between a page and its workers. Each receiver has one inbox. A message post with no grounded receiver goes to the "inbox (unknown peer)" box. |
 | Queue (channel) | ▤ | `MessageChannel` and `BroadcastChannel` (TypeScript), queue types in the C++ catalog, and inferred guarded queues. |
 | Event-loop queues | ▤ | "Timers", "Microtasks", "Callbacks", from `dispatches` with how `timer`, `microtask` or `callback`. |
 | Lock | lock icon | `navigator.locks`, mutexes, rwlocks. |
@@ -119,7 +121,8 @@ Kernel-only operations (`effects.os.call`) end on boxes inside the band, one per
 An `fd` open on a literal path also draws an **opens** edge to the Filesystem box, so the file shows there. The File
 descriptors box stays for every `fd` call. An open whose path is `<dynamic>` only shows under File descriptors.
 
-Each op box lists the names it saw (signal names, for example), and the count. The band is sized from its labels.
+Each op box lists the names it saw (signal names, for example), and the count. The band is sized from its labels. A
+scope with no kernel-op box and no chip draws no band at all (and the outside column moves in to take its place).
 
 An edge from a slice to a resource in the same process never crosses the band.
 
@@ -212,6 +215,9 @@ Components with no functions, route or fact (a lone `package.json`, lockfiles) a
 Tests, fixtures and samples follow the Flow tab's noise rule and are left out. Turn on **Show tests** in the toolbar to
 include them. A scope that is itself inside a test folder shows its tests without the switch.
 
+This covers the runtime too: a thread spawned from a test file, and a process rooted in a test fixture, get no frame (and
+no slices, resources or edges) unless **Show tests** is on. A process frame with nothing in scope is not drawn.
+
 ### Pass-through descend
 
 When a scope holds exactly one folder of code (`apps/hosted` holds `src`), the view shows that folder's children and the
@@ -224,6 +230,22 @@ Each process frame has **exit ports** on its right edge, one per edge that leave
 of their targets, so the lines do not cross. Edges that reach the same kernel-band chip or outside box share a **trunk**
 from the port to the target. A trunk carries a **×N** pill with the number of edges it stands for. Selecting a trunk's
 pill or edge shows its sites.
+
+### Routing: no line through another frame
+
+Process frames wrap into a grid of 1 to 4 columns, so a process in a left column has other process frames between it and the
+band. A trunk that would cross them is routed instead: out of its own frame's port, into the gutter beside its column, along
+the free channels between frames (or below the grid), and into the band from the left. No edge runs through another frame's
+header or through a card it does not start or end on; a test (`systemFramesRouting.test.tsx`) checks every arrow and trunk
+polyline on a multi-column layout. Edges between two slices in different processes are routed around frame headers and
+cards the same way.
+
+### Header text
+
+A frame header shows its title on the left and its subtitle on the right. The subtitle is cut with an ellipsis at its end
+to the room right of the title (and the title is cut only when it would leave under 10 characters for the subtitle), so
+two texts never overlap or leave the frame. Hover a header for the full title and subtitle. A resource card cuts its label
+the same way, from the end: `inbox (unknown peer)` reads `inbox (unkn…` on a narrow strip card.
 
 ## Levels, scope drill-down and navigation
 
@@ -239,7 +261,7 @@ pill or edge shows its sites.
 
 Keyboard: frame headers, components, outside boxes, "+N more" chips and edges are all focusable. **Tab** moves between them.
 On a frame header, **Enter** selects the frame (the panel shows it, with its Collapse, Group and Show all buttons), and
-**Space** collapses or expands it. Enter on a coroutine summary opens it. On a "+N more" chip, **Enter** or **Space**
+**Space** collapses or expands it. Enter on a coroutine summary (one you grouped) draws its coroutines again, and Enter on a collapsed "Not on a thread" frame opens it. On a "+N more" chip, **Enter** or **Space**
 shows all the slices; on a component, an outside box or an edge, it selects it.
 
 Zooming out stops at 0.1, or at the scale of the last fit when that is smaller, so zooming out never zooms in. Collapsing,
@@ -260,6 +282,9 @@ While System is shown and no code is open, the right Code pane starts collapsed 
 | Computing | "Computing runtime…" while the model is computed on a later task. The page paints first. |
 | No runtime entry | No process or thread frames. Components are laid out as flat cards, with the kernel band and the outside column still drawn. In-process resources sit in one strip labelled "In process (no entry found)". The toolbar says "No runtime entry in this scope". |
 | Runtime skipped | The exec model was cut because the scope is too large. The view is flat and the toolbar says "Runtime skipped: the scope is too large to trace (N functions skipped)". |
+
+The flat layout keeps the syscall evidence on its kernel chips, as the framed layout does: the chip reads `unlink` or
+`connect` when an edge's evidence names the syscall, not just the API.
 | Older snapshot | A snapshot indexed before `effects.os.call` existed shows no Kernel box. The model is rebuilt from the IR, so there is no stored-shape migration. |
 
 ## Performance
@@ -364,7 +389,9 @@ Tests: `apps/web/test/pipelineLayout.test.tsx` and `packages/core/model/test/pip
 ## Tests
 
 - `apps/web/test/systemFrames.test.tsx`: frame nesting, coroutine groups, empty frames, skipped note, ports and trunks.
-- `apps/web/test/systemView.dom.test.tsx`: keyboard (Tab reaches frame headers, Enter toggles), toolbar notes.
+- `apps/web/test/systemFramesRouting.test.tsx`: no edge through a foreign frame header or card on a multi-column layout,
+  process subtitles, the empty band, text truncation. `systemGeometry.ts` is its segment-versus-rectangle helper.
+- `apps/web/test/systemView.dom.test.tsx`: keyboard (Tab reaches frame headers, Enter selects, Space toggles), toolbar notes.
 - `apps/web/test/systemFixtures.ts`: the hand-built fixtures the tests use.
 - `packages/core/model/test/system.test.ts`, `system-runtime.test.ts`: the model and runtime.
 - `packages/core/flow` tests: `execPlans` output equals the old single-pass `execModel`.
