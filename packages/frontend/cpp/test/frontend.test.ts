@@ -101,3 +101,42 @@ describe("frontend-cpp out-of-line class template methods", () => {
     expect(bar?.attrs.qualifiedName).toBe("Foo::bar");
   });
 });
+
+describe("frontend-cpp declared names", () => {
+  const extractSource = async (file: string, src: string): Promise<IRBatch[]> => {
+    const ctx = { root, files: [file], listFiles: () => [file], readFile: async () => src, log: () => undefined };
+    const batches: IRBatch[] = [];
+    for await (const batch of frontend.extract(ctx)) batches.push(batch);
+    return batches;
+  };
+  const functionsOf = (batches: IRBatch[]) =>
+    allRecords(batches).flatMap((r) => ("node" in r && r.node.kind === "structure.function" ? [r.node] : []));
+
+  const rows: [string, string, string, string][] = [
+    ["macro before a std return type", "BENCHMARK_EXPORT std::map<std::string, std::string> KvPairsFromEnv(const char* f, int x) { return {}; }", "KvPairsFromEnv", "KvPairsFromEnv"],
+    ["macro before a qualified out-of-line method", "struct Foo { std::vector<int> Bar(); };\nABSL_MUST_USE_RESULT std::vector<int> Foo::Bar() { return {}; }", "Bar", "Foo::Bar"],
+    ["macro before absl::Status", "ABSL_ATTRIBUTE_NOINLINE absl::Status Check(int v) { return {}; }", "Check", "Check"],
+    ["template class method with a template argument", "template <class T> void Foo<T>::bar() {}", "bar", "Foo::bar"],
+    ["template argument with a parenthesized comparison", "template <int N> void Arr<(N > 2)>::put() {}", "put", "Arr::put"],
+    ["enable_if return type with <=", "template <class Tp> inline typename std::enable_if<sizeof(Tp) <= sizeof(Tp*)>::type DoNotOptimize(Tp const& v) {}", "DoNotOptimize", "DoNotOptimize"],
+    ["nested template arguments", "template <class T> void Foo<Bar<T>>::baz() {}", "baz", "Foo::baz"],
+    ["operator<", "bool operator<(const A&, const A&) { return false; }", "operator<", "operator<"],
+    ["operator<<", "std::ostream& operator<<(std::ostream& o, const A&) { return o; }", "operator<<", "operator<<"],
+    ["out-of-line operator<=>", "auto A::operator<=>(const A&) const {}", "operator<=>", "A::operator<=>"],
+  ];
+
+  it.each(rows)("names %s", async (_label, src, simple, qualified) => {
+    const file = `names/${simple.replace(/\W/g, "_")}.cc`;
+    const fns = functionsOf(await extractSource(file, src));
+    const fn = fns.find((n) => n.attrs.name === simple);
+    expect(fn?.attrs.name).toBe(simple);
+    expect(fn?.attrs.qualifiedName).toBe(qualified);
+  });
+
+  it("resolves a call to a function whose return type sits behind a macro", async () => {
+    const file = "names/env.cc";
+    const src = "BENCHMARK_EXPORT std::map<std::string, std::string> KvPairsFromEnv(const char* f, int x) { return {}; }\nvoid caller() { KvPairsFromEnv(\"x\", 1); }\n";
+    const calls = allRecords(await extractSource(file, src)).flatMap((r) => ("edge" in r && r.edge.kind === "calls.call" ? [r.edge] : []));
+    expect(calls.some((e) => e.from === `${file}#caller` && e.to === `${file}#KvPairsFromEnv`)).toBe(true);
+  });
+});

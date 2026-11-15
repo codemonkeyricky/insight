@@ -17,15 +17,59 @@ interface Reach {
 const HEADER_RE = /\.(?:h|hh|hpp|hxx|h\+\+|inc|inl|ipp|tcc|cuh)$/i;
 
 /** Template argument lists removed, nested ones too: `Foo<T>::bar` becomes `Foo::bar`. Unclosed `<` drops the rest. */
+// A copy of stripTemplates in packages/frontend/cpp/src/project.ts. Keep the two in step.
+const ANGLE_OPERATOR_SYMBOLS = ["<=>", "<<=", ">>=", "<<", ">>", "<=", ">=", "<", ">"];
+
+function angleOperatorAt(s: string, i: number): { text: string; end: number } | undefined {
+  if (!s.startsWith("operator", i) || (i > 0 && /[\w$]/.test(s[i - 1] ?? ""))) return undefined;
+  let j = i + "operator".length;
+  if (/[\w$]/.test(s[j] ?? "")) return undefined;
+  while (j < s.length && /\s/.test(s[j] ?? "")) j++;
+  const sym = ANGLE_OPERATOR_SYMBOLS.find((x) => s.startsWith(x, j));
+  return sym ? { text: `operator${sym}`, end: j + sym.length } : undefined;
+}
+
 function stripTemplateArgs(s: string): string {
-  let out = "";
+  const out: string[] = [];
   let depth = 0;
-  for (const ch of s) {
-    if (ch === "<") depth++;
-    else if (ch === ">" && depth > 0) depth--;
-    else if (depth === 0) out += ch;
+  let parens = 0;
+  let i = 0;
+  while (i < s.length) {
+    if (depth === 0) {
+      const op = angleOperatorAt(s, i);
+      if (op) {
+        out.push(op.text);
+        i = op.end;
+        continue;
+      }
+    }
+    const ch = s[i];
+    let len = 1;
+    let bracket = false;
+    if (s.startsWith("<=>", i)) len = 3;
+    else if (s.startsWith("<=", i) || s.startsWith(">=", i) || s.startsWith("<<", i)) len = 2;
+    else if (s.startsWith(">>", i)) {
+      len = 2;
+      if (parens === 0 && depth > 0) {
+        depth = Math.max(0, depth - 2);
+        bracket = true;
+      }
+    } else if (ch === "<") {
+      if (parens === 0) {
+        depth++;
+        bracket = true;
+      }
+    } else if (ch === ">") {
+      if (parens === 0 && depth > 0) {
+        depth--;
+        bracket = true;
+      }
+    } else if (ch === "(") parens++;
+    else if (ch === ")") parens = Math.max(0, parens - 1);
+    if (!bracket && depth === 0) out.push(s.slice(i, i + len));
+    i += len;
   }
-  return out;
+  return out.join("");
 }
 
 /**
