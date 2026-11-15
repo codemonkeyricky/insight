@@ -34,6 +34,16 @@ const filenameSchemaId = (file: string): string | undefined => {
 const normId = (id: string): string => id.replace(/#+$/, "");
 const ignoredPath = (file: string): boolean => file.split("/").slice(0, -1).some((d) => IGNORED_DIRS.has(d));
 /** Test fixture and sample data never counts as a schema or kinds file (it can still be an instance). */
+/** An absolute URI that no local $id could satisfy by changing: anything but a well-known json-schema.org meta-schema. */
+const absoluteMiss = (ref: string): boolean => {
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(ref)) return false;
+  try {
+    const host = new URL(ref).hostname;
+    return !(host === "json-schema.org" || host.endsWith(".json-schema.org"));
+  } catch {
+    return true;
+  }
+};
 const fixturePath = (file: string): boolean => /(^|\/)(fixtures|samples)\//.test(file);
 
 type DocClass = "schema" | "kinds" | "other";
@@ -61,7 +71,7 @@ type Span = { file: string; start: [number, number]; end: [number, number] };
 
 const isObj = (v: unknown): v is Schema => typeof v === "object" && v !== null && !Array.isArray(v);
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const prov = (confidence: "exact" | "heuristic") => ({ frontend: FRONTEND_ID, confidence });
+const prov = (confidence: "exact" | "heuristic" | "inferred") => ({ frontend: FRONTEND_ID, confidence });
 
 interface Prop {
   id: string;
@@ -232,6 +242,12 @@ const KIND_TOKEN = /["'`]((?:structure|packaging|flow|calls|concurrency|sync|eff
 const EMIT_BEFORE = /kind\s*:\s*$/;
 /** A positional emit call on the same line, e.g. emitNode(call, container, "sync", "sync.condvar", ...). */
 const EMIT_CALL_BEFORE = /\bemit\w*\([^)]*$/;
+/** Any call whose argument list is still open at the literal, e.g. flow(ctx, "flow.return", ...). */
+const ANY_CALL_BEFORE = /[A-Za-z_$][\w$]*\([^()]*$/;
+/** Comparison operands and `case` labels are reads, not emits. */
+const COMPARE_BEFORE = /(?:===|!==|==|!=)\s*$|\bcase\s+$/;
+/** Query and read helpers: a kind passed to one of these is looked up, not produced. */
+const READ_CALL_BEFORE = /(?:\.(?:includes|has|get|filter|find|some|every|indexOf|startsWith|delete)|\b(?:nodesOfKind|edgesOfKind|byKind|ofKind|isKind|hasKind))\([^()]*$/;
 
 /** Scans the TypeScript and JavaScript files under packages/ and apps/ for quoted kind names. Each file keeps one hit per (kind, how). */
 async function scanTs(ctx: ExtractContext): Promise<TsScan> {
@@ -268,7 +284,11 @@ async function scanTs(ctx: ExtractContext): Promise<TsScan> {
       const lineStart = starts[line] as number;
       const linePrefix = text.slice(lineStart, idx);
       const how: "emit" | "read" =
-        EMIT_BEFORE.test(text.slice(Math.max(0, idx - 40), idx)) || EMIT_CALL_BEFORE.test(linePrefix) ? "emit" : "read";
+        EMIT_BEFORE.test(text.slice(Math.max(0, idx - 40), idx)) ||
+        EMIT_CALL_BEFORE.test(linePrefix) ||
+        (ANY_CALL_BEFORE.test(linePrefix) && !COMPARE_BEFORE.test(linePrefix) && !READ_CALL_BEFORE.test(linePrefix))
+          ? "emit"
+          : "read";
       const key = `${kind}|${how}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -330,7 +350,7 @@ function buildBatch(doc: Doc, run: Run, ts: TsScan | undefined, ctx: ExtractCont
     if (doc0 === "") targetFile = file;
     else {
       targetFile = byId.get(doc0);
-      if (targetFile === undefined && /^[a-z][a-z0-9+.-]*:/i.test(doc0)) dependOnAll = true;
+      if (targetFile === undefined && absoluteMiss(doc0)) dependOnAll = true;
       if (targetFile === undefined && !/^[a-z][a-z0-9+.-]*:/i.test(doc0)) {
         const rel = posix.normalize(posix.join(posix.dirname(file), doc0));
         if (!rel.startsWith("..")) targetFile = rel;
@@ -440,7 +460,14 @@ function buildBatch(doc: Doc, run: Run, ts: TsScan | undefined, ctx: ExtractCont
       xEdge(tsFile, kid, "x-schema.uses-kind", { how: hit.how }, hit.span);
     }
   }
-  const deps = [...new Set([...(ts?.files ?? []), ...imported, ...(run.dupDeps.get(file) ?? [])])].sort();
+  const deps = [
+    ...new Set([
+      ...(ts?.files ?? []),
+      ...imported,
+      ...(run.dupDeps.get(file) ?? []),
+      ...(dependOnAll ? run.allDocFiles.filter((f) => f !== file) : []),
+    ]),
+  ].sort();
   return { file, records, ...(deps.length > 0 ? { dependsOn: deps } : {}) };
 }
 
@@ -462,12 +489,12 @@ function buildInstance(doc: Doc, byId: Map<string, string>, schemaFiles: Set<str
   if (ds !== undefined) {
     const bare = normId(ds);
     target = byId.get(bare) ?? byId.get(ds);
-    if (target === undefined && /^[a-z][a-z0-9+.-]*:/i.test(ds)) dependOnAll = true;
+    if (target === undefined && absoluteMiss(ds)) dependOnAll = true;
     if (target === undefined && !/^[a-z][a-z0-9+.-]*:/i.test(ds)) {
       const rel = posix.normalize(posix.join(posix.dirname(file), bare));
       if (schemaFiles.has(rel)) target = rel;
       else {
-        finding = `unknown $schema "${ds}" (no schema file at ${rel})`;
+        if (!fixturePath(file)) finding = `unknown $schema "${ds}" (no schema file at ${rel})`;
         if (!rel.startsWith("..")) missing = rel;
       }
     }
@@ -501,7 +528,7 @@ function buildInstance(doc: Doc, byId: Map<string, string>, schemaFiles: Set<str
       kind: "x-schema.validated-by",
       attrs: { via },
       span: spanAt(file, lines, line),
-      provenance: prov("exact"),
+      provenance: prov(via === "filename" ? "inferred" : "exact"),
     },
   } as IRRecord);
   return { file, records, dependsOn: [target] };
@@ -511,7 +538,7 @@ function buildInstance(doc: Doc, byId: Map<string, string>, schemaFiles: Set<str
  * True when the project has a schema or kinds file. Two bounded passes over one walk: a name-only check that stops at
  * the first hit, then (if the names found nothing) a content check of at most MAX_READ_FILES small JSON files.
  */
-function walkForSchemas(root: string): { hit: string | null; capped: boolean } {
+function walkForSchemas(root: string): { hit: string | null; capped: boolean; walkCapped?: boolean } {
   let seen = 0;
   const jsonFiles: string[] = [];
   const stack: string[] = [""];
@@ -536,9 +563,10 @@ function walkForSchemas(root: string): { hit: string | null; capped: boolean } {
       }
     }
   }
+  const walkCapped = stack.length > 0 && seen > MAX_WALK_FILES;
   let read = 0;
   for (const childRel of jsonFiles) {
-    if (read >= MAX_READ_FILES) return { hit: null, capped: true };
+    if (read >= MAX_READ_FILES) return { hit: null, capped: true, walkCapped };
     try {
       const abs = join(root, childRel);
       if (statSync(abs).size > MAX_BYTES) continue;
@@ -550,7 +578,7 @@ function walkForSchemas(root: string): { hit: string | null; capped: boolean } {
       // unreadable or not JSON
     }
   }
-  return { hit: null, capped: false };
+  return { hit: null, capped: false, walkCapped };
 }
 
 export const frontend: Frontend = {
@@ -560,7 +588,8 @@ export const frontend: Frontend = {
 
   async detect(root: ProjectRoot): Promise<Detection | null> {
     if (existsSync(join(root.path, KINDS_FILE))) return { reason: `found ${KINDS_FILE}` };
-    const { hit, capped } = walkForSchemas(root.path);
+    const { hit, capped, walkCapped } = walkForSchemas(root.path);
+    if (hit === null && walkCapped) process.stderr.write(`${FRONTEND_ID}: directory walk stopped after ${MAX_WALK_FILES} JSON files, so a schema further on was not looked for\n`);
     if (hit === null && capped) process.stderr.write(`${FRONTEND_ID}: no schema file by name; content scan stopped after ${MAX_READ_FILES} JSON files, so a schema further on was not looked for\n`);
     return hit !== null ? { reason: `found JSON Schema or kinds file ${hit}` } : null;
   },

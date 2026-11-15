@@ -62,7 +62,7 @@ const Card = memo(function Card({ e, box, color, state, refLabel, onHot, onPick 
       <title>{e.description ? `${e.label}\n${e.description}` : e.label}</title>
       <rect className={`sd-body${edge ? " edge" : ""}`} width={box.w} height={box.h} rx={9} />
       <path className="sd-head" d={`M0 ${HEADER_H} V9 A9 9 0 0 1 9 0 H${box.w - 9} A9 9 0 0 1 ${box.w} 9 V${HEADER_H} Z`} style={{ fill: `color-mix(in srgb, ${color} 16%, var(--sd-card))` }} />
-      <rect x={0} y={0} width={box.w} height={3} rx={1.5} style={{ fill: color }} clipPath="inset(0 round 9px)" />
+      <path d={`M2.29 3 A9 9 0 0 1 9 0 H${box.w - 9} A9 9 0 0 1 ${box.w - 2.29} 3 Z`} style={{ fill: color }} />
       <line x1={0} x2={box.w} y1={HEADER_H} y2={HEADER_H} className="sd-rule" />
       <text className="sd-label" x={12} y={HEADER_H / 2 + 3} dominantBaseline="central">
         {clip(e.label, labelMax)}

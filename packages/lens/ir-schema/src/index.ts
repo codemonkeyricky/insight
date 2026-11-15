@@ -252,7 +252,7 @@ export const lensIrSchema: Lens = {
         lens: LENS_ID,
         id: `never-emitted:${nameOf(k)}`,
         severity: "info",
-        message: `${nameOf(k)} is declared but no TypeScript file emits it`,
+        message: `${nameOf(k)} is declared but no TypeScript file emits it (kinds emitted from data tables such as effects.json, or built dynamically, are not detected)`,
         nodes: [k.id],
         ...(k.span ? { span: k.span } : {}),
       });

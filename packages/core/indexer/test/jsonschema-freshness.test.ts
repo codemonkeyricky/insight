@@ -54,4 +54,15 @@ describe("frontend-jsonschema freshness", () => {
     const after = await runIndex(options(false));
     expect(after.extracted).toContainEqual({ frontend: "frontend-jsonschema", file: "data/alice.json" });
   }, 120_000);
+
+  it("re-extracts a kinds shard when a schema gains the $id its absolute attrs $ref named", async () => {
+    mkdirSync(join(project, "kinds-ref"), { recursive: true });
+    writeFileSync(join(project, "kinds-ref", "kinds.json"), JSON.stringify([{ kind: "sync.later", facet: "structure", on: "node", attrs: { $ref: "https://example.com/later-attrs.json" } }]));
+    await runIndex(options(false));
+    const quiet = await runIndex(options(false));
+    expect(quiet.extracted.filter((e) => e.frontend === "frontend-jsonschema")).toEqual([]);
+    writeFileSync(join(project, "schemas", "later-attrs.schema.json"), JSON.stringify({ $schema: "https://json-schema.org/draft/2020-12/schema", $id: "https://example.com/later-attrs.json", title: "LaterAttrs", type: "object" }));
+    const after = await runIndex(options(false));
+    expect(after.extracted).toContainEqual({ frontend: "frontend-jsonschema", file: "kinds-ref/kinds.json" });
+  }, 120_000);
 });

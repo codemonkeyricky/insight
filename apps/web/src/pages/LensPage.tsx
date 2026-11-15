@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type LensRecord, type LensView, type SchemaDiagramView, type ScopeStats, type Span, type StateMachineTransition, type TargetType } from "../api";
 import { AnnotationBox } from "../components/AnnotationBox";
 import { GraphCanvas, type GraphPick } from "../components/GraphCanvas";
@@ -67,6 +67,14 @@ export function LensPage({ id, lensId, scope, projectName, stats, onLoaded }: Le
       cancelled = true;
     };
   }, [id, lensId, scope]);
+
+  // Stable so the memoised schema cards do not re-render on every LensPage render (setters are stable).
+  const pickSchema = useCallback((p: { span?: Span; label: string }) => {
+    if (p.span) {
+      setNote(null);
+      setSelected({ span: p.span, label: p.label });
+    } else setNote(`${p.label}: no source line is recorded.`);
+  }, []);
 
   if (error) return <p className="error" role="alert">{error}</p>;
   if (!lens) return <p className="muted">Loading</p>;
@@ -171,7 +179,7 @@ export function LensPage({ id, lensId, scope, projectName, stats, onLoaded }: Le
                       ))}
                     </div>
                   </div>
-                  <SchemaDiagram key={diagram.id} view={diagram} onPick={(p) => (p.span ? show(p.span, p.label) : setNote(`${p.label}: no source line is recorded.`))} />
+                  <SchemaDiagram key={diagram.id} view={diagram} onPick={pickSchema} />
                 </div>
               )}
               {result.views.filter((v) => v.type !== "state-machine" && v.type !== "schema-diagram").map((view) => (

@@ -174,6 +174,68 @@ describe("dependencies of lookups that fail or cross files", () => {
     expect(bs.find((b) => b.file === "insight-plugin.json")?.dependsOn).toContain("o.schema.json");
   });
 
+  it("kinds file with an absolute attrs $ref that finds no $id depends on all other JSON files", async () => {
+    const other = JSON.stringify({ $schema: SCHEMA, title: "O", type: "object" });
+    const kinds = JSON.stringify([kindDecl("sync.thing", { attrs: { $ref: "https://example.com/attrs.json#/$defs/A" } })]);
+    const bs = await runMem({ "o.schema.json": other, "x/kinds.json": kinds });
+    expect(bs.find((b) => b.file === "x/kinds.json")?.dependsOn).toContain("o.schema.json");
+  });
+
+  it("does not fall back to all JSON files for json-schema.org meta-schema URIs", async () => {
+    const ref = JSON.stringify({ $schema: SCHEMA, title: "R", properties: { x: { $ref: "https://json-schema.org/draft/2020-12/schema" } } });
+    const inst = JSON.stringify({ $schema: "http://json-schema.org/draft-07/schema#" });
+    const bs = await runMem({ "o.schema.json": JSON.stringify({ $schema: SCHEMA, title: "O" }), "r.schema.json": ref, "i.json": inst });
+    expect(bs.find((b) => b.file === "r.schema.json")?.dependsOn ?? []).not.toContain("o.schema.json");
+    expect(bs.find((b) => b.file === "i.json")?.dependsOn ?? []).not.toContain("o.schema.json");
+  });
+
+  it("matches validated-by by filename with inferred confidence, by $schema with exact", async () => {
+    const manifest = JSON.stringify({ $schema: SCHEMA, $id: "https://insight.dev/core/plugin-manifest.json", title: "M", type: "object" });
+    const bs = await runMem({
+      "m.schema.json": manifest,
+      "a/insight-plugin.json": "{\"id\":\"a\"}",
+      "b.json": JSON.stringify({ $schema: "https://insight.dev/core/plugin-manifest.json" }),
+    });
+    const vb = edges(bs).filter((e) => e.kind === "x-schema.validated-by");
+    expect(vb.find((e) => e.from === "a/insight-plugin.json")?.provenance.confidence).toBe("inferred");
+    expect(vb.find((e) => e.from === "b.json")?.provenance.confidence).toBe("exact");
+  });
+
+  it("gives no unknown-$schema finding to instances under fixtures/ or samples/", async () => {
+    const bs = await runMem({
+      "s.schema.json": JSON.stringify({ $schema: SCHEMA, title: "S" }),
+      "a/fixtures/i.json": JSON.stringify({ $schema: "./nope.schema.json" }),
+      "a/real.json": JSON.stringify({ $schema: "./nope.schema.json" }),
+    });
+    expect(findings(bs.find((b) => b.file === "a/fixtures/i.json"))).toHaveLength(0);
+    expect(findings(bs.find((b) => b.file === "a/real.json"))).toHaveLength(1);
+  });
+
+  it("counts a kind passed to any call as an emit, but not comparisons, case labels or lookups", async () => {
+    const ts = [
+      'flow(ctx, "flow.return", x);',
+      'if (k === "flow.jump") {}',
+      'switch (k) { case "flow.block": break; }',
+      'if (set.has("flow.throw")) {}',
+    ].join("\n");
+    const bs = await runMem(
+      {
+        "packages/x/kinds.json": JSON.stringify(["return", "jump", "block", "throw"].map((n) => kindDecl(`flow.${n}`))),
+        "packages/y/a.ts": ts,
+      },
+      ["packages/x/kinds.json"],
+    );
+    const how = (to: string) => edges(bs).find((e) => e.kind === "x-schema.uses-kind" && e.to.endsWith(to))?.attrs as { how?: string } | undefined;
+    expect(JSON.stringify(edges(bs).filter((e) => e.kind === "x-schema.uses-kind").map((e) => [e.to, (e.attrs as { how: string }).how]))).toContain('"emit"');
+    const hows = Object.fromEntries(edges(bs).filter((e) => e.kind === "x-schema.uses-kind").map((e) => [e.to, (e.attrs as { how: string }).how]));
+    void how;
+    const byName = (n: string) => Object.entries(hows).find(([k]) => k.includes(n))?.[1];
+    expect(byName("return")).toBe("emit");
+    expect(byName("jump")).toBe("read");
+    expect(byName("block")).toBe("read");
+    expect(byName("throw")).toBe("read");
+  });
+
   it("links duplicate-$id files in both directions", async () => {
     const mk = (t: string) => JSON.stringify({ $schema: SCHEMA, $id: "https://example.com/d.json", title: t });
     const bs = await runMem({ "a.schema.json": mk("A"), "b.schema.json": mk("B") });
