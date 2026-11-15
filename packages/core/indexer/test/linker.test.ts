@@ -322,13 +322,13 @@ describe("build-graph narrowing", () => {
 
   /** A structure.type node in a file, and a method whose parent is that type. */
   const typeIn = (id: string, file: string) =>
-    ({ node: { id, facet: "calls", kind: "structure.type", parent: file, attrs: {}, provenance: PROV } }) as const;
+    ({ node: { id, facet: "calls", kind: "structure.type", parent: file, attrs: { name: id.split("#")[1] }, provenance: PROV } }) as const;
   const method = (id: string, parent: string) =>
     ({ node: { id, facet: "calls", kind: "structure.function", parent, attrs: {}, provenance: PROV } }) as const;
 
-  it("(d) keeps a method defined in a target downstream of the caller, and drops an unrelated sibling method", async () => {
-    // lib depends on app, so lib's closure contains the caller's owner: the Fixture::Run override is linked by
-    // virtual dispatch even though app does not link lib. The other target's method has no such link and is dropped.
+  it("(d) never drops a method candidate, even one in a target the caller does not link", async () => {
+    // Both Run methods are in targets the caller's binary does not link. Methods are always kept, since virtual
+    // dispatch can reach any override. Nothing is narrowed.
     const records: IRRecord[] = [
       target("//app:a"), target("//lib:x"), target("//other:o"),
       owns("//app:a", "app/main.cc"), owns("//lib:x", "lib/x.cc"), owns("//other:o", "other/o.cc"),
@@ -340,7 +340,61 @@ describe("build-graph narrowing", () => {
     ];
     const result = await linkRecords(records, "app/main.cc", FILES);
     const edge = result.doc.edges.find((e) => e.kind === "calls.call");
-    expect(edge?.to).toBe("lib/x.cc#Fixture::Run");
+    expect(edge?.to).toEqual({ candidates: ["lib/x.cc#Fixture::Run", "other/o.cc#Other::Run"] });
+    expect(edge?.provenance.resolvedBy).toBeUndefined();
+    expect(result.narrowed).toBe(0);
+  });
+
+  /** An out-of-line method: the C++ frontend parents it to the file, and its qualified name names the type. */
+  const outOfLine = (id: string, file: string, qualifiedName: string) =>
+    ({ node: { id, facet: "calls", kind: "structure.function", parent: file, attrs: { qualifiedName }, provenance: PROV } }) as const;
+
+  it("(f) keeps an out-of-line method parented to its file when its qualified name names a type", async () => {
+    const records: IRRecord[] = [
+      target("//app:a"), target("//lib:x"), target("//other:o"),
+      owns("//app:a", "app/main.cc"), owns("//lib:x", "lib/x.cc"), owns("//other:o", "other/o.cc"),
+      dep("//lib:x", "//app:a"),
+      fn("app/main.cc#main", "app/main.cc"),
+      typeIn("lib/x.cc#Circle", "lib/x.cc"), outOfLine("lib/x.cc#Circle::area", "lib/x.cc", "Circle::area"),
+      fn("other/o.cc#free", "other/o.cc"),
+      call("app/main.cc#main", ["lib/x.cc#Circle::area", "other/o.cc#free"]),
+    ];
+    const result = await linkRecords(records, "app/main.cc", FILES);
+    const edge = result.doc.edges.find((e) => e.kind === "calls.call");
+    expect(edge?.to).toBe("lib/x.cc#Circle::area");
+    expect(result.narrowed).toBe(1);
+  });
+
+  it("(g) keeps the sibling implementation of a virtual call, not linked into the caller's closure", async () => {
+    // render -> shape, circle -> shape, app -> {render, circle}. render.cc calls s->area() with candidates
+    // Shape::area and Circle::area. Circle is not in render's closure nor downstream of it, but app links both.
+    const records: IRRecord[] = [
+      target("//render:r"), target("//shape:s"), target("//circle:c"),
+      owns("//render:r", "render/render.cc"), owns("//shape:s", "shape/shape.cc"), owns("//circle:c", "circle/circle.cc"),
+      dep("//render:r", "//shape:s"), dep("//circle:c", "//shape:s"),
+      typeIn("shape/shape.h#Shape", "shape/shape.cc"), outOfLine("shape/shape.cc#Shape::area", "shape/shape.cc", "Shape::area"),
+      typeIn("circle/circle.h#Circle", "circle/circle.cc"), outOfLine("circle/circle.cc#Circle::area", "circle/circle.cc", "Circle::area"),
+      fn("render/render.cc#draw", "render/render.cc"),
+      call("render/render.cc#draw", ["shape/shape.cc#Shape::area", "circle/circle.cc#Circle::area"]),
+    ];
+    const result = await linkRecords(records, "render/render.cc", [...FILES, "render/render.cc", "shape/shape.cc", "circle/circle.cc"]);
+    const edge = result.doc.edges.find((e) => e.kind === "calls.call");
+    expect(edge?.to).toEqual({ candidates: ["shape/shape.cc#Shape::area", "circle/circle.cc#Circle::area"] });
+    expect(edge?.provenance.resolvedBy).toBeUndefined();
+    expect(result.narrowed).toBe(0);
+  });
+
+  it("(h) drops an unrelated free function in a non-linked target, and keeps a method beside it", async () => {
+    const records: IRRecord[] = [
+      target("//app:a"), target("//lib:x"), target("//other:o"),
+      owns("//app:a", "app/main.cc"), owns("//lib:x", "lib/x.cc"), owns("//other:o", "other/o.cc"),
+      fn("app/main.cc#main", "app/main.cc"), fn("lib/x.cc#free", "lib/x.cc"),
+      typeIn("other/o.cc#Other", "other/o.cc"), outOfLine("other/o.cc#Other::Run", "other/o.cc", "Other::Run"),
+      call("app/main.cc#main", ["lib/x.cc#free", "other/o.cc#Other::Run"]),
+    ];
+    const result = await linkRecords(records, "app/main.cc", FILES);
+    const edge = result.doc.edges.find((e) => e.kind === "calls.call");
+    expect(edge?.to).toBe("other/o.cc#Other::Run");
     expect(edge?.provenance.resolvedBy).toContain("build-graph");
     expect(result.narrowed).toBe(1);
   });

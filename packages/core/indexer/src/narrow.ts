@@ -18,7 +18,8 @@ interface Reach {
  * target). For each frontend that owns both the caller's file and the candidate's file: the candidate is linked when
  * one of its owners is in the caller's dependency closure, or when that closure is open. A candidate is dropped only
  * when some shared frontend says not linked and none says linked. A candidate with no shared frontend (or in no
- * target) is kept. Edits edges in place and returns how many changed. Never adds edges.
+ * target) is kept. Methods (see `isMethod`) are always kept, so narrowing only drops free functions. Edits edges in
+ * place and returns how many changed. Never adds edges.
  */
 export function narrowByBuildGraph(nodes: ReadonlyMap<NodeId, IRNode>, edges: ShardEdge[]): number {
   const owners = new Map<NodeId, Set<NodeId>>();
@@ -70,19 +71,39 @@ export function narrowByBuildGraph(nodes: ReadonlyMap<NodeId, IRNode>, edges: Sh
     return grouped;
   };
 
-  /** A method: its parent chain reaches a structure.type before the structure.file. */
+  /** Names (simple and qualified) of every structure.type in the IR, built once. */
+  const typeNames = new Set<string>();
+  for (const n of nodes.values()) {
+    if (n.kind !== "structure.type") continue;
+    const name = n.attrs?.name;
+    if (typeof name === "string") typeNames.add(name);
+    const qn = n.attrs?.qualifiedName;
+    if (typeof qn === "string") typeNames.add(qn);
+  }
+
+  /**
+   * A method: (a) its parent chain reaches a structure.type before the structure.file, or (b) its qualified name
+   * is `<prefix>::<name>` where the last segment of `<prefix>` names a structure.type. (b) covers out-of-line
+   * definitions, which the C++ frontend parents to the file rather than to the type.
+   */
   const isMethod = (id: NodeId): boolean => {
     const seen = new Set<NodeId>();
     let cur = nodes.get(id)?.parent;
     while (cur !== undefined && !seen.has(cur)) {
       seen.add(cur);
       const n = nodes.get(cur);
-      if (!n) return false;
+      if (!n) break;
       if (n.kind === "structure.type") return true;
-      if (n.kind === "structure.file") return false;
+      if (n.kind === "structure.file") break;
       cur = n.parent;
     }
-    return false;
+    const node = nodes.get(id);
+    const name = node?.attrs?.qualifiedName ?? node?.attrs?.name;
+    if (typeof name !== "string") return false;
+    const sep = name.lastIndexOf("::");
+    if (sep <= 0) return false;
+    const prefixLast = name.slice(0, sep).split("::").pop() ?? "";
+    return typeNames.has(prefixLast) || typeNames.has(name.slice(0, sep));
   };
 
   const closures = new Map<NodeId, Reach>();
@@ -130,15 +151,14 @@ export function narrowByBuildGraph(nodes: ReadonlyMap<NodeId, IRNode>, edges: Sh
     }
 
     /**
-     * Keep unless some shared frontend says not linked and none says linked. A method that lives downstream of the
-     * caller (one of the caller's owners is in a candidate owner's closure) is linked too: library code reaches
-     * downstream overrides and callbacks by virtual dispatch, though the library does not link them.
+     * Keep unless some shared frontend says not linked and none says linked. Methods are never dropped: virtual
+     * dispatch can reach any override, including a sibling implementation the caller's binary links.
      */
     const keeps = (candidate: NodeId): boolean => {
+      if (isMethod(candidate)) return true;
       const file = fileOf(candidate);
       if (file === undefined) return true;
       const candidateByFrontend = ownersByFrontend(file);
-      const method = isMethod(candidate);
       let shared = 0;
       for (const [f, reach] of reachByFrontend) {
         const candidateOwners = candidateByFrontend.get(f);
@@ -146,12 +166,6 @@ export function narrowByBuildGraph(nodes: ReadonlyMap<NodeId, IRNode>, edges: Sh
         shared++;
         if (reach.open) return true;
         for (const t of candidateOwners) if (reach.targets.has(t)) return true;
-        if (method) {
-          const callerOwners = callerByFrontend.get(f) ?? new Set<NodeId>();
-          for (const t of candidateOwners) {
-            for (const s of closureOf(t).targets) if (callerOwners.has(s)) return true;
-          }
-        }
       }
       return shared === 0;
     };
