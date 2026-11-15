@@ -94,11 +94,11 @@ export async function* extractFiles(ctx: ExtractContext, limitBytes: number = MA
 
 export const frontend: Frontend = {
   id: FRONTEND_ID,
-  version: "0.2.3",
+  version: "0.1.0",
   provides: ["structure", "packaging", "flow", "calls", "effects"],
 
   async detect(root: ProjectRoot) {
-    const hit = findSource(root.path, 3);
+    const hit = findSource(root.path, 6);
     return hit ? { reason: `found ${hit}` } : null;
   },
 

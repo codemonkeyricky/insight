@@ -1,6 +1,6 @@
 {
   "name": "@insight/frontend-systemverilog",
-  "version": "0.2.3",
+  "version": "0.1.0",
   "description": "Insight frontend: Verilog and SystemVerilog via tree-sitter (syntactic)",
   "license": "MIT",
   "type": "module",

@@ -413,7 +413,7 @@ function scanCandidates(text: string): ScanCandidate[] {
  */
 function registerScanned(unit: Unit, candidates: ScanCandidate[], p: Project): void {
   if (unit.errorCount === 0) return;
-  const known = new Set((p.declsByName.get("") ?? []).map((d) => d.name));
+  const known = new Set<string>();
   for (const refs of p.declsByName.values()) for (const d of refs) if (d.file === unit.rel) known.add(d.name);
   for (const c of candidates) {
     if (known.has(c.name)) continue;

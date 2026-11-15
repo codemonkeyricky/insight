@@ -357,11 +357,13 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
     if (name === "$fopen") {
       // IEEE 1800: no mode opens a multichannel descriptor for writing. A literal mode that
       // starts with r and has no + reads; any other mode (w, a, r+) writes. A non-literal mode
-      // is unknown and keeps the read classification.
+      // may be a write, so it is classified as one and marked modeUnknown.
       const mode = literalOf(args[1]);
       if (args.length < 2) kind = "effects.fs.write";
-      else if (mode === undefined) kind = "effects.fs.read";
-      else kind = /^r/.test(mode) && !mode.includes("+") ? "effects.fs.read" : "effects.fs.write";
+      else if (mode === undefined) {
+        kind = "effects.fs.write";
+        attrs.modeUnknown = true;
+      } else kind = /^r/.test(mode) && !mode.includes("+") ? "effects.fs.read" : "effects.fs.write";
       key = "path";
       if (mode !== undefined) attrs.mode = mode;
     } else {
@@ -509,7 +511,7 @@ function emitTree(project: Project, unit: Unit, root: SyntaxNode): IRBatch {
         const label = labelOf(n);
         const prefix = [f.module?.name ?? basename, ...f.gen].join(".");
         const ord = f.module?.ords.get(nodeKey(n)) ?? 1;
-        const name = label ? `${prefix}.${label}` : `${prefix}.${keyword}#${ord}`;
+        const name = label ? `${prefix}.${label}` : `${prefix}.${keyword}[${ord}]`;
         const { list, clock } = sensitivityOf(n);
         const id = ids.take(`${rel}#${name}`);
         node({

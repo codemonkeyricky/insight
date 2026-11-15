@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -100,9 +100,9 @@ describe("frontend-systemverilog", () => {
     expect(kinds("structure.type").map((n) => n.attrs.name)).toEqual(expect.arrayContaining(["alu", "top"]));
     expect(kinds("structure.module").map((n) => n.attrs.name)).toEqual(expect.arrayContaining(["pkg", "dv_pkg"]));
     expect(kinds("structure.function").map((n) => n.id)).toEqual(
-      expect.arrayContaining(["pkg.sv#pkg.saturate_add", "top.sv#top.report", "alu.sv#alu.always_comb#1", "top.sv#top.always_ff#1", "top.sv#top.g_lanes.always_ff#2"]),
+      expect.arrayContaining(["pkg.sv#pkg.saturate_add", "top.sv#top.report", "alu.sv#alu.always_comb[1]", "top.sv#top.always_ff[1]", "top.sv#top.g_lanes.always_ff[2]"]),
     );
-    expect(kinds("structure.function").find((n) => n.id === "top.sv#top.always_ff#1")?.attrs.clock).toBe("clk");
+    expect(kinds("structure.function").find((n) => n.id === "top.sv#top.always_ff[1]")?.attrs.clock).toBe("clk");
 
     const instances = kinds("x-sv.instance").map((n) => [n.attrs.name, n.attrs.module, n.attrs.generate ?? ""]);
     expect(instances).toEqual(
@@ -124,7 +124,19 @@ describe("frontend-systemverilog", () => {
     expect(kinds("effects.fs.read").map((n) => [n.attrs.api, n.attrs.path])).toEqual(expect.arrayContaining([["$readmemh", "init.hex"]]));
 
     const calls = edges.filter((e) => e.kind === "calls.call");
-    expect(calls.some((e) => e.from === "alu.sv#alu.always_comb#1" && e.to === "pkg.sv#pkg.saturate_add" && e.attrs?.callee === "pkg::saturate_add")).toBe(true);
+    expect(calls.some((e) => e.from === "alu.sv#alu.always_comb[1]" && e.to === "pkg.sv#pkg.saturate_add" && e.attrs?.callee === "pkg::saturate_add")).toBe(true);
+  });
+
+  it("detects a source file five directories down, and ignores one only under node_modules", async () => {
+    const deep = mkdtempSync(join(tmpdir(), "sv-detect-"));
+    mkdirSync(join(deep, "a", "b", "c", "d", "e"), { recursive: true });
+    writeFileSync(join(deep, "a", "b", "c", "d", "e", "x.sv"), "module x;\nendmodule\n");
+    expect(await frontend.detect({ path: deep, name: "deep", allowBuildTools: false })).toEqual({ reason: "found a/b/c/d/e/x.sv" });
+
+    const vendored = mkdtempSync(join(tmpdir(), "sv-detect-"));
+    mkdirSync(join(vendored, "node_modules", "pkg"), { recursive: true });
+    writeFileSync(join(vendored, "node_modules", "pkg", "x.sv"), "module x;\nendmodule\n");
+    expect(await frontend.detect({ path: vendored, name: "vendored", allowBuildTools: false })).toBeNull();
   });
 
   it("matches the golden IR for the fixture project", async () => {
@@ -273,8 +285,8 @@ describe("review fixes", () => {
     expect(fs.some((n) => n.attrs.api === "$fclose")).toBe(false);
     // Method calls on objects are named with a dot in the unresolved text.
     expect(edges.some((e) => e.kind === "calls.call" && JSON.stringify(e.to).includes("bi::send"))).toBe(false);
-    // Process ordinals count the module's own processes: the second unlabelled initial is initial#2.
-    expect(nodes.some((n) => n.id === "rtl2.sv#rtl_nonansi.initial#2")).toBe(true);
+    // Process ordinals count the module's own processes: the second unlabelled initial is initial[2].
+    expect(nodes.some((n) => n.id === "rtl2.sv#rtl_nonansi.initial[2]")).toBe(true);
     // disable and break become flow.jump; the disable keeps its target.
     const jumps = nodes.filter((n) => n.kind === "flow.jump");
     expect(jumps.some((n) => n.attrs.variant === "break" && n.attrs.label === "blk_x")).toBe(true);
@@ -390,9 +402,9 @@ describe("round 2 fixes", () => {
 
   it("fix 7: a caller in a generate branch takes that branch's definition; a caller outside them gets the candidates", async () => {
     const edges = edgesOf(allRecords(await extractDir(round2, ["gen_pick.sv"])));
-    const g1 = edges.find((e) => e.kind === "calls.call" && e.from === "gen_pick.sv#gen_pick.g1.initial#1");
-    const g2 = edges.find((e) => e.kind === "calls.call" && e.from === "gen_pick.sv#gen_pick.g2.initial#2");
-    const top = edges.find((e) => e.kind === "calls.call" && e.from === "gen_pick.sv#gen_pick.initial#3");
+    const g1 = edges.find((e) => e.kind === "calls.call" && e.from === "gen_pick.sv#gen_pick.g1.initial[1]");
+    const g2 = edges.find((e) => e.kind === "calls.call" && e.from === "gen_pick.sv#gen_pick.g2.initial[2]");
+    const top = edges.find((e) => e.kind === "calls.call" && e.from === "gen_pick.sv#gen_pick.initial[3]");
     expect(g1?.to).toBe("gen_pick.sv#gen_pick.g1.pick");
     expect(g1?.provenance?.confidence).toBe("exact");
     expect(g2?.to).toBe("gen_pick.sv#gen_pick.g2.pick");
@@ -409,7 +421,7 @@ describe("round 3 fixes", () => {
 
   it("fix 1: a class handle declared after another declaration (a net declaration in the tree) resolves for new, method calls and array elements", async () => {
     const records = allRecords(await extractDir(round3, ["handles.sv"]));
-    const calls = callsFrom(records, "handles.sv#handles_mod.initial#1");
+    const calls = callsFrom(records, "handles.sv#handles_mod.initial[1]");
     expect(pairs(calls)).toEqual([
       ["C.new", "handles.sv#C.new"],
       ["C.new", "handles.sv#C.new"],
@@ -732,5 +744,15 @@ describe("confidence labels", () => {
     expect(proc?.provenance?.confidence).toBe("exact");
     expect(proc?.attrs?.clock).toBe("clk");
     expect(proc?.attrs?.clockConfidence).toBe("heuristic");
+  });
+});
+
+describe("system task effects", () => {
+  it("a $fopen whose mode is a variable is a write, marked as an unknown mode", async () => {
+    const batches = await extractDir(join(fixturesDir, "fopen"), ["mode.sv"]);
+    const fopen = nodesOf(allRecords(batches)).find((n) => n.attrs?.api === "$fopen");
+    expect(fopen?.kind).toBe("effects.fs.write");
+    expect(fopen?.attrs?.modeUnknown).toBe(true);
+    expect(fopen?.attrs?.path).toBe("out.txt");
   });
 });
