@@ -182,3 +182,54 @@ describe("System fixes: programs with nothing in scope", () => {
     }
   });
 });
+
+describe("System fixes: unresolved thread spawns are placeholders", () => {
+  // src/main.ts runs main, which calls dispatch; dispatch starts std::thread(fn) with a dynamic fn that resolves to no function.
+  const placeholderDoc = (spawnPath: string, owner: string): IRDocument => {
+    const spawnNode = fx.node(`${spawnPath}@spawn:12`, "concurrency", "concurrency.spawn-thread", {
+      attrs: { api: "std::thread", target: "fn" },
+      parent: `${spawnPath}#${owner}`,
+      span: fx.span(spawnPath, 12, 2, 12, 30),
+    });
+    return {
+      nodes: [
+        file("package.json"), file("src/main.ts"), file(spawnPath), file("src/work.ts"),
+        moduleFn("src/main.ts", { nodeEntry: true }), fn("src/main.ts", "main"), fn("src/main.ts", "dispatch"), fn("src/work.ts", "work"),
+        fn(spawnPath, owner),
+        spawnNode,
+      ],
+      edges: [
+        fx.edge("src/main.ts#(module)", "src/main.ts#main", "calls", "calls.call", { span: fx.span("src/main.ts", 1, 2, 1, 12) }),
+        fx.edge("src/main.ts#main", "src/main.ts#dispatch", "calls", "calls.call", { span: fx.span("src/main.ts", 3, 2, 3, 12) }),
+        ...(spawnPath === "src/main.ts" ? [] : [fx.edge("src/main.ts#dispatch", `${spawnPath}#${owner}`, "calls", "calls.call", { span: fx.span("src/main.ts", 4, 2, 4, 12) })]),
+      ],
+      findings: [],
+    };
+  };
+  const placeholdersOf = (doc: IRDocument, tests: boolean) => {
+    const s = systemModel(buildProjectModel(doc), "", { tests });
+    return { s, threads: (s.runtimes ?? []).filter((r) => r.unresolved === true) };
+  };
+
+  it("draws one placeholder thread under the program whose main reaches the spawn site", () => {
+    // The spawn sits in dispatch itself, which main reaches.
+    const { s, threads } = placeholdersOf(placeholderDoc("src/main.ts", "dispatch"), false);
+    expect(threads).toHaveLength(1);
+    const ph = threads[0];
+    expect(ph?.kind).toBe("thread");
+    expect(ph?.label).toBe("Thread · std::thread");
+    expect(ph?.note).toBe("target unresolved: fn");
+    expect(ph?.parent).toMatch(/^prog:/);
+    // No slice of its own, and a spawns edge from the spawning slice into it.
+    expect((s.slices ?? []).some((sl) => sl.runtime === ph?.id)).toBe(false);
+    const edge = s.edges.find((e) => e.verb === "spawns" && e.to === ph?.id);
+    expect(edge).toBeDefined();
+    expect(edge?.from).toMatch(/\|src\/main\.ts$/);
+  });
+
+  it("draws no placeholder for the same spawn in a test file when tests are off", () => {
+    const doc = placeholderDoc("test/spawn.test.ts", "run");
+    expect(placeholdersOf(doc, false).threads).toHaveLength(0);
+    expect(placeholdersOf(doc, true).threads).toHaveLength(1);
+  });
+});

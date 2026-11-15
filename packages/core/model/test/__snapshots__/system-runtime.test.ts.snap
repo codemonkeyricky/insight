@@ -565,6 +565,22 @@ exports[`runtime model: TypeScript fixture > matches the committed snapshot of t
     {
       "confidence": "exact",
       "count": 1,
+      "from": "thread:main:entry:node:src/main.ts|src",
+      "id": "thread:main:entry:node:src/main.ts|src>spawns>thread:src/main.ts@spawn:20",
+      "label": "spawns Worker",
+      "sites": [
+        {
+          "file": "src/main.ts",
+          "fn": "src/main.ts#serve",
+          "line": 21,
+        },
+      ],
+      "to": "thread:src/main.ts@spawn:20",
+      "verb": "spawns",
+    },
+    {
+      "confidence": "exact",
+      "count": 1,
       "from": "thread:src/main.ts@spawn:10|src",
       "id": "thread:src/main.ts@spawn:10|src>enqueues>queue:thread:main:entry:node:src/main.ts:inbox",
       "label": "message",
@@ -720,6 +736,7 @@ exports[`runtime model: TypeScript fixture > matches the committed snapshot of t
       "id": "thread:src/main.ts@spawn:20",
       "kind": "thread",
       "label": "Thread · Worker",
+      "note": "target unresolved",
       "parent": "prog:entry:node:src/main.ts",
       "spawn": {
         "api": "Worker",
@@ -728,6 +745,7 @@ exports[`runtime model: TypeScript fixture > matches the committed snapshot of t
         "line": 21,
         "status": "unresolved",
       },
+      "unresolved": true,
     },
     {
       "id": "unthreaded",

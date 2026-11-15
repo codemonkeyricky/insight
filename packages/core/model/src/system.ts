@@ -479,6 +479,12 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
     }
   }
 
+  // Placeholder threads of unresolved spawns: started from the spawning slice (the spawn site's component on its thread).
+  for (const [rt, ph] of plan.placeholders) {
+    const site: Site = { file: ph.spawn.file, line: ph.spawn.line, ...(ph.spawn.fn !== undefined ? { fn: ph.spawn.fn } : {}) };
+    addFact(ph.from, rt, "spawns", `spawns ${ph.spawn.api ?? "thread"}`, site, true);
+  }
+
   // Message handoffs and event-loop queues, per the runtime's dispatches. Flat: one inbox per receiving component.
   for (const d of plan.exec.dispatches) {
     if (!inside(d.file)) continue;
