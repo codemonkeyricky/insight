@@ -16,6 +16,7 @@ import {
   type FnDecl,
   type Project,
 } from "./project.js";
+import { analyze, atomOf, caseGroups, decompose, enumerator, holderRef, shadowNames, stateIndexOf, testId, writeOf, type Atom, type Holder, type RefCtx, type WriteInfo } from "./state.js";
 import {
   CONDVAR_OP,
   classAt,
@@ -273,7 +274,15 @@ export function emitUnit(project: Project, rel: string): IRBatch {
 
   const prov: Provenance = { frontend: FRONTEND_ID, confidence: unit.errors.length > 0 ? "inferred" : "exact" };
   const syncProv: Provenance = { frontend: FRONTEND_ID, confidence: "inferred" };
-  const ids = new Ids((project.fnsByFile.get(rel) ?? []).map((d) => d.id));
+  const stateIndex = stateIndexOf(project);
+  const ids = new Ids([...(project.fnsByFile.get(rel) ?? []).map((d) => d.id), ...(stateIndex.byRel.get(rel) ?? []).map((h) => h.id)]);
+  /** State facts are syntactic guesses by design (D12). */
+  const heur: Provenance = { frontend: FRONTEND_ID, confidence: "heuristic" };
+  const writeInfo = new Map<string, WriteInfo>();
+  const exitTests = new Set<string>();
+  const emittedTests = new Set<string>();
+  const armIds = new Map<string, string>();
+  const shadowCache = new Map<string, Set<string>>();
   const records: IRRecord[] = [];
   const deps = new Set<string>();
   const node = (n: IRNode) => records.push({ node: n });
@@ -599,6 +608,164 @@ export function emitUnit(project: Project, rel: string): IRBatch {
     });
   };
 
+
+  /** The names, class and index an expression in `n` is read against. */
+  const refCtx = (n: SyntaxNode): RefCtx => {
+    let fnNode: SyntaxNode | undefined;
+    let cls: string | undefined;
+    for (let p: SyntaxNode | null = n; p; p = p.parent) {
+      if (p.type !== "function_definition" && p.type !== "lambda_expression") continue;
+      fnNode ??= p;
+      const decl = project.fns.get(`${rel}|${nodeKey(p)}`);
+      if (decl?.cls !== undefined) {
+        cls = decl.cls;
+        break;
+      }
+    }
+    cls ??= scopeOf(n).cls;
+    let shadow = new Set<string>();
+    if (fnNode) {
+      const key = nodeKey(fnNode);
+      shadow = shadowCache.get(key) ?? shadowNames(fnNode);
+      shadowCache.set(key, shadow);
+    }
+    return { index: stateIndex, ...(cls !== undefined ? { cls } : {}), shadow };
+  };
+
+  const analyzeBody = (fnNode: SyntaxNode) => {
+    const body = fnNode.childForFieldName("body");
+    if (!body || body.type !== "compound_statement") return;
+    const a = analyze(body, rel, refCtx(body));
+    for (const [k, v] of a.writes) writeInfo.set(k, v);
+    for (const k of a.exits) exitTests.add(k);
+  };
+
+  const emitHolder = (h: Holder, container: NodeId, at: SyntaxNode) =>
+    node({
+      id: h.id,
+      facet: "state",
+      kind: "state.holder",
+      parent: container,
+      attrs: { name: h.name, domainKind: "enum", values: h.values, declaredType: h.declaredType },
+      span: spanOf(rel, at),
+      provenance: heur,
+    });
+
+  const emitWrite = (h: Holder, container: NodeId, at: SyntaxNode, op: "init" | "set", value: string | undefined, info?: WriteInfo) =>
+    node({
+      id: ids.take(`${rel}@write:${at.startPosition.row}:${at.startPosition.column}`),
+      facet: "state",
+      kind: "state.write",
+      parent: container,
+      attrs: {
+        holder: h.id,
+        op,
+        ...(value !== undefined ? { value } : { dynamic: true }),
+        receiver: "",
+        ...(info?.from ? { from: info.from } : {}),
+        ...(info && info.guards.length > 0 ? { guards: info.guards, guardMatch: "receiver" } : {}),
+      },
+      span: spanOf(rel, at),
+      provenance: heur,
+    });
+
+  const emitTest = (container: NodeId, at: SyntaxNode, id: string, h: Holder, values: string[], extra: Record<string, unknown>) =>
+    node({
+      id,
+      facet: "state",
+      kind: "state.test",
+      parent: container,
+      attrs: { holder: h.id, values, receiver: "", ...extra },
+      span: spanOf(rel, at),
+      provenance: heur,
+    });
+
+  /** A comparison as a test. `thenArm` and `elseArm` are the arms of the `if` it is the condition of, when it is. */
+  const emitAtomTest = (container: NodeId, a: Atom, whole: boolean, thenArm: string | undefined, elseArm: string | undefined) => {
+    const key = nodeKey(a.node);
+    if (emittedTests.has(key)) return;
+    emittedTests.add(key);
+    // `arm` is where the holder is in `values`; `elseArm` where it is not.
+    const holds = a.negated ? (whole ? elseArm : undefined) : thenArm;
+    const fails = a.negated ? thenArm : whole ? elseArm : undefined;
+    emitTest(container, a.node, testId(rel, a.node), a.holder, [a.value], {
+      ...(a.negated ? { negated: true } : {}),
+      ...(holds ? { arm: holds } : {}),
+      ...(fails ? { elseArm: fails } : {}),
+      ...(exitTests.has(key) ? { exitGuard: true } : {}),
+    });
+  };
+
+  const emitArm = (label: string, at: SyntaxNode, container: NodeId): string => {
+    const id = ids.take(`${rel}@arm:${at.startPosition.row}:${at.startPosition.column}`);
+    armIds.set(nodeKey(at), id);
+    node({ id, facet: "flow", kind: "flow.branch-arm", parent: container, attrs: { label }, span: spanOf(rel, at), provenance: prov });
+    return id;
+  };
+
+  const handleIf = (n: SyntaxNode, container: NodeId) => {
+    const cons = n.childForFieldName("consequence");
+    const alt = n.childForFieldName("alternative");
+    const altStmt = alt?.type === "else_clause" ? alt.namedChild(0) : alt;
+    const thenArm = cons ? emitArm("then", cons, container) : undefined;
+    const elseArm = altStmt ? emitArm("else", altStmt, container) : undefined;
+    const cond = decompose(n.childForFieldName("condition"), refCtx(n));
+    for (const a of cond.atoms) emitAtomTest(container, a, cond.whole, thenArm, elseArm);
+  };
+
+  const handleSwitch = (n: SyntaxNode, container: NodeId) => {
+    const cond = n.childForFieldName("condition");
+    const ctx = refCtx(n);
+    const disc = holderRef(cond?.type === "condition_clause" ? cond.childForFieldName("value") ?? cond.namedChildren[cond.namedChildren.length - 1] : cond, ctx);
+    const arms = new Map<string, string>();
+    for (const cs of (n.childForFieldName("body")?.namedChildren ?? []).filter((c) => c.type === "case_statement")) {
+      const value = cs.childForFieldName("value");
+      arms.set(nodeKey(cs), emitArm(value ? `case ${value.text.slice(0, 60)}` : "default", cs, container));
+    }
+    if (!disc) return;
+    for (const g of caseGroups(n, disc, ctx)) {
+      if (g.values.length === 0) continue;
+      const first = g.cases[0] as SyntaxNode;
+      const arm = arms.get(nodeKey(g.last));
+      emitTest(container, first, testId(rel, first), disc, g.values, arm ? { arm } : {});
+    }
+  };
+
+  /** A default member initialiser, a constructor initialiser, or a global's initialiser. */
+  const handleInit = (h: Holder, container: NodeId, at: SyntaxNode, valueExpr: SyntaxNode | null | undefined) => {
+    let v: SyntaxNode | null | undefined = valueExpr;
+    if (v && (v.type === "initializer_list" || v.type === "argument_list")) v = v.namedChildren.find((c) => c.type !== "comment");
+    if (!v) return;
+    emitWrite(h, container, at, "init", enumerator(v, h, refCtx(at)));
+  };
+
+  const handleStateDecl = (n: SyntaxNode, container: NodeId) => {
+    for (const d of n.childrenForFieldName("declarator")) {
+      let nameNode: SyntaxNode = d;
+      if (d.type === "init_declarator") nameNode = d.childForFieldName("declarator") ?? d;
+      const h = stateIndex.byDecl.get(`${rel}|${nodeKey(d)}`);
+      if (!h) continue;
+      emitHolder(h, container, nameNode);
+      const value = n.type === "field_declaration" ? n.childForFieldName("default_value") : d.type === "init_declarator" ? d.childForFieldName("value") : null;
+      handleInit(h, container, value ?? nameNode, value);
+    }
+  };
+
+  const handleAssignment = (n: SyntaxNode, container: NodeId) => {
+    const w = writeOf(n, refCtx(n));
+    if (!w) return;
+    emitWrite(w.holder, container, n, "set", w.value, writeInfo.get(nodeKey(n)));
+  };
+
+  const handleFieldInitializer = (n: SyntaxNode, container: NodeId) => {
+    if (n.parent?.type !== "field_initializer_list") return;
+    const name = n.namedChild(0);
+    if (name?.type !== "field_identifier") return;
+    const ctx = refCtx(n);
+    const h = ctx.cls !== undefined ? ctx.index.byClass.get(ctx.cls)?.get(name.text) : undefined;
+    if (h) handleInit(h, container, n, n.namedChild(1));
+  };
+
   const visit = (n: SyntaxNode, container: NodeId, fn: FnDecl | undefined): void => {
     let nextContainer = container;
     let nextFn = fn;
@@ -665,6 +832,7 @@ export function emitUnit(project: Project, rel: string): IRBatch {
         break;
       }
       case "function_definition": {
+        analyzeBody(n);
         const decl = project.fns.get(`${rel}|${nodeKey(n)}`);
         if (decl) {
           node({
@@ -682,6 +850,7 @@ export function emitUnit(project: Project, rel: string): IRBatch {
         break;
       }
       case "lambda_expression": {
+        analyzeBody(n);
         const decl = project.fns.get(`${rel}|${nodeKey(n)}`);
         if (decl) {
           const span = spanOf(rel, n);
@@ -710,9 +879,25 @@ export function emitUnit(project: Project, rel: string): IRBatch {
         break;
       case "declaration":
         handleDeclaration(n, container, fn);
+        handleStateDecl(n, container);
         break;
+      case "field_declaration":
+        handleStateDecl(n, container);
+        break;
+      case "field_initializer":
+        handleFieldInitializer(n, container);
+        break;
+      case "assignment_expression":
+        handleAssignment(n, container);
+        break;
+      case "binary_expression": {
+        const a = atomOf(n, refCtx(n));
+        if (a) emitAtomTest(container, a, false, undefined, undefined);
+        break;
+      }
       case "if_statement":
         flow(n, "if", "flow.branch", container, { condition: (n.childForFieldName("condition")?.text ?? "").slice(0, 200) });
+        handleIf(n, container);
         break;
       case "conditional_expression":
         flow(n, "cond", "flow.branch", container, { condition: (n.childForFieldName("condition")?.text ?? "").slice(0, 200) });
@@ -721,6 +906,7 @@ export function emitUnit(project: Project, rel: string): IRBatch {
         const body = n.childForFieldName("body");
         const hasDefault = body?.namedChildren.some((c) => c.type === "case_statement" && !c.childForFieldName("value")) ?? false;
         flow(n, "switch", "flow.switch", container, { hasDefault });
+        handleSwitch(n, container);
         break;
       }
       case "for_statement":
@@ -775,6 +961,22 @@ export function emitUnit(project: Project, rel: string): IRBatch {
       provenance: { frontend: FRONTEND_ID, confidence: "exact" },
     };
     records.push({ finding });
+  }
+
+  // A guard id must name a state.test node that was emitted; drop the rest (the narrowing is still used for `from`).
+  const testIds = new Set<string>();
+  for (const r of records) if ("node" in r && r.node.kind === "state.test") testIds.add(r.node.id);
+  for (const r of records) {
+    if (!("node" in r) || r.node.kind !== "state.write") continue;
+    const attrs = r.node.attrs as Record<string, unknown>;
+    if (!Array.isArray(attrs.guards)) continue;
+    const kept = (attrs.guards as string[]).filter((g) => testIds.has(g));
+    if (kept.length === attrs.guards.length) continue;
+    if (kept.length > 0) attrs.guards = kept;
+    else {
+      delete attrs.guards;
+      delete attrs.guardMatch;
+    }
   }
 
   return { file: rel, records, dependsOn: [...deps].sort() };

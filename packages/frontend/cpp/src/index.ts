@@ -24,8 +24,8 @@ function findSource(dir: string, depth: number): string | undefined {
 
 export const frontend: Frontend = {
   id: FRONTEND_ID,
-  version: "0.1.3",
-  provides: ["structure", "packaging", "flow", "calls", "effects", "concurrency", "sync"],
+  version: "0.1.4",
+  provides: ["structure", "packaging", "flow", "calls", "effects", "concurrency", "sync", "state"],
 
   async detect(root: ProjectRoot) {
     const hit = findSource(root.path, 3);

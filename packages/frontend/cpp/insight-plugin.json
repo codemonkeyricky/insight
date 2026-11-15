@@ -1,6 +1,6 @@
 {
   "id": "frontend-cpp",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "C and C++: structure, includes, calls, control flow, known system effects, threads and standard locks. Syntactic (tree-sitter), no compiler.",
   "irVersion": "^1.0",
   "detect": [
@@ -30,6 +30,7 @@
     "effects",
     "flow",
     "packaging",
+    "state",
     "structure",
     "sync"
   ],

@@ -39,6 +39,7 @@ Facets are optional and declared. A frontend lists the facets it fills, and a le
 | `concurrency` | Things that run alongside other things |
 | `sync` | Coordination: locks, semaphores, atomics, condition variables |
 | `effects` | Contact with the outside world: fs, net, process, env, clock |
+| `state` | Explicit finite state: holders whose type is a finite set of values, the writes that set them, and the tests that compare them |
 | `x-*` | Open namespace for plugin facets |
 
 ## Kinds
@@ -84,7 +85,7 @@ Base kinds shipped by the core:
 | `calls.call-site` | calls | node | – |  |
 | `calls.dynamic-dispatch` | calls | node | – |  |
 | `calls.callback-registration` | calls | node | – |  |
-| `calls.call` | calls | edge | – | Caller function to callee function. A call through an interface member, or an abstract class member, has no body to call, so its `to` is `{"candidates": [...]}` with the implementations (`attrs.how` is `interface`, provenance `heuristic`). The candidates are every indexed class that implements the interface, directly, through an extended interface, or through a base class, and that declares the member or inherits it from its nearest base class; or, for an abstract member, every indexed concrete subclass of the abstract class and what it inherits or overrides. A receiver typed by an interface is matched against that interface's implementers, not the interface that declares the member. A set is sorted by id and holds at most 32 targets; `attrs.truncated` is `true` when the set was cut. A set always has at least one target, even when there is one implementation. Not covered: structural matches (a class that fits an interface without `implements`), classes in files outside the index, class expressions, and a new implementer in another file, which reaches a call site only when that call site's file is extracted again. |
+| `calls.call` | calls | edge | – | Caller function to callee function. A call through an interface member, or an abstract class member, has no body to call, so its `to` is `{"candidates": [...]}` with the implementations (`attrs.how` is `interface`, provenance `heuristic`). The candidates are every indexed class that implements the interface, directly, through an extended interface, or through a base class, and that declares the member or inherits it from its nearest base class; or, for an abstract member, every indexed concrete subclass of the abstract class and what it inherits or overrides. A receiver typed by an interface is matched against that interface's implementers, not the interface that declares the member. A set is sorted by id and holds at most 32 targets; `attrs.truncated` is `true` when the set was cut. A set always has at least one target, even when there is one implementation. Not covered: structural matches (a class that fits an interface without `implements`), classes in files outside the index, class expressions, and a new implementer in another file, which reaches a call site only when that call site's file is extracted again. Optional `attrs.knownState` maps a holder id to the values it is known to hold at the call site, `attrs.knownStale` lists the holders whose value there may be out of date, and `attrs.knownEntry` lists the holders whose known set at the call is exactly the caller's own entry set (no write or test of the holder, and no await, on any path from the caller's entry to the call, and no join with a non-entry set). |
 | `calls.reference` | calls | edge | – | Caller to a function it refers to without calling it. `attrs.how` is `new`, `jsx`, `value`, `closure` or `handler`. Caller is the enclosing function, or the file for module-level code. `closure` runs from a function to an anonymous function created inside it, so the creator still reaches what the closure calls. `handler` runs from the code that installs a project function as an event or message handler, such as `worker.onmessage = fn` or `addEventListener("message", fn)`, to that function. |
 | `calls.contains-call` | calls | edge | – |  |
 | `concurrency.spawn-thread` | concurrency | node | – | `attrs.target` names the function run; `attrs.api` (optional) is the exact API that spawns it. |
@@ -102,6 +103,9 @@ Base kinds shipped by the core:
 | `sync.semaphore` | sync | node | – | `attrs.op` (required) is `acquire`, `release`, `wait`, `notify` or `op`. Optional `attrs.name`, `attrs.lock` (the lock the operation is tied to) and `attrs.api`. |
 | `sync.atomic-op` | sync | node | – | `attrs.op` (required) is `acquire`, `release`, `wait`, `notify` or `op`. Optional `attrs.lock` and `attrs.api`. |
 | `sync.condvar` | sync | node | – | `attrs.op` (required) is `acquire`, `release`, `wait`, `notify` or `op`. Optional `attrs.lock` and `attrs.api`, e.g. `wait` with `lock` `m_`. |
+| `state.holder` | state | node | – | A field, variable or useState slot whose declared type is a finite set of values (enum or literal union). |
+| `state.write` | state | node | – | One site that sets a holder: an assignment, an object-literal property, an initializer, or a call to a setter helper. `from` is the set of values the holder is known to have just before. `fromEntry: true` (only when `from` is absent) says the known set at the write is exactly the enclosing function's entry set, so a consumer may fill it from the callers; a write without `from` and without `fromEntry` is unknown for another reason (dynamic write, join with an unknown side, loop widening, stale after an await). |
+| `state.test` | state | node | – | One comparison of a holder against literal values (`===`, `!==`, `==`, `!=`, or a switch case group), with the branch arms where it holds or doesn't. |
 | `effects.fs.read` | effects | node | – | Optional `attrs.syscall`, see below. |
 | `effects.fs.write` | effects | node | – | Optional `attrs.syscall`, see below. |
 | `effects.net.connect` | effects | node | – | Optional `attrs.syscall`, see below. |
@@ -129,6 +133,9 @@ Other attributes added with the System tab, all from the same schema files:
 | `sync.semaphore` | `op` | yes | `acquire`, `release`, `wait`, `notify` or `op`. |
 | | `name`, `lock`, `api` | no | `name` is the semaphore's name; `lock` is the mutex it is tied to. |
 | `sync.condvar` | `op` | yes | As for `sync.semaphore`. |
+| `state.holder` | state | node | – | A field, variable or useState slot whose declared type is a finite set of values (enum or literal union). |
+| `state.write` | state | node | – | One site that sets a holder: an assignment, an object-literal property, an initializer, or a call to a setter helper. `from` is the set of values the holder is known to have just before. `fromEntry: true` (only when `from` is absent) says the known set at the write is exactly the enclosing function's entry set, so a consumer may fill it from the callers; a write without `from` and without `fromEntry` is unknown for another reason (dynamic write, join with an unknown side, loop widening, stale after an await). |
+| `state.test` | state | node | – | One comparison of a holder against literal values (`===`, `!==`, `==`, `!=`, or a switch case group), with the branch arms where it holds or doesn't. |
 | | `name`, `lock`, `api` | no | `name` is the condvar's name. |
 | `sync.atomic-op` | `op` | yes | As for `sync.semaphore`. |
 | | `lock`, `api` | no | |
@@ -154,6 +161,9 @@ The fact rules that turn these kinds into System-view edges are in `docs/system-
 | `sync.lock-acquire`, `sync.lock-release`, `sync.rwlock-acquire` | catalog (`lock-acquire`); `navigator.locks` | `src/extract.ts` |
 | `sync.semaphore` | not emitted | `src/extract.ts` |
 | `sync.condvar`, `sync.atomic-op` | catalog | `src/extract.ts` |
+| `state.holder` | state | node | – | A field, variable or useState slot whose declared type is a finite set of values (enum or literal union). |
+| `state.write` | state | node | – | One site that sets a holder: an assignment, an object-literal property, an initializer, or a call to a setter helper. `from` is the set of values the holder is known to have just before. `fromEntry: true` (only when `from` is absent) says the known set at the write is exactly the enclosing function's entry set, so a consumer may fill it from the callers; a write without `from` and without `fromEntry` is unknown for another reason (dynamic write, join with an unknown side, loop widening, stale after an await). |
+| `state.test` | state | node | – | One comparison of a holder against literal values (`===`, `!==`, `==`, `!=`, or a switch case group), with the branch arms where it holds or doesn't. |
 
 `effects.unknown` and the C++ `concurrency.async-task` are not emitted by any frontend.
 

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { createIRAjv, KindRegistry, validateIR } from "../src/index.js";
+import { createIRAjv, isCoreFacet, isFacetId, KindRegistry, validateIR } from "../src/index.js";
 import { createCoreRegistry, loadIRSchemas } from "../src/node.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -105,9 +105,53 @@ describe("core registry", () => {
     const registry = createCoreRegistry();
     const facets = new Set(registry.list().map((k) => k.facet));
     expect([...facets].sort()).toEqual(
-      ["calls", "concurrency", "effects", "flow", "packaging", "structure", "sync"],
+      ["calls", "concurrency", "effects", "flow", "packaging", "state", "structure", "sync"],
     );
     expect(registry.subkinds("sync.lock-acquire")).toContain("sync.rwlock-acquire");
+  });
+});
+
+describe("state facet", () => {
+  const ref = { frontend: "test", confidence: "exact" };
+  const file = { node: { id: "app/s.ts", facet: "structure", kind: "structure.file", attrs: { path: "app/s.ts", language: "typescript", parseStatus: "ok" }, provenance: ref } };
+  const fn = { node: { id: "app/s.ts#f", facet: "structure", kind: "structure.function", parent: "app/s.ts", attrs: { name: "f" }, provenance: ref } };
+  const holder = { node: { id: "app/s.ts#status", facet: "state", kind: "state.holder", parent: "app/s.ts", attrs: { name: "status", domainKind: "union", values: ["\"idle\"", "\"busy\""] }, provenance: ref } };
+  const write = (attrs: Record<string, unknown>) => ({ node: { id: "app/s.ts#f/write/1", facet: "state", kind: "state.write", parent: "app/s.ts#f", attrs: { holder: "app/s.ts#status", ...attrs }, provenance: ref } });
+  const test = { node: { id: "app/s.ts#f/test/1", facet: "state", kind: "state.test", parent: "app/s.ts#f", attrs: { holder: "app/s.ts#status", values: ["\"busy\""] }, provenance: ref } };
+  const doc = (...records: unknown[]) => [file, fn, ...records].map((r) => JSON.stringify(r)).join("\n");
+
+  it("isFacetId accepts state", () => {
+    expect(isFacetId("state")).toBe(true);
+    expect(isCoreFacet("state")).toBe(true);
+  });
+
+  it("accepts a holder, a set write and a test", () => {
+    const report = validateIR(doc(holder, write({ op: "set", value: "\"busy\"" }), test), createCoreRegistry());
+    expect(report.errors).toEqual([]);
+    expect(report.ok).toBe(true);
+  });
+
+  it("rejects a set write with neither value nor dynamic", () => {
+    const report = validateIR(doc(holder, write({ op: "set" })), createCoreRegistry());
+    expect(report.ok).toBe(false);
+  });
+
+  it("accepts a set write marked dynamic without a value", () => {
+    const report = validateIR(doc(holder, write({ op: "set", dynamic: true })), createCoreRegistry());
+    expect(report.errors).toEqual([]);
+  });
+
+  it("rejects a holder with no values", () => {
+    const bad = { node: { ...holder.node, attrs: { name: "status", domainKind: "union" } } };
+    const report = validateIR(doc(bad), createCoreRegistry());
+    expect(report.ok).toBe(false);
+  });
+
+  it("accepts a calls.call edge with knownState and knownStale", () => {
+    const edge = { edge: { from: "app/s.ts#f", to: "app/s.ts#f", facet: "calls", kind: "calls.call", attrs: { knownState: { "app/s.ts#status": ["\"busy\""] }, knownStale: ["app/s.ts#status"] }, provenance: ref } };
+    const report = validateIR(doc(edge), createCoreRegistry());
+    expect(report.errors).toEqual([]);
+    expect(report.ok).toBe(true);
   });
 });
 

@@ -87,9 +87,12 @@ importers:
       '@insight/lens-lock-order':
         specifier: workspace:*
         version: link:../../packages/lens/lock-order
+      '@insight/lens-states':
+        specifier: workspace:*
+        version: link:../../packages/lens/states
       '@vercel/functions':
         specifier: ^3.11.1
-        version: 3.11.1
+        version: 3.11.1(ws@8.23.0)
       aws4fetch:
         specifier: ^1.0.20
         version: 1.0.20
@@ -414,6 +417,19 @@ importers:
       '@insight/sdk':
         specifier: workspace:*
         version: link:../../core/sdk
+
+  packages/lens/states:
+    dependencies:
+      '@insight/ir':
+        specifier: workspace:*
+        version: link:../../core/ir
+      '@insight/sdk':
+        specifier: workspace:*
+        version: link:../../core/sdk
+    devDependencies:
+      '@insight/indexer':
+        specifier: workspace:*
+        version: link:../../core/indexer
 
 packages:
 
@@ -1885,9 +1901,11 @@ snapshots:
     dependencies:
       execa: 5.1.1
 
-  '@vercel/functions@3.11.1':
+  '@vercel/functions@3.11.1(ws@8.23.0)':
     dependencies:
       '@vercel/oidc': 4.0.8
+    optionalDependencies:
+      ws: 8.23.0
 
   '@vercel/oidc@4.0.8':
     dependencies:

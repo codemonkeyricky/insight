@@ -6,6 +6,7 @@ import type { IRBatch } from "@insight/sdk";
 import { importBindings, matchCall, matchEnvRead, matchExportRoute, matchFetch, matchSchedule, matchServe, matchWorker, nodeScriptArgument, scriptPath, urlText, type ImportBinding, type ScriptPath, type UrlText, type WorkerEnv } from "./effects.js";
 import { channelIndex, matchChannelRecv, matchChannelSend } from "./channels.js";
 import { scriptKind } from "./digest.js";
+import { emitState } from "./state.js";
 import { dispatchFor, MAX_DISPATCH_TARGETS, propName } from "./dispatch.js";
 import { workspaceManifestPaths, workspacePackages, workspaceProgramEntries, workspaceSource, type ProgramEntry, type WorkspacePackage } from "./packages.js";
 
@@ -1195,6 +1196,10 @@ export function emitFile(project: Project, rel: string): IRBatch {
   };
   const push = (node: IRNode) => records.push({ node });
   const pushEdge = (edge: IREdge) => records.push({ edge });
+  /** The flow.branch-arm id emitted for each arm node, so state tests can name their arms. */
+  const armIds = new Map<ts.Node, string>();
+  /** The calls.call edge emitted for each call to a project function, so state facts can annotate it. */
+  const callEdges = new Map<ts.CallExpression, IREdge>();
 
   const dependOn = (target: string) => {
     if (target !== rel) deps.add(target);
@@ -1443,7 +1448,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
       const sym = project.checker.getSymbolAtLocation(nameOf(callee));
       const target = declOf(project, sym);
       if (target?.entity.type === "function") {
-        pushEdge({
+        const callEdge: IREdge = {
           from: fn,
           to: target.id,
           facet: "calls",
@@ -1451,7 +1456,9 @@ export function emitFile(project: Project, rel: string): IRBatch {
           attrs: { callee: callee.getText(sf).slice(0, 200) },
           span: spanOf(rel, sf, callee),
           provenance: PROV,
-        });
+        };
+        callEdges.set(call, callEdge);
+        pushEdge(callEdge);
         dependOn(target.rel);
       } else {
         // A call through an interface or abstract member: every implementation the project declares is a candidate.
@@ -1600,17 +1607,14 @@ export function emitFile(project: Project, rel: string): IRBatch {
       }
     };
 
-    const flow = (tag: string, kind: string, attrs: Record<string, unknown>, at: ts.Node = node) =>
-      push({
-        id: uniqueId(`${tag}:${pos(sf, at.getStart(sf)).join(":")}`),
-        facet: "flow",
-        kind,
-        parent: owner,
-        attrs,
-        span: spanOf(rel, sf, at),
-        provenance: PROV,
-      });
-    const arm = (label: string, at: ts.Node) => flow("arm", "flow.branch-arm", { label }, at);
+    const flow = (tag: string, kind: string, attrs: Record<string, unknown>, at: ts.Node = node): string => {
+      const id = uniqueId(`${tag}:${pos(sf, at.getStart(sf)).join(":")}`);
+      push({ id, facet: "flow", kind, parent: owner, attrs, span: spanOf(rel, sf, at), provenance: PROV });
+      return id;
+    };
+    const arm = (label: string, at: ts.Node) => {
+      armIds.set(at, flow("arm", "flow.branch-arm", { label }, at));
+    };
     const block = (label: string, at: ts.Node) => flow("block", "flow.block", { label }, at);
 
     if (ts.isIfStatement(node)) {
@@ -1764,6 +1768,27 @@ export function emitFile(project: Project, rel: string): IRBatch {
     });
   };
   visit(sf, rel, rel);
+
+  // State facts need the arm ids and call edges the walk above produced, so they run after it.
+  if (!sf.isDeclarationFile) {
+    const state = emitState({
+      project,
+      rel,
+      sf,
+      moduleId,
+      pos: (offset) => pos(sf, offset),
+      spanOf: (n) => spanOf(rel, sf, n),
+      declOf: (sym) => declOf(project, sym),
+      uniqueId,
+      armId: (n) => armIds.get(n),
+      provenance: PROV,
+    });
+    for (const n of state.nodes) push(n);
+    for (const [call, attrs] of state.callAttrs) {
+      const edge = callEdges.get(call);
+      if (edge) edge.attrs = { ...edge.attrs, ...attrs };
+    }
+  }
 
   for (const d of project.program.getSyntacticDiagnostics(sf)) {
     const start = d.start ?? 0;

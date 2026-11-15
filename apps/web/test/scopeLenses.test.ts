@@ -159,3 +159,12 @@ describe("nodeText", () => {
     expect(nodeText("src/a.ts:12 load")).toBe("src/a.ts:12 load");
   });
 });
+
+describe("a state-machine view", () => {
+  it("is content only when it has a transition", async () => {
+    const { viewHasContent } = await import("../src/scopeLenses");
+    const base = { type: "state-machine" as const, id: "m", title: "m", holder: { id: "h", name: "h", domainKind: "enum" as const }, states: [] };
+    expect(viewHasContent({ ...base, transitions: [] })).toBe(false);
+    expect(viewHasContent({ ...base, transitions: [{ id: "t", from: "a", to: "b", confidence: "exact", sites: [] }] })).toBe(true);
+  });
+});

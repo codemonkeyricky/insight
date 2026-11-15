@@ -16,7 +16,7 @@
     "inputs": { "description": "Extra input globs. Editing a matching file marks every shard of this plugin dirty.", "type": "array", "items": { "type": "string", "minLength": 1 } },
     "provides": {
       "type": "array",
-      "items": { "type": "string", "pattern": "^(structure|packaging|flow|calls|concurrency|sync|effects|x-[a-z0-9-]+)$" },
+      "items": { "type": "string", "pattern": "^(structure|packaging|flow|calls|concurrency|sync|effects|state|x-[a-z0-9-]+)$" },
       "uniqueItems": true
     },
     "hidden": { "description": "A lens with no tab in the web app. It still runs and its results stay available to the CLI and API.", "type": "boolean" },
