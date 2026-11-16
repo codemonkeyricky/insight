@@ -379,7 +379,9 @@ export function fileFlow(paths: ProjectPaths, snapshot: string, file: string, fo
   const snap = loadSnapshot(paths, snapshot);
   const nodes = [...snap.nodes.values()].filter((n) => n.span?.file === file);
   const edges = snap.edges.filter((e) => e.span?.file === file);
-  if (focus === "intermodule") return buildFileFlow(file, nodes, edges, { focus: "intermodule", callees: calleesFor(paths, snapshot) });
+  if (focus === "intermodule") {
+    return buildFileFlow(file, nodes, edges, { focus: "intermodule", callees: calleesFor(paths, snapshot), state: couplingFor(paths, snapshot).state });
+  }
   return buildFileFlow(file, nodes, edges, { coupling: couplingFor(paths, snapshot) });
 }
 
@@ -580,7 +582,7 @@ export function scopeExecOf(paths: ProjectPaths, snapshot: string, path: string,
   const snap = loadSnapshot(paths, snapshot);
   const kind = scopeKindOf(snap, scope);
   if (!kind) throw new ProjectError(404, "no such scope");
-  const opts = focus === "intermodule" ? { focus: "intermodule" as const, callees: calleesFor(paths, snapshot) } : {};
+  const opts = focus === "intermodule" ? { focus: "intermodule" as const, callees: calleesFor(paths, snapshot), state: couplingFor(paths, snapshot).state } : {};
   const view: ScopeExecView = { scope, kind, exec: execModel(snap.model.doc.nodes, snap.model.doc.edges, scope, opts) };
   scopeExecs.set(key, view);
   if (scopeExecs.size > SCOPE_EXEC_LIMIT) scopeExecs.delete(scopeExecs.keys().next().value as string);

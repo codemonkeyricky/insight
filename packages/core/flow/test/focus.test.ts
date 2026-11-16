@@ -250,3 +250,43 @@ export function run(path: string): number {
     expect(focused.functions.find((f) => f.id === id)?.chart).toEqual([direct.width, direct.height]);
   });
 });
+
+describe("inter-module focus keeps state rows", () => {
+  const FILES: Record<string, string> = {
+    "package.json": JSON.stringify({ name: "focus-state", type: "module" }),
+    "src/b.ts": `export function helper(n: number): number {
+  return n + 1;
+}
+`,
+    "src/a.ts": `import { helper } from "./b";
+
+let total = 0;
+
+export function run(n: number): number {
+  total = total + n;
+  return helper(total);
+}
+`,
+  };
+
+  it("draws a state row of a module variable that run reads and writes, under focus and without it", async () => {
+    const { nodes, edges } = await indexFixture(FILES);
+    const index = couplingIndex(nodes, edges);
+    const map = calleeMapOf(index);
+    const focused = factsForFile("src/a.ts", nodes, edges, { focus: "intermodule", callees: map, state: index.state }).find((f) => f.id === "src/a.ts#run");
+    const drawn = labels(focused?.items ?? []);
+    expect(drawn.some((l) => l.startsWith("state:") && l.includes("total"))).toBe(true);
+    expect(drawn.some((l) => l.startsWith("call:") && l.includes("helper"))).toBe(true);
+    const plain = labels(factsForFile("src/a.ts", nodes, edges, { state: index.state }).find((f) => f.id === "src/a.ts#run")?.items ?? []);
+    expect(plain.some((l) => l.startsWith("state:") && l.includes("total"))).toBe(true);
+  });
+
+  it("buildFileFlow keeps the state rows of run when given the state index", async () => {
+    const { nodes, edges } = await indexFixture(FILES);
+    const index = couplingIndex(nodes, edges);
+    const flow = buildFileFlow("src/a.ts", nodes, edges, { focus: "intermodule", callees: calleeMapOf(index), state: index.state });
+    const run = flow.functions.find((f) => f.id === "src/a.ts#run");
+    expect(run).toBeDefined();
+    expect(JSON.stringify(run)).toContain("total");
+  });
+});

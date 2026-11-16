@@ -106,10 +106,13 @@ export function buildFileFlow(
   file: string,
   nodes: Iterable<IRNode>,
   edges: Iterable<IREdge>,
-  opts: { coupling?: CouplingIndex; focus?: "intermodule"; callees?: ReadonlyMap<string, FocusCallee> } = {},
+  opts: { coupling?: CouplingIndex; focus?: "intermodule"; callees?: ReadonlyMap<string, FocusCallee>; state?: StateIndex } = {},
 ): FileFlow {
   const coupling = opts.coupling;
-  const focus = opts.focus === "intermodule" ? { focus: "intermodule" as const, callees: opts.callees ?? new Map<string, FocusCallee>() } : {};
+  // The focus needs the state index too: state rows are built only when factsForFile has one. The coupling index carries it.
+  const focus = opts.focus === "intermodule"
+    ? { focus: "intermodule" as const, callees: opts.callees ?? new Map<string, FocusCallee>(), state: opts.state ?? coupling?.state }
+    : {};
   const facts = factsForFile(file, nodes, edges, { ...(coupling ? { sources: true, state: coupling.state } : {}), ...focus });
   return {
     file,
