@@ -12,7 +12,7 @@ This document is the operator's view.
 ## Architecture
 
 ```
-browser ──► arch-insight.vercel.app (static: dist-hosted, VITE_STORAGE_BASE = KV_PUBLIC_BASE/)
+browser ──► system-insight.vercel.app (static: dist-hosted, VITE_STORAGE_BASE = KV_PUBLIC_BASE/)
    │
    ├─ POST /api/index ───┐
    ├─ GET  /api/status ──┤
@@ -150,7 +150,7 @@ End-to-end checks were run with playwright-core and headless chromium (see the P
 
 ## Links
 
-A repository opens at a path as well as from the home page: `https://arch-insight.vercel.app/facebook/zstd` (the
+A repository opens at a path as well as from the home page: `https://system-insight.vercel.app/facebook/zstd` (the
 `github.com/<owner>/<repo>` and `https://github.com/<owner>/<repo>` forms work too, with an optional `.git`). The page
 moves the path to the hash route `#/gh/<owner>/<repo>` before the router reads it, and that route indexes the repository
 if it has no index yet, exactly as the home page's Index button does. Paths under `/api/`, `/assets/` and
@@ -293,13 +293,13 @@ valid signature.
 | `SESSION_SECRET` | Function | 32 random bytes, base64. Seals the session and the OAuth state cookies. |
 | `STORAGE_SIGNING_KEY` | Function and the storage Worker (same value) | 32 random bytes, base64. Signs the storage paths. Generate one with `openssl rand -base64 32`. |
 | `STORAGE_PUBLIC_BASE` | Function | The storage Worker's public URL (no trailing slash). Falls back to `KV_PUBLIC_BASE`, then `R2_PUBLIC_BASE`. |
-| `PUBLIC_ORIGIN` | Function | The site's origin, e.g. `https://arch-insight.vercel.app`. Used for the OAuth redirect and the origin check. |
+| `PUBLIC_ORIGIN` | Function | The site's origin, e.g. `https://system-insight.vercel.app`. Used for the OAuth redirect and the origin check. |
 | `ALLOWED_ORIGINS` | Function (optional) | Extra origins allowed to make state-changing requests (comma separated), e.g. a preview URL or `http://localhost:5310`. |
 
 GitHub App setup (Settings → Developer settings → GitHub Apps → New GitHub App):
 
-1. Name it, e.g. "Insight Viewer". Homepage URL `https://arch-insight.vercel.app`.
-2. Callback URL `https://arch-insight.vercel.app/api/auth/callback`. Add `http://localhost:5310/api/auth/callback` for local
+1. Name it, e.g. "Insight Viewer". Homepage URL `https://system-insight.vercel.app`.
+2. Callback URL `https://system-insight.vercel.app/api/auth/callback`. Add `http://localhost:5310/api/auth/callback` for local
    development.
 3. Turn on "Expire user authorization tokens". Turn off "Active" under Webhook (no webhook).
 4. Repository permissions: Contents, read-only (Metadata read-only comes with it). No other permissions.

@@ -47,8 +47,8 @@ describe("node adapter: Set-Cookie", () => {
 
 describe("node adapter: the request URL", () => {
   it("builds the URL from x-forwarded-host and x-forwarded-proto", async () => {
-    const res = await fetch(`${origin}/x?y=1`, { headers: { "x-forwarded-host": "arch-insight.vercel.app", "x-forwarded-proto": "https" } });
-    expect(await res.json()).toEqual({ url: "https://arch-insight.vercel.app/x?y=1" });
+    const res = await fetch(`${origin}/x?y=1`, { headers: { "x-forwarded-host": "system-insight.vercel.app", "x-forwarded-proto": "https" } });
+    expect(await res.json()).toEqual({ url: "https://system-insight.vercel.app/x?y=1" });
   });
 
   it("uses the host header with a loopback http origin when no forwarded headers are sent", async () => {
