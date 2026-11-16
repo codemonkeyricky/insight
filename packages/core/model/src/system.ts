@@ -357,6 +357,24 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
       for (const s of sourcesOf(owner, file, comp)) addFact(s.from, id, "listens", "listen", site, exact, { fact: node.id });
       continue;
     }
+    if (node.kind === "effects.store.access") {
+      // A binding or SDK call into a store (a Worker's KV or D1 binding, a bucket). The Cloudflare KV and R2 ids are the ones
+      // classifyHost gives their REST calls, so a binding and a REST call reach one external.
+      const store = typeof attrs.store === "string" ? attrs.store : "other";
+      const ext = storeAccessExternal(store);
+      const id = ensureExternal(ext);
+      const verb: SystemEdge["verb"] = attrs.op === "write" || attrs.op === "delete" ? "writes" : "reads";
+      const api = typeof attrs.api === "string" ? attrs.api : "store";
+      // The binding name is kept on the store external, as an env var name is kept on the environment.
+      const binding = typeof attrs.binding === "string" ? attrs.binding : undefined;
+      if (binding !== undefined && binding !== "") {
+        const target = externals.get(id) as SystemExternal;
+        if (!target.names?.includes(binding)) target.names = [...(target.names ?? []), binding].sort();
+      }
+      const ev = evidenceOf(attrs, false);
+      for (const s of sourcesOf(owner, file, comp)) addFact(s.from, id, verb, api, site, exact, ev ? { ev, fact: node.id } : { fact: node.id });
+      continue;
+    }
     if (node.kind === "effects.os.call") {
       const op = typeof attrs.op === "string" ? attrs.op : "info";
       const target = typeof attrs.target === "string" ? attrs.target : undefined;
@@ -933,6 +951,19 @@ export function nodePackageRoots(model: ProjectModel): string[] {
 }
 
 /** The verb of an HTTP method: reads for GET and HEAD, writes for the rest that change state, calls when unknown. */
+/**
+ * The external a store access (`effects.store.access`) stands for. Cloudflare KV and R2 take the ids classifyHost gives
+ * their REST calls, so a Worker binding and a REST call to the same service share one external.
+ */
+function storeAccessExternal(store: string): SystemExternal {
+  if (store === "cloudflare-kv" || store === "cloudflare-r2") {
+    const svc = classifyHost("api.cloudflare.com", store === "cloudflare-kv" ? "/storage/kv/" : "/r2/");
+    return { id: svc.id, label: svc.label, category: "store" };
+  }
+  if (store === "cloudflare-d1") return { id: "store:cloudflare-d1", label: "Cloudflare D1", category: "store" };
+  return { id: `store:${store}`, label: store, category: "store" };
+}
+
 function methodVerb(method: string | undefined): SystemEdge["verb"] {
   if (method === "GET" || method === "HEAD") return "reads";
   if (method === "POST" || method === "PUT" || method === "PATCH" || method === "DELETE") return "writes";

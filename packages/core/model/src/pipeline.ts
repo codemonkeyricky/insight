@@ -6,7 +6,7 @@ import type { NodeId, Span, IREdge } from "@insight/ir";
 import { isNoisePath } from "@insight/flow";
 import type { ProjectModel, Rel } from "./model.js";
 import { normalizeScope, ROOT_SCOPE } from "./scope.js";
-import { componentOf, nodePackageRoots, packageRoots, systemModel, type Site, type SystemComponent, type SystemOptions } from "./system.js";
+import { componentOf, deployRoots, nodePackageRoots, packageRoots, systemModel, type Site, type SystemComponent, type SystemOptions } from "./system.js";
 import { scopeView } from "./view.js";
 import { enclosingFn, sequencePipelines, type PipelineSequence } from "./sequence.js";
 
@@ -96,7 +96,7 @@ export function pipelineModel(model: ProjectModel, scopePath: string, opts: Pipe
   const inner = sys.via === undefined ? scope : scope === ROOT_SCOPE ? sys.via : `${scope}/${sys.via}`;
   const tests = opts.tests === true || isNoisePath(scope) || isNoisePath(`${scope}/x`);
   const view = scopeView(model, inner);
-  const packages = packageRoots(model.files, nodePackageRoots(model));
+  const packages = packageRoots(model.files, [...nodePackageRoots(model), ...deployRoots(model.files)]);
   const sysById = new Map(sys.components.map((c) => [c.id, c] as const));
 
   // Ownership of each in-scope, non-noise file: its System component (files of dropped components have none).

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { IRDocument, IRNode } from "@insight/ir";
 import * as fx from "@insight/sdk/testing";
-import { buildProjectModel, systemModel, type SystemModel } from "../src/index.js";
+import { buildProjectModel, pipelineModel, systemModel, type SystemModel } from "../src/index.js";
 import { storeDriverOf } from "../src/services.js";
 
 const file = (path: string): IRNode => fx.node(path, "structure", "structure.file", { attrs: { path }, span: fx.span(path, 0, 0, 0, 0) });
@@ -205,5 +205,89 @@ describe("database driver stores", () => {
     expect(storeDriverOf("@vercel/kv/x")?.label).toBe("Vercel KV");
     expect(storeDriverOf("pg-pool")).toBeUndefined();
     expect(storeDriverOf("node:sqlite")?.id).toBe("store:sqlite");
+  });
+});
+
+describe("store access facts", () => {
+  const KV_WORKER = "apps/storage-worker/src/index.ts";
+  const HOSTED = "apps/hosted/src/api.ts";
+  const kvRest = "/client/v4/accounts/acc/storage/kv/namespaces/ns/values/key";
+
+  function storeDoc(extra: IRNode[] = [], storeEdges: IRNode[] = []): IRDocument {
+    return {
+      nodes: [
+        file("apps/storage-worker/wrangler.toml"),
+        file(KV_WORKER),
+        fn(KV_WORKER, "handle"),
+        file("apps/hosted/package.json"),
+        file(HOSTED),
+        fn(HOSTED, "save"),
+        ...storeEdges,
+        ...extra,
+      ],
+      edges: [],
+      findings: [],
+    };
+  }
+  const access = (attrs: Record<string, unknown>, line = 3) => effect(KV_WORKER, "handle", line, "effects.store.access", attrs);
+  const rest = (method: string, line = 4) =>
+    effect(HOSTED, "save", line, "effects.net.connect", { api: "fetch", host: "api.cloudflare.com", path: kvRest, method, confidence: "exact" });
+
+  it("gives a KV binding read and a KV REST PUT one external, with reads and writes edges", () => {
+    const sys = systemModel(modelOf(storeDoc([rest("PUT")], [access({ api: "env.INDEX", store: "cloudflare-kv", op: "read", binding: "INDEX" })])), "");
+    const kv = sys.externals.filter((e) => e.id === "svc:cloudflare-kv");
+    expect(kv).toHaveLength(1);
+    expect(kv[0]).toMatchObject({ label: "Cloudflare KV", category: "store" });
+    const to = sys.edges.filter((e) => e.to === "svc:cloudflare-kv");
+    expect(to.map((e) => e.verb).sort()).toEqual(["reads", "writes"]);
+    expect(kv[0]?.names).toEqual(["INDEX"]);
+    expect(sys.externals.some((e) => e.id.startsWith("host:api.cloudflare.com"))).toBe(false);
+  });
+
+  it("uses the writes verb for a write or delete op", () => {
+    const sys = systemModel(modelOf(storeDoc([], [access({ api: "env.INDEX", store: "cloudflare-kv", op: "delete", binding: "INDEX" })])), "");
+    expect(sys.edges.find((e) => e.to === "svc:cloudflare-kv")?.verb).toBe("writes");
+  });
+
+  it("maps D1 to its store and an unknown store to store:<store>", () => {
+    const sys = systemModel(
+      modelOf(storeDoc([], [access({ api: "env.DB", store: "cloudflare-d1", op: "list" }, 3), access({ api: "x", store: "turso", op: "write" }, 5)])),
+      "",
+    );
+    expect(sys.externals).toEqual(expect.arrayContaining([expect.objectContaining({ id: "store:cloudflare-d1", label: "Cloudflare D1", category: "store" })]));
+    expect(sys.externals).toEqual(expect.arrayContaining([expect.objectContaining({ id: "store:turso", label: "turso", category: "store" })]));
+    expect(sys.edges.find((e) => e.to === "store:turso")?.verb).toBe("writes");
+    expect(sys.edges.find((e) => e.to === "store:cloudflare-d1")?.verb).toBe("reads");
+  });
+
+  it("keeps a wrangler-only folder as a pipeline component", () => {
+    const frontA = "plugins/a/src/a.ts";
+    const host = "host/src/run.ts";
+    const doc: IRDocument = {
+      nodes: [
+        file("host/package.json"),
+        file(host),
+        fn(host, "run"),
+        file("plugins/a/package.json"),
+        file(frontA),
+        fn(frontA, "detect"),
+        file("workers/edge/wrangler.toml"),
+        file("workers/edge/src/index.ts"),
+        fn("workers/edge/src/index.ts", "detect"),
+      ],
+      edges: [
+        fx.edge(`${host}#run`, [`${frontA}#detect`, "workers/edge/src/index.ts#detect"], "calls", "calls.call", {
+          span: fx.span(host, 10, 2, 10, 20),
+          attrs: { callee: "frontend.detect", how: "interface" },
+        }),
+        fx.edge(`${host}#run`, [`${frontA}#detect`, "workers/edge/src/index.ts#detect"], "calls", "calls.call", {
+          span: fx.span(host, 11, 2, 11, 20),
+          attrs: { callee: "frontend.extract", how: "interface" },
+        }),
+      ],
+      findings: [],
+    };
+    const pm = pipelineModel(modelOf(doc), "");
+    expect(pm.components.map((c) => c.id)).toContain("workers/edge");
   });
 });
