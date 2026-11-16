@@ -17,13 +17,16 @@ export const EXEC_PROJECT_ROOT = "project";
 export const MAX_SYNC_EDGES_PER_RESOURCE = 50;
 /** The name the IR gives a channel whose identity it could not resolve. Such a channel is listed but never paired. */
 const DYNAMIC_CHANNEL = "<dynamic>";
+/** The scene id of the group that holds the functions no thread runs (the System tab's "Not on a thread"). */
+export const UNTHREADED_ID = "unthreaded";
+export const UNTHREADED_LABEL = "Not on a thread";
 /** The synthetic process that holds the grounded main threads no program owns. */
 export const MAIN_PROCESS_ID = "prog:main";
 
 /** The note on each function drawn as plain code flow, with no runtime box around it. */
 export const NO_RUNTIME_NOTE = "Plain call with no runtime context. Zoom out to see where it runs.";
 /** The root's note when no thread is grounded in the scope. */
-const NO_RUNTIME_ROOT_NOTE = "Code flow, no runtime context found in this scope.";
+export const NO_RUNTIME_ROOT_NOTE = "Code flow, no runtime context found in this scope.";
 
 /** Every node kind of the execution scene, with its level. */
 export const EXEC_LEVELS: Record<string, SceneLevel> = {
@@ -41,6 +44,15 @@ export const EXEC_LEVELS: Record<string, SceneLevel> = {
 export function isGroundedThread(t: ExecThread, nameOf: (fnId: string) => string | undefined): boolean {
   const flag = (t as { grounded?: boolean }).grounded;
   return flag ?? (t.kind !== "main" || t.roots.some((r) => nameOf(r) === "main"));
+}
+
+/**
+ * Whether the model has runtime context: a grounded thread, or a coroutine. The System tab draws its thread frames when it
+ * does; without it the functions run on no thread.
+ */
+export function hasRuntimeContext(model: ExecModel): boolean {
+  const names = new Map(model.functions.map((f) => [f.id, f.name]));
+  return model.threads.some((t) => isGroundedThread(t, (id) => names.get(id)) || t.coroutines.length > 0);
 }
 
 export function execThreadId(threadId: string): string {

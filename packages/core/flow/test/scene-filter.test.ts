@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { ExecFunctionRef, ExecModel, ExecModelStats, ExecThread } from "../src/exec-model.js";
 import { buildExecScene, execFnId, execThreadId } from "../src/exec-scene.js";
-import { execRootsOnly, keepScene } from "../src/scene-filter.js";
+import { keepScene } from "../src/scene-filter.js";
+import { unrootedScene } from "../src/unrooted.js";
 import type { Scene, SceneNode } from "../src/scene.js";
 
 const ZERO_STATS: ExecModelStats = {
@@ -171,123 +172,11 @@ describe("keepScene", () => {
   });
 });
 
-describe("execRootsOnly", () => {
-  it("keeps each thread and the placements of its roots, and drops coroutines and the non-root plain code flow", () => {
-    const m = basic();
-    const full = buildExecScene(m);
-    // The full scene has the nodes the cut must remove.
-    expect(full.nodes.has("co:main:co")).toBe(true);
-    expect(full.nodes.has("project>f")).toBe(true);
-
-    const out = execRootsOnly(full, m);
-    // "project>f" runs on no thread and nothing calls it, so it is a root of the plain code flow and is kept.
-    expect(keysOf(out)).toEqual(
-      [
-        full.root,
-        "prog:main",
-        execFnId(full.root, "f"),
-        execThreadId("main"),
-        execFnId(execThreadId("main"), "main"),
-        execThreadId("spawn:1"),
-        execFnId(execThreadId("spawn:1"), "work"),
-      ].sort(),
-    );
-    expect(out.root).toBe(full.root);
-    expect(out.nodes.get(execThreadId("main"))?.children).toEqual([execFnId(execThreadId("main"), "main")]);
-  });
-
-  it("keeps the spawn edge between kept ends and drops the call edges that leave the roots", () => {
-    const m = basic();
-    const out = execRootsOnly(buildExecScene(m), m);
-    expect(edgesOf(out)).toEqual([[execFnId(execThreadId("main"), "main"), execThreadId("spawn:1"), "spawn"]]);
-  });
-
-  it("keeps a thread that starts no function the scene holds", () => {
-    const m = model({
-      functions: [fn("main", 1), fn("x", 2)],
-      threads: [
-        mainThread({ roots: ["main"], reached: ["main", "x"] }),
-        { id: "spawn:2", kind: "thread", grounded: true, roots: [], reach: 0, reached: [], coroutines: [], coroutineOnly: [] },
-      ],
-    });
-    const out = execRootsOnly(buildExecScene(m), m);
-    expect(out.nodes.has(execThreadId("spawn:2"))).toBe(true);
-    expect(out.nodes.get(execThreadId("spawn:2"))?.children).toEqual([]);
-    expect(out.nodes.has(execFnId(execThreadId("main"), "x"))).toBe(false);
-  });
-
-  it("ignores a root the thread runs only in a coroutine, and a root the model does not list", () => {
-    const m = model({
-      functions: [fn("main", 1), fn("co", 2, { runtime: "coroutine" })],
-      threads: [
-        mainThread({
-          roots: ["main", "co", "ghost"],
-          reached: ["co", "main"],
-          coroutineOnly: ["co"],
-          coroutines: [{ target: "co", how: "await", dispatchedBy: ["main"], callees: [] }],
-        }),
-      ],
-    });
-    const full = buildExecScene(m);
-    const out = execRootsOnly(full, m);
-    expect(keysOf(out)).toEqual(["prog:main", full.root, execThreadId("main"), execFnId(execThreadId("main"), "main")].sort());
-  });
-
-  it("keeps the flat roots of plain code flow: an ungrounded thread's roots and the functions nothing calls", () => {
-    // No thread is grounded: main (an inferred entry) calls helper, and lone is called by nothing.
-    const m = model({
-      functions: [fn("main", 1), fn("helper", 2), fn("lone", 3), fn("leaf", 4)],
-      threads: [mainThread({ id: "main", kind: "main", grounded: false, roots: ["main"], reached: ["main", "helper", "leaf"] })],
-      calls: [
-        ["main", "helper"],
-        ["helper", "leaf"],
-      ],
-      unthreaded: ["lone"],
-    });
-    const full = buildExecScene(m);
-    expect(full.nodes.has("project>main")).toBe(true);
-    const out = execRootsOnly(full, m);
-    expect(keysOf(out)).toEqual([full.root, "project>lone", "project>main"].sort());
-    expect(out.nodes.get(full.root)?.children).toEqual(["project>main", "project>lone"]);
-    expect(out.nodes.has("project>helper")).toBe(false);
-    expect(edgesOf(out)).toEqual([]);
-  });
-
-  describe("a thread with many functions over two files", () => {
-    // 26 functions over two files. The cut keeps the roots' placements directly under the thread, with no file node.
-    const names = (prefix: string) => Array.from({ length: 13 }, (_, i) => `${prefix}${i}`);
-    const aNames = names("a");
-    const bNames = names("b");
-    const functions = [
-      ...aNames.map((id, i) => fn(id, i + 1, { file: "src/a.ts" })),
-      ...bNames.map((id, i) => fn(id, i + 1, { file: "src/b.ts" })),
-    ];
-    const reached = [...aNames, ...bNames].sort();
-
-    it("keeps the placement of each root under its thread, and drops the others", () => {
-      const m = model({
-        functions,
-        threads: [mainThread({ roots: ["a0", "b0"], reached, reach: reached.length })],
-        calls: [
-          ["a0", "a1"],
-          ["a1", "b0"],
-        ],
-      });
-      const thread = execThreadId("main");
-      const out = execRootsOnly(buildExecScene(m), m);
-      expect(keysOf(out)).toEqual(["prog:main", "project", thread, execFnId(thread, "a0"), execFnId(thread, "b0")].sort());
-      expect(out.nodes.get(thread)?.children).toEqual([execFnId(thread, "a0"), execFnId(thread, "b0")]);
-      expect(out.nodes.has(execFnId(thread, "a1"))).toBe(false);
-      expect([...out.nodes.values()].some((n) => n.kind === "file")).toBe(false);
-    });
-  });
-});
-
 describe("flattenRoots", () => {
   it("drops every container: the roots are boxes directly on the project, once each", async () => {
     const { flattenRoots } = await import("../src/scene-filter.js");
     const m = basic();
-    const cut = execRootsOnly(buildExecScene(m), m);
+    const cut = unrootedScene(buildExecScene(m), m);
     const flat = flattenRoots(cut, m);
     const kinds = [...flat.nodes.values()].map((n) => n.kind);
     expect(kinds.every((k) => k === "function" || k === "project")).toBe(true);
@@ -296,10 +185,24 @@ describe("flattenRoots", () => {
     expect(new Set(refs).size).toBe(refs.length);
   });
 
+  it("labels a module entry's subtitle with its top-level code, and sorts the boxes by name", async () => {
+    const { flattenRoots } = await import("../src/scene-filter.js");
+    const m = model({
+      functions: [fn("zeta", 1), fn("alpha", 2), { ...fn("src/a.ts#(module)", 1, { file: "src/a.ts" }), name: "src/a.ts", module: true }],
+      threads: [mainThread({ roots: ["zeta", "alpha", "src/a.ts#(module)"], reached: ["zeta", "alpha", "src/a.ts#(module)"] })],
+      calls: [["src/a.ts#(module)", "alpha"]],
+    });
+    const flat = flattenRoots(buildExecScene(m), m);
+    const labels = (flat.nodes.get(flat.root)?.children ?? []).map((c) => flat.nodes.get(c)?.label);
+    expect(labels).toEqual([...labels].sort());
+    const module = [...flat.nodes.values()].find((n) => n.kind === "function" && n.ref === "src/a.ts#(module)");
+    expect(module?.detail).toBe("top level · src/a.ts:1");
+  });
+
   it("gives each box its file relative to the scope as the subtitle", async () => {
     const { flattenRoots } = await import("../src/scene-filter.js");
     const m = { ...basic(), scope: "src" };
-    const flat = flattenRoots(execRootsOnly(buildExecScene(m), m), m);
+    const flat = flattenRoots(unrootedScene(buildExecScene(m), m), m);
     const box = [...flat.nodes.values()].find((n) => n.kind === "function");
     expect(box?.detail).toMatch(/^app\.ts:\d+$/);
   });

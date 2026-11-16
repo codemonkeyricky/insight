@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { IREdge, IRNode } from "@insight/ir";
 import { execModel, resourcesOf, type ExecFunctionRef, type ExecModel, type ExecModelStats, type ExecResource, type ExecThread } from "../src/exec-model.js";
 import { buildExecScene, execFnId, execThreadId } from "../src/exec-scene.js";
-import { execRootsOnly, keepScene } from "../src/scene-filter.js";
+import { keepScene } from "../src/scene-filter.js";
+import { unrootedScene } from "../src/unrooted.js";
 import type { Scene, SceneNode } from "../src/scene.js";
 import { PROVENANCE, callEdge, fnNode } from "./synthetic.js";
 
@@ -157,7 +158,7 @@ describe("buildExecScene: named sync edges", () => {
     ]);
   });
 
-  it("keeps the roots that reach a site, and joins them with the named edge, when the scene is cut to roots only", () => {
+  it("joins the cards that reach a site with the named edge, when the scene is cut to cards", () => {
     // main's root m1 calls s1, which locks m. The worker's root w1 calls w2, which locks m too. s1 and w2 are not roots.
     const functions: ExecFunctionRef[] = [
       { id: "m1", name: "m1", file: "src/app.ts", line: 1, inScope: true, runtime: "thread" },
@@ -205,14 +206,16 @@ describe("buildExecScene: named sync edges", () => {
     const full = buildExecScene(model);
     expect(syncEdges(full).map((e) => [e.from, e.to])).toEqual([[execFnId(execThreadId("main"), "s1"), execFnId(execThreadId("t1"), "w2")]]);
 
-    const cut = execRootsOnly(full, model);
+    // m1 and w1 are the cards (nothing in scope calls them); s1 and w2 are called, so each site joins the card that reaches it.
+    const cut = unrootedScene(full, model);
     expect(cut.nodes.has(execFnId(execThreadId("main"), "m1"))).toBe(true);
+    expect(cut.nodes.has(execFnId(execThreadId("t1"), "w1"))).toBe(true);
     expect(cut.nodes.has(execFnId(execThreadId("main"), "s1"))).toBe(false);
     expect(cut.nodes.has(execFnId(execThreadId("t1"), "w2"))).toBe(false);
     expect(syncEdges(cut)).toEqual([
       {
-        from: execThreadId("main"),
-        to: execThreadId("t1"),
+        from: execFnId(execThreadId("main"), "m1"),
+        to: execFnId(execThreadId("t1"), "w1"),
         kind: "sync",
         count: 1,
         how: "lock",
