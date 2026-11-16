@@ -28,11 +28,12 @@ export function cardWidth(label: string): number {
 }
 
 /**
- * The room an opened card takes beyond its own box, for the expansions drawn beside it: the width from the card's right
- * edge and the height from its top. A card with no entry takes only its own box. The web computes these from the open
+ * The room an opened card takes beyond its own box, for the expansions drawn beside it: `w` from the card's right edge
+ * (callee charts), `left` from its left edge (a callers box and what hangs from it open to the left; absent is none) and
+ * the height from its top. A card with no entry takes only its own box. The web computes these from the open
  * expansions (footprintOf in apps/web/src/zoom/expand.ts).
  */
-export type Footprint = ReadonlyMap<string, Size>;
+export type Footprint = ReadonlyMap<string, Size & { left?: number }>;
 
 /**
  * The roots-only layout of a flat scene: the root's children are the cards, wrapped in rows of at most CARD_WRAP_W, in
@@ -51,14 +52,15 @@ export function gridRootsLayout(scene: Scene, footprint?: Footprint): SceneLayou
     const n = scene.nodes.get(id);
     const w = cardWidth(n?.label ?? id);
     const room = footprint?.get(id);
-    const outerW = w + (room?.w ?? 0);
+    const left = room?.left ?? 0;
+    const outerW = left + w + (room?.w ?? 0);
     const outerH = Math.max(CARD_H, room?.h ?? 0);
     if (x > 0 && x + outerW > CARD_WRAP_W) {
       y += rowH + CARD_GAP;
       x = 0;
       rowH = 0;
     }
-    slots.push({ id, x: CARD_PAD_SIDE + x, y: CARD_PAD_TOP + y, w, h: CARD_H });
+    slots.push({ id, x: CARD_PAD_SIDE + x + left, y: CARD_PAD_TOP + y, w, h: CARD_H });
     x += outerW + CARD_GAP;
     rowH = Math.max(rowH, outerH);
     width = Math.max(width, x - CARD_GAP);

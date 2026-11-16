@@ -132,3 +132,19 @@ describe("refsOf: a spawn caller", () => {
     expect(refs.calledBy.map((r) => [r.id, r.name, r.isFunction])).toEqual([[`${A}#main`, "main · spawns Worker", true]]);
   });
 });
+
+describe("refsOf: a caller that renders and passes a function keeps its invoking row", () => {
+  const F = `${B}#f`;
+  const K = `${A}#k`;
+  const doc = (hows: string[]): IRDocument => ({
+    nodes: [fileNode(A), fileNode(B), fnNode(B, "f", 2), fnNode(A, "k", 2)],
+    edges: hows.map((how, i) => fx.edge(K, F, "calls", "calls.reference", { attrs: { how }, span: fx.span(A, 3 + i, 0, 3 + i, 5) })),
+    findings: [],
+  });
+
+  it.each([[["value", "jsx"]], [["jsx", "value"]]])("keeps jsx as the row's how in order %j", (hows) => {
+    const refs = refsOf(scopeView(buildProjectModel(doc(hows)), ""), F);
+    expect(refs.calledBy).toHaveLength(1);
+    expect(refs.calledBy[0]).toMatchObject({ id: K, kind: "reference", how: "jsx", count: 2 });
+  });
+});

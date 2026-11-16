@@ -183,7 +183,7 @@ export class ExecStore implements MapSource {
    * them fit (runtimeRootsLayout and gridRootsLayout keep it). Only a slotted (roots-only) build is laid out again. The
    * layout is arithmetic, so this is synchronous.
    */
-  rebuild(b: MapBuild, footprint: ReadonlyMap<string, { w: number; h: number }>): MapBuild {
+  rebuild(b: MapBuild, footprint: ReadonlyMap<string, { left?: number; w: number; h: number }>): MapBuild {
     const view = this.viewOf(b);
     if (view === undefined || !b.slotted) return b;
     const layout = view.containers ? runtimeRootsLayout(view.scene, footprint) : gridRootsLayout(view.scene, footprint);

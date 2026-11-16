@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // The callers box wired into the zoom map: a fake source draws a roots-only map of two function cards, F and G, so the map's
-// own handlers (the card chip, Escape, the rows' ▸, the focus after a close) run as they do in the app.
+// own handlers (the card chip, Escape, the rows' ◂, the focus after a close) run as they do in the app.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { layoutFunction, type FunctionFlow, type Rect } from "@insight/flow";
@@ -151,7 +151,7 @@ describe("the map's callers wiring", () => {
     expect(cardChip!.getAttribute("aria-pressed")).toBe("true");
   });
 
-  it("two quick ▸ clicks on two rows open the row clicked last, whichever chart loads last (item 5)", async () => {
+  it("two quick ◂ clicks on two rows open the row clicked last, whichever chart loads last (item 5)", async () => {
     getRefs.mockResolvedValue({ calledBy: [refRow("A"), refRow("B")] });
     const slowA = deferred<FunctionFlow>();
     chartOf.mockImplementation(async (id: string) => (id === "A" ? slowA.promise : flow(id)));

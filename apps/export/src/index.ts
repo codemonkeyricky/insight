@@ -58,11 +58,12 @@ export class ExportError extends Error {
 }
 
 /** True when the lens listing row has a saved result: an ok lens with something to show. */
-function resultHasContent(result: { findings: readonly unknown[]; views: readonly { type: string; nodes?: unknown[]; edges?: unknown[]; rows?: unknown[]; root?: unknown; transitions?: unknown[] }[] }): boolean {
+function resultHasContent(result: { findings: readonly unknown[]; views: readonly { type: string; nodes?: unknown[]; edges?: unknown[]; rows?: unknown[]; root?: unknown; transitions?: unknown[]; entities?: unknown[] }[] }): boolean {
   return result.findings.length > 0 || result.views.some((view) => {
     if (view.type === "graph") return (view.nodes?.length ?? 0) > 0 || (view.edges?.length ?? 0) > 0;
     if (view.type === "table") return (view.rows?.length ?? 0) > 0;
     if (view.type === "state-machine") return (view.transitions?.length ?? 0) > 0;
+    if (view.type === "schema-diagram") return (view.entities?.length ?? 0) > 0;
     return view.root !== undefined;
   });
 }

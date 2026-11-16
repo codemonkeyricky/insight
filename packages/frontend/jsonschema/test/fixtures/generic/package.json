@@ -1,0 +1,7 @@
+{
+  "name": "generic-fixture",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": { "test": "echo ok" },
+  "dependencies": { "ajv": "^8.0.0" }
+}

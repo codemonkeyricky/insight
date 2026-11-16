@@ -161,7 +161,41 @@ export interface TreeView {
   root: TreeNode;
 }
 
-export type LensView = GraphView | TableView | TreeView | StateMachineView;
+/** One field of a schema-diagram card. `ref` names the entity the field points at. */
+export interface SchemaField {
+  name: string;
+  type: string;
+  required: boolean;
+  values?: string[];
+  ref?: string;
+  description?: string;
+}
+
+/** One card of a schema diagram: a record, a node kind or an edge kind. */
+export interface SchemaEntity {
+  id: string;
+  label: string;
+  group: string;
+  role: "record" | "node-kind" | "edge-kind";
+  extends?: string;
+  description?: string;
+  /** A short extra line shown at the foot of the card, e.g. "validated by: 14 files". */
+  note?: string;
+  span?: ViewSpan;
+  fields: SchemaField[];
+}
+
+/** An entity-relationship style diagram: cards with fields, grouped in frames, joined by ref and extends links. */
+export interface SchemaDiagramView {
+  type: "schema-diagram";
+  id: string;
+  title: string;
+  groups: { id: string; label: string }[];
+  entities: SchemaEntity[];
+  links: { from: string; field?: string; to: string; kind: "ref" | "extends" }[];
+}
+
+export type LensView = GraphView | TableView | TreeView | StateMachineView | SchemaDiagramView;
 
 export interface LensResult {
   findings: LensFinding[];
