@@ -66,7 +66,7 @@ export function LayersPanel({ shown, findingCount, onChange, onClose, roots }: P
       <label className="sh-check">
         <input type="checkbox" checked={shown.intermodule} onChange={(e) => onChange("intermodule", e.target.checked)} /> Inter-module calls only
       </label>
-      <p className="muted">Hides file/OS/env access, try frames and calls inside the same file.</p>
+      <p className="muted">Hides file/OS/env access, try frames, and calls to functions that are not exported from another file. Empty branches and loops are pruned.</p>
       <label className="sh-check">
         <input
           type="checkbox"

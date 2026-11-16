@@ -158,7 +158,8 @@ export class ZoomStore {
           for (const f of res.functions) this.fns.set(f.id, f);
         },
         (e: unknown) => {
-          this.fileLoads.delete(file);
+          // A focus change cleared this load and a newer one may own the entry now: only this load's entry is dropped.
+          if (this.fileLoads.get(file) === load) this.fileLoads.delete(file);
           throw e;
         },
       );

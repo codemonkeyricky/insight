@@ -34,7 +34,7 @@ import { zoneCells, zoneLetter, zoneLines } from "../../zoom/zones";
 import { offMapSelected } from "../../zoom/offMap";
 import type { ZoomStore } from "../../zoom/scene";
 import { stepAction, stepCallee, type StepContext } from "../../zoom/stepAction";
-import { boxAction } from "../../zoom/boxAction";
+import { boxAction, isTouchPointer } from "../../zoom/boxAction";
 import { CalloutShape, ExpansionShape, type CalloutEnds } from "./Expansion";
 
 /** The camera's scale range: from the whole project down to a single line of a chart. */
@@ -294,6 +294,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   /** The same selection, for the handlers and the async selects, which read it when they run. */
   const offMapRef = useRef<OffMap | undefined>(undefined);
   const stageRef = useRef<HTMLDivElement>(null);
+  /** Whether the last pointer that went down on the stage was a touch or pen: its taps are single-tap opens (see boxClick). */
+  const touchPointerRef = useRef(false);
   /** The stage's size at the last resize, so a resize that changes nothing does not refit the camera. */
   const lastSizeRef = useRef<{ width: number; height: number } | undefined>(undefined);
   /** Refits the selected focus when the usable size changed since the last refit. Set by the stage's effect. */
@@ -775,23 +777,32 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     if (b) void show(source.focusOf?.(b, nodeId) ?? nodeId, true, true, boxAction("enter", { hasChart: b.node(nodeId)?.chart !== undefined }) === "toggle");
   };
 
-  /** A click on a box only selects it: the source panel and the URL follow, and no chart opens or closes. */
+  /**
+   * A click on a box. With a mouse, a box with a chart only selects: the source panel and the URL follow, and no chart opens
+   * or closes. A touch or pen tap on such a box acts like a double-click (see boxDoubleClick), since double-click is unreliable
+   * there. A box with no chart opens as a link does, by either pointer.
+   */
   const boxClick = (nodeId: string) => {
     const b = buildRef.current;
     if (expandMore(nodeId)) return;
     stageRef.current?.focus({ preventScroll: true });
     if (!b) return;
-    void show(source.focusOf?.(b, nodeId) ?? nodeId, true, true, false, true);
+    const focus = source.focusOf?.(b, nodeId) ?? nodeId;
+    const action = boxAction("click", { hasChart: b.node(nodeId)?.chart !== undefined, open: anchoredTo(expRef.current, nodeId) !== undefined, touch: touchPointerRef.current });
+    if (action === "select") void show(focus, true, true, false, true);
+    else if (action === "navigate") void show(focus, true, true, false);
+    // show toggles the chart beside the box: closed, it opens; open, it closes (close-side).
+    else void show(focus, true, true, true, false, true);
   };
 
   /**
    * A double-click on a box opens its chart in a box to its right, or closes that side box when it is open. A box with no
-   * chart opens as a link does. The two clicks of the double-click only select (see boxClick), so this is the one toggle.
+   * chart opens as a link does. A touch double-click is not taken: its taps already acted (see boxClick).
    */
   const boxDoubleClick = (nodeId: string) => {
     const b = buildRef.current;
     // A "+N more" card's clicks already showed the rest of its cards.
-    if (!b || nodeId.endsWith(MORE_SUFFIX)) return;
+    if (!b || nodeId.endsWith(MORE_SUFFIX) || touchPointerRef.current) return;
     stageRef.current?.focus({ preventScroll: true });
     const focus = source.focusOf?.(b, nodeId) ?? nodeId;
     const action = boxAction("dblclick", { hasChart: b.node(nodeId)?.chart !== undefined, open: anchoredTo(expRef.current, nodeId) !== undefined });
@@ -1615,6 +1626,9 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
         aria-label="Execution map of the scope"
         aria-describedby={hint ? hintId : undefined}
         onKeyDown={onKey}
+        onPointerDownCapture={(e) => {
+          touchPointerRef.current = isTouchPointer(e.pointerType);
+        }}
       >
         <svg
           ref={svgRef}

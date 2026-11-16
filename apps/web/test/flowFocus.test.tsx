@@ -33,11 +33,16 @@ describe("flow focus preference", () => {
   });
 
   it("falls back to the inter-module focus and never throws when storage is blocked", () => {
-    vi.spyOn(globalThis, "localStorage", "get").mockImplementation(() => {
+    const spy = vi.spyOn(globalThis, "localStorage", "get").mockImplementation(() => {
       throw new Error("blocked");
     });
     expect(readFlowFocus()).toBe("intermodule");
     expect(() => writeFlowFocus("all")).not.toThrow();
+    // A remount reads the choice the store was given, not the default, while storage stays blocked.
+    expect(readFlowFocus()).toBe("all");
+    spy.mockRestore();
+    writeFlowFocus("intermodule");
+    expect(readFlowFocus()).toBe("intermodule");
   });
 });
 
@@ -48,7 +53,7 @@ describe("LayersPanel inter-module checkbox", () => {
     render(<LayersPanel shown={shownOf({ intermodule: true })} onChange={() => {}} onClose={() => {}} />);
     const box = screen.getByLabelText(/Inter-module calls only/) as HTMLInputElement;
     expect(box.checked).toBe(true);
-    expect(screen.getByText("Hides file/OS/env access, try frames and calls inside the same file.")).toBeTruthy();
+    expect(screen.getByText("Hides file/OS/env access, try frames, and calls to functions that are not exported from another file. Empty branches and loops are pruned.")).toBeTruthy();
   });
 
   it("calls onChange with intermodule when toggled", () => {

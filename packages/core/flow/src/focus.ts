@@ -20,10 +20,11 @@ export interface FocusOptions {
 }
 
 /**
- * The inter-module view of a chart. Keeps control flow, awaits, spawns, returns, throws, lock and sync rows, state rows and
- * net or clock effects. Drops:
+ * The inter-module view of a chart. Keeps control flow, awaits, spawns, returns, throws, lock and sync rows, state rows,
+ * handler rows and net or clock effects. Drops:
  * - kernel and environment effects (see HIDDEN_EFFECT_PREFIXES);
- * - calls that do not resolve to one exported function of another file (unresolved, candidate-only, same-file, internal);
+ * - calls that do not resolve to one exported function of another file (unresolved, candidate-only, same-file, internal), and
+ *   an await of such a call (an await of only hidden effects goes too);
  * - the `finally` marker, while a `try` frame is unwrapped so its try and catch bodies are spliced inline in order;
  * - a branch, switch, loop or try whose bodies are all empty after filtering. A lock frame is never pruned.
  *
@@ -44,12 +45,26 @@ function keepCall(item: Extract<Item, { t: "step" }>, opts: FocusOptions): boole
   return callee !== undefined && callee.exported && callee.file !== opts.file;
 }
 
+/**
+ * An await row is the await of what it wraps. An await of a call is kept only as that call is (see keepCall, so an await of
+ * an unresolved or same-file call goes). An await of effects alone is kept unless every effect is hidden, so no bare
+ * `await` is left behind a dropped kernel effect. An await of a plain value (no call, no effect) is control flow and stays.
+ */
+function keepAwait(item: Extract<Item, { t: "step" }>, opts: FocusOptions): boolean {
+  const awaited = item.awaited;
+  if (awaited === undefined) return item.target === undefined || keepCall(item, opts);
+  if (awaited.call) return keepCall(item, opts);
+  return awaited.effects.length === 0 || !awaited.effects.every(hiddenEffect);
+}
+
 function filterList(items: readonly Item[], opts: FocusOptions): Item[] {
   const out: Item[] = [];
   for (const item of items) {
     if (item.t === "step") {
       if (item.role === "marker") continue;
-      if (item.role === "call" && !keepCall(item, opts)) continue;
+      // A handler row ("on ▸") is message coupling, so it is kept whatever its target.
+      if (item.role === "call" && !item.handler && !keepCall(item, opts)) continue;
+      if (item.role === "await" && !keepAwait(item, opts)) continue;
       if (item.role === "effect" && hiddenEffect(item.kind)) continue;
       out.push(item);
     } else if (item.t === "term") {

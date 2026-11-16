@@ -1065,17 +1065,23 @@ function buildPlans(nodes: readonly IRNode[], edges: readonly IREdge[], fold: bo
 
 export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], scope: string, opts: ExecModelOptions = {}): ExecModel {
   const plans = execPlans(nodes, edges, { lambdas: opts.lambdas });
-  const chartOf = opts.focus === "intermodule"
-    ? focusChartOf(nodes, edges, opts.callees ?? new Map<string, FocusCallee>(), opts.state ?? stateIndex(nodes, edges, moduleMap(nodes)))
-    : plans.chartOf;
+  const chartOf = opts.focus === "intermodule" ? focusChartOf(nodes, edges, opts.callees ?? NO_CALLEES, opts.state) : plans.chartOf;
   return execModelOf({ ...plans, chartOf }, scope, opts);
 }
 
-/** Focused chart sizes, memoized by the three inputs they depend on: nodes, edges and callees (each an array or map identity). */
-const FOCUS_CHARTS = new WeakMap<object, WeakMap<object, WeakMap<object, Map<string, Map<string, [number, number]>>>>>();
+/** The callee map of a focus that gives none: one shared empty map, so the focus memo still hits. */
+const NO_CALLEES: ReadonlyMap<string, FocusCallee> = new Map();
+/** The memo key of a focus that derives its state index from nodes and edges (see focusChartOf). */
+const DERIVED_STATE: object = {};
+
+/**
+ * Focused chart sizes, memoized by the inputs they depend on: nodes, edges, callees and state (each an identity). A focus that
+ * gives no state derives it from nodes and edges, and only on a memo miss: a hit never rebuilds it.
+ */
+const FOCUS_CHARTS = new WeakMap<object, WeakMap<object, WeakMap<object, WeakMap<object, Map<string, Map<string, [number, number]>>>>>>();
 
 /** The chart size of a function under the inter-module focus, laid out once per file. See ExecModelOptions.focus. */
-function focusChartOf(nodes: readonly IRNode[], edges: readonly IREdge[], callees: ReadonlyMap<string, FocusCallee>, state: StateIndex): ExecPlans["chartOf"] {
+function focusChartOf(nodes: readonly IRNode[], edges: readonly IREdge[], callees: ReadonlyMap<string, FocusCallee>, given: StateIndex | undefined): ExecPlans["chartOf"] {
   let byEdges = FOCUS_CHARTS.get(nodes);
   if (byEdges === undefined) {
     byEdges = new WeakMap();
@@ -1086,18 +1092,30 @@ function focusChartOf(nodes: readonly IRNode[], edges: readonly IREdge[], callee
     byCallees = new WeakMap();
     byEdges.set(edges, byCallees);
   }
-  let sizesByFile = byCallees.get(callees);
+  let byState = byCallees.get(callees);
+  if (byState === undefined) {
+    byState = new WeakMap();
+    byCallees.set(callees, byState);
+  }
+  const stateKey: object = given ?? DERIVED_STATE;
+  let sizesByFile = byState.get(stateKey);
   if (sizesByFile === undefined) {
     sizesByFile = new Map();
-    byCallees.set(callees, sizesByFile);
+    byState.set(stateKey, sizesByFile);
   }
   const byFile = sizesByFile;
+  let derived: StateIndex | undefined;
+  const stateOf = (): StateIndex => {
+    if (given !== undefined) return given;
+    if (derived === undefined) derived = stateIndex(nodes, edges, moduleMap(nodes));
+    return derived;
+  };
   return (file: string, id: string): [number, number] | undefined => {
     if (file === "") return undefined;
     let sizes = byFile.get(file);
     if (sizes === undefined) {
       sizes = new Map();
-      for (const f of factsForFile(file, nodes, edges, { focus: "intermodule", callees, state }).map((f) => layoutFunction(f))) {
+      for (const f of factsForFile(file, nodes, edges, { focus: "intermodule", callees, state: stateOf() }).map((f) => layoutFunction(f))) {
         if (!f.tooLarge && f.nodes.length > 0) sizes.set(f.id, [f.width, f.height]);
       }
       byFile.set(file, sizes);

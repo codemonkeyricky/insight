@@ -19,9 +19,12 @@ export function pickBox(boxes: readonly Box[], depth: (id: string) => number, x:
  * handler (open or fold) never ran. A double-click on a map control (a Callers button, a callers box, a close ×) is the
  * control's two clicks, not a zoom: React's stopPropagation runs after d3's listener on the svg, so it cannot stop it. A
  * double-click on a function box opens or closes its chart (boxAction), so it does not zoom either.
+ *
+ * d3 also turns a double-tap on touch into that double-click: its touchend reaches this filter as a `touchend` event, so the
+ * same rule applies to it. A single touch that starts a pan on a box is still taken.
  */
 export function zoomTakes(ev: { type: string; ctrlKey?: boolean; button?: number; target?: unknown }): boolean {
-  if (ev.type === "dblclick") {
+  if (ev.type === "dblclick" || ev.type === "touchend") {
     const t = ev.target as { closest?: (sel: string) => unknown } | null | undefined;
     if (t && typeof t.closest === "function" && t.closest("svg.flow, .zm-callers-btn, .zm-callers, .zm-expansion-close, .zm-box:not(.zm-external)") !== null) return false;
   }

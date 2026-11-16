@@ -79,6 +79,43 @@ describe("filterChartItems: calls", () => {
   });
 });
 
+describe("filterChartItems: awaits and handlers", () => {
+  const awaitRow = (label: string, awaited: { call: boolean; effects: string[] }, target?: string): Item => ({
+    t: "step",
+    role: "await",
+    label,
+    kind: "concurrency.await",
+    awaited,
+    ...(target !== undefined ? { target } : {}),
+  });
+
+  it("keeps an await of an exported call of another file, and drops an await of a same-file, non-exported or unresolved call", () => {
+    const kept = awaitRow("await helper()", { call: true, effects: [] }, "src/b.ts#helper");
+    expect(filterChartItems([kept], opts)).toEqual([kept]);
+    expect(filterChartItems([awaitRow("await local()", { call: true, effects: [] }, "src/a.ts#local")], opts)).toEqual([]);
+    expect(filterChartItems([awaitRow("await hidden()", { call: true, effects: [] }, "src/b.ts#hidden")], opts)).toEqual([]);
+    expect(filterChartItems([awaitRow("await", { call: true, effects: [] })], opts)).toEqual([]);
+  });
+
+  it("drops an await whose only content was a hidden kernel effect, and keeps one that awaits a net effect or a plain value", () => {
+    expect(filterChartItems([awaitRow("await", { call: false, effects: ["effects.fs.read"] })], opts)).toEqual([]);
+    expect(filterChartItems([awaitRow("await", { call: false, effects: ["effects.fs.read", "effects.env.read"] })], opts)).toEqual([]);
+    const net = awaitRow("await", { call: false, effects: ["effects.net.connect"] });
+    expect(filterChartItems([net], opts)).toEqual([net]);
+    const value = awaitRow("await", { call: false, effects: [] });
+    expect(filterChartItems([value], opts)).toEqual([value]);
+  });
+
+  it("keeps a handler row whatever its target: a message handler is coupling", () => {
+    const sameFile: Item = call("src/a.ts#local", { label: "on message", handler: true });
+    const hiddenFn: Item = call("src/b.ts#hidden", { label: "on message", handler: true });
+    const unresolved: Item = call(undefined, { label: "on ▸", handler: true });
+    expect(filterChartItems([sameFile, hiddenFn, unresolved], opts)).toEqual([sameFile, hiddenFn, unresolved]);
+    // A call that is not a handler is still dropped.
+    expect(filterChartItems([call("src/a.ts#local", { label: "local()" })], opts)).toEqual([]);
+  });
+});
+
 describe("filterChartItems: try and empty forks", () => {
   const tryFork: Item = {
     t: "fork",
@@ -191,6 +228,11 @@ export function run(path: string): number {
     expect(map.has("node:fs#readFileSync")).toBe(false);
   });
 
+  it("calleeMapOf is built once per index and shared", () => {
+    expect(calleeMapOf(index)).toBe(calleeMapOf(index));
+    expect(calleeMapOf(couplingIndex(nodes, edges))).not.toBe(calleeMapOf(index));
+  });
+
   it("draws only the inter-module calls of run, with the try frame unwrapped and no kernel or env effect", () => {
     const map = calleeMapOf(index);
     const flow = buildFileFlow("src/a.ts", nodes, edges, { focus: "intermodule", callees: map });
@@ -211,6 +253,35 @@ export function run(path: string): number {
     expect(labels(plainRun?.items ?? []).some((l) => l.includes("fork:try"))).toBe(true);
     expect(labels(plainRun?.items ?? []).some((l) => l.includes("local"))).toBe(true);
     expect(plainRun?.items.some((i) => i.t === "step" && i.kind !== undefined)).toBe(false);
+  });
+});
+
+describe("factsForFile with the inter-module focus: awaits from the IR", () => {
+  it("draws no bare await for an awaited kernel read, nor for an awaited same-file call", async () => {
+    const { nodes, edges } = await indexFixture({
+      "package.json": JSON.stringify({ name: "focus-await", type: "module" }),
+      "src/b.ts": `export async function helper(n: number): Promise<number> {\n  return n + 1;\n}\n`,
+      "src/a.ts": `import { readFile } from "node:fs/promises";
+import { helper } from "./b";
+
+async function local(n: number): Promise<number> {
+  return n;
+}
+
+export async function run(path: string): Promise<number> {
+  await readFile(path);
+  await local(1);
+  return await helper(2);
+}
+`,
+    });
+    const index = couplingIndex(nodes, edges);
+    const plain = factsForFile("src/a.ts", nodes, edges, { sources: true, state: index.state }).find((f) => f.id === "src/a.ts#run");
+    expect(labels(plain?.items ?? []).filter((l) => l.startsWith("await:")).length).toBeGreaterThanOrEqual(3);
+    const focused = factsForFile("src/a.ts", nodes, edges, { focus: "intermodule", callees: calleeMapOf(index), state: index.state }).find((f) => f.id === "src/a.ts#run");
+    const drawn = labels(focused?.items ?? []);
+    expect(drawn.filter((l) => l.startsWith("await:"))).toEqual(["await:await helper()"]);
+    expect(drawn.some((l) => l.includes("fs.read"))).toBe(false);
   });
 });
 

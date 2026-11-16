@@ -100,6 +100,8 @@ export type Item =
       targets?: string[];
       /** A state row: the variable it reads or writes (coupling view only). */
       state?: StateRef;
+      /** An await row (`sources` builds only): whether it waits on a call, and the IR kinds of the effects it wraps. */
+      awaited?: { call: boolean; effects: string[] };
       /** A call row: the local(s) its result is bound or assigned to. */
       binds?: string | string[];
       /** Coupling pass: the row's class. */
@@ -411,7 +413,12 @@ function convert(ev: Ev, sources: boolean): Item[] {
         ...(wrapped?.targets ? { targets: wrapped.targets } : {}),
         ...(wrapped?.binds !== undefined ? { binds: wrapped.binds } : {}),
       };
-      if (ev.type === "await") return [...items, step("await", { ...ev, ...wrap }, inner ? `await ${inner}` : "await", sources)];
+      if (ev.type === "await") {
+        const row = step("await", { ...ev, ...wrap }, inner ? `await ${inner}` : "await", sources);
+        // The inter-module focus keeps or drops the row by what it waits on (see focus.ts), so the build records that.
+        const awaited = { call: wrapped !== undefined, effects: kids.filter((c) => c.type === "effect").map((c) => c.kind ?? "") };
+        return [...items, sources ? { ...row, awaited } : row];
+      }
       // Effects keep their own label; a resolved call inside only adds the link to its target.
       return [...items, step(ev.type, { ...ev, ...wrap }, ev.label, sources)];
     }

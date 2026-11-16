@@ -60,7 +60,7 @@ const hasMod = (n: ts.Node, k: ts.SyntaxKind): boolean => ts.canHaveModifiers(n)
 
 const exportListCache = new WeakMap<ts.SourceFile, Set<string>>();
 /** The local names a file lists in an `export { … }` without a module specifier. */
-function exportedLocals(sf: ts.SourceFile): Set<string> {
+export function exportedLocals(sf: ts.SourceFile): Set<string> {
   let names = exportListCache.get(sf);
   if (names === undefined) {
     names = new Set();

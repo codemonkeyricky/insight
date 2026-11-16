@@ -87,10 +87,16 @@ export function couplingIndex(nodes: readonly IRNode[], edges: readonly IREdge[]
  * whose target is missing here (external, unresolved, a candidate list) is never kept. Built from `index.functions`.
  */
 export function calleeMapOf(index: CouplingIndex): Map<string, FocusCallee> {
+  const hit = calleeMaps.get(index);
+  if (hit) return hit;
   const out = new Map<string, FocusCallee>();
   for (const [id, fn] of index.functions) if (fn.file !== undefined) out.set(id, { file: fn.file, exported: fn.exported });
+  calleeMaps.set(index, out);
   return out;
 }
+
+/** The call-target map of each index, built once. The map is shared: read it, never write it. */
+const calleeMaps = new WeakMap<CouplingIndex, Map<string, FocusCallee>>();
 
 /**
  * The control-flow chart of every function in one source file, rebuilt from the IR.

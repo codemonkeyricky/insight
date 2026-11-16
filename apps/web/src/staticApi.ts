@@ -336,7 +336,7 @@ export function makeStaticApi(baseFor: (projectId: string) => string | Promise<s
       type FlowInput = Parameters<typeof buildFileFlow>;
       const index = await couplingOf(id, graph);
       // The inter-module focus takes the call-target map only: it never stacks the coupling chart (see server fileFlow).
-      if (focus === "intermodule") return buildFileFlow(path, nodes as unknown as FlowInput[1], edges as unknown as FlowInput[2], { focus: "intermodule", callees: calleeMapOf(index) });
+      if (focus === "intermodule") return buildFileFlow(path, nodes as unknown as FlowInput[1], edges as unknown as FlowInput[2], { focus: "intermodule", callees: calleeMapOf(index), state: index.state });
       return buildFileFlow(path, nodes as unknown as FlowInput[1], edges as unknown as FlowInput[2], { coupling: index });
     },
     flowSummary: async (id: string): Promise<FileFlowSummary[]> => {
