@@ -189,26 +189,39 @@ export function callEnd(rel: Rel): Pos {
  * s1 first: the callback runs once s1 has started. A callback that is not inside one of `fn`'s calls keeps its own end.
  */
 export function orderKeys(model: ProjectModel, fn: FunctionEntity, own: Rel[]): (rel: Rel) => OrderKey {
-  const direct = own.filter((r) => r.from === fn.id && r.edge.span !== undefined);
+  const at = orderKeysAt(model, fn, own);
   return (rel) => {
     const end = callEnd(rel);
-    if (rel.from === fn.id) return { at: end, sub: NONE };
-    // The callback directly under fn that holds this call.
-    let top = rel.from;
+    return at(rel.from, end, end);
+  };
+}
+
+/**
+ * The order key of any statement of `fn` made at `from` (a function: fn itself, or a callback under it), at position `at`, with
+ * `inner` as its position inside a host call. Anything directly in fn sorts at `at`. Anything inside a callback sorts right after
+ * the host call of fn that the callback is passed to, at `inner`. This is the same rule `orderKeys` gives calls, so a loop,
+ * branch or try in a callback sorts with the call it runs under, not by where it starts.
+ */
+export function orderKeysAt(model: ProjectModel, fn: FunctionEntity, own: Rel[]): (from: NodeId, at: Pos, inner: Pos) => OrderKey {
+  const direct = own.filter((r) => r.from === fn.id && r.edge.span !== undefined);
+  return (from, at, inner) => {
+    if (from === fn.id) return { at, sub: NONE };
+    // The callback directly under fn that holds this statement.
+    let top = from;
     for (let depth = 0; depth < 1000; depth++) {
       const parent = model.byId.get(top)?.parent;
       if (parent === undefined || parent === fn.id) break;
       top = parent;
     }
     const start = model.byId.get(top)?.span?.start;
-    if (start === undefined) return { at: end, sub: NONE };
+    if (start === undefined) return { at, sub: NONE };
     let host: Rel | undefined;
     for (const d of direct) {
       const ds = (d.edge.span as Span).start;
       if (cmpPos(ds, start) > 0 || cmpPos(callEnd(d), start) < 0) continue;
       if (host === undefined || cmpPos(ds, (host.edge.span as Span).start) > 0) host = d;
     }
-    return host === undefined ? { at: end, sub: NONE } : { at: callEnd(host), sub: end };
+    return host === undefined ? { at, sub: NONE } : { at: callEnd(host), sub: inner };
   };
 }
 

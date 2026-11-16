@@ -382,7 +382,8 @@ describe("stage graph: data edges", () => {
 
   it("gives a loop an edge from the producer of the local its range reads", () => {
     const nodes = [flow("loop:5:2", "flow.loop", [5, 2, 9, 3], { variant: "for-of", condition: "const p of plugins", reads: ["plugins"] })];
-    const edges = [call(DRV, stageId("s3"), 3, 2, 6, { binds: "plugins" }), call(DRV, stageId("s4"), 6, 4, 6)];
+    // s4 reads nothing, but its empty `reads` key says the frontend emitted call reads (so the data-flow facts are present).
+    const edges = [call(DRV, stageId("s3"), 3, 2, 6, { binds: "plugins" }), call(DRV, stageId("s4"), 6, 4, 6, { reads: [] })];
     const g = graphOf(doc({ nodes, edges }));
     const loop = g.body.find((n) => n.kind === "loop");
     expect(loop?.kind).toBe("loop");
@@ -420,5 +421,143 @@ describe("stage graph: data edges", () => {
     const g = graphOf(doc(nestingParts()));
     expect(g.edges).toEqual([]);
     expect(g.coverage).toContain("No data-flow facts for this language");
+  });
+});
+
+describe("stage graph: review fixes", () => {
+  it("nests an else-if inside the outer else arm when the arm and the inner if have the same span, as the TS frontend emits them", () => {
+    // if (k === 0) { s1 } else if (k === 1) { s2 } else { s3 }: the outer else arm's span is the inner if statement's span.
+    const nodes = [
+      flow("if:4:2", "flow.branch", [4, 2, 10, 3], { condition: "k === 0" }),
+      flow("arm:4:15", "flow.branch-arm", [4, 15, 6, 3], { label: "then" }),
+      flow("arm:6:8", "flow.branch-arm", [6, 8, 10, 3], { label: "else" }),
+      flow("if:6:8", "flow.branch", [6, 8, 10, 3], { condition: "k === 1" }),
+      flow("arm:6:22", "flow.branch-arm", [6, 22, 8, 3], { label: "then" }),
+      flow("arm:8:9", "flow.branch-arm", [8, 9, 10, 3], { label: "else" }),
+    ];
+    const edges = [call(DRV, stageId("s1"), 5, 4, 6), call(DRV, stageId("s2"), 7, 4, 6), call(DRV, stageId("s3"), 9, 4, 6)];
+    const g = graphOf(doc({ nodes, edges }));
+    expect(show(g.body)).toBe("if{then=[s1] else=[if{then=[s2] else=[s3]}]}");
+  });
+
+  it("gives no exit pills for unlabelled case breaks of a switch inside a for-of loop", () => {
+    const nodes = [
+      flow("loop:20:2", "flow.loop", [20, 2, 30, 3], { variant: "for-of", condition: "const x of xs" }),
+      flow("block:20:30", "flow.block", [20, 30, 30, 3], { label: "body" }),
+      flow("switch:21:4", "flow.switch", [21, 4, 29, 5], { hasDefault: false }),
+      flow("arm:22:6", "flow.branch-arm", [22, 6, 24, 7], { label: "case 1" }),
+      flow("jump:23:8", "flow.jump", [23, 8, 23, 14], { variant: "break" }),
+      flow("arm:25:6", "flow.branch-arm", [25, 6, 29, 5], { label: "case 2" }),
+      flow("jump:27:8", "flow.jump", [27, 8, 27, 14], { variant: "break" }),
+    ];
+    const edges = [call(DRV, stageId("s1"), 26, 8, 10)];
+    const g = graphOf(doc({ nodes, edges }));
+    expect(show(g.body)).toBe("for[if{case 1=[] case 2=[s1]}]");
+    expect(show(g.body)).not.toContain("exit:");
+  });
+
+  it("keeps a labelled break that leaves the loop from inside a switch", () => {
+    const nodes = [
+      flow("loop:20:2", "flow.loop", [20, 2, 30, 3], { variant: "for-of", condition: "const x of xs" }),
+      flow("block:20:30", "flow.block", [20, 30, 30, 3], { label: "body" }),
+      flow("switch:21:4", "flow.switch", [21, 4, 29, 5], { hasDefault: false }),
+      flow("arm:22:6", "flow.branch-arm", [22, 6, 24, 7], { label: "case 1" }),
+      flow("jump:23:8", "flow.jump", [23, 8, 23, 14], { variant: "break" }),
+      flow("arm:25:6", "flow.branch-arm", [25, 6, 29, 5], { label: "case 2" }),
+      flow("jump:27:8", "flow.jump", [27, 8, 27, 22], { variant: "break", label: "outer" }),
+    ];
+    const edges = [call(DRV, stageId("s1"), 28, 8, 10)];
+    const g = graphOf(doc({ nodes, edges }));
+    expect(show(g.body)).toBe("for[if{case 1=[] case 2=[exit:break s1]}]");
+  });
+
+  it("follows the derives of a const-arrow driver to the producer, giving the s1 to s2 edge", () => {
+    // export const viaConst = () => { const x = s1(); const y = x; s2(y); }
+    const edges = [call(DRV, stageId("s1"), 2, 2, 6, { binds: "x" }), call(DRV, stageId("s2"), 4, 2, 6, { reads: ["y"] })];
+    const g = graphOf(docWithDriver({ derives: { y: ["x"] } }, { edges }));
+    expect(g.edges).toEqual([{ from: idOf(g, "s1"), to: idOf(g, "s2"), label: "x→y" }]);
+  });
+
+  it("says there are no data-flow facts when only binds and condition reads are present, and draws no edges", () => {
+    // C++-shaped: a call binds a local and a loop's condition reads it, but no call carries reads and no function derives.
+    const nodes = [flow("loop:5:2", "flow.loop", [5, 2, 9, 3], { variant: "for-of", condition: "const p of plugins", reads: ["plugins"] })];
+    const edges = [call(DRV, stageId("s3"), 3, 2, 6, { binds: "plugins" }), call(DRV, stageId("s4"), 6, 4, 6)];
+    const g = graphOf(doc({ nodes, edges }));
+    expect(g.edges).toEqual([]);
+    expect(g.coverage).toContain("No data-flow facts for this language");
+  });
+
+  it("takes the producer from the arm the consumer is in, not from the other arm of the same branch", () => {
+    // let ast = s1(); if (c) { ast = s2(); } else { s3(ast); }
+    const nodes = [
+      flow("if:4:2", "flow.branch", [4, 2, 8, 3], { condition: "c" }),
+      flow("arm:4:10", "flow.branch-arm", [4, 10, 6, 3], { label: "then" }),
+      flow("arm:6:8", "flow.branch-arm", [6, 8, 8, 3], { label: "else" }),
+    ];
+    const edges = [
+      call(DRV, stageId("s1"), 2, 2, 6, { binds: "ast" }),
+      call(DRV, stageId("s2"), 5, 4, 6, { binds: "ast" }),
+      call(DRV, stageId("s3"), 7, 4, 6, { reads: ["ast"] }),
+    ];
+    const g = graphOf(doc({ nodes, edges }));
+    expect(g.edges).toEqual([{ from: idOf(g, "s1"), to: idOf(g, "s3"), label: "ast" }]);
+  });
+
+  it("orders a branch inside an anonymous callback after the call the callback is passed to", () => {
+    // s1(); withLock(() => { if (x) s2(); else s3(); }); s4();
+    const WL = `${F}#withLock`;
+    const LAM = `${F}#run.lambda`;
+    const nodes: IRNode[] = [
+      fn(WL, "withLock", F, F),
+      fx.node(LAM, "structure", "structure.function", { attrs: { name: "λ3:11", anonymous: true }, parent: DRV, span: fx.span(F, 3, 11, 6, 3) }),
+      flow("if:4:4", "flow.branch", [4, 4, 5, 15], { condition: "x" }, LAM),
+      flow("arm:4:10", "flow.branch-arm", [4, 10, 4, 16], { label: "then" }, LAM),
+      flow("arm:5:4", "flow.branch-arm", [5, 4, 5, 15], { label: "else" }, LAM),
+    ];
+    const edges = [
+      call(DRV, stageId("s1"), 2, 2, 4),
+      call(DRV, WL, 3, 2, 10, { callEnd: [6, 3] }),
+      call(LAM, stageId("s2"), 4, 10, 12),
+      call(LAM, stageId("s3"), 5, 9, 11),
+      call(DRV, stageId("s4"), 7, 2, 4),
+    ];
+    const g = graphOf(doc({ nodes, edges }));
+    expect(show(g.body)).toBe("s1 withLock~ if{then=[s2] else=[s3]} s4");
+  });
+
+  it("shows an inlined helper whose body has a stage, even when the helper alone would be minor", () => {
+    // const step = (f) => { s3(f) }; step(other): step calls one target, so it is minor before inlining, but s3 is a stage.
+    const H = `${F}#run.step`;
+    const nodes = [fn(H, "step", F, DRV, { params: ["f"] })];
+    const edges = [call(DRV, H, 8, 2, 8, { reads: ["other"] }), call(H, stageId("s3"), 22, 4, 6)];
+    const g = graphOf(doc({ nodes, edges }));
+    expect(show(g.body)).toBe("step{s3}");
+    expect(g.body[0]?.kind === "call" && g.body[0].minor).toBeFalsy();
+  });
+
+  it("maps an inlined helper's parameter to the call-site reads, never to a driver local of the same name", () => {
+    // const files = s1(); const other = s2(); const step = (files) => { s3(files) }; step(other): s3 gets s2's value, not s1's.
+    const H = `${F}#run.step`;
+    const nodes = [fn(H, "step", F, DRV, { params: ["files"] })];
+    const edges = [
+      call(DRV, stageId("s1"), 2, 2, 6, { binds: "files" }),
+      call(DRV, stageId("s2"), 3, 2, 6, { binds: "other" }),
+      call(DRV, H, 8, 2, 8, { reads: ["other"] }),
+      call(H, stageId("s3"), 22, 4, 6, { reads: ["files"] }),
+    ];
+    const g = graphOf(doc({ nodes, edges }));
+    // The helper call itself also reads `other` (an s2 to step edge); the edge into s3 is the one under test.
+    expect(g.edges.filter((e) => e.to === idOf(g, "s3"))).toEqual([{ from: idOf(g, "s2"), to: idOf(g, "s3"), label: "other→files" }]);
+  });
+
+  it("gives a for-of loop variable the iterable's producer, in addition to the loop's own edge", () => {
+    // const items = s4(); for (const it of items) s5(it);  The frontend's derives: { it: ["items"] }.
+    const nodes = [flow("loop:5:2", "flow.loop", [5, 2, 8, 3], { variant: "for-of", condition: "const it of items", reads: ["items"] })];
+    const edges = [call(DRV, stageId("s4"), 3, 2, 6, { binds: "items" }), call(DRV, stageId("s5"), 6, 4, 6, { reads: ["it"] })];
+    const g = graphOf(docWithDriver({ derives: { it: ["items"] } }, { nodes, edges }));
+    expect(g.edges).toEqual([
+      { from: idOf(g, "s4"), to: g.body.find((n) => n.kind === "loop")?.id ?? "", label: "items" },
+      { from: idOf(g, "s4"), to: idOf(g, "s5"), label: "items→it" },
+    ]);
   });
 });

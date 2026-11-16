@@ -16,6 +16,7 @@ import {
   MIN_STAGES,
   NONE,
   orderKeys,
+  orderKeysAt,
   STAGE_TARGETS_MIN,
   type OrderKey,
   type Pos,
@@ -152,8 +153,11 @@ const KIND_OF: Record<string, TKind> = {
   "flow.return": "exit",
   "flow.throw": "exit",
 };
-/** Outer-first order for spans that start at the same place: containers before their arms, blocks, exits and calls. */
-const RANK: Record<string, number> = { "flow.loop": 0, "flow.try": 0, "flow.branch": 0, "flow.switch": 0, "flow.branch-arm": 1, "flow.block": 2, "flow.jump": 3, "flow.return": 3, "flow.throw": 3 };
+/**
+ * Outer-first order for spans that start and end at the same place. An arm comes before the statement it holds: the TS frontend gives
+ * an `else if` arm the same span as the inner if, and that if belongs inside the arm. Then containers, blocks, exits and calls.
+ */
+const RANK: Record<string, number> = { "flow.branch-arm": 0, "flow.loop": 1, "flow.try": 1, "flow.branch": 1, "flow.switch": 1, "flow.block": 2, "flow.jump": 3, "flow.return": 3, "flow.throw": 3 };
 const CALL_RANK = 4;
 const CONTAINERS = new Set<TKind>(["loop", "branch", "arm", "try", "block"]);
 
@@ -179,14 +183,17 @@ function membersOf(fnId: NodeId, ctx: Ctx): TNode[] {
   if (fn === undefined) return root.children;
   const groups = ctx.idx.groupsByFn.get(fnId) ?? [];
   const keyOf = orderKeys(ctx.model, fn, groups.flat());
+  const keyAt = orderKeysAt(ctx.model, fn, groups.flat());
 
   const items: Array<{ node: TNode; rank: number }> = [];
   for (const n of ctx.idx.flowByFn.get(fnId) ?? []) {
     const kind = KIND_OF[n.kind];
     const span = n.span as Span;
     if (kind === undefined) continue;
+    // A statement inside an anonymous callback sorts with the call the callback is passed to, as its calls do.
+    const key = keyAt(n.parent as NodeId, span.start, span.start);
     items.push({
-      node: { kind, start: span.start, end: span.end, key: { at: span.start, sub: NONE }, ir: n, children: [] },
+      node: { kind, start: span.start, end: span.end, key, ir: n, children: [] },
       rank: RANK[n.kind] as number,
     });
   }
@@ -246,6 +253,8 @@ interface Ctx {
   memo: Map<NodeId, TNode[]>;
   ids: Set<string>;
   noCallEnd: boolean;
+  /** The frontend emitted data-flow facts: a call's `reads` key, or a function's `derives` key, in the driver or an inlined helper. */
+  facts: boolean;
 }
 
 interface Env {
@@ -255,7 +264,15 @@ interface Env {
   stack: NodeId[]; // the driver and the helpers being inlined
   loops: number; // loops around this point
   exitOk: boolean; // an exit here is kept: its nearest enclosing statement is a branch arm inside a loop
+  /** The nearest enclosing breakable statement is a switch, not a loop: an unlabelled break leaves that switch, so it is no exit. */
+  inSwitch: boolean;
 }
+
+/** Whether the frontend emitted `derives` on a function, even `{}`: the key itself says the function's data-flow facts were emitted. */
+const hasDerivesKey = (model: ProjectModel, fn: NodeId): boolean => {
+  const node = model.byId.get(fn);
+  return node !== undefined && attr(node, "derives") !== undefined;
+};
 
 function emitList(nodes: TNode[], env: Env): StageNode[] {
   const out: StageNode[] = [];
@@ -296,7 +313,10 @@ const siteOf = (ir: IRNode, env: Env): Site => ({ file: (ir.span as Span).file, 
 function exitNode(n: TNode, env: Env): StageNode | undefined {
   if (!env.exitOk) return undefined;
   const ir = n.ir as IRNode;
-  const how = ir.kind === "flow.return" ? "return" : ir.kind === "flow.throw" ? "throw" : str(attr(ir, "variant")) === "break" ? "break" : "continue";
+  const isBreak = str(attr(ir, "variant")) === "break";
+  // An unlabelled break inside a switch leaves the switch only: it is no exit from the loop around it.
+  if (isBreak && env.inSwitch && str(attr(ir, "label")) === undefined) return undefined;
+  const how = ir.kind === "flow.return" ? "return" : ir.kind === "flow.throw" ? "throw" : isBreak ? "break" : "continue";
   return { kind: "exit", id: env.prefix + ir.id, how, site: siteOf(ir, env) };
 }
 
@@ -313,13 +333,13 @@ function loopNode(n: TNode, env: Env): StageNode {
     ...(condition !== undefined ? { condition } : {}),
     ...(reads !== undefined ? { reads } : {}),
     site: siteOf(ir, env),
-    body: emitList(bodyNodes, { ...env, loops: env.loops + 1, exitOk: false }),
+    body: emitList(bodyNodes, { ...env, loops: env.loops + 1, exitOk: false, inSwitch: false }),
   };
 }
 
 function branchNode(n: TNode, env: Env): StageNode {
   const ir = n.ir as IRNode;
-  const armEnv: Env = { ...env, exitOk: env.loops > 0 };
+  const armEnv: Env = { ...env, exitOk: env.loops > 0, inSwitch: ir.kind === "flow.switch" ? true : env.inSwitch };
   const headers = headerOf(n);
   const arms: Array<{ id: string; label: string; body: StageNode[] }> = n.children
     .filter((c) => c.kind === "arm")
@@ -376,6 +396,8 @@ function resolveCall(group: Rel[], env: Env): StageNode | undefined {
     ...(bindsType !== undefined ? { bindsType } : {}),
     ...(reads !== undefined ? { reads } : {}),
   };
+  // A call's `reads` key, even an empty list, says the frontend emitted call reads: the data-flow facts are present.
+  if (reads !== undefined) ctx.facts = true;
   const id = unique(ctx, `${env.prefix}call@${first.from}@${span ? `${span.start[0]}:${span.start[1]}` : "?"}`);
   const targetOk = (t: NodeId): boolean => {
     const f = ctx.model.functionById.get(t);
@@ -411,10 +433,12 @@ function resolveCall(group: Rel[], env: Env): StageNode | undefined {
   const minor = (ctx.idx.callersOf.get(t)?.size ?? 0) > FAN_IN_MAX || (ctx.idx.targetCount.get(t) ?? 0) < STAGE_TARGETS_MIN;
   let body: StageNode[] = [];
   if (isLocalTo(ctx.model, fn, ctx.driverId) && env.stack.length <= MAX_INLINE_DEPTH && !env.stack.includes(t)) {
-    body = emitList(membersOf(t, ctx), { ctx, fnId: t, prefix: `${id}/`, stack: [...env.stack, t], loops: 0, exitOk: false });
+    if (hasDerivesKey(ctx.model, t)) ctx.facts = true;
+    body = emitList(membersOf(t, ctx), { ctx, fnId: t, prefix: `${id}/`, stack: [...env.stack, t], loops: 0, exitOk: false, inSwitch: false });
   }
-  // An inlined helper with no non-minor stage in its body is itself a utility: hidden like one.
-  const utility = minor || (body.length > 0 && countStages(body) === 0);
+  // A helper is decided after inlining: with a stage in its body it is shown, whatever its own call count says. Without an inlined
+  // body, it is minor when its own call count says so.
+  const utility = body.length > 0 ? countStages(body) === 0 : minor;
   const component = ctx.compOf(fn.file);
   return {
     kind: "call",
@@ -607,18 +631,19 @@ export function stageGraph(
 ): StageGraph {
   const idx = indexOf(model);
   const inScope = (file: string): boolean => compOf(file) !== undefined && (tests || !isNoisePath(file));
-  const ctx: Ctx = { model, idx, compOf, tests, driverId, inScope, memo: new Map(), ids: new Set(), noCallEnd: false };
+  const ctx: Ctx = { model, idx, compOf, tests, driverId, inScope, memo: new Map(), ids: new Set(), noCallEnd: false, facts: hasDerivesKey(model, driverId) };
   const fn = model.functionById.get(driverId);
-  const env: Env = { ctx, fnId: driverId, prefix: "", stack: [driverId], loops: 0, exitOk: false };
+  const env: Env = { ctx, fnId: driverId, prefix: "", stack: [driverId], loops: 0, exitOk: false, inSwitch: false };
   const body = markRepeats(pruneList(emitList(membersOf(driverId, ctx), env)), new Map());
   const component = fn ? compOf(fn.file) : undefined;
-  const data = dataEdges(model, body, driverId);
+  // Without data-flow facts there are no edges at all: no call to call, and no loop or branch that reads a local.
+  const edges = ctx.facts ? dataEdges(model, body, driverId) : [];
   const coverage = coverageOf(ctx, body, driverId);
-  if (body.length > 0 && !data.facts) coverage.push("No data-flow facts for this language");
+  if (body.length > 0 && !ctx.facts) coverage.push("No data-flow facts for this language");
   return {
     driver: { id: driverId, name: fn?.name ?? driverId, file: fn?.file ?? "", ...(component !== undefined ? { component } : {}) },
     body,
-    edges: data.edges,
+    edges,
     coverage,
   };
 }
@@ -639,16 +664,28 @@ interface Flat {
   binds?: string[];
   bindsType?: string;
   scope: NodeId[]; // the driver, then the helpers inlined around the stage
+  /** Per scope entry: the reads of the call that inlined it, as the call site reads them. Undefined for the driver. */
+  args: Array<string[] | undefined>;
+  /** The branch arms the stage sits in, outermost first: two stages in different arms of one branch never run together. */
+  arms: Array<{ branch: string; arm: number }>;
 }
 
 /** Stages in call order. Minor calls are hidden, so they and their bodies are not stages. */
-function flatten(nodes: StageNode[], scope: NodeId[], out: Flat[]): void {
+function flatten(
+  nodes: StageNode[],
+  scope: NodeId[],
+  args: Array<string[] | undefined>,
+  arms: Array<{ branch: string; arm: number }>,
+  out: Flat[],
+): void {
   const open = (n: { id: string; reads?: string[]; binds?: string[]; bindsType?: string }): Flat => {
     const e: Flat = {
       id: n.id,
       index: out.length,
       end: 0,
       scope,
+      args,
+      arms,
       ...(n.reads !== undefined ? { reads: n.reads } : {}),
       ...(n.binds !== undefined ? { binds: n.binds } : {}),
       ...(n.bindsType !== undefined ? { bindsType: n.bindsType } : {}),
@@ -660,19 +697,19 @@ function flatten(nodes: StageNode[], scope: NodeId[], out: Flat[]): void {
     if (n.kind === "call") {
       if (n.minor === true) continue;
       const e = open(n);
-      if (n.body) flatten(n.body, n.fn !== undefined ? [...scope, n.fn] : scope, out);
+      if (n.body && n.fn !== undefined) flatten(n.body, [...scope, n.fn], [...args, n.reads], arms, out);
       e.end = out.length;
     } else if (n.kind === "loop") {
       const e = open(n);
-      flatten(n.body, scope, out);
+      flatten(n.body, scope, args, arms, out);
       e.end = out.length;
     } else if (n.kind === "branch") {
       const e = open(n);
-      for (const a of n.arms) flatten(a.body, scope, out);
+      n.arms.forEach((a, i) => flatten(a.body, scope, args, [...arms, { branch: n.id, arm: i }], out));
       e.end = out.length;
     } else if (n.kind === "try") {
-      flatten(n.body, scope, out);
-      flatten(n.handler, scope, out);
+      flatten(n.body, scope, args, arms, out);
+      flatten(n.handler, scope, args, arms, out);
     }
   }
 }
@@ -682,14 +719,21 @@ function flatten(nodes: StageNode[], scope: NodeId[], out: Flat[]): void {
  * the enclosing functions, for a captured local) until they reach a local a stage call bound earlier, which is a producer. A
  * local bound by a stage stops the walk, so a producer's own inputs are not edges. Pure.
  */
-function dataEdges(model: ProjectModel, body: StageNode[], driverId: NodeId): { edges: DataEdge[]; facts: boolean } {
+function dataEdges(model: ProjectModel, body: StageNode[], driverId: NodeId): DataEdge[] {
   const flat: Flat[] = [];
-  flatten(body, [driverId], flat);
+  flatten(body, [driverId], [undefined], [], flat);
   const derivesOf = (fn: NodeId): Record<string, string[]> => {
     const node = model.byId.get(fn);
     const d = node ? attr(node, "derives") : undefined;
     return d !== null && typeof d === "object" && !Array.isArray(d) ? (d as Record<string, string[]>) : {};
   };
+  /** A helper's parameter names, from its `params` attribute. */
+  const paramsOf = (fn: NodeId): string[] => {
+    const node = model.byId.get(fn);
+    return (node ? namesOf(attr(node, "params")) : undefined) ?? [];
+  };
+  /** Two arms of one branch: a stage in one never runs with a stage in the other, so it is no producer for it. */
+  const exclusive = (p: Flat, c: Flat): boolean => p.arms.some((a) => c.arms.some((b) => b.branch === a.branch && b.arm !== a.arm));
   const producers = new Map<string, Flat[]>();
   for (const s of flat) {
     if (s.binds === undefined) continue;
@@ -701,9 +745,6 @@ function dataEdges(model: ProjectModel, body: StageNode[], driverId: NodeId): { 
       else producers.set(key, [s]);
     }
   }
-  // Facts were emitted when a stage carries reads or binds, or the driver derives a local.
-  const facts = flat.some((s) => s.reads !== undefined || s.binds !== undefined) || Object.keys(derivesOf(driverId)).length > 0;
-
   interface Found {
     producer: Flat;
     bound: string; // the producer's local
@@ -712,10 +753,16 @@ function dataEdges(model: ProjectModel, body: StageNode[], driverId: NodeId): { 
   const resolve = (name: string, depth: number, consumer: Flat, read: string, seen: Set<string>, out: Found[]): void => {
     for (let i = depth; i >= 0; i--) {
       const owner = consumer.scope[i] as NodeId;
+      // A helper's parameter is the call site's argument: its reads, in the scope the call sits in. Never a local of the same name.
+      if (i > 0 && paramsOf(owner).includes(name)) {
+        for (const next of consumer.args[i] ?? []) resolve(next, i - 1, consumer, read, seen, out);
+        return;
+      }
       const bound = producers.get(`${owner}\u0000${name}`);
       if (bound !== undefined) {
-        // The nearest producer that finished before the consumer. A binding that is not finished yet gives no value here.
-        const earlier = bound.filter((p) => p.end <= consumer.index);
+        // The nearest producer that finished before the consumer, in an arm the consumer can run with. A binding that is not
+        // finished yet gives no value here.
+        const earlier = bound.filter((p) => p.end <= consumer.index && !exclusive(p, consumer));
         const last = earlier[earlier.length - 1];
         if (last !== undefined) out.push({ producer: last, bound: name, read });
         return;
@@ -747,7 +794,7 @@ function dataEdges(model: ProjectModel, body: StageNode[], driverId: NodeId): { 
       edges.push({ from: f.producer.id, to: c.id, label, ...(type !== undefined ? { type } : {}) });
     }
   }
-  return { edges, facts };
+  return edges;
 }
 
 /**

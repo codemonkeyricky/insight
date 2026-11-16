@@ -1501,26 +1501,54 @@ export function emitFile(project: Project, rel: string): IRBatch {
   /**
    * The `derives` attribute of a function: each local variable its body declares, mapped to the distinct locals its initializer and
    * every assignment to it (`=` or compound) in this function read. A destructuring target gets the whole right side's reads.
-   * Parameters have no entry, and nested functions and classes are not descended into. Omitted when no local reads a local.
+   * Parameters have no entry, and nested functions and classes are not descended into. A loop variable (`for (const x of xs)`,
+   * `for (x in o)`, destructured or not) takes the reads of its iterable. A local that reads no local is omitted. Always present on a
+   * function, `{}` when none remain: the key says the data-flow facts were emitted. The declaration holding a function (a const arrow,
+   * a class property arrow) is unwrapped to the function, so the attribute is on the function.
    */
-  const derivesAttr = (fnNode: ts.Node): { derives?: Record<string, string[]> } => {
-    if (!ts.isFunctionLike(fnNode)) return {};
-    const body = (fnNode as { body?: ts.Node }).body;
-    if (body === undefined) return {};
+  /** The function a declaration holds: a function-like node, or the arrow or function expression a const or class property holds. */
+  const functionOf = (node: ts.Node): ts.SignatureDeclaration | undefined => {
+    if ((ts.isVariableDeclaration(node) || ts.isPropertyDeclaration(node)) && node.initializer !== undefined) {
+      const init = unwrapAll(node.initializer);
+      return ts.isArrowFunction(init) || ts.isFunctionExpression(init) ? init : undefined;
+    }
+    return ts.isFunctionLike(node) ? node : undefined;
+  };
+
+  /** The `params` attribute: the parameter names in order, each name a destructured parameter binds included. Omitted when none. */
+  const paramsAttr = (node: ts.Node): { params?: string[] } => {
+    const names = (functionOf(node)?.parameters ?? []).flatMap((p) => bindingIdents(p.name));
+    return names.length > 0 ? { params: names.map((id) => id.text) } : {};
+  };
+
+  const derivesAttr = (node: ts.Node): { derives: Record<string, string[]> } => {
+    const body = (functionOf(node) as { body?: ts.Node } | undefined)?.body;
+    if (body === undefined) return { derives: {} };
     const entries = new Map<ts.Symbol, { name: string; reads: Set<string> }>();
     const assigns: Array<{ targets: ts.Identifier[]; value: ts.Expression }> = [];
+    /** A declared local: its entry is created once, and each read it gets is added. */
+    const declare = (id: ts.Identifier, reads: Iterable<string>): void => {
+      const sym = project.checker.getSymbolAtLocation(id);
+      if (sym === undefined) return;
+      let e = entries.get(sym);
+      if (e === undefined) {
+        e = { name: id.text, reads: new Set() };
+        entries.set(sym, e);
+      }
+      for (const r of reads) e.reads.add(r);
+    };
     const walk = (n: ts.Node): void => {
       if (ts.isFunctionLike(n) || ts.isClassLike(n)) return;
       if (ts.isVariableDeclaration(n)) {
-        for (const id of bindingIdents(n.name)) {
-          const sym = project.checker.getSymbolAtLocation(id);
-          if (sym === undefined) continue;
-          let e = entries.get(sym);
-          if (e === undefined) {
-            e = { name: id.text, reads: new Set() };
-            entries.set(sym, e);
-          }
-          if (n.initializer !== undefined) for (const r of localReads(n.initializer, true)) e.reads.add(r);
+        const reads = n.initializer !== undefined ? localReads(n.initializer, true) : [];
+        for (const id of bindingIdents(n.name)) declare(id, reads);
+      } else if (ts.isForOfStatement(n) || ts.isForInStatement(n)) {
+        // A loop variable takes the reads of the iterable it walks: a declared one here, or an assigned one (an expression) below.
+        const reads = localReads(n.expression, true);
+        if (ts.isVariableDeclarationList(n.initializer)) {
+          for (const d of n.initializer.declarations) for (const id of bindingIdents(d.name)) declare(id, reads);
+        } else {
+          assigns.push({ targets: assignTargets(n.initializer), value: n.expression });
         }
       } else if (ts.isBinaryExpression(n) && ASSIGN_OPERATORS.has(n.operatorToken.kind)) {
         assigns.push({ targets: assignTargets(n.left), value: n.right });
@@ -1541,7 +1569,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
       if (e.reads.size === 0) continue;
       derives[e.name] = [...new Set([...(derives[e.name] ?? []), ...e.reads])];
     }
-    return Object.keys(derives).length > 0 ? { derives } : {};
+    return { derives };
   };
 
   const visit = (node: ts.Node, container: string, fn: string): void => {
@@ -1581,6 +1609,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
             ...(decl.entity.packageEntry ? { packageEntry: true } : {}),
             ...(decl.entity.programEntry !== undefined ? { programEntry: decl.entity.programEntry } : {}),
             ...derivesAttr(node),
+            ...paramsAttr(node),
           },
           span,
           provenance: PROV,

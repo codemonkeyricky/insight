@@ -95,6 +95,40 @@ export function bindings(): void {
   sinkB(v);
   sinkC(debug && level && wide);
 }
+
+function sinkD(arg: unknown): void {
+  void arg;
+}
+
+function stepOne(): number {
+  return 1;
+}
+
+function stepTwo(v: number): void {
+  void v;
+}
+
+export const viaConst = (): void => {
+  const x = stepOne();
+  const y = x;
+  stepTwo(y);
+};
+
+export class Holder {
+  run = (): void => {
+    const z = stepOne();
+    const w = z;
+    stepTwo(w);
+  };
+}
+
+export function loopOver(): void {
+  const items = [stepOne()];
+  for (const it of items) sinkD(it);
+  const pairs = [{ a: stepOne(), b: 2 }];
+  for (const { a, b } of pairs) sinkD(a + b);
+  for (const key in items) sinkD(key);
+}
 `;
 
 let nodes: IRNode[];
@@ -207,8 +241,32 @@ describe("frontend-typescript function derives", () => {
     expect(d?.q).toEqual(["seed", "src"]);
   });
 
-  it("omits the attribute on a function with no derivation", () => {
-    expect(fnNamed("sinkA")?.attrs).not.toHaveProperty("derives");
+  it("emits derives on every function, empty when it derives nothing", () => {
+    expect(fnNamed("sinkA")?.attrs.derives).toEqual({});
+  });
+
+  it("computes a const arrow's derives on the arrow, the function the declaration holds", () => {
+    // export const viaConst = () => { const x = stepOne(); const y = x; stepTwo(y); }: x reads nothing, y reads x.
+    expect(fnNamed("viaConst")?.attrs.derives).toEqual({ y: ["x"] });
+  });
+
+  it("computes a class property arrow's derives on the arrow", () => {
+    const run = nodes.find((n) => n.kind === "structure.function" && n.attrs.qualifiedName === "Holder.run");
+    expect(run?.attrs.derives).toEqual({ w: ["z"] });
+  });
+
+  it("gives a for-of or for-in loop variable the reads of its iterable, and each name a destructured one binds", () => {
+    expect(fnNamed("loopOver")?.attrs.derives).toEqual({ it: ["items"], a: ["pairs"], b: ["pairs"], key: ["items"] });
+  });
+});
+
+describe("frontend-typescript function params", () => {
+  it("lists a function's parameter names in order", () => {
+    expect(fnNamed("derive")?.attrs.params).toEqual(["input", "other"]);
+  });
+
+  it("gives a const arrow its own parameters", () => {
+    expect(fnNamed("viaConst")?.attrs).not.toHaveProperty("params");
   });
 });
 
