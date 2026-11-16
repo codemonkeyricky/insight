@@ -7,6 +7,7 @@ import { importBindings, matchCall, matchEnvRead, matchExportRoute, matchFetch, 
 import { channelIndex, matchChannelRecv, matchChannelSend } from "./channels.js";
 import { scriptKind } from "./digest.js";
 import { emitState } from "./state.js";
+import { emitData } from "./data.js";
 import { dispatchFor, MAX_DISPATCH_TARGETS, propName, registryFor } from "./dispatch.js";
 import { workspaceManifestPaths, workspacePackages, workspaceProgramEntries, workspaceSource, type ProgramEntry, type WorkspacePackage } from "./packages.js";
 
@@ -1318,7 +1319,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
     return found.to !== undefined && found.confidence !== undefined ? { to: found.to, confidence: found.confidence } : undefined;
   };
 
-  const emitModule = (from: string, spec: string, specNode: ts.Node, typeOnly: boolean, dynamic: boolean, kind: "packaging.import" | "packaging.re-export") => {
+  const emitModule = (from: string, spec: string, specNode: ts.Node, typeOnly: boolean, dynamic: boolean, kind: "packaging.import" | "packaging.re-export", names?: readonly string[], aliases?: readonly string[]) => {
     const target = project.resolveModule(spec, sf.fileName);
     let to: NodeId | UnresolvedRef;
     if (target !== undefined && project.rels.has(target)) {
@@ -1332,7 +1333,10 @@ export function emitFile(project: Project, rel: string): IRBatch {
     }
     // A bare specifier may name a workspace package, whose package.json decides its source. Any manifest change re-extracts.
     if (!spec.startsWith(".") && !spec.startsWith("/")) for (const m of project.manifestRels) dependOn(m);
-    const attrs: Record<string, unknown> = kind === "packaging.import" ? { specifier: spec, typeOnly, dynamic } : { specifier: spec };
+    // A re-export records the names it passes on: the exported-from side of `export { a as b } from` (`a`), `["*"]` for `export *`.
+    // `as` gives the exported name of each, by position (`b`), so a downstream name maps back to the name it came from.
+    const attrs: Record<string, unknown> = kind === "packaging.import" ? { specifier: spec, typeOnly, dynamic } : { specifier: spec, names: [...(names ?? ["*"])] };
+    if (kind === "packaging.re-export" && aliases !== undefined && aliases[0] !== "*") attrs.as = [...aliases];
     pushEdge({ from, to, facet: "packaging", kind, attrs, span: spanOf(rel, sf, specNode), provenance: PROV });
   };
 
@@ -1849,7 +1853,11 @@ export function emitFile(project: Project, rel: string): IRBatch {
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
       emitModule(rel, node.moduleSpecifier.text, node.moduleSpecifier, node.importClause?.isTypeOnly ?? false, false, "packaging.import");
     } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
-      emitModule(rel, node.moduleSpecifier.text, node.moduleSpecifier, false, false, "packaging.re-export");
+      const clause = node.exportClause;
+      const elements = clause && ts.isNamedExports(clause) ? clause.elements : undefined;
+      const names = elements ? elements.map((e) => (e.propertyName ?? e.name).text) : ["*"];
+      const aliases = elements ? elements.map((e) => e.name.text) : ["*"];
+      emitModule(rel, node.moduleSpecifier.text, node.moduleSpecifier, false, false, "packaging.re-export", names, aliases);
     } else if (ts.isCallExpression(node)) {
       if (node.expression.kind === ts.SyntaxKind.ImportKeyword && node.arguments[0] && ts.isStringLiteralLike(node.arguments[0])) {
         emitModule(rel, node.arguments[0].text, node.arguments[0], false, true, "packaging.import");
@@ -1912,6 +1920,18 @@ export function emitFile(project: Project, rel: string): IRBatch {
       const edge = callEdges.get(call);
       if (edge) edge.attrs = { ...edge.attrs, ...attrs };
     }
+    const data = emitData({
+      project,
+      rel,
+      sf,
+      moduleId,
+      spanOf: (n) => spanOf(rel, sf, n),
+      spanIn: (file, n) => spanOf(file, project.sourceFor(file) ?? sf, n),
+      provenance: PROV,
+      dependOn,
+    });
+    for (const n of data.nodes) push(n);
+    for (const e of data.edges) pushEdge(e);
   }
 
   for (const d of project.program.getSyntacticDiagnostics(sf)) {

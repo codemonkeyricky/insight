@@ -17,6 +17,7 @@ import {
   type FnDecl,
   type Project,
 } from "./project.js";
+import { emitData } from "./data.js";
 import { analyze, atomOf, caseGroups, decompose, enumerator, holderRef, shadowNames, stateIndexOf, testId, writeOf, type Atom, type Holder, type RefCtx, type WriteInfo } from "./state.js";
 import {
   CONDVAR_OP,
@@ -989,6 +990,18 @@ export function emitUnit(project: Project, rel: string): IRBatch {
   };
 
   visit(unit.root, rel, undefined);
+
+  // Variables and their reads and writes need the whole project's declaration index, built before any file is emitted.
+  const data = emitData(project, rel, prov);
+  for (const n of data.nodes) node(n);
+  for (const e of data.edges) edge(e);
+  // The file that declares a variable this file reads or writes is a dependency: a move or rename of the declaration re-extracts it.
+  for (const e of data.edges) {
+    if (typeof e.to !== "string") continue;
+    const hash = e.to.indexOf("#");
+    const declaring = hash > 0 ? e.to.slice(0, hash) : "";
+    if (declaring !== "" && declaring !== rel && !declaring.startsWith("<")) deps.add(declaring);
+  }
 
   if (unit.errors.length > 0) {
     const first = unit.errors[0] as SyntaxNode;

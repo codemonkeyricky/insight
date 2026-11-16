@@ -16,6 +16,7 @@ export type FlowRole =
   | "spawn"
   | "effect"
   | "sync"
+  | "state"
   | "branch"
   | "switch"
   | "loop"
@@ -28,8 +29,8 @@ export type FlowRole =
   | "continue";
 
 /**
- * What a chart row is for the coupling view: a local row, or the boundary it crosses. `state` and `ctl` are reserved for
- * phases 3 and 4 of the coupling view: no row takes them yet.
+ * What a chart row is for the coupling view: a local row, or the boundary it crosses. `ctl` is reserved for phase 4 of the
+ * coupling view: no row takes it yet.
  */
 export type CouplingClass = "local" | "cross" | "io" | "state" | "conc" | "escape" | "ctl";
 
@@ -61,6 +62,12 @@ export interface FlowNode {
   fold?: number;
   /** An open fold's header row (`▾ n local`): folding it back closes the fold. */
   open?: boolean;
+  /** A state row (coupling view only): the variable is written, not only read. */
+  write?: true;
+  /** A state row (coupling view only): module-private state the function reaches from its module's surface. */
+  hidden?: true;
+  /** A state row (coupling view only): global state, visible from every module. */
+  global?: true;
   /** Absolute lane of the node's station (line map layout). */
   lane?: number;
   /** Absolute x where the label text starts. */

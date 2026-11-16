@@ -78,6 +78,8 @@ export function CouplingSection({ base, info }: { base: ListBase; info: Coupling
                 ) : (
                   e.label
                 )}
+                {cls === "state" && e.hidden === true && <span className="muted small"> ◆ hidden</span>}
+                {cls === "state" && e.global === true && <span className="muted small"> global</span>}
                 {e.module !== undefined && e.module !== "" && <span className="muted small"> {e.module}</span>}
               </li>
             ))}

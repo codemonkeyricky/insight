@@ -61,6 +61,8 @@ export interface OutsideStep {
 export function outsideSteps(fn: FunctionFlow, scope: string): OutsideStep[] {
   const out: OutsideStep[] = [];
   for (const node of fn.nodes) {
+    // A state row names a variable, not a function: it is no call outside the scope.
+    if (node.role === "state") continue;
     const target = node.target;
     if (target === undefined || !outsideScope(target, scope)) continue;
     out.push({ node, target, name: nameOfId(target), ...outsideCall(target, scope) });

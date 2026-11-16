@@ -1,5 +1,5 @@
 import type { IREdge, IRNode } from "@insight/ir";
-import { factsForFile } from "./build.js";
+import { factsForFile, type StateIndex } from "./build.js";
 import { couplingChart, couplingFacts, type CouplingFootprint } from "./coupling.js";
 import { layoutFunction, measure } from "./layout.js";
 import { moduleMap, type ModuleMap } from "./modules.js";
@@ -22,16 +22,21 @@ export * from "./modules.js";
 export * from "./coupling.js";
 export * from "./resource-peers.js";
 
-/** What the coupling view needs from the whole project: its modules and every function's footprint. Built once per snapshot. */
+/**
+ * What the coupling view needs from the whole project: its modules, every function's footprint, the module surface (the
+ * functions other modules reach), and the mutable variables with the modules that write them. Built once per snapshot.
+ */
 export interface CouplingIndex {
   modules: ModuleMap;
   footprints: ReadonlyMap<string, CouplingFootprint>;
+  surface: ReadonlySet<string>;
+  state: StateIndex;
 }
 
 /** The coupling index of a project's IR records. */
 export function couplingIndex(nodes: readonly IRNode[], edges: readonly IREdge[]): CouplingIndex {
-  const { modules, footprints } = couplingFacts(nodes, edges);
-  return { modules, footprints };
+  const { modules, footprints, surface, state } = couplingFacts(nodes, edges);
+  return { modules, footprints, surface, state };
 }
 
 /**
@@ -46,13 +51,13 @@ export function couplingIndex(nodes: readonly IRNode[], edges: readonly IREdge[]
  */
 export function buildFileFlow(file: string, nodes: Iterable<IRNode>, edges: Iterable<IREdge>, opts: { coupling?: CouplingIndex } = {}): FileFlow {
   const coupling = opts.coupling;
-  const facts = factsForFile(file, nodes, edges, coupling ? { sources: true } : {});
+  const facts = factsForFile(file, nodes, edges, coupling ? { sources: true, state: coupling.state } : {});
   return {
     file,
     functions: facts.map((f) => {
       const flow = layoutFunction(f);
       if (coupling === undefined || flow.tooLarge) return flow;
-      const pruned = couplingChart(f.id, f.items, coupling.modules, coupling.footprints);
+      const pruned = couplingChart(f.id, f.items, coupling.modules, coupling.footprints, coupling.surface);
       const chart = layoutFunction({ id: f.id, name: f.name, async: f.async, ...(f.span ? { span: f.span } : {}), items: pruned.items });
       return { ...flow, coupling: { ...pruned.info, chart, rows: { all: flow.nodes.length, coupling: chart.nodes.length } } };
     }),

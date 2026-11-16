@@ -33,7 +33,7 @@ import { FarCards, type FarCard } from "./FarCards";
 import { zoneCells, zoneLetter, zoneLines } from "../../zoom/zones";
 import { offMapSelected } from "../../zoom/offMap";
 import type { ZoomStore } from "../../zoom/scene";
-import { stepAction, type StepContext } from "../../zoom/stepAction";
+import { stepAction, stepCallee, type StepContext } from "../../zoom/stepAction";
 import { CalloutShape, ExpansionShape, type CalloutEnds } from "./Expansion";
 
 /** The camera's scale range: from the whole project down to a single line of a chart. */
@@ -950,7 +950,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   /** The facts stepAction decides on, for a row of the expansion of `fnId`. */
   const stepContext = (fnId: string, node: FlowNode): StepContext => {
     const b = buildRef.current;
-    const callee = node.target !== undefined && node.target !== ownerOf(expRef.current.find((e) => e.fnId === fnId), node.id) ? node.target : undefined;
+    const callee = stepCallee(node, ownerOf(expRef.current.find((e) => e.fnId === fnId), node.id));
     return { hasCallee: callee !== undefined, isLambda: callee !== undefined && isLambdaCall(b, fnId, callee), runtime: stepRuntime(node) };
   };
 
