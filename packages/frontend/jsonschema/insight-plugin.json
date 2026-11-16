@@ -1,0 +1,14 @@
+{
+  "id": "frontend-jsonschema",
+  "version": "0.2.0",
+  "description": "POC: detects JSON Schema files and kinds files by content (defs, properties, $ref links, kind declarations), links data files to the schema they follow and which TypeScript files emit or read each kind",
+  "irVersion": "^1.0",
+  "detect": ["**/*.json"],
+  "files": ["**/*.json"],
+  "inputListing": ["**/*.json", "packages/**/*.{ts,tsx,js,mjs,cjs}", "apps/**/*.{ts,tsx,js,mjs,cjs}"],
+  "provides": ["structure", "x-schema"],
+  "kinds": "data/kinds.json",
+  "roles": {
+    "frontend": "dist/index.js"
+  }
+}

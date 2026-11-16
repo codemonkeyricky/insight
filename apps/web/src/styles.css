@@ -1370,3 +1370,50 @@ a.auth-chip { text-decoration: none; }
 .sm-sites { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
 .sm-sites li { padding: 6px 8px; border: 1px solid var(--hair); border-radius: var(--r-sm); background: var(--sheet); }
 @media (max-width: 700px) { .sm-machines > .sm-list { max-width: none; } }
+
+/* Schema diagram (lens "Schema"): one colour per facet, readable on both themes. */
+:root {
+  --sd-0: #3F73DC; --sd-1: #8A55D1; --sd-2: #139488; --sd-3: #C47F14; --sd-4: #CF4468; --sd-5: #3A9E48; --sd-6: #CB5A28; --sd-7: #2493BC; --sd-x: #7A7A80; --sd-rec: var(--accent);
+  --sd-card: var(--sheet);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --sd-0: #6C9BFF; --sd-1: #B589F2; --sd-2: #3CC9B8; --sd-3: #F0B04A; --sd-4: #F27A98; --sd-5: #62CC72; --sd-6: #F28A5C; --sd-7: #5CC0E6; --sd-x: #98989D; --sd-card: #232326; }
+}
+:root[data-theme="dark"] { --sd-0: #6C9BFF; --sd-1: #B589F2; --sd-2: #3CC9B8; --sd-3: #F0B04A; --sd-4: #F27A98; --sd-5: #62CC72; --sd-6: #F28A5C; --sd-7: #5CC0E6; --sd-x: #98989D; --sd-card: #232326; }
+.sd-bar { display: flex; align-items: center; gap: 12px; margin: 6px 0; }
+.sd-wrap { position: relative; width: 100%; height: max(600px, calc(100vh - 230px)); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-bottom: 18px; }
+.sd-svg { display: block; cursor: grab; user-select: none; }
+.sd-svg:active { cursor: grabbing; }
+.sd-tools { background: color-mix(in srgb, var(--bg) 88%, transparent); border: 1px solid var(--line); border-radius: 8px; padding: 3px 4px 3px 10px; position: absolute; top: 8px; right: 10px; z-index: 2; display: flex; align-items: center; gap: 10px; }
+.sd-msg { position: absolute; top: 40%; left: 0; right: 0; text-align: center; margin: 0; }
+.sd-frame-box { fill: color-mix(in srgb, var(--g) 5%, transparent); stroke: color-mix(in srgb, var(--g) 32%, transparent); stroke-width: 1.2; }
+.sd-frame-title { fill: var(--g); font: 700 15px var(--font-ui); letter-spacing: 0.02em; text-transform: lowercase; cursor: zoom-in; }
+.sd-frame-count { fill: var(--muted); font-weight: 500; font-size: 12px; }
+.sd-card { cursor: pointer; outline: none; transition: opacity .15s; }
+.sd-card.dim { opacity: 0.22; }
+.sd-card:focus-visible .sd-body, .sd-card.hot .sd-body { stroke: var(--accent); stroke-width: 2; }
+.sd-card.linked .sd-body { stroke: var(--accent); stroke-opacity: .6; stroke-width: 1.5; }
+.sd-body { fill: var(--sd-card); stroke: color-mix(in srgb, var(--ink) 22%, transparent); stroke-width: 1; filter: drop-shadow(0 1px 2px var(--shadow)); }
+.sd-body.edge { stroke-dasharray: 5 3; }
+.sd-rule { stroke: color-mix(in srgb, var(--ink) 14%, transparent); }
+.sd-label { fill: var(--fg); font: 600 12.5px var(--font-code); }
+.sd-badge { fill: color-mix(in srgb, var(--ink) 10%, transparent); }
+.sd-badge.edge { fill: none; stroke: color-mix(in srgb, var(--ink) 35%, transparent); stroke-dasharray: 3 2; }
+.sd-badge-text { fill: var(--muted); font: 600 9.5px var(--font-ui); letter-spacing: .04em; }
+.sd-empty { fill: var(--muted); font: italic 11px var(--font-ui); }
+.sd-fname { fill: var(--muted); font: 11.5px var(--font-code); }
+.sd-field.req .sd-fname { fill: var(--fg); }
+.sd-ftype { fill: var(--muted); font: 10.5px var(--font-code); }
+.sd-ftype.ref { fill: var(--accent-text); font-weight: 600; }
+.sd-values { fill: var(--muted); font: 9.5px var(--font-code); opacity: .85; }
+.sd-note { fill: var(--accent-text); font: 600 10.5px var(--font-code); }
+.sd-dot { fill: var(--fg); }
+.sd-dot.hollow { fill: none; stroke: var(--muted); stroke-width: 1.2; }
+.sd-curve { fill: none; stroke: color-mix(in srgb, var(--ink) 45%, transparent); stroke-width: 1.3; transition: opacity .15s; }
+.sd-link.ref .sd-curve { stroke: color-mix(in srgb, var(--accent) 60%, transparent); }
+.sd-head-ref { fill: color-mix(in srgb, var(--accent) 75%, transparent); }
+.sd-head-ext { fill: var(--sd-card); stroke: color-mix(in srgb, var(--ink) 60%, transparent); stroke-width: 1.4; }
+.sd-link.off { opacity: .08; }
+.sd-link.on .sd-curve { stroke: var(--accent); stroke-width: 2.2; }
+.sd-link.on .sd-head-ref { fill: var(--accent); }
+.sd-link.on .sd-head-ext { stroke: var(--accent); }

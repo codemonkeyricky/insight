@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
-import { api, type LensRecord, type LensView, type ScopeStats, type Span, type StateMachineTransition, type TargetType } from "../api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { api, type LensRecord, type LensView, type SchemaDiagramView, type ScopeStats, type Span, type StateMachineTransition, type TargetType } from "../api";
 import { AnnotationBox } from "../components/AnnotationBox";
 import { GraphCanvas, type GraphPick } from "../components/GraphCanvas";
 import { SourcePanel, type SelectedSpan } from "../components/SourcePanel";
 import { TreeBlock } from "../components/TreeBlock";
+import { SchemaDiagram } from "../schema/SchemaDiagram";
 import { StateDiagram, type MachinePick } from "../components/StateDiagram";
 import { MachineList, SiteList } from "../components/MachineSection";
 import { machinesOf, readMachineParam, selectMachine, withMachineParam } from "../states/machineParam";
@@ -36,6 +37,7 @@ export function LensPage({ id, lensId, scope, projectName, stats, onLoaded }: Le
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [machineParam, setMachineParam] = useState<string | null>(() => readMachineParam(window.location.hash));
+  const [diagramId, setDiagramId] = useState<string | null>(null);
   const [arc, setArc] = useState<StateMachineTransition | null>(null);
   const onLoadedRef = useRef(onLoaded);
 
@@ -65,6 +67,14 @@ export function LensPage({ id, lensId, scope, projectName, stats, onLoaded }: Le
       cancelled = true;
     };
   }, [id, lensId, scope]);
+
+  // Stable so the memoised schema cards do not re-render on every LensPage render (setters are stable).
+  const pickSchema = useCallback((p: { span?: Span; label: string }) => {
+    if (p.span) {
+      setNote(null);
+      setSelected({ span: p.span, label: p.label });
+    } else setNote(`${p.label}: no source line is recorded.`);
+  }, []);
 
   if (error) return <p className="error" role="alert">{error}</p>;
   if (!lens) return <p className="muted">Loading</p>;
@@ -100,6 +110,8 @@ export function LensPage({ id, lensId, scope, projectName, stats, onLoaded }: Le
     setSelected({ span, label: text });
   };
 
+  const diagrams = result.views.filter((v): v is SchemaDiagramView => v.type === "schema-diagram");
+  const diagram = diagrams.find((d) => d.id === diagramId) ?? diagrams[0];
   const machines = machinesOf(result.views);
   const machine = selectMachine(machines, machineParam);
   const chooseMachine = (holderId: string) => {
@@ -156,7 +168,21 @@ export function LensPage({ id, lensId, scope, projectName, stats, onLoaded }: Le
                   ))}
                 </div>
               )}
-              {result.views.filter((v) => v.type !== "state-machine").map((view) => (
+              {diagram && (
+                <div className="view">
+                  <div className="sd-bar">
+                    <div className="seg" role="group" aria-label="Diagram">
+                      {diagrams.map((d) => (
+                        <button key={d.id} type="button" aria-pressed={d.id === diagram.id} onClick={() => setDiagramId(d.id)}>
+                          {d.title}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <SchemaDiagram key={diagram.id} view={diagram} onPick={pickSchema} />
+                </div>
+              )}
+              {result.views.filter((v) => v.type !== "state-machine" && v.type !== "schema-diagram").map((view) => (
                 <ViewBlock key={view.id} view={view} projectId={id} onPick={pick} onShow={show} />
               ))}
               <h3>Findings</h3>
@@ -304,7 +330,7 @@ export function ViewBlock({
       </div>
     );
   }
-  if (view.type === "state-machine") return <></>;
+  if (view.type === "state-machine" || view.type === "schema-diagram") return <></>;
   return (
     <div className="view">
       <h3>{view.title}</h3>
