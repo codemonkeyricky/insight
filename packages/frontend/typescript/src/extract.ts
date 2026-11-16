@@ -1704,7 +1704,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
             qualifiedName: decl.qname,
             async: decl.entity.async,
             exported: decl.entity.exported,
-            ...(decl.entity.anonymous ? { anonymous: isCallbackSlot(node) } : {}),
+            ...(decl.entity.anonymous ? { anonymous: true, callbackSlot: isCallbackSlot(node) } : {}),
             ...(decl.entity.module ? { module: true } : {}),
             ...(decl.entity.htmlEntry ? { htmlEntry: true } : {}),
             ...(decl.entity.nodeEntry ? { nodeEntry: true } : {}),

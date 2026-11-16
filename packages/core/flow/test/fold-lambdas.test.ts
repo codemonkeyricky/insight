@@ -73,3 +73,13 @@ describe("execModel folds lambdas into their owner", () => {
     expect(model.functions.map((f) => f.id)).toContain(LAM);
   });
 });
+
+describe("summarizeScope folds a returned-literal member arrow (anonymous, not a callback slot)", () => {
+  it("still folds it into its owner: the owner gets the member's call and no member row", () => {
+    const member: IRNode = { ...anonNode(APP, 4, MAIN), attrs: { name: "λ5:3", anonymous: true, callbackSlot: false } };
+    const nodes = [fnNode(APP, "main", 0), member, fnNode(LIB, "help", 0)];
+    const flow = summarizeScope(nodes, [closureEdge(MAIN, LAM, APP, 4), callEdge(LAM, HELP, APP, 5)], [APP, LIB]);
+    expect(flow.functions.map((f) => f.id)).toEqual([MAIN, HELP]);
+    expect(flow.calls).toEqual([expect.objectContaining({ from: MAIN, to: HELP, count: 1 })]);
+  });
+});

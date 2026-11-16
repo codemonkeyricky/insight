@@ -1,4 +1,4 @@
-import { displayLocal, type IREdge, type IRNode } from "@insight/ir";
+import { displayLocals, type IREdge, type IRNode } from "@insight/ir";
 import { edgeTargets } from "@insight/sdk";
 import { factsForFile, type Arm, type FunctionFacts, type Item, type StateIndex, type StateRef, type StateVariable } from "./build.js";
 import { layoutFunction } from "./layout.js";
@@ -292,7 +292,7 @@ function keepItem(item: Item, caught: boolean, ctx: Ctx, st: { next: number }): 
       const baseLabel = hoisted !== undefined ? `${item.label} ⇢ ${hoisted}` : item.label;
       const baseTitle = hoisted !== undefined ? `${item.title ?? item.label} ⇢ ${hoisted}` : item.title;
       // A kept call whose result goes into a local shows where it goes: `cfg ← config.loadConfig()`.
-      const bind = item.role === "call" || item.role === "await" ? (item.binds === undefined ? undefined : bindNames(item).map(displayLocal).join(", ")) : undefined;
+      const bind = item.role === "call" || item.role === "await" ? (item.binds === undefined ? undefined : bindNames(item).map(displayLocals(bindNames(item))).join(", ")) : undefined;
       const boundLabel = bind !== undefined ? `${bind} ← ${baseLabel}` : baseLabel;
       const boundTitle = bind !== undefined ? `${bind} ← ${baseTitle ?? baseLabel}` : baseTitle;
       return {
@@ -309,8 +309,8 @@ function keepItem(item: Item, caught: boolean, ctx: Ctx, st: { next: number }): 
       return { ...item, coupling: "escape" };
     case "fork": {
       const dep = ctx.taint?.get(item);
-      const label = dep === undefined ? item.label : `${item.label} ⇠ ${dep.map(displayLocal).join(", ")}`;
-      const title = dep === undefined ? item.title : `${item.title ?? item.label} ⇠ ${dep.map(displayLocal).join(", ")}`;
+      const label = dep === undefined ? item.label : `${item.label} ⇠ ${dep.map(displayLocals(dep)).join(", ")}`;
+      const title = dep === undefined ? item.title : `${item.title ?? item.label} ⇠ ${dep.map(displayLocals(dep)).join(", ")}`;
       return {
         ...item,
         // A taint-kept branch is control flow that depends on a local carrying an external value (`ctl`); a lock frame is conc.
@@ -323,7 +323,7 @@ function keepItem(item: Item, caught: boolean, ctx: Ctx, st: { next: number }): 
       const dep = ctx.taint?.get(item);
       return {
         ...item,
-        ...(dep !== undefined ? { coupling: "ctl" as const, label: `${item.label} ⇠ ${dep.map(displayLocal).join(", ")}`, title: `${item.title ?? item.label} ⇠ ${dep.map(displayLocal).join(", ")}` } : {}),
+        ...(dep !== undefined ? { coupling: "ctl" as const, label: `${item.label} ⇠ ${dep.map(displayLocals(dep)).join(", ")}`, title: `${item.title ?? item.label} ⇠ ${dep.map(displayLocals(dep)).join(", ")}` } : {}),
         body: prune(item.body, caught, ctx, st),
       };
     }

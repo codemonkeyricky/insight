@@ -3,16 +3,16 @@
 // out to every candidate. A named helper nested in the driver is inlined under its call. Pure: the same model always gives the
 // same output.
 //
-// Callbacks: a candidate call whose every target is an anonymous function is a callback slot (`opts.onProgress`), not a stage,
-// and is dropped. The frontend marks a function anonymous (`anonymous` attribute): a property arrow of a returned or stored object
-// is a named member, while a property of an options bag passed to a call is a slot. A model with no such attribute marks its
-// lambdas by their id. An anonymous function passed to a call (a lambda) is folded into the driver's statements, but its locals and
+// Callbacks: a candidate call whose every target is a callback slot (`opts.onProgress`, `callbackSlot` attribute), not a stage, and is
+// dropped. The frontend sets `callbackSlot` on each anonymous function: a property arrow of a returned or stored object is a named
+// member, while a property of an options bag passed to a call is a slot. A model with no such attribute marks its lambdas by their id.
+// A slot whose result is bound and read (`const ast = this.s.parse(t)`) is kept as a plain stage so its data edge survives. An anonymous function passed to a call (a lambda) is folded into the driver's statements, but its locals and
 // parameters are scoped to it: a read inside it resolves through its own declarations first, then outward.
 //
 // Exits: a return, break or continue counts as the driver's exit only inside a loop's branch arm, and only when it sits in the
 // driver itself, not in an inlined helper or a callback. Top-level guard returns (`if (!x) return;` before the stages) are dropped
 // on purpose: they are preconditions, not a point where the pipeline stops. A throw always counts.
-import { displayLocal, type IREdge, type IRNode, type NodeId, type Span } from "@insight/ir";
+import { displayLocals, type IREdge, type IRNode, type NodeId, type Span } from "@insight/ir";
 import { isNoisePath } from "@insight/flow";
 import type { FunctionEntity, ProjectModel, Rel } from "./model.js";
 import {
@@ -339,12 +339,13 @@ function nearestFnOf(model: ProjectModel, from: NodeId): NodeId | undefined {
 }
 
 /**
- * A callback: an anonymous function. The frontend's `anonymous` attribute decides when it is present (on every lambda of a current
- * frontend); a model without it (an older frontend) marks a callback by its lambda segment (`.λ221:21`).
+ * A callback slot: an anonymous function a caller passes in. The frontend's `callbackSlot` attribute decides when it is present (on
+ * every anonymous function of a current frontend); a model without it (an older frontend) marks a callback by its lambda segment
+ * (`.λ221:21`). `anonymous` says only that a function is a lambda; a property arrow of a returned literal is anonymous but not a slot.
  */
 const isCallbackFn = (model: ProjectModel, id: NodeId): boolean => {
-  const attr = model.byId.get(id)?.attrs.anonymous;
-  return typeof attr === "boolean" ? attr : /[.#]λ\d/.test(id);
+  const slot = model.byId.get(id)?.attrs.callbackSlot;
+  return typeof slot === "boolean" ? slot : /[.#]λ\d/.test(id);
 };
 
 /** The anonymous callbacks between a node and the function being emitted, outermost first: the callbacks a call sits in. */
@@ -479,7 +480,12 @@ function resolveCall(group: Rel[], env: Env): StageNode | undefined {
     if (how === "interface" || how === "registry") {
       // A callback slot: every candidate is an anonymous function, a callback a caller passes in (`opts.onProgress?.(line)`). The
       // driver runs no stage of its own there, so the call is dropped like one with no target.
-      if (targets.every((t) => isCallbackFn(ctx.model, t))) return undefined;
+      if (targets.every((t) => isCallbackFn(ctx.model, t))) {
+        // A slot whose result is bound (`const ast = this.s.parse(t)`) produces data a later statement may read: it stays one
+        // ambiguous stage so that data edge survives. A slot with no bound result (fire-and-forget) is dropped.
+        if (binds === undefined) return undefined;
+        return { kind: "call", id, name: callee ?? "call", site, ambiguous: true, candidates: targets.length, ...dataAttrs };
+      }
       const shown = targets.slice(0, FANOUT_CAP).map((t): { fn: NodeId; name: string; component?: string } => {
         const f = ctx.model.functionById.get(t) as FunctionEntity;
         const component = ctx.compOf(f.file);
@@ -926,8 +932,9 @@ function dataEdges(model: ProjectModel, body: StageNode[], driverId: NodeId): { 
     for (const f of found) if (f.producer.id !== c.id && !byProducer.has(f.producer.id)) byProducer.set(f.producer.id, f);
     const nearest = [...byProducer.values()].sort((a, b) => b.producer.index - a.producer.index).slice(0, EDGE_IN_MAX);
     for (const f of nearest) {
-      const bound = displayLocal(f.bound);
-      const read = displayLocal(f.read);
+      const shown = displayLocals([f.bound, f.read]);
+      const bound = shown(f.bound);
+      const read = shown(f.read);
       const full = `${bound}→${read}`;
       const label = bound === read ? read : full.length <= EDGE_LABEL_MAX ? full : read;
       const type = f.producer.bindsType !== undefined && f.producer.binds?.includes(f.bound) ? f.producer.bindsType : undefined;

@@ -5,9 +5,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { IRNode } from "@insight/ir";
 import frontend from "../src/index.js";
 
-// The `anonymous` attribute of a lambda says whether it is a callback slot. A property arrow of a returned or stored literal is a named
-// member; a property arrow of an options bag passed to a call is a callback slot; a lambda passed directly is one too. A property of a
-// bound literal is named by the property, and its declared parameters and derived locals are emitted like a declared function's.
+// Every lambda is `anonymous` (master's meaning, unchanged). The `callbackSlot` attribute says whether an anonymous function is a callback
+// slot: a property arrow of a returned or stored literal is a named member (false); a property arrow of an options bag passed to a call
+// is a callback slot (true); a lambda passed directly is one too. A property of a bound literal is named by the property, and its
+// declared parameters and derived locals are emitted like a declared function's.
 
 const FILE = "src/slots.ts";
 
@@ -56,16 +57,25 @@ const fnAt = (text: string): IRNode | undefined => {
 };
 
 describe("frontend-typescript callback slots", () => {
-  it("marks a property arrow of a returned literal as a named member, not a callback", () => {
-    expect(fnAt("return { parse:")?.attrs.anonymous).toBe(false);
+  it("keeps a property arrow of a returned literal anonymous, but not a callback slot", () => {
+    expect(fnAt("return { parse:")?.attrs.anonymous).toBe(true);
+    expect(fnAt("return { parse:")?.attrs.callbackSlot).toBe(false);
   });
 
   it("marks a property arrow of an options bag passed to a call as a callback slot", () => {
     expect(fnAt("runWith({ onProgress:")?.attrs.anonymous).toBe(true);
+    expect(fnAt("runWith({ onProgress:")?.attrs.callbackSlot).toBe(true);
   });
 
-  it("marks a lambda passed directly to a call as a callback", () => {
+  it("marks a lambda passed directly to a call as a callback slot", () => {
     expect(fnAt("forEach((n)")?.attrs.anonymous).toBe(true);
+    expect(fnAt("forEach((n)")?.attrs.callbackSlot).toBe(true);
+  });
+
+  it("emits no callbackSlot on a named function, which is not anonymous", () => {
+    const load = nodes.find((n) => n.attrs.name === "load");
+    expect(load?.attrs.anonymous).toBeUndefined();
+    expect(load?.attrs.callbackSlot).toBeUndefined();
   });
 
   it("names a property of a bound literal by the property, with its parameters and derives", () => {

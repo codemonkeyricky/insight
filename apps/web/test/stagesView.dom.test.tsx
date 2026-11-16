@@ -60,4 +60,17 @@ describe("Stages view errors and keyboard", () => {
     fireEvent.keyDown(pill as HTMLElement, { key: " " });
     expect(showCode).toHaveBeenCalledTimes(2);
   });
+
+  it("says so when the scope has no stage drivers", async () => {
+    getStages.mockResolvedValueOnce({ drivers: [] });
+    render(<StagesView id="p" scope="empty" />);
+    expect(await screen.findByText("No stage drivers in this scope")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("shows an error line when the stage graph could not be built", async () => {
+    getStages.mockResolvedValueOnce({ drivers: [{ id: RUN, name: "run", file: "app/src/run.ts", score: 1 }] });
+    render(<StagesView id="p" scope="broken" />);
+    expect((await screen.findByRole("alert")).textContent).toBe("Stage graph could not be built");
+  });
 });

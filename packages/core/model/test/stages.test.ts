@@ -795,6 +795,8 @@ describe("stage graph: named property arrows and callback marks (review r3)", ()
   const PARSE = `${F}#makeParser.λ3:10`;
   const parseCall = (): IREdge => call(DRV, [PARSE], 2, 2, 20, { how: "interface", callee: "parser.parse", binds: "ast" });
   const saveCall = (): IREdge => call(DRV, stageId("s4"), 3, 2, 14, { reads: ["ast"] });
+  // A call whose result is not bound: a fire-and-forget callback (`opts.onProgress?.(line)`).
+  const fireAndForgetCall = (): IREdge => call(DRV, [PARSE], 2, 2, 20, { how: "interface", callee: "parser.parse" });
   const parseNode = (attrs: Record<string, unknown>): IRNode => fn(PARSE, "λ3:10", F, F, { params: ["t"], ...attrs });
 
   it("keeps a named property arrow as a stage, with its ast edge into the next stage", () => {
@@ -804,13 +806,33 @@ describe("stage graph: named property arrows and callback marks (review r3)", ()
     expect(g.edges).toEqual([{ from: parse?.id, to: idOf(g, "s4"), label: "ast" }]);
   });
 
-  it("drops a candidate that is an anonymous callback", () => {
-    const g = graphOf(docWithDriver({ params: [] }, { nodes: [parseNode({ anonymous: true })], edges: [parseCall(), saveCall()] }));
+  it("drops a candidate that is a callback slot whose result is not bound", () => {
+    const g = graphOf(docWithDriver({ params: [] }, { nodes: [parseNode({ anonymous: true, callbackSlot: true })], edges: [fireAndForgetCall(), saveCall()] }));
     expect(stageNamed(g.body, "parser.parse")).toBeUndefined();
   });
 
-  it("drops a lambda with no anonymous attribute by its lambda id (an older frontend)", () => {
-    const g = graphOf(docWithDriver({ params: [] }, { nodes: [parseNode({})], edges: [parseCall(), saveCall()] }));
+  it("keeps an anonymous member arrow that is not a callback slot as a stage (callbackSlot false)", () => {
+    const g = graphOf(docWithDriver({ params: [] }, { nodes: [parseNode({ anonymous: true, callbackSlot: false })], edges: [parseCall(), saveCall()] }));
+    const parse = stageNamed(g.body, "parser.parse");
+    expect(parse).toBeDefined();
+    expect(g.edges).toEqual([{ from: parse?.id, to: idOf(g, "s4"), label: "ast" }]);
+  });
+
+  it("keeps a bound callback slot as one ambiguous stage, so its ast edge survives", () => {
+    const g = graphOf(docWithDriver({ params: [] }, { nodes: [parseNode({ anonymous: true, callbackSlot: true })], edges: [parseCall(), saveCall()] }));
+    const parse = stageNamed(g.body, "parser.parse");
+    expect(parse).toBeDefined();
+    expect(parse?.ambiguous).toBe(true);
+    expect(g.edges).toEqual([{ from: parse?.id, to: idOf(g, "s4"), label: "ast" }]);
+  });
+
+  it("drops an unbound callback slot (a fire-and-forget call such as opts.onProgress)", () => {
+    const g = graphOf(docWithDriver({ params: [] }, { nodes: [parseNode({ anonymous: true, callbackSlot: true })], edges: [fireAndForgetCall(), saveCall()] }));
+    expect(stageNamed(g.body, "parser.parse")).toBeUndefined();
+  });
+
+  it("drops a lambda with no callbackSlot attribute by its lambda id (an older frontend)", () => {
+    const g = graphOf(docWithDriver({ params: [] }, { nodes: [parseNode({})], edges: [fireAndForgetCall(), saveCall()] }));
     expect(stageNamed(g.body, "parser.parse")).toBeUndefined();
   });
 

@@ -68,7 +68,9 @@ export function StagesView({ id, scope, tests = false, onTests }: { id: string; 
   if (done === null || (done.error !== undefined && done.key !== key)) return <p className="muted small">Loading stages</p>;
   if (done.error !== undefined) return <p className="error" role="alert">{done.error}</p>;
   const payload = done.payload;
-  if (payload === undefined || payload.graph === undefined || payload.drivers.length === 0) return null;
+  if (payload === undefined || payload.drivers.length === 0) return <p className="muted small">No stage drivers in this scope</p>;
+  // The server builds the graph with the drivers; a missing graph is a failed build, not an empty scope.
+  if (payload.graph === undefined) return <p className="error" role="alert">Stage graph could not be built</p>;
   return (
     <StagesDiagram
       id={id}
