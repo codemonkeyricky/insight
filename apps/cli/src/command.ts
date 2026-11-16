@@ -1,25 +1,32 @@
 import { resolve } from "node:path";
 import { runIndex } from "@insight/indexer";
 import { formatReport } from "./format.js";
+import { runCoupling } from "./coupling.js";
 
 import { runServe, SERVE_USAGE } from "./serve.js";
 
 const USAGE = `usage:
   insight index <path> [--state <dir>] [--full] [--allow-build-tools] [--json] [--quiet]
+  insight coupling <fn|file|scope> [--path <dir>] [--state <dir>] [--json]
   insight serve [path...] [--port <n>] [--host <addr>] [--home <dir>] [--no-open]
 
   index    Extract IR for a project and write the snapshot, shards and SQLite index under <path>/.insight
-  --state  Write the generated state to <dir> instead of <path>/.insight. Plugins and lens settings still come from <path>/.insight
+  coupling Read the coupling footprint of a function, file or folder from an existing snapshot (never indexes)
+  --path   The project folder (coupling; default the current directory)
+  --state  Write the generated state to <dir> instead of <path>/.insight. For coupling, read it from there
   --full   Ignore cached shards and re-extract every file
   --allow-build-tools   Let frontends run build tools such as bazel or cmake (off by default)
-  --json   Print the run report as JSON
+  --json   Print the run report, or the coupling report, as JSON
   --quiet  Do not print progress lines
 
 ${SERVE_USAGE}`;
 
 interface Args {
   command?: string;
+  /** index: the project path. coupling: the function id, file or folder to report. */
   path?: string;
+  /** coupling: the project folder, when --path is given. Undefined is the current directory. */
+  project?: string;
   /** The state folder, when --state is given. Undefined keeps the default, <path>/.insight. */
   state?: string;
   full: boolean;
@@ -41,6 +48,11 @@ export function parseArgs(argv: string[]): Args {
       if (value === undefined || value === "" || value.startsWith("--")) throw new Error("--state needs a folder");
       args.state = value;
     }
+    else if (a === "--path") {
+      const value = argv[++i];
+      if (value === undefined || value === "" || value.startsWith("--")) throw new Error("--path needs a folder");
+      args.project = value;
+    }
     else if (a.startsWith("--")) throw new Error(`unknown option ${a}`);
     else if (args.command === undefined) args.command = a;
     else if (args.path === undefined) args.path = a;
@@ -58,6 +70,14 @@ export async function main(argv: string[]): Promise<number> {
     console.error((err as Error).message);
     console.error(USAGE);
     return 2;
+  }
+  if (args.command === "coupling") {
+    return runCoupling({
+      selector: args.path ?? ".",
+      ...(args.project !== undefined ? { project: args.project } : {}),
+      ...(args.state !== undefined ? { state: args.state } : {}),
+      json: args.json,
+    });
   }
   if (args.command !== "index" || args.path === undefined) {
     console.error(USAGE);

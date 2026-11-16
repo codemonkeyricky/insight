@@ -1,4 +1,5 @@
 import type { IndexReport } from "@insight/indexer";
+import type { CouplingReport, CouplingReportEntry } from "@insight/flow";
 
 function table(rows: string[][]): string {
   const widths = rows[0]?.map((_, i) => Math.max(...rows.map((r) => (r[i] ?? "").length))) ?? [];
@@ -49,6 +50,38 @@ export function formatReport(r: IndexReport): string {
   if (r.problems.length > 0) {
     lines.push(`problems in the linked IR (${r.problems.length} shown at most):`);
     for (const p of r.problems) lines.push(`  ${p}`);
+  }
+  return lines.join("\n");
+}
+
+/** One entry: its label, the target it names, and where the target is declared. */
+function formatCouplingEntry(e: CouplingReportEntry): string {
+  const target = e.target === undefined ? "" : ` → ${e.target}`;
+  const where = e.file === undefined ? "" : `  (${e.file}${e.line === undefined ? "" : `:${e.line}`})`;
+  return `    ${e.label}${target}${where}`;
+}
+
+/** Plain-text coupling footprint of one scope, grouped by class. Empty classes are omitted. */
+export function formatCoupling(r: CouplingReport): string {
+  if (r.functions.length === 0) return "no functions in scope";
+  const lines: string[] = [];
+  for (const f of r.functions) {
+    if (lines.length > 0) lines.push("");
+    lines.push(`${f.name}  ${f.id}`);
+    lines.push(`  ${f.file ?? "(no file)"}  module ${f.module}`);
+    lines.push(`  ${f.summary}`);
+    const classes: [string, CouplingReportEntry[]][] = [
+      ["cross", f.cross],
+      ["io", f.io],
+      ["state", f.state],
+      ["conc", f.conc],
+      ["escape", f.escape],
+    ];
+    for (const [name, entries] of classes) {
+      if (entries.length === 0) continue;
+      lines.push(`  ${name}`);
+      for (const e of entries) lines.push(formatCouplingEntry(e));
+    }
   }
   return lines.join("\n");
 }
