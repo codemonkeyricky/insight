@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import type { StageGraph, StageDriver } from "@insight/model";
 import { api } from "../../api";
-import { LABEL_H, planStages, type LayoutChip, type LayoutNode, type LayoutPath, type Point } from "../../arch/stages-layout";
+import { DATA_H, LABEL_H, planStages, type LayoutChip, type LayoutDataLink, type LayoutNode, type LayoutPath, type Point } from "../../arch/stages-layout";
 import { fileTarget, useCodeTarget } from "../../codeTarget";
 import { hrefView } from "../../router";
 import type { StagesPayload } from "../../model/payloads";
@@ -99,8 +99,15 @@ export function StagesDiagram({
 }) {
   const [stageEl, setStageEl] = useState<HTMLDivElement | null>(null);
   const stageW = useElementWidth(stageEl);
+  // Data edges are on by default. Off, the diagram is the call order alone.
+  const [showData, setShowData] = useState(true);
+  // The stage under the pointer: its data links that leave or enter it are drawn.
+  const [hover, setHover] = useState<string | undefined>(undefined);
   // One row when the whole driver fits at a legible scale; otherwise its spine wraps into rows as wide as the stage.
-  const plan = useMemo(() => planStages(graph, { showAll, stageW: stageW > 0 ? stageW : FALLBACK_W }), [graph, showAll, stageW]);
+  const plan = useMemo(
+    () => planStages(graph, { showAll, data: showData, stageW: stageW > 0 ? stageW : FALLBACK_W }),
+    [graph, showAll, showData, stageW],
+  );
   const layout = plan.layout;
   const vh = typeof window === "undefined" ? 900 : window.innerHeight;
   const stageH = Math.round(Math.min(Math.max(layout.height * plan.k + STAGE_PAD, STAGE_MIN_H), vh * STAGE_MAX_VH));
@@ -113,6 +120,7 @@ export function StagesDiagram({
   };
   const frames = layout.nodes.filter((n): n is FrameNode => n.kind === "frame");
   const others = layout.nodes.filter((n) => n.kind !== "frame");
+  const links = hover !== undefined ? layout.links.filter((l) => l.from === hover || l.to === hover) : [];
   const picked = drivers.some((d) => d.id === graph.driver.id) ? graph.driver.id : drivers[0]?.id;
   return (
     <div className="stg">
@@ -132,6 +140,9 @@ export function StagesDiagram({
         </label>
         <label className="sysv-tests small">
           <input type="checkbox" checked={showAll} onChange={(e) => onShowAll(e.target.checked)} /> Show all
+        </label>
+        <label className="sysv-tests small">
+          <input type="checkbox" checked={showData} onChange={(e) => setShowData(e.target.checked)} /> Data
         </label>
         <span className="sysv-zoom" role="group" aria-label="Zoom">
           <button type="button" onClick={() => pz.zoomBy(1 / 1.25)} aria-label="Zoom out">
@@ -175,7 +186,10 @@ export function StagesDiagram({
                 <PathShape key={p.key} p={p} />
               ))}
               {others.map((n) => (
-                <NodeShape key={n.key} id={id} n={n} onOpen={open} />
+                <NodeShape key={n.key} id={id} n={n} onOpen={open} onHover={setHover} />
+              ))}
+              {links.map((l) => (
+                <LinkShape key={l.key} l={l} />
               ))}
             </g>
           </svg>
@@ -207,7 +221,17 @@ function PathShape({ p }: { p: LayoutPath }) {
   return <polyline className={`stg-line ${p.tone}`} points={points} markerEnd={p.arrow ? "url(#stg-head)" : undefined} />;
 }
 
-function NodeShape({ id, n, onOpen }: { id: string; n: Exclude<LayoutNode, { kind: "frame" }>; onOpen: (site: Site | undefined) => void }) {
+function NodeShape({
+  id,
+  n,
+  onOpen,
+  onHover,
+}: {
+  id: string;
+  n: Exclude<LayoutNode, { kind: "frame" }>;
+  onOpen: (site: Site | undefined) => void;
+  onHover: (stage: string | undefined) => void;
+}) {
   switch (n.kind) {
     case "card":
       return (
@@ -216,6 +240,10 @@ function NodeShape({ id, n, onOpen }: { id: string; n: Exclude<LayoutNode, { kin
           role="button"
           tabIndex={0}
           onClick={() => onOpen(n.site)}
+          onMouseEnter={() => onHover(n.stage)}
+          onMouseLeave={() => onHover(undefined)}
+          onFocus={() => onHover(n.stage)}
+          onBlur={() => onHover(undefined)}
           onKeyDown={(e) => {
             if (e.key === "Enter") onOpen(n.site);
           }}
@@ -262,7 +290,33 @@ function NodeShape({ id, n, onOpen }: { id: string; n: Exclude<LayoutNode, { kin
           {n.text}
         </text>
       );
+    case "data":
+      return <DataPill x={n.x} y={n.y} w={n.w} text={n.text} title={n.titleFull} />;
   }
+}
+
+/** A data edge's label: a small pill on a connector, or on a link's arc. Its title is the full name and type. */
+function DataPill({ x, y, w, text, title }: { x: number; y: number; w: number; text: string; title: string }) {
+  return (
+    <g className="stg-data">
+      <title>{title}</title>
+      <rect x={x} y={y} width={w} height={DATA_H} rx={DATA_H / 2} />
+      <text x={x + w / 2} y={y + DATA_H / 2 + 3.5} textAnchor="middle">
+        {text}
+      </text>
+    </g>
+  );
+}
+
+/** A data edge between stages that are not neighbours: a dashed arc with its label, drawn while one of its stages is under the pointer. */
+function LinkShape({ l }: { l: LayoutDataLink }) {
+  const points = l.points.map((pt: Point) => pt.join(",")).join(" ");
+  return (
+    <g className="stg-link-g">
+      <polyline className="stg-link" points={points} markerEnd="url(#stg-head)" />
+      <DataPill x={l.x} y={l.y} w={l.w} text={l.text} title={l.titleFull} />
+    </g>
+  );
 }
 
 /** A component chip: a link to the component's System scope when it has a path, plain text otherwise. */

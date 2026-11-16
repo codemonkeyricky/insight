@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { StageGraph, StageNode } from "@insight/model";
-import { CONDITION_MAX, LEGIBLE_K, layoutStages, planStages, type LayoutNode } from "../src/arch/stages-layout";
+import { CONDITION_MAX, DATA_H, LEGIBLE_K, layoutStages, planStages, type LayoutNode } from "../src/arch/stages-layout";
 
 const site = (line: number) => ({ file: "app/src/run.ts", line, fn: "app/src/run.ts#run" });
 const call = (id: string, name: string, extra: Record<string, unknown> = {}): StageNode =>
@@ -221,5 +221,113 @@ describe("stages layout", () => {
     const back = l.paths.filter((q) => q.arrow && q.points[0] !== undefined && q.points[q.points.length - 1] !== undefined && (q.points[0][0] ?? 0) > (q.points[q.points.length - 1]?.[0] ?? 0));
     expect(back.length).toBe(new Set(cs.map((c) => c.y)).size - 1);
     expect(l.width * p.k).toBeLessThanOrEqual(stageW + 1);
+  });
+});
+
+/** A driver with three neighbours on one spine: scanProject → diffTrees, diffTrees → a loop, then writeShard. */
+function dataGraph(): StageGraph {
+  const loop = {
+    kind: "loop",
+    id: "loop9",
+    variant: "for-of",
+    condition: "const f of files",
+    reads: ["files"],
+    site: site(7),
+    body: [call("c3", "shardKey")],
+  } as StageNode;
+  return {
+    driver: { id: "app/src/run.ts#run", name: "run", file: "app/src/run.ts" },
+    body: [call("c0", "scanProject"), call("c1", "diffTrees"), loop, call("c4", "writeShard")],
+    edges: [
+      { from: "c0", to: "c1", label: "scan", type: "ScanResult" },
+      { from: "c1", to: "loop9", label: "files" },
+      { from: "c0", to: "c4", label: "scan" },
+    ],
+    coverage: [],
+  };
+}
+
+const boxOf = (n: LayoutNode): { x: number; y: number; w: number; h: number } | undefined =>
+  n.kind === "card" || n.kind === "frame" || n.kind === "diamond" || n.kind === "data" ? n : undefined;
+const boxesCross = (a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }): boolean =>
+  a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
+describe("stages layout: data edges", () => {
+  it("draws a pill on the connector of each neighbouring pair, with the type when it is short", () => {
+    const layout = layoutStages(dataGraph(), { data: true });
+    const pills = layout.nodes.filter((n): n is Extract<LayoutNode, { kind: "data" }> => n.kind === "data");
+    expect(pills.map((p) => [p.from, p.to, p.text])).toEqual([
+      ["c0", "c1", "scan: ScanResult"],
+      ["c1", "loop9", "files"],
+    ]);
+    expect(pills[0]?.titleFull).toBe("scan: ScanResult");
+  });
+
+  it("never lets a data pill overlap a card, a frame or a diamond, and keeps it inside the diagram", () => {
+    const layout = layoutStages(dataGraph(), { data: true });
+    const solid = layout.nodes.filter((n) => n.kind === "card" || n.kind === "frame" || n.kind === "diamond");
+    const pills = layout.nodes.filter((n) => n.kind === "data");
+    expect(pills.length).toBeGreaterThan(0);
+    for (const p of pills) {
+      const pb = boxOf(p);
+      expect(pb).toBeDefined();
+      for (const s of solid) {
+        const sb = boxOf(s);
+        if (sb !== undefined && pb !== undefined) expect(boxesCross(pb, sb), `${JSON.stringify(pb)} vs ${JSON.stringify(sb)}`).toBe(false);
+      }
+      expect(pb?.x ?? -1).toBeGreaterThanOrEqual(0);
+      expect((pb?.x ?? 0) + (pb?.w ?? 0)).toBeLessThanOrEqual(layout.width);
+    }
+  });
+
+  it("draws an edge between stages that are not neighbours as a link, and no pill for it", () => {
+    const layout = layoutStages(dataGraph(), { data: true });
+    expect(layout.links.map((l) => [l.from, l.to, l.text])).toEqual([["c0", "c4", "scan"]]);
+    expect(layout.nodes.some((n) => n.kind === "data" && n.from === "c0" && n.to === "c4")).toBe(false);
+    // Headroom for the arc: the diagram is taller than the same one without links.
+    const flat = layoutStages(dataGraph(), { data: false });
+    expect(layout.height).toBeGreaterThan(flat.height);
+    expect(layout.links[0]?.points[0]?.[1]).toBeGreaterThan(0);
+  });
+
+  it("draws no data at all when data is off, and the layout is the same as without edges", () => {
+    const off = layoutStages(dataGraph(), { data: false });
+    expect(off.links).toEqual([]);
+    expect(off.nodes.some((n) => n.kind === "data")).toBe(false);
+    const bare = layoutStages({ ...dataGraph(), edges: [] });
+    expect(off).toEqual(bare);
+  });
+
+  it("widens a connector to fit its pill, so the cards on either side keep their place", () => {
+    const off = layoutStages(dataGraph(), { data: false });
+    const on = layoutStages(dataGraph(), { data: true });
+    expect(on.width).toBeGreaterThan(off.width);
+  });
+});
+
+describe("stages layout: link labels", () => {
+  it("keeps link labels clear of each other and of every card, even when several links share a span", () => {
+    const g = dataGraph();
+    const graph: StageGraph = {
+      ...g,
+      edges: [...g.edges, { from: "c1", to: "c4", label: "files" }],
+    };
+    const layout = layoutStages(graph, { data: true });
+    expect(layout.links.length).toBe(2);
+    const labels = layout.links.map((l) => ({ x: l.x, y: l.y, w: l.w, h: DATA_H }));
+    const solid = layout.nodes.filter((n) => n.kind === "card" || n.kind === "frame" || n.kind === "diamond");
+    for (let i = 0; i < labels.length; i++) {
+      const li = labels[i];
+      if (li === undefined) continue;
+      expect(li.y).toBeGreaterThanOrEqual(0);
+      for (const s of solid) {
+        const sb = boxOf(s);
+        if (sb !== undefined) expect(boxesCross(li, sb), `label ${JSON.stringify(li)} vs ${JSON.stringify(sb)}`).toBe(false);
+      }
+      for (let j = i + 1; j < labels.length; j++) {
+        const lj = labels[j];
+        if (lj !== undefined) expect(boxesCross(li, lj), `${JSON.stringify(li)} vs ${JSON.stringify(lj)}`).toBe(false);
+      }
+    }
   });
 });

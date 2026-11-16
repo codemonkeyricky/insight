@@ -1268,6 +1268,11 @@ button.add-submit:disabled { background: var(--faint); color: var(--graphite); b
 .stg-text.lane { fill: var(--muted); font: 600 11px var(--font-ui); }
 .stg-text.catch { fill: var(--warn-text); font: 600 11px var(--font-ui); }
 .stg-text.muted { fill: var(--muted); }
+/* Data edges: a quiet pill on a connector, and a thin dashed arc for a link between stages that are not neighbours. */
+.stg-data rect { fill: var(--card-top); stroke: var(--hair); stroke-width: 1; }
+.stg-data text { fill: var(--muted); font: 10px var(--font-code); pointer-events: none; }
+.stg-data title { pointer-events: auto; }
+.stg-link { fill: none; stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 3; opacity: 0.75; pointer-events: none; }
 .sysv-frame { cursor: pointer; outline: none; }
 .sysv-frame-body { fill: var(--sheet); stroke: var(--hair); stroke-width: 1; }
 .sysv-frame.process > .sysv-frame-body { fill: var(--box); }

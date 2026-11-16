@@ -1,4 +1,4 @@
-import type { StageGraph, StageNode } from "@insight/model";
+import type { DataEdge, StageGraph, StageNode } from "@insight/model";
 
 // The Stages view's geometry. A StageGraph (packages/core/model/src/stages.ts) becomes positioned cards, frames, diamonds,
 // pills, text and polylines. The main spine runs left to right. A loop is a labelled frame with a return arrow along its
@@ -50,6 +50,21 @@ export const LEGIBLE_K = 0.85;
 const MAX_K = 1;
 /** A loop's or branch's condition is shown at most this many characters long; the full text is the title. */
 export const CONDITION_MAX = 48;
+/** A data pill: 10px monospace, about 0.64em a character, with this much room around the text. */
+export const DATA_H = 16;
+const DATA_CHAR_W = 6.4;
+const DATA_PAD = 6;
+/** Room kept between a data pill and the cards on either side of its connector. */
+const PILL_GAP = 9;
+/** A data pill's label is shown at most this many characters long. */
+const DATA_TEXT_MAX = 26;
+/** A link between two stages that are not neighbours arcs above them: its apex sits this far above their tops. */
+const ARC_RISE = 16;
+/** Each further row of link labels rises this far above the first. */
+const LINK_ROW = DATA_H + 4;
+/** Space reserved above the diagram when some link arcs over it. */
+export const ARC_HEADROOM = 2 * ARC_RISE + 8;
+const ARC_STEPS = 16;
 
 /** The text of an exit pill, by how the flow leaves. */
 const EXIT_TEXT: Record<"continue" | "break" | "return" | "throw", string> = { continue: "skip", break: "break", return: "return", throw: "throw" };
@@ -80,11 +95,27 @@ export type LayoutNode =
       site?: Site;
       fn?: string;
       chips: LayoutChip[];
+      /** The stage this card draws (the call's id), for data edges. */
+      stage?: string;
     }
-  | { kind: "frame"; key: string; x: number; y: number; w: number; h: number; label: string; titleFull: string; tone: "loop" | "helper" | "try"; site?: Site }
-  | { kind: "diamond"; key: string; x: number; y: number; w: number; h: number; titleFull: string; site?: Site }
+  | {
+      kind: "frame";
+      key: string;
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+      label: string;
+      titleFull: string;
+      tone: "loop" | "helper" | "try";
+      site?: Site;
+      stage?: string;
+    }
+  | { kind: "diamond"; key: string; x: number; y: number; w: number; h: number; titleFull: string; site?: Site; stage?: string }
   | { kind: "pill"; key: string; x: number; y: number; w: number; h: number; text: string; how: "continue" | "break" | "return" | "throw"; site?: Site }
-  | { kind: "text"; key: string; x: number; y: number; text: string; titleFull?: string; tone: "cond" | "lane" | "catch" | "muted" };
+  | { kind: "text"; key: string; x: number; y: number; text: string; titleFull?: string; tone: "cond" | "lane" | "catch" | "muted" }
+  /** A data edge drawn on the connector between two neighbouring stages. */
+  | { kind: "data"; key: string; x: number; y: number; w: number; h: number; text: string; titleFull: string; from: string; to: string };
 
 export interface LayoutPath {
   key: string;
@@ -94,6 +125,20 @@ export interface LayoutPath {
   arrow: boolean;
 }
 
+/** A data edge between two stages that are not neighbours: a dashed arc from the producer's card to the consumer's. */
+export interface LayoutDataLink {
+  key: string;
+  from: string;
+  to: string;
+  points: Point[];
+  text: string;
+  titleFull: string;
+  /** The label's top-left corner, and its width. Its height is DATA_H. */
+  x: number;
+  y: number;
+  w: number;
+}
+
 export interface StageLayout {
   width: number;
   height: number;
@@ -101,6 +146,8 @@ export interface StageLayout {
   nodes: LayoutNode[];
   /** Polylines, drawn above frames and below cards. */
   paths: LayoutPath[];
+  /** Data edges that are not drawn on a connector: shown on hover of one of their stages. Empty unless `data` is set. */
+  links: LayoutDataLink[];
 }
 
 export interface StageLayoutOptions {
@@ -108,6 +155,21 @@ export interface StageLayoutOptions {
   showAll?: boolean;
   /** When set, the top-level spine wraps into rows no wider than this many px (breaking only between items). */
   rowW?: number;
+  /** Data edges are drawn: pills on the connectors of neighbouring stages, and links for the rest. Off by default. */
+  data?: boolean;
+}
+
+/** A data edge as drawn: its label, and its width on a connector. */
+interface DataPill {
+  text: string;
+  title: string;
+  w: number;
+}
+
+/** The options plus what one layout pass shares: the pills by "from\0to", and the pills it drew. */
+interface Ctx extends StageLayoutOptions {
+  pills: Map<string, DataPill>;
+  used: Set<string>;
 }
 
 // ---- measuring and clipping -------------------------------------------------------------------------------------------------
@@ -138,6 +200,9 @@ interface Sized {
   mid: number;
   /** Whether the block has no stage in it (an empty sequence draws only its spine stub). */
   empty: boolean;
+  /** The stage at the block's left and right end, when that stage is a card, frame or diamond: a connector joins these. */
+  first?: string;
+  last?: string;
   draw: (x: number, y: number, out: Out) => void;
 }
 
@@ -153,37 +218,97 @@ function leaf(w: number, h: number, draw: (x: number, y: number, out: Out) => vo
 }
 
 /** A sequence laid out left to right on one spine. Blocks are aligned on their spines; connectors join neighbours. */
-function chain(nodes: StageNode[], o: StageLayoutOptions): Sized {
-  return spine(nodes.map((n) => sizeOf(n, o)).filter((p): p is Sized => p !== undefined));
+function chain(nodes: StageNode[], o: Ctx): Sized {
+  return spine(
+    nodes.map((n) => sizeOf(n, o)).filter((p): p is Sized => p !== undefined),
+    o,
+  );
 }
 
-/** Blocks laid left to right on one spine, joined by arrows. */
-function spine(parts: Sized[]): Sized {
+const pillKey = (from: string | undefined, to: string | undefined): string | undefined => (from !== undefined && to !== undefined ? `${from}\0${to}` : undefined);
+
+/** The data pill on the connector between two neighbours, when a data edge joins their stages. */
+function pillBetween(prev: Sized, next: Sized, o: Ctx): { key: string; pill: DataPill } | undefined {
+  const key = pillKey(prev.last, next.first);
+  const pill = key !== undefined ? o.pills.get(key) : undefined;
+  return key !== undefined && pill !== undefined ? { key, pill } : undefined;
+}
+
+/** Blocks laid left to right on one spine, joined by arrows. A connector with a data pill is as wide as the pill. */
+function spine(parts: Sized[], o: Ctx): Sized {
   if (parts.length === 0) {
     return { w: EMPTY_W, h: 0, mid: 0, empty: true, draw: (x, y, out) => pushPath(out, [[x, y], [x + EMPTY_W, y]], "flow", false) };
   }
   const top = Math.max(...parts.map((p) => p.mid));
   const below = Math.max(...parts.map((p) => p.h - p.mid));
-  const w = parts.reduce((sum, p) => sum + p.w, 0) + GAP * (parts.length - 1);
+  // gaps[i] is the connector before part i (unused for the first part).
+  const gaps = parts.map((p, i) => {
+    const prev = parts[i - 1];
+    if (prev === undefined) return 0;
+    const hit = pillBetween(prev, p, o);
+    return hit !== undefined ? Math.max(GAP, hit.pill.w + 2 * PILL_GAP) : GAP;
+  });
+  const w = parts.reduce((sum, p) => sum + p.w, 0) + gaps.reduce((sum, g) => sum + g, 0);
   return {
     w,
     h: top + below,
     mid: top,
     empty: false,
+    first: parts[0]?.first,
+    last: parts[parts.length - 1]?.last,
     draw(x, y, out) {
       let cx = x;
       let prevRight = x;
       parts.forEach((p, i) => {
-        if (i > 0) pushPath(out, [[prevRight, y + top], [cx, y + top]], "flow", true);
+        if (i > 0) {
+          const at = y + top;
+          pushPath(out, [[prevRight, at], [cx, at]], "flow", true);
+          const hit = pillBetween(parts[i - 1] as Sized, p, o);
+          if (hit !== undefined) {
+            const { key, pill } = hit;
+            o.used.add(key);
+            const [from, to] = key.split("\0") as [string, string];
+            const mid = (prevRight + cx) / 2;
+            pushNode(out, { kind: "data", x: mid - pill.w / 2, y: at - DATA_H / 2, w: pill.w, h: DATA_H, text: pill.text, titleFull: pill.title, from, to });
+          }
+        }
         p.draw(cx, y + top - p.mid, out);
         prevRight = cx + p.w;
-        cx = prevRight + GAP;
+        cx = prevRight + (gaps[i + 1] ?? 0);
       });
     },
   };
 }
 
-function sizeOf(n: StageNode, o: StageLayoutOptions): Sized | undefined {
+/** The label of a data edge: `name: Type` when that fits, else the name; the full text is the title. */
+function pillOf(e: DataEdge): DataPill {
+  const short = e.type !== undefined && e.label.length + 2 + e.type.length <= DATA_TEXT_MAX ? `${e.label}: ${e.type}` : e.label;
+  const text = clip(short, DATA_TEXT_MAX);
+  return { text, title: e.type !== undefined ? `${e.label}: ${e.type}` : e.label, w: Math.ceil(text.length * DATA_CHAR_W + 2 * DATA_PAD) };
+}
+
+function sizeOf(n: StageNode, o: Ctx): Sized | undefined {
+  const s = sizeOfNode(n, o);
+  if (s === undefined || (n.kind !== "call" && n.kind !== "loop" && n.kind !== "branch")) return s;
+  // A stage's card, frame or diamond is tagged with the stage's id as it is drawn, so data edges can find its box.
+  const id = n.id;
+  const draw = s.draw;
+  return {
+    ...s,
+    first: id,
+    last: id,
+    draw(x, y, out) {
+      const from = out.nodes.length;
+      draw(x, y, out);
+      for (let i = from; i < out.nodes.length; i++) {
+        const d = out.nodes[i];
+        if (d !== undefined && (d.kind === "card" || d.kind === "frame" || d.kind === "diamond") && d.stage === undefined) d.stage = id;
+      }
+    },
+  };
+}
+
+function sizeOfNode(n: StageNode, o: Ctx): Sized | undefined {
   switch (n.kind) {
     case "call":
       return callSized(n, o);
@@ -217,7 +342,7 @@ interface CardSpec {
   more?: number;
 }
 
-function callSized(n: Extract<StageNode, { kind: "call" }>, o: StageLayoutOptions): Sized | undefined {
+function callSized(n: Extract<StageNode, { kind: "call" }>, o: Ctx): Sized | undefined {
   if (n.minor === true && o.showAll !== true) return undefined;
   if (n.body !== undefined) {
     return frameSized({ label: `${n.name}()`, titleFull: n.name, tone: "helper", site: n.site, body: chain(n.body, o), ret: false });
@@ -328,7 +453,7 @@ function frameSized(s: { label: string; titleFull: string; tone: "loop" | "helpe
   });
 }
 
-function branchSized(n: Extract<StageNode, { kind: "branch" }>, o: StageLayoutOptions): Sized {
+function branchSized(n: Extract<StageNode, { kind: "branch" }>, o: Ctx): Sized {
   const arms = n.arms.map((a) => {
     const body = chain(a.body, o);
     return { text: body.empty ? `${a.label}: —` : a.label, body };
@@ -364,7 +489,7 @@ function branchSized(n: Extract<StageNode, { kind: "branch" }>, o: StageLayoutOp
 }
 
 /** A try: a frame around the try block, with a dashed catch lane below it when the handler has stages. */
-function trySized(n: Extract<StageNode, { kind: "try" }>, o: StageLayoutOptions): Sized {
+function trySized(n: Extract<StageNode, { kind: "try" }>, o: Ctx): Sized {
   const body = chain(n.body, o);
   const handler = chain(n.handler, o);
   const hasCatch = !handler.empty;
@@ -406,7 +531,7 @@ function exitSized(how: "continue" | "break" | "return" | "throw", site: Site): 
  * The top-level spine of a driver, broken into rows no wider than `rowW`. A row breaks only between two items. The end of each row
  * runs a connector down into the gap and back to the start of the next row, so the order reads row by row.
  */
-function wrapRows(nodes: StageNode[], o: StageLayoutOptions, rowW: number): Sized {
+function wrapRows(nodes: StageNode[], o: Ctx, rowW: number): Sized {
   const parts = nodes.map((n) => sizeOf(n, o)).filter((p): p is Sized => p !== undefined);
   const rows: Sized[][] = [];
   let cur: Sized[] = [];
@@ -421,8 +546,8 @@ function wrapRows(nodes: StageNode[], o: StageLayoutOptions, rowW: number): Size
     cur.push(p);
   }
   if (cur.length > 0) rows.push(cur);
-  if (rows.length <= 1) return spine(parts);
-  const lines = rows.map(spine);
+  if (rows.length <= 1) return spine(parts, o);
+  const lines = rows.map((r) => spine(r, o));
   const tops: number[] = [];
   let h = 0;
   lines.forEach((r, i) => {
@@ -454,12 +579,115 @@ function wrapRows(nodes: StageNode[], o: StageLayoutOptions, rowW: number): Size
   };
 }
 
-/** The layout of a stage graph: the driver's body on one spine from the left, with its margin. Deterministic. */
-export function layoutStages(graph: StageGraph, opts: StageLayoutOptions = {}): StageLayout {
-  const body = opts.rowW !== undefined ? wrapRows(graph.body, opts, opts.rowW) : chain(graph.body, opts);
+interface Box {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** The box of each stage that drew a card, frame or diamond. A stage draws one, so the first is the one. */
+function boxesOf(nodes: LayoutNode[]): Map<string, Box> {
+  const boxes = new Map<string, Box>();
+  for (const n of nodes) {
+    if ((n.kind === "card" || n.kind === "frame" || n.kind === "diamond") && n.stage !== undefined && !boxes.has(n.stage)) {
+      boxes.set(n.stage, { x: n.x, y: n.y, w: n.w, h: n.h });
+    }
+  }
+  return boxes;
+}
+
+/** A dashed arc from the top middle of one box to the top middle of another, rising `rise` px above the top of the diagram. */
+function arcBetween(a: Box, b: Box, top: number, rise: number): Point[] {
+  const xa = a.x + a.w / 2;
+  const ya = a.y;
+  const xb = b.x + b.w / 2;
+  const yb = b.y;
+  const cx = (xa + xb) / 2;
+  const cy = top - 2 * rise;
+  const pts: Point[] = [];
+  for (let i = 0; i <= ARC_STEPS; i++) {
+    const t = i / ARC_STEPS;
+    const u = 1 - t;
+    pts.push([u * u * xa + 2 * u * t * cx + t * t * xb, u * u * ya + 2 * u * t * cy + t * t * yb]);
+  }
+  return pts;
+}
+
+/** One drawing of the body with `headroom` px left above it: the nodes and paths, and the pills it drew on connectors. */
+function drawPass(graph: StageGraph, opts: StageLayoutOptions, pills: Map<string, DataPill>, headroom: number) {
+  const o: Ctx = { ...opts, pills, used: new Set() };
+  const body = opts.rowW !== undefined ? wrapRows(graph.body, o, opts.rowW) : chain(graph.body, o);
   const out: Out = { nodes: [], paths: [], seq: 0 };
-  body.draw(MARGIN, MARGIN, out);
-  return { width: Math.ceil(body.w + 2 * MARGIN), height: Math.ceil(body.h + 2 * MARGIN), nodes: out.nodes, paths: out.paths };
+  body.draw(MARGIN, MARGIN + headroom, out);
+  return { body, out, used: o.used };
+}
+
+/**
+ * The row of each link's label above the body. A label sits above the whole diagram; a label whose horizontal span
+ * would meet one already placed in the same row takes the next row up, so no two labels sit on each other.
+ */
+function linkRows(linked: DataEdge[], boxes: Map<string, Box>): number[] {
+  const placed: { row: number; x0: number; x1: number }[] = [];
+  return linked.map((e) => {
+    const a = boxes.get(e.from);
+    const b = boxes.get(e.to);
+    if (a === undefined || b === undefined) return 0;
+    const w = pillOf(e).w;
+    const mid = (a.x + a.w / 2 + b.x + b.w / 2) / 2;
+    const x0 = mid - w / 2 - PILL_GAP;
+    const x1 = mid + w / 2 + PILL_GAP;
+    let row = 0;
+    while (placed.some((p) => p.row === row && p.x0 < x1 && x0 < p.x1)) row++;
+    placed.push({ row, x0, x1 });
+    return row;
+  });
+}
+
+/**
+ * The layout of a stage graph: the driver's body on one spine from the left, with its margin. A data edge between two neighbours
+ * is a pill on their connector; an edge between stages further apart is a link, which arcs above the diagram. Deterministic.
+ */
+export function layoutStages(graph: StageGraph, opts: StageLayoutOptions = {}): StageLayout {
+  const pills = new Map<string, DataPill>();
+  if (opts.data === true) for (const e of graph.edges) pills.set(`${e.from}\0${e.to}`, pillOf(e));
+  let pass = drawPass(graph, opts, pills, 0);
+  const boxes0 = boxesOf(pass.out.nodes);
+  // The links are the edges that are not on a connector and have both stages drawn (a minor stage is hidden).
+  const linked = opts.data === true ? graph.edges.filter((e) => !pass.used.has(`${e.from}\0${e.to}`) && boxes0.has(e.from) && boxes0.has(e.to)) : [];
+  const rows = linkRows(linked, boxes0);
+  const headroom = linked.length > 0 ? ARC_HEADROOM + LINK_ROW * Math.max(0, ...rows) : 0;
+  if (headroom > 0) pass = drawPass(graph, opts, pills, headroom);
+  const boxes = boxesOf(pass.out.nodes);
+  // The top of the highest box, frames included: the link labels sit above it, clear of every card and frame.
+  const diagramTop = Math.min(...Array.from(boxes.values(), (b) => b.y));
+  const links: LayoutDataLink[] = [];
+  linked.forEach((e, i) => {
+    const a = boxes.get(e.from);
+    const b = boxes.get(e.to);
+    if (a === undefined || b === undefined) return;
+    const rise = ARC_RISE + LINK_ROW * (rows[i] ?? 0);
+    const pill = pillOf(e);
+    const midX = (a.x + a.w / 2 + b.x + b.w / 2) / 2;
+    links.push({
+      key: `l${links.length}`,
+      from: e.from,
+      to: e.to,
+      points: arcBetween(a, b, diagramTop, rise),
+      text: pill.text,
+      titleFull: pill.title,
+      x: midX - pill.w / 2,
+      y: diagramTop - rise - DATA_H / 2,
+      w: pill.w,
+    });
+  });
+  return {
+    width: Math.ceil(pass.body.w + 2 * MARGIN),
+    height: Math.ceil(pass.body.h + 2 * MARGIN + headroom),
+    nodes: pass.out.nodes,
+    paths: pass.out.paths,
+    links,
+  };
 }
 
 /**
