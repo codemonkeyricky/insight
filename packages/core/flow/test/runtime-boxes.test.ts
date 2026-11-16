@@ -218,6 +218,20 @@ describe("footprints", () => {
     expect(c.w).toBe(frame(plain, first as string).w);
   });
 
+  it("shifts a card right by the left room and keeps the room left of it inside the frame", () => {
+    const m = twoThreads();
+    const s = runtimeRootsScene(buildExecScene(m), m) as Scene;
+    const open = runtimeOpen(s);
+    const [first, ...rest] = cardsIn(s, execThreadId("main"));
+    const plain = placeSceneLayout(s, runtimeRootsLayout(s), open);
+    const withLeft = placeSceneLayout(s, runtimeRootsLayout(s, new Map([[first as string, { left: 300, w: 0, h: 100 }]])), open);
+    const r = (p: typeof plain, id: string) => p.rects.get(id) as { x: number; y: number; w: number; h: number };
+    expect(r(withLeft, first as string).x - r(plain, first as string).x).toBe(300);
+    const c = r(withLeft, first as string);
+    const beside = { x: c.x - 300, y: c.y, w: 300, h: 100 };
+    for (const other of rest) expect(overlap(beside, r(withLeft, other))).toBe(false);
+  });
+
   it("keeps the room clear in the flat grid too", () => {
     const flat = flattenRoots(execRootsOnly(buildExecScene(twoThreads()), twoThreads()), twoThreads());
     const kids = [...(flat.nodes.get(flat.root)?.children ?? [])];

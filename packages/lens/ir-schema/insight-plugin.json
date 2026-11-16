@@ -1,0 +1,9 @@
+{
+  "id": "lens-ir-schema",
+  "version": "0.1.0",
+  "description": "POC: the IR's kinds, their attrs schemas, which TypeScript files emit or read them, and the core schema's $ref graph",
+  "irVersion": "^1.0",
+  "roles": {
+    "lens": "dist/index.js"
+  }
+}

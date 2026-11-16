@@ -66,6 +66,9 @@ importers:
       '@insight/frontend-cpp':
         specifier: workspace:*
         version: link:../../packages/frontend/cpp
+      '@insight/frontend-jsonschema':
+        specifier: workspace:*
+        version: link:../../packages/frontend/jsonschema
       '@insight/frontend-systemverilog':
         specifier: workspace:*
         version: link:../../packages/frontend/systemverilog
@@ -90,6 +93,9 @@ importers:
       '@insight/lens-flow-complexity':
         specifier: workspace:*
         version: link:../../packages/lens/flow-complexity
+      '@insight/lens-ir-schema':
+        specifier: workspace:*
+        version: link:../../packages/lens/ir-schema
       '@insight/lens-lock-order':
         specifier: workspace:*
         version: link:../../packages/lens/lock-order
@@ -321,6 +327,15 @@ importers:
         specifier: 0.27.2
         version: 0.27.2
 
+  packages/frontend/jsonschema:
+    dependencies:
+      '@insight/ir':
+        specifier: workspace:*
+        version: link:../../core/ir
+      '@insight/sdk':
+        specifier: workspace:*
+        version: link:../../core/sdk
+
   packages/frontend/systemverilog:
     dependencies:
       '@insight/ir':
@@ -411,6 +426,15 @@ importers:
         version: link:../../core/sdk
 
   packages/lens/flow-complexity:
+    dependencies:
+      '@insight/ir':
+        specifier: workspace:*
+        version: link:../../core/ir
+      '@insight/sdk':
+        specifier: workspace:*
+        version: link:../../core/sdk
+
+  packages/lens/ir-schema:
     dependencies:
       '@insight/ir':
         specifier: workspace:*

@@ -1,0 +1,5 @@
+{
+  "$schema": "../schemas/person.schema.json",
+  "name": { "first": "Alice", "last": "Liddell" },
+  "age": 10
+}

@@ -88,6 +88,7 @@ export function viewHasContent(view: LensView): boolean {
   if (view.type === "graph") return view.nodes.length > 0 || view.edges.length > 0;
   if (view.type === "table") return view.rows.length > 0;
   if (view.type === "state-machine") return view.transitions.length > 0;
+  if (view.type === "schema-diagram") return view.entities.length > 0;
   return hasTreeNodes(view.root);
 }
 

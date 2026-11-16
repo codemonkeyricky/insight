@@ -89,7 +89,7 @@ export interface MapBuild {
    */
   slotted?: boolean;
   /** The room the build keeps beside each box (the footprint it was laid out with). */
-  footprint?: ReadonlyMap<string, { w: number; h: number }>;
+  footprint?: ReadonlyMap<string, { left?: number; w: number; h: number }>;
 }
 
 /** The URL that shows a focus: the scope, the function, and whether the map is the roots-only view. */
@@ -139,7 +139,7 @@ export interface MapSource {
    * The build again, laid out with `footprint`: the room kept beside each box (see MapBuild.slotted). Synchronous, since the
    * layout is arithmetic. Only a slotted build is laid out again.
    */
-  rebuild?(build: MapBuild, footprint: ReadonlyMap<string, { w: number; h: number }>): MapBuild;
+  rebuild?(build: MapBuild, footprint: ReadonlyMap<string, { left?: number; w: number; h: number }>): MapBuild;
   /**
    * Shows every root card of the thread that the "+N more" card `nodeId` stands for, and loads the scope again. The map
    * builds the focus again afterwards. Undefined (no method) means the source has no such cards.

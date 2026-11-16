@@ -21,6 +21,17 @@ describe("cardWidth", () => {
   });
 });
 
+describe("gridRootsLayout: room on the left", () => {
+  it("places the card `left` further right and keeps the next card clear", () => {
+    const sc = flat(["alpha", "beta"]);
+    const plain = gridRootsLayout(sc).containers.root!.slots;
+    const withLeft = gridRootsLayout(sc, new Map([["f0", { left: 120, w: 30, h: 50 }]])).containers.root!.slots;
+    expect(withLeft[0]!.x).toBe(plain[0]!.x + 120);
+    expect(withLeft[1]!.x).toBe(plain[1]!.x + 120 + 30);
+    expect(withLeft[0]!.x - 16).toBeGreaterThanOrEqual(120);
+  });
+});
+
 describe("gridRootsLayout", () => {
   it("lays cards in rows of uniform height, top-left aligned, inside the padding", () => {
     const labels = Array.from({ length: 21 }, (_, i) => `fn${i}`);

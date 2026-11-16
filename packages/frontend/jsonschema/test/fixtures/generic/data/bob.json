@@ -1,0 +1,4 @@
+{
+  "$schema": "../schemas/missing.schema.json",
+  "name": { "first": "Bob", "last": "Builder" }
+}
