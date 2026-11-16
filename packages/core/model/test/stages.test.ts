@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { IRDocument, IREdge, IRNode } from "@insight/ir";
 import * as fx from "@insight/sdk/testing";
-import { buildProjectModel, stageDrivers, stageGraph, type StageNode } from "../src/index.js";
+import { buildProjectModel, stageDrivers, stageGraph, type StageGraph, type StageNode } from "../src/index.js";
 import { armShare } from "../src/stages.js";
 
 const F = "app/src/run.ts";
@@ -237,7 +237,12 @@ describe("stage graph: coverage notes", () => {
     const nodes = [flow("loop:3:2", "flow.loop", [3, 2, 5, 3], { variant: "for-of", condition: "xs" })];
     const edges = [call(DRV, stageId("s1"), 4, 4, 6, { callEnd: undefined }), call(DRV, [stageId("s5"), stageId("s6")], 6, 2, 6, { callee: "amb" })];
     const g = graphOf(doc({ nodes, edges }));
-    expect(g.coverage).toEqual(["Nested call order approximate", "Early exits not shown", "1 calls with several possible targets shown once"]);
+    expect(g.coverage).toEqual([
+      "Nested call order approximate",
+      "Early exits not shown",
+      "1 calls with several possible targets shown once",
+      "No data-flow facts for this language",
+    ]);
   });
 });
 
@@ -327,5 +332,93 @@ describe("stage graph: catch exits", () => {
     const edges = [call(DRV, stageId("s1"), 23, 6, 8), call(DRV, stageId("s2"), 33, 4, 6)];
     const g = graphOf(doc({ nodes, edges }));
     expect(show(g.body)).toBe("for[try[s1]catch[exit:continue]] try[s2]catch[]");
+  });
+});
+
+/** The fixture document with extra attributes on the driver function (its `derives`). */
+function docWithDriver(attrs: Record<string, unknown>, parts: { nodes?: IRNode[]; edges?: IREdge[] } = {}): IRDocument {
+  const d = doc(parts);
+  return { ...d, nodes: d.nodes.map((n) => (n.id === DRV ? { ...n, attrs: { ...n.attrs, ...attrs } } : n)) };
+}
+
+/** The first stage call named `name`, looking inside loops, branch arms, try blocks and inlined helpers. */
+function stageNamed(nodes: StageNode[], name: string): StageNode | undefined {
+  for (const n of nodes) {
+    if (n.kind === "call" && n.name === name) return n;
+    const inner: StageNode[] | undefined =
+      n.kind === "call" ? n.body : n.kind === "loop" ? n.body : n.kind === "branch" ? n.arms.flatMap((a) => a.body) : n.kind === "try" ? [...n.body, ...n.handler] : undefined;
+    const hit = inner ? stageNamed(inner, name) : undefined;
+    if (hit) return hit;
+  }
+  return undefined;
+}
+const idOf = (g: StageGraph, name: string): string => stageNamed(g.body, name)?.id ?? `missing:${name}`;
+
+describe("stage graph: data edges", () => {
+  it("links a bound local straight to a stage that reads it, with the producer's type", () => {
+    const edges = [call(DRV, stageId("s3"), 3, 2, 6, { binds: "scan", bindsType: "ScanResult" }), call(DRV, stageId("s4"), 5, 2, 6, { reads: ["scan"] })];
+    const g = graphOf(doc({ edges }));
+    expect(g.edges).toEqual([{ from: idOf(g, "s3"), to: idOf(g, "s4"), label: "scan", type: "ScanResult" }]);
+  });
+
+  it("follows the driver's derives chain to the producer and labels the renamed read", () => {
+    const edges = [call(DRV, stageId("s1"), 3, 2, 6, { binds: "scan" }), call(DRV, stageId("s2"), 5, 2, 6, { reads: ["files"] })];
+    const g = graphOf(docWithDriver({ derives: { files: ["allFiles"], allFiles: ["scan"] } }, { edges }));
+    expect(g.edges).toEqual([{ from: idOf(g, "s1"), to: idOf(g, "s2"), label: "scan→files" }]);
+  });
+
+  it("stops at the first producer: a local bound by a stage is not traced into that stage's own inputs", () => {
+    const edges = [
+      call(DRV, stageId("s3"), 3, 2, 6, { binds: "cfg" }),
+      call(DRV, stageId("s4"), 5, 2, 6, { binds: "scan", reads: ["cfg"] }),
+      call(DRV, stageId("s5"), 7, 2, 6, { reads: ["scan"] }),
+    ];
+    const g = graphOf(docWithDriver({ derives: { scan: ["cfg"] } }, { edges }));
+    expect(g.edges).toEqual([
+      { from: idOf(g, "s3"), to: idOf(g, "s4"), label: "cfg" },
+      { from: idOf(g, "s4"), to: idOf(g, "s5"), label: "scan" },
+    ]);
+  });
+
+  it("gives a loop an edge from the producer of the local its range reads", () => {
+    const nodes = [flow("loop:5:2", "flow.loop", [5, 2, 9, 3], { variant: "for-of", condition: "const p of plugins", reads: ["plugins"] })];
+    const edges = [call(DRV, stageId("s3"), 3, 2, 6, { binds: "plugins" }), call(DRV, stageId("s4"), 6, 4, 6)];
+    const g = graphOf(doc({ nodes, edges }));
+    const loop = g.body.find((n) => n.kind === "loop");
+    expect(loop?.kind).toBe("loop");
+    expect(g.edges).toEqual([{ from: idOf(g, "s3"), to: loop?.id ?? "", label: "plugins" }]);
+  });
+
+  it("follows a captured local from an inlined helper to the driver's producer", () => {
+    const H = `${F}#run.helper`;
+    const nodes = [fn(H, "helper", F, DRV, { derives: { x: ["scan"] } })];
+    const edges = [
+      call(DRV, stageId("s3"), 2, 2, 6, { binds: "scan" }),
+      call(DRV, H, 8, 2, 8),
+      call(H, stageId("s4"), 22, 4, 6, { reads: ["x"] }),
+      call(H, stageId("s5"), 23, 4, 6),
+    ];
+    const g = graphOf(doc({ nodes, edges }));
+    expect(g.edges).toEqual([{ from: idOf(g, "s3"), to: idOf(g, "s4"), label: "scan→x" }]);
+  });
+
+  it("keeps one edge per producer and at most three incoming edges, nearest producers first", () => {
+    const edges = [
+      call(DRV, stageId("s3"), 2, 2, 6, { binds: ["x", "y"] }),
+      call(DRV, stageId("s4"), 3, 2, 6, { binds: "b" }),
+      call(DRV, stageId("s5"), 4, 2, 6, { binds: "c" }),
+      call(DRV, stageId("s6"), 5, 2, 6, { binds: "d" }),
+      call(DRV, stageId("s1"), 8, 2, 6, { reads: ["a", "b", "c", "d", "x", "y"] }),
+    ];
+    const g = graphOf(doc({ edges }));
+    const into = g.edges.filter((e) => e.to === idOf(g, "s1"));
+    expect(into.map((e) => e.from)).toEqual([idOf(g, "s6"), idOf(g, "s5"), idOf(g, "s4")]);
+    expect(g.edges.filter((e) => e.from === idOf(g, "s3")).length).toBe(0);
+  });
+
+  it("has no edges, and says so, when the frontend gave no data-flow facts", () => {
+    const g = graphOf(doc(nestingParts()));
+    expect(g.edges).toEqual([]);
+    expect(g.coverage).toContain("No data-flow facts for this language");
   });
 });

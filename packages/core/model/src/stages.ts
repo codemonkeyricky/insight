@@ -43,14 +43,26 @@ export type StageNode =
       body?: StageNode[]; // inlined local helper (named fn nested in the driver), depth <= 3, cycle-guarded
       repeatOf?: string; // the helper was inlined by an earlier call (this one: id of that call): no body, "same as above"
       binds?: string[];
-      reads?: string[]; // P2
+      bindsType?: string; // checker type of the one bound local (calls.call attrs.bindsType)
+      reads?: string[]; // locals the receiver and arguments read (calls.call attrs.reads)
     }
   | { kind: "loop"; id: string; variant: string; condition?: string; reads?: string[]; site: Site; body: StageNode[] }
-  | { kind: "branch"; id: string; condition: string; site: Site; arms: { id: string; label: string; body: StageNode[] }[] }
+  | {
+      kind: "branch";
+      id: string;
+      condition: string;
+      reads?: string[];
+      site: Site;
+      arms: { id: string; label: string; body: StageNode[] }[];
+    }
   | { kind: "try"; id: string; site: Site; body: StageNode[]; handler: StageNode[] }
   | { kind: "exit"; id: string; how: "continue" | "break" | "return" | "throw"; site: Site };
 
-/** A data edge between two stages (P2: not produced yet, always empty here). */
+/**
+ * A data edge between two stages: the producer's bound local reaches the consumer's read. `label` is the consumer-side name,
+ * or `bound→read` when the local was renamed through a derivation chain and the label is short. `type` is the producer's bound
+ * type when the IR gives one.
+ */
 export interface DataEdge {
   from: string;
   to: string;
@@ -152,6 +164,8 @@ const bindsOf = (v: unknown): string[] | undefined => {
   if (Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === "string")) return v as string[];
   return undefined;
 };
+/** A list of local names from an attribute; an empty list is kept (it says the facts were emitted and nothing is read). */
+const namesOf = (v: unknown): string[] | undefined => (Array.isArray(v) && v.every((x) => typeof x === "string") ? (v as string[]) : undefined);
 
 /**
  * The statements of one function as a tree. Flow parents are always the function, so nesting comes from span containment:
@@ -289,6 +303,7 @@ function exitNode(n: TNode, env: Env): StageNode | undefined {
 function loopNode(n: TNode, env: Env): StageNode {
   const ir = n.ir as IRNode;
   const condition = str(attr(ir, "condition"));
+  const reads = namesOf(attr(ir, "reads"));
   const headers = headerOf(n);
   const bodyNodes = n.children.filter((c) => !headers.includes(c));
   return {
@@ -296,6 +311,7 @@ function loopNode(n: TNode, env: Env): StageNode {
     id: env.prefix + ir.id,
     variant: str(attr(ir, "variant")) ?? "loop",
     ...(condition !== undefined ? { condition } : {}),
+    ...(reads !== undefined ? { reads } : {}),
     site: siteOf(ir, env),
     body: emitList(bodyNodes, { ...env, loops: env.loops + 1, exitOk: false }),
   };
@@ -316,7 +332,15 @@ function branchNode(n: TNode, env: Env): StageNode {
   // Statements between the arms (an `else if` chain has no else arm of its own): they make up an implicit else.
   const extras = n.children.filter((c) => c.kind !== "arm" && !headers.includes(c));
   if (extras.length > 0) arms.push({ id: `${env.prefix}${ir.id}#else`, label: "else", body: emitList(extras, armEnv) });
-  return { kind: "branch", id: env.prefix + ir.id, condition: str(attr(ir, "condition")) ?? "", site: siteOf(ir, env), arms };
+  const reads = namesOf(attr(ir, "reads"));
+  return {
+    kind: "branch",
+    id: env.prefix + ir.id,
+    condition: str(attr(ir, "condition")) ?? "",
+    ...(reads !== undefined ? { reads } : {}),
+    site: siteOf(ir, env),
+    arms,
+  };
 }
 
 function tryNode(n: TNode, env: Env): StageNode {
@@ -345,6 +369,13 @@ function resolveCall(group: Rel[], env: Env): StageNode | undefined {
   const site: Site = { file: span?.file ?? ctx.model.fileOf(first.from) ?? "", line: span ? span.start[0] + 1 : 0, fn: env.fnId };
   const callee = str(first.edge.attrs?.callee);
   const binds = bindsOf(first.edge.attrs?.binds);
+  const bindsType = str(first.edge.attrs?.bindsType);
+  const reads = namesOf(first.edge.attrs?.reads);
+  const dataAttrs = {
+    ...(binds !== undefined ? { binds } : {}),
+    ...(bindsType !== undefined ? { bindsType } : {}),
+    ...(reads !== undefined ? { reads } : {}),
+  };
   const id = unique(ctx, `${env.prefix}call@${first.from}@${span ? `${span.start[0]}:${span.start[1]}` : "?"}`);
   const targetOk = (t: NodeId): boolean => {
     const f = ctx.model.functionById.get(t);
@@ -368,10 +399,10 @@ function resolveCall(group: Rel[], env: Env): StageNode | undefined {
         name: callee ?? shown[0]?.name ?? "call",
         site,
         fanout: { how, targets: shown, ...(targets.length > FANOUT_CAP ? { truncated: true } : {}) },
-        ...(binds !== undefined ? { binds } : {}),
+        ...dataAttrs,
       };
     }
-    return { kind: "call", id, name: callee ?? "call", site, ambiguous: true, candidates: targets.length, ...(binds !== undefined ? { binds } : {}) };
+    return { kind: "call", id, name: callee ?? "call", site, ambiguous: true, candidates: targets.length, ...dataAttrs };
   }
 
   const t = first.to;
@@ -395,7 +426,7 @@ function resolveCall(group: Rel[], env: Env): StageNode | undefined {
     site,
     ...(utility ? { minor: true } : {}),
     ...(body.length > 0 ? { body } : {}),
-    ...(binds !== undefined ? { binds } : {}),
+    ...dataAttrs,
   };
 }
 
@@ -581,12 +612,142 @@ export function stageGraph(
   const env: Env = { ctx, fnId: driverId, prefix: "", stack: [driverId], loops: 0, exitOk: false };
   const body = markRepeats(pruneList(emitList(membersOf(driverId, ctx), env)), new Map());
   const component = fn ? compOf(fn.file) : undefined;
+  const data = dataEdges(model, body, driverId);
+  const coverage = coverageOf(ctx, body, driverId);
+  if (body.length > 0 && !data.facts) coverage.push("No data-flow facts for this language");
   return {
     driver: { id: driverId, name: fn?.name ?? driverId, file: fn?.file ?? "", ...(component !== undefined ? { component } : {}) },
     body,
-    edges: [],
-    coverage: coverageOf(ctx, body, driverId),
+    edges: data.edges,
+    coverage,
   };
+}
+
+// ---- data edges ----------------------------------------------------------------------------------------------------------------
+
+/** Incoming data edges kept per stage: the nearest producers win. */
+const EDGE_IN_MAX = 3;
+/** A `bound→read` label is shown in full up to this length; a longer one shows the consumer's name alone. */
+const EDGE_LABEL_MAX = 24;
+
+/** A visible stage in call order. `index` and `end` bound it in the flat list, so `end <= consumer.index` means "finished before". */
+interface Flat {
+  id: string;
+  index: number;
+  end: number;
+  reads?: string[];
+  binds?: string[];
+  bindsType?: string;
+  scope: NodeId[]; // the driver, then the helpers inlined around the stage
+}
+
+/** Stages in call order. Minor calls are hidden, so they and their bodies are not stages. */
+function flatten(nodes: StageNode[], scope: NodeId[], out: Flat[]): void {
+  const open = (n: { id: string; reads?: string[]; binds?: string[]; bindsType?: string }): Flat => {
+    const e: Flat = {
+      id: n.id,
+      index: out.length,
+      end: 0,
+      scope,
+      ...(n.reads !== undefined ? { reads: n.reads } : {}),
+      ...(n.binds !== undefined ? { binds: n.binds } : {}),
+      ...(n.bindsType !== undefined ? { bindsType: n.bindsType } : {}),
+    };
+    out.push(e);
+    return e;
+  };
+  for (const n of nodes) {
+    if (n.kind === "call") {
+      if (n.minor === true) continue;
+      const e = open(n);
+      if (n.body) flatten(n.body, n.fn !== undefined ? [...scope, n.fn] : scope, out);
+      e.end = out.length;
+    } else if (n.kind === "loop") {
+      const e = open(n);
+      flatten(n.body, scope, out);
+      e.end = out.length;
+    } else if (n.kind === "branch") {
+      const e = open(n);
+      for (const a of n.arms) flatten(a.body, scope, out);
+      e.end = out.length;
+    } else if (n.kind === "try") {
+      flatten(n.body, scope, out);
+      flatten(n.handler, scope, out);
+    }
+  }
+}
+
+/**
+ * The data edges of one stage graph. Each stage's reads are followed through the `derives` of the function they sit in (and of
+ * the enclosing functions, for a captured local) until they reach a local a stage call bound earlier, which is a producer. A
+ * local bound by a stage stops the walk, so a producer's own inputs are not edges. Pure.
+ */
+function dataEdges(model: ProjectModel, body: StageNode[], driverId: NodeId): { edges: DataEdge[]; facts: boolean } {
+  const flat: Flat[] = [];
+  flatten(body, [driverId], flat);
+  const derivesOf = (fn: NodeId): Record<string, string[]> => {
+    const node = model.byId.get(fn);
+    const d = node ? attr(node, "derives") : undefined;
+    return d !== null && typeof d === "object" && !Array.isArray(d) ? (d as Record<string, string[]>) : {};
+  };
+  const producers = new Map<string, Flat[]>();
+  for (const s of flat) {
+    if (s.binds === undefined) continue;
+    const owner = s.scope[s.scope.length - 1] as NodeId;
+    for (const b of s.binds) {
+      const key = `${owner}\u0000${b}`;
+      const list = producers.get(key);
+      if (list) list.push(s);
+      else producers.set(key, [s]);
+    }
+  }
+  // Facts were emitted when a stage carries reads or binds, or the driver derives a local.
+  const facts = flat.some((s) => s.reads !== undefined || s.binds !== undefined) || Object.keys(derivesOf(driverId)).length > 0;
+
+  interface Found {
+    producer: Flat;
+    bound: string; // the producer's local
+    read: string; // the consumer's name for it
+  }
+  const resolve = (name: string, depth: number, consumer: Flat, read: string, seen: Set<string>, out: Found[]): void => {
+    for (let i = depth; i >= 0; i--) {
+      const owner = consumer.scope[i] as NodeId;
+      const bound = producers.get(`${owner}\u0000${name}`);
+      if (bound !== undefined) {
+        // The nearest producer that finished before the consumer. A binding that is not finished yet gives no value here.
+        const earlier = bound.filter((p) => p.end <= consumer.index);
+        const last = earlier[earlier.length - 1];
+        if (last !== undefined) out.push({ producer: last, bound: name, read });
+        return;
+      }
+      const derives = derivesOf(owner);
+      if (Object.prototype.hasOwnProperty.call(derives, name)) {
+        const guard = `${i}\u0000${name}`;
+        if (seen.has(guard)) return;
+        seen.add(guard);
+        for (const next of derives[name] ?? []) resolve(next, i, consumer, read, seen, out);
+        return;
+      }
+      // Not declared in this function: a captured local is declared in an enclosing one, so keep looking outward.
+    }
+  };
+
+  const edges: DataEdge[] = [];
+  for (const c of flat) {
+    if (c.reads === undefined || c.reads.length === 0) continue;
+    const found: Found[] = [];
+    for (const r of c.reads) resolve(r, c.scope.length - 1, c, r, new Set(), found);
+    const byProducer = new Map<string, Found>();
+    for (const f of found) if (f.producer.id !== c.id && !byProducer.has(f.producer.id)) byProducer.set(f.producer.id, f);
+    const nearest = [...byProducer.values()].sort((a, b) => b.producer.index - a.producer.index).slice(0, EDGE_IN_MAX);
+    for (const f of nearest) {
+      const full = `${f.bound}→${f.read}`;
+      const label = f.bound === f.read ? f.read : full.length <= EDGE_LABEL_MAX ? full : f.read;
+      const type = f.producer.bindsType !== undefined && f.producer.binds?.includes(f.bound) ? f.producer.bindsType : undefined;
+      edges.push({ from: f.producer.id, to: c.id, label, ...(type !== undefined ? { type } : {}) });
+    }
+  }
+  return { edges, facts };
 }
 
 /**
