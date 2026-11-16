@@ -1,5 +1,6 @@
 import type { IREdge, IRNode } from "@insight/ir";
 import { factsForFile, type StateIndex } from "./build.js";
+import type { FocusCallee } from "./focus.js";
 import { couplingChart, couplingFacts, type CouplingFootprint } from "./coupling.js";
 import { layoutFunction, measure } from "./layout.js";
 import { moduleMap, type ModuleMap } from "./modules.js";
@@ -27,6 +28,7 @@ export * from "./scope-input.js";
 export * from "./resource-peers.js";
 export * from "./state-writes.js";
 export * from "./unguarded.js";
+export * from "./focus.js";
 
 /** A function of the snapshot as a coupling report names it: its id, display name, and declaration site. */
 export interface CouplingFunction {
@@ -36,6 +38,8 @@ export interface CouplingFunction {
   file?: string;
   /** The 1-based line the function starts on, when it has a span. */
   line?: number;
+  /** Whether the function is exported (`attrs.exported`). An external stub is never exported. */
+  exported: boolean;
 }
 
 /**
@@ -61,6 +65,8 @@ export function couplingIndex(nodes: readonly IRNode[], edges: readonly IREdge[]
   const { modules, footprints, surface, state, facts } = couplingFacts(nodes, edges);
   const filePaths = new Set<string>();
   for (const n of nodes) if (n.kind === "structure.file") filePaths.add(String(n.attrs.path ?? n.id));
+  const exportedIds = new Set<string>();
+  for (const n of nodes) if (n.kind === "structure.function" && n.attrs.exported === true && n.attrs.external !== true) exportedIds.add(n.id);
   const functions = new Map<string, CouplingFunction>();
   for (const [id, f] of facts) {
     // A file's top-level flow has no span; its id is the file path, so it still names its file.
@@ -70,9 +76,20 @@ export function couplingIndex(nodes: readonly IRNode[], edges: readonly IREdge[]
       name: f.name,
       ...(file !== undefined ? { file } : {}),
       ...(f.span !== undefined ? { line: f.span.start[0] + 1 } : {}),
+      exported: exportedIds.has(id),
     });
   }
   return { modules, footprints, surface, state, functions, unguarded: unguardedStateFromFacts(facts.values(), nodes, edges, state) };
+}
+
+/**
+ * The call targets of the inter-module focus: every function of the project with its file and export flag, by id. A call
+ * whose target is missing here (external, unresolved, a candidate list) is never kept. Built from `index.functions`.
+ */
+export function calleeMapOf(index: CouplingIndex): Map<string, FocusCallee> {
+  const out = new Map<string, FocusCallee>();
+  for (const [id, fn] of index.functions) if (fn.file !== undefined) out.set(id, { file: fn.file, exported: fn.exported });
+  return out;
 }
 
 /**
@@ -85,9 +102,15 @@ export function couplingIndex(nodes: readonly IRNode[], edges: readonly IREdge[]
  * With `opts.coupling`, each function also carries its coupling chart (see `FunctionFlow.coupling`).
  * The index describes the whole project; `nodes` and `edges` may hold only this file.
  */
-export function buildFileFlow(file: string, nodes: Iterable<IRNode>, edges: Iterable<IREdge>, opts: { coupling?: CouplingIndex } = {}): FileFlow {
+export function buildFileFlow(
+  file: string,
+  nodes: Iterable<IRNode>,
+  edges: Iterable<IREdge>,
+  opts: { coupling?: CouplingIndex; focus?: "intermodule"; callees?: ReadonlyMap<string, FocusCallee> } = {},
+): FileFlow {
   const coupling = opts.coupling;
-  const facts = factsForFile(file, nodes, edges, coupling ? { sources: true, state: coupling.state } : {});
+  const focus = opts.focus === "intermodule" ? { focus: "intermodule" as const, callees: opts.callees ?? new Map<string, FocusCallee>() } : {};
+  const facts = factsForFile(file, nodes, edges, { ...(coupling ? { sources: true, state: coupling.state } : {}), ...focus });
   return {
     file,
     functions: facts.map((f) => {

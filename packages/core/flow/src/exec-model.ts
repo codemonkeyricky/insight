@@ -3,6 +3,7 @@ import { edgeTargets } from "@insight/sdk";
 import { insideScope } from "./scope-map.js";
 import { isNoisePath } from "./scope.js";
 import { factsForFile, type StateIndex } from "./build.js";
+import type { FocusCallee } from "./focus.js";
 import { layoutFunction } from "./layout.js";
 import { stateWriteSites, unguardedFromSites, type StateWriteSite } from "./state-writes.js";
 
@@ -316,6 +317,13 @@ export interface ExecModelOptions {
    * and it is never listed.
    */
   lambdas?: boolean;
+  /**
+   * `focus: "intermodule"` sizes each box by the chart the inter-module focus draws (see filterChartItems), so a box matches
+   * its chart. Roots, reach, threads and the unreferenced stats still come from the unfiltered IR. `callees` is the project's
+   * call-target map (see calleeMapOf).
+   */
+  focus?: "intermodule";
+  callees?: ReadonlyMap<string, FocusCallee>;
 }
 
 interface Fn {
@@ -1052,7 +1060,44 @@ function buildPlans(nodes: readonly IRNode[], edges: readonly IREdge[], fold: bo
 }
 
 export function execModel(nodes: readonly IRNode[], edges: readonly IREdge[], scope: string, opts: ExecModelOptions = {}): ExecModel {
-  return execModelOf(execPlans(nodes, edges, { lambdas: opts.lambdas }), scope, opts);
+  const plans = execPlans(nodes, edges, { lambdas: opts.lambdas });
+  const chartOf = opts.focus === "intermodule" ? focusChartOf(nodes, edges, opts.callees ?? new Map<string, FocusCallee>()) : plans.chartOf;
+  return execModelOf({ ...plans, chartOf }, scope, opts);
+}
+
+/** Focused chart sizes, memoized by the three inputs they depend on: nodes, edges and callees (each an array or map identity). */
+const FOCUS_CHARTS = new WeakMap<object, WeakMap<object, WeakMap<object, Map<string, Map<string, [number, number]>>>>>();
+
+/** The chart size of a function under the inter-module focus, laid out once per file. See ExecModelOptions.focus. */
+function focusChartOf(nodes: readonly IRNode[], edges: readonly IREdge[], callees: ReadonlyMap<string, FocusCallee>): ExecPlans["chartOf"] {
+  let byEdges = FOCUS_CHARTS.get(nodes);
+  if (byEdges === undefined) {
+    byEdges = new WeakMap();
+    FOCUS_CHARTS.set(nodes, byEdges);
+  }
+  let byCallees = byEdges.get(edges);
+  if (byCallees === undefined) {
+    byCallees = new WeakMap();
+    byEdges.set(edges, byCallees);
+  }
+  let sizesByFile = byCallees.get(callees);
+  if (sizesByFile === undefined) {
+    sizesByFile = new Map();
+    byCallees.set(callees, sizesByFile);
+  }
+  const byFile = sizesByFile;
+  return (file: string, id: string): [number, number] | undefined => {
+    if (file === "") return undefined;
+    let sizes = byFile.get(file);
+    if (sizes === undefined) {
+      sizes = new Map();
+      for (const f of factsForFile(file, nodes, edges, { focus: "intermodule", callees }).map((f) => layoutFunction(f))) {
+        if (!f.tooLarge && f.nodes.length > 0) sizes.set(f.id, [f.width, f.height]);
+      }
+      byFile.set(file, sizes);
+    }
+    return sizes.get(id);
+  };
 }
 
 /** The scope's view of the project-wide plans. See execModel. */

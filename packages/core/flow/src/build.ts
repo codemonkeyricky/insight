@@ -1,5 +1,6 @@
 import type { IREdge, IRNode } from "@insight/ir";
 import { edgeTargets } from "@insight/sdk";
+import { filterChartItems, type FocusCallee } from "./focus.js";
 import type { CouplingClass, FlowRole, FlowSpan } from "./types.js";
 
 /** A mutable variable a state row touches, as the coupling pass classifies it. */
@@ -588,8 +589,16 @@ export interface FunctionFacts {
  * Group a file's IR records by the function that owns them and rebuild each function's flow.
  * `nodes` and `edges` may hold more than the file; records from other files are ignored.
  */
-export function factsForFile(file: string, nodes: Iterable<IRNode>, edges: Iterable<IREdge>, opts: { sources?: boolean; state?: StateIndex } = {}): FunctionFacts[] {
-  const sources = opts.sources === true;
+export function factsForFile(
+  file: string,
+  nodes: Iterable<IRNode>,
+  edges: Iterable<IREdge>,
+  opts: { sources?: boolean; state?: StateIndex; focus?: "intermodule"; callees?: ReadonlyMap<string, FocusCallee> } = {},
+): FunctionFacts[] {
+  // The inter-module focus filters on the IR kind of an effect and on the targets of a call, so it needs the `sources` fields.
+  const focus = opts.focus === "intermodule" ? { file, callees: opts.callees ?? new Map<string, FocusCallee>() } : undefined;
+  const sources = opts.sources === true || focus !== undefined;
+  const focused = (items: Item[]): Item[] => (focus === undefined ? items : filterChartItems(items, focus));
   const allNodes = [...nodes];
   const allEdges = [...edges];
   const functions = new Map<string, FunctionFacts>();
@@ -681,13 +690,13 @@ export function factsForFile(file: string, nodes: Iterable<IRNode>, edges: Itera
 
   const out: FunctionFacts[] = [];
   for (const fn of functions.values()) {
-    fn.items = mergeStateReads(frameLocks(convertAll(nest(events.get(fn.id) ?? []), sources)));
+    fn.items = focused(mergeStateReads(frameLocks(convertAll(nest(events.get(fn.id) ?? []), sources))));
     out.push(fn);
   }
   // Statements outside every function run when the module loads.
   const top = events.get(file);
   if (top && top.length > 0) {
-    out.push({ id: file, name: topLevelName(file), async: false, items: mergeStateReads(frameLocks(convertAll(nest(top), sources))) });
+    out.push({ id: file, name: topLevelName(file), async: false, items: focused(mergeStateReads(frameLocks(convertAll(nest(top), sources)))) });
   }
   return out.sort((a, b) => (a.span ? a.span.start[0] : 0) - (b.span ? b.span.start[0] : 0) || a.name.localeCompare(b.name));
 }
