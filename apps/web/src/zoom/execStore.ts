@@ -5,6 +5,7 @@
 import {
   MORE_SUFFIX,
   buildExecScene,
+  withResourcePeers,
   execDefaultOpen,
   execThreadId,
   execRootsOnly,
@@ -17,12 +18,13 @@ import {
   runtimeRootsScene,
   type ExecFunctionRef,
   type ExecModel,
+  type FunctionFlow,
   type Scene,
   type SceneLayout,
 } from "@insight/flow";
 import { api } from "../api";
 import { solve } from "./elk";
-import { execBuild, execCallChain, execFocus, execIndex, execOpenSet, execPlacementFor, execResolve, execThreadKeyOf, execUrl, splitExecFocus, type ExecIndex } from "./execMap";
+import { execBuild, execCallChain, execFocus, execIndex, execOpenSet, execPlacementFor, execResolve, execRunsOn, execThreadKeyOf, execUrl, splitExecFocus, syncSites, type ExecIndex } from "./execMap";
 import type { MapBuild, MapSource, MapUrl } from "./source";
 
 /** One scope's loaded canvas: its scene and layout, the model's functions, and the index the panels read. */
@@ -41,6 +43,8 @@ export interface ExecView {
   containers: boolean;
   /** The dispatch targets (await or start) of each thread, by the thread's scene id: a chain box of one is an async box. */
   asyncIn: ReadonlyMap<string, ReadonlySet<string>>;
+  /** The model the scene was built from: its functions, threads and resources (the panels and the edge tooltips read it). */
+  model: ExecModel;
 }
 
 /** The most layouts with containers opened a view keeps. Each one reuses the base layout, so a few are cheap. */
@@ -128,7 +132,7 @@ export class ExecStore implements MapSource {
             const targets = new Set(t.coroutines.map((c) => c.target));
             if (targets.size > 0) asyncIn.set(execThreadId(t.id), targets);
           }
-          const view: ExecView = { scene, layout, open, fns, index: execIndex(scene, model, callers, this.lambdas), layouts: new Map(), containers, asyncIn };
+          const view: ExecView = { scene, layout, open, fns, index: execIndex(scene, model, callers, this.lambdas), layouts: new Map(), containers, asyncIn, model };
           this.views.set(key, view);
           return view;
         })
@@ -171,7 +175,7 @@ export class ExecStore implements MapSource {
     if (!view.scene.nodes.has(nodeId)) throw new Error(`Nothing in the execution map at ${nodeId}`);
     const layout = await this.layoutFor(view, execOpenSet(view.scene, nodeId));
     // A roots-only build is slotted: its expansions sit in the room the layout keeps for them (see rebuild).
-    return { ...execBuild(view.scene, layout, scope, nodeId, view.fns), slotted: this.rootsOnly };
+    return { ...withSites(view, execBuild(view.scene, layout, scope, nodeId, view.fns)), slotted: this.rootsOnly };
   }
 
   /**
@@ -183,7 +187,19 @@ export class ExecStore implements MapSource {
     const view = this.viewOf(b);
     if (view === undefined || !b.slotted) return b;
     const layout = view.containers ? runtimeRootsLayout(view.scene, footprint) : gridRootsLayout(view.scene, footprint);
-    return { ...execBuild(view.scene, layout, b.path, b.nodeId, view.fns), slotted: true, footprint };
+    return { ...withSites(view, execBuild(view.scene, layout, b.path, b.nodeId, view.fns)), slotted: true, footprint };
+  }
+
+  /** The threads `fnId` runs on in the build's scope, for its open box's tooltip (see execRunsOn). */
+  runsOn(b: MapBuild, fnId: string): string | undefined {
+    const view = this.viewOf(b);
+    return view === undefined ? undefined : execRunsOn(view.index, view.scene, fnId);
+  }
+
+  /** A function's chart with its sync rows' peers in their titles, from the build's model (see withResourcePeers). */
+  annotateChart(b: MapBuild, fnId: string, chart: FunctionFlow): FunctionFlow {
+    const view = this.viewOf(b);
+    return view === undefined ? chart : withResourcePeers(chart, fnId, view.model);
   }
 
   /** Whether `fnId` is a dispatch target of the thread that holds the box `boxId` (see ExecView.asyncIn). */
@@ -252,4 +268,11 @@ export class ExecStore implements MapSource {
     if (view === undefined) return undefined;
     return execPlacementFor(view.index, fnId, execThreadKeyOf(view.scene, build.nodeId));
   }
+}
+
+/** The build's sync edges with their sites: the tooltip of each lists the sites of the resources the edge names. */
+function withSites(view: ExecView, b: MapBuild): MapBuild {
+  if (!b.edges.some((e) => e.kind === "sync" && e.resources !== undefined)) return b;
+  const edges = b.edges.map((e) => (e.kind === "sync" && e.resources !== undefined ? { ...e, sites: syncSites(view.model, e.resources) } : e));
+  return { ...b, edges };
 }

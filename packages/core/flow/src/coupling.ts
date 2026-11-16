@@ -89,6 +89,8 @@ function stepInfo(item: StepItem, caught: boolean, ctx: Ctx): { kept: boolean; c
   switch (item.role) {
     case "effect":
       return { kept: true, coupling: "io" };
+    case "sync":
+      return { kept: true, coupling: "conc" };
     case "spawn":
       return { kept: true, coupling: "conc" };
     case "await":
@@ -121,7 +123,7 @@ function kept(item: Item, caught: boolean, ctx: Ctx): boolean {
     case "term":
       return item.role === "throw" && !caught;
     case "fork":
-      return item.arms.some((a) => a.body.some((b) => kept(b, armCaught(item, a, caught), ctx)));
+      return item.role === "lock" || item.arms.some((a) => a.body.some((b) => kept(b, armCaught(item, a, caught), ctx)));
     case "loop":
       return item.body.some((b) => kept(b, caught, ctx));
   }
@@ -141,16 +143,29 @@ function keepItem(item: Item, caught: boolean, ctx: Ctx, st: { next: number }): 
   switch (item.t) {
     case "step": {
       const info = stepInfo(item, caught, ctx);
+      // A suspension point says that other coroutines may run there; a hoisted callee footprint shows as ⇢ on the label and title.
+      const suspends = item.role === "await";
+      const hoisted = info.hoisted;
+      const baseLabel = hoisted !== undefined ? `${item.label} ⇢ ${hoisted}` : item.label;
+      const baseTitle = hoisted !== undefined ? `${item.title ?? item.label} ⇢ ${hoisted}` : item.title;
       return {
         ...item,
         ...(info.coupling !== undefined ? { coupling: info.coupling } : {}),
-        ...(info.hoisted !== undefined ? { hoisted: info.hoisted, label: `${item.label} ⇢ ${info.hoisted}`, title: `${item.title ?? item.label} ⇢ ${info.hoisted}` } : {}),
+        ...(hoisted !== undefined ? { hoisted } : {}),
+        label: suspends ? `⏸ ${baseLabel}` : baseLabel,
+        ...(suspends
+          ? { title: `${baseTitle ?? baseLabel} (other coroutines may run here)` }
+          : baseTitle !== undefined ? { title: baseTitle } : {}),
       };
     }
     case "term":
       return { ...item, coupling: "escape" };
     case "fork":
-      return { ...item, arms: item.arms.map((a) => ({ ...a, body: prune(a.body, armCaught(item, a, caught), ctx, st) })) };
+      return {
+        ...item,
+        ...(item.role === "lock" ? { coupling: "conc" as const } : {}),
+        arms: item.arms.map((a) => ({ ...a, body: prune(a.body, armCaught(item, a, caught), ctx, st) })),
+      };
     case "loop":
       return { ...item, body: prune(item.body, caught, ctx, st) };
   }
@@ -227,6 +242,9 @@ function collect(list: readonly Item[], caught: boolean, M: string | undefined, 
           add(mine, { cls: "io", label: item.label, ...(item.kind !== undefined ? { kind: item.kind } : {}) });
         } else if (item.role === "spawn") {
           add(mine, { cls: "conc", label: item.label });
+        } else if (item.role === "sync") {
+          // A release is the end of a frame, not a new interaction, so it adds no entry.
+          if (item.lockOp !== "release") add(mine, { cls: "conc", label: item.text ?? item.label });
         } else if (item.role === "await" || item.role === "call") {
           const targets = targetsOf(item);
           const cross = targets.filter((t) => isCross(t, M, modules));
@@ -241,6 +259,8 @@ function collect(list: readonly Item[], caught: boolean, M: string | undefined, 
         if (item.role === "throw" && !caught) add(mine, { cls: "escape", label: "throws" });
         break;
       case "fork":
+        // A lock frame's head is the acquire it replaces.
+        if (item.role === "lock") add(mine, { cls: "conc", label: item.text ?? `lock ${item.lock ?? ""}`.trim() });
         for (const a of item.arms) collect(a.body, armCaught(item, a, caught), M, modules, mine, sites);
         break;
       case "loop":

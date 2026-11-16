@@ -112,6 +112,15 @@ describe("OS, channel and sync facts from the TypeScript frontend", () => {
     expect(atomics.find((n) => n.attrs.api === "Atomics.add")).toMatchObject({ kind: "sync.atomic-op", attrs: { api: "Atomics.add", op: "op" } });
   });
 
+  it("names Atomics.wait and Atomics.notify on one array by that array, so they are one condvar, and an atomic op by its array", async () => {
+    const atomics = await under("atomics", "src/lib/channels.ts");
+    const wait = atomics.find((n) => n.attrs.api === "Atomics.wait");
+    const notify = atomics.find((n) => n.attrs.api === "Atomics.notify");
+    expect(wait?.attrs.name).toBe("shared");
+    expect(notify?.attrs.name).toBe("shared");
+    expect(atomics.find((n) => n.attrs.api === "Atomics.add")?.attrs.lock).toBe("shared");
+  });
+
   it("one-to-one wrappers carry a syscall and high-level calls do not", async () => {
     const wrappers = (await under("plainWrappers")).map((n) => n.attrs);
     expect(wrappers).toContainEqual({ api: "fs.unlinkSync", path: "/tmp/stale", syscall: "unlink" });
@@ -168,7 +177,15 @@ describe("catalog matching", () => {
   it("navigator.locks.request and Atomics match through their globals", () => {
     expect(matchAll(`navigator.locks.request("x", f); Atomics.wait(a, 0, 0);`)).toEqual([
       { kind: "sync.lock-acquire", attrs: { api: "navigator.locks.request", lock: "x" } },
-      { kind: "sync.condvar", attrs: { api: "Atomics.wait", op: "wait" } },
+      { kind: "sync.condvar", attrs: { api: "Atomics.wait", op: "wait", name: "a" } },
+    ]);
+  });
+
+  it("names an atomic op by its array when it is an identifier or a property access, and <dynamic> otherwise", () => {
+    expect(matchAll(`Atomics.add(this.buf, 0, 1); Atomics.add(make(), 0, 1);`)).toEqual([
+      { kind: "sync.atomic-op", attrs: { api: "Atomics.add", op: "op", lock: "this.buf" } },
+      { kind: "sync.atomic-op", attrs: { api: "Atomics.add", op: "op", lock: "<dynamic>" } },
+      undefined, // make(), the call nested in the second Atomics.add, is not a catalog entry
     ]);
   });
 });

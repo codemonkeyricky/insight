@@ -38,6 +38,17 @@ function allRows(items: readonly Item[], out: (Step | Term)[] = []): (Step | Ter
   return out;
 }
 
+/** The spans of the lock frames' heads (a frame is a fork, not a row, so `allRows` does not list it). */
+function lockHeads(items: readonly Item[], out: string[] = []): string[] {
+  for (const item of items) {
+    if (item.t === "fork") {
+      if (item.role === "lock") out.push(spanKey(item.span));
+      for (const a of item.arms) lockHeads(a.body, out);
+    } else if (item.t === "loop") lockHeads(item.body, out);
+  }
+  return out;
+}
+
 /** Rows whose span should survive pruning, with the reason. Throws count only when no enclosing try catches them. */
 function mustKeep(items: readonly Item[], M: string, modules: ModuleMap, out: Map<string, string> = new Map(), caught = false): Map<string, string> {
   for (const item of items) {
@@ -48,11 +59,13 @@ function mustKeep(items: readonly Item[], M: string, modules: ModuleMap, out: Ma
         return m !== undefined && m !== M;
       });
       if (item.role === "effect") out.set(spanKey(item.span), "io");
-      else if (item.role === "spawn" || item.role === "await") out.set(spanKey(item.span), "conc");
+      else if (item.role === "spawn" || item.role === "await" || item.role === "sync") out.set(spanKey(item.span), "conc");
       else if (cross) out.set(spanKey(item.span), "cross");
     } else if (item.t === "term") {
       if (item.role === "throw" && !caught) out.set(spanKey(item.span), "escape");
     } else if (item.t === "fork") {
+      // A lock frame's head is the acquire it replaces: a conc row.
+      if (item.role === "lock") out.set(spanKey(item.span), "conc");
       const tryCatches = item.role === "try" && item.arms.some((a) => a.kind === "exception");
       for (const a of item.arms) mustKeep(a.body, M, modules, out, tryCatches && a.kind === "next" ? true : caught);
     } else if (item.t === "loop") {
@@ -120,7 +133,7 @@ function measure(index: IndexRecords): Measured {
     const chart = layoutFunction({ id, name: f.name, async: f.async, ...(f.span ? { span: f.span } : {}), items: pruned.items });
 
     const required = mustKeep(f.items, M, modules);
-    const kept = new Set(allRows(pruned.items).map((r) => spanKey(r.span)));
+    const kept = new Set([...allRows(pruned.items).map((r) => spanKey(r.span)), ...lockHeads(pruned.items)]);
     for (const [key, why] of required) {
       m.checked++;
       if (!kept.has(key)) m.lossFailures.push(`${id} ${why} ${key}`);

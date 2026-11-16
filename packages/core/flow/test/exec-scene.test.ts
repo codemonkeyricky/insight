@@ -33,6 +33,9 @@ const ZERO_STATS: ExecModelStats = {
   functionsListed: 0,
   locks: 0,
   channels: 0,
+  condvars: 0,
+  semaphores: 0,
+  atomics: 0,
 };
 
 const fn = (id: string, line = 1, extra: Partial<ExecFunctionRef> = {}): ExecFunctionRef => ({
@@ -607,7 +610,7 @@ describe("buildExecScene: sync edges", () => {
       resources: [resource("lock", "m", [["m1", "acquire"], ["m2", "acquire"], ["w1", "acquire"]], ["main", "spawn:1"])],
     });
     const s = buildExecScene(m);
-    expect(syncEdges(s)).toEqual([{ from: at("main", "m1"), to: at("spawn:1", "w1"), kind: "sync", count: 1, how: "lock" }]);
+    expect(syncEdges(s)).toEqual([{ from: at("main", "m1"), to: at("spawn:1", "w1"), kind: "sync", count: 1, how: "lock", directed: false, resources: [{ name: "m", kind: "lock" }] }]);
   });
 
   it("draws no sync edge for a lock that only one thread uses", () => {
@@ -692,7 +695,7 @@ describe("buildExecScene: sync edges", () => {
       resources: [resource("lock", "m", [["m1", "acquire"], ["w2", "acquire"]], ["main", "t1"])],
     });
     const s = buildExecScene(m);
-    expect(syncEdges(s)).toEqual([{ from: at("main", "m1"), to: execFnId(execCoroutineId("t1", "w2"), "w2"), kind: "sync", count: 1, how: "lock" }]);
+    expect(syncEdges(s)).toEqual([{ from: at("main", "m1"), to: execFnId(execCoroutineId("t1", "w2"), "w2"), kind: "sync", count: 1, how: "lock", directed: false, resources: [{ name: "m", kind: "lock" }] }]);
     expect(s.nodes.has(execFnId(execCoroutineId("t1", "w2"), "w2"))).toBe(true);
   });
 

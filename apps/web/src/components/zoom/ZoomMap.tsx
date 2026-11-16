@@ -64,6 +64,18 @@ const SHEET_ROOM_MARGIN = 16;
 const TILE_LABEL_PX = 16;
 
 /**
+ * Annotates a chart (MapSource.annotateChart: its messages, its resource peers). An annotation that throws leaves the chart
+ * as it is, so the chart still shows.
+ */
+function annotateOrKeep(chart: FunctionFlow, annotate: () => FunctionFlow): FunctionFlow {
+  try {
+    return annotate();
+  } catch {
+    return chart;
+  }
+}
+
+/**
  * The room the status pill takes at the bottom of a desktop stage: its measured height (or the fallback) and a gap. Nothing
  * when the pill is not shown (a phone hides it).
  */
@@ -648,12 +660,19 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   /** The view an expansion is placed on: the visible world, except on a slotted build, where the layout keeps the room. */
   const placeView = (b: MapBuild) => (b.slotted ? undefined : visibleWorld(cameraRef.current, sizeOf()));
 
-  /** A function's chart, or undefined when it has none to draw (no chart source, no such function, too large, empty). */
+  /**
+   * A function's chart, or undefined when it has none to draw (no chart source, no such function, too large, empty). The
+   * build on the map annotates it (MapSource.annotateChart), so its sync rows name their peers.
+   */
   const loadChart = async (fnId: string): Promise<FunctionFlow | undefined> => {
     if (charts === undefined) return undefined;
     try {
       const f = await loadFunctionChart(charts.store, fnId);
-      return f === undefined || f.tooLarge || f.nodes.length === 0 ? undefined : f;
+      if (f === undefined || f.tooLarge || f.nodes.length === 0) return undefined;
+      const b = buildRef.current;
+      const annotate = source.annotateChart;
+      if (b === undefined || annotate === undefined) return f;
+      return annotateOrKeep(f, () => annotate(b, fnId, f));
     } catch {
       return undefined;
     }
@@ -989,8 +1008,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     // The loaded chart carries the coupling (the summary the box shows) and the message targets; the unfolded chart is laid
     // out again from the coupling chart's items, with the message targets applied to it.
     const flow = await loadChart(fnId);
-    const source = flow?.coupling?.chart;
-    if (flow === undefined || source === undefined) return;
+    const chartSource = flow?.coupling?.chart;
+    if (flow === undefined || chartSource === undefined) return;
     // Receivers are read only when the function posts messages: a chart with no post step needs no references request.
     if (flow.nodes.some(isPostStep)) await charts?.store.loadMessages(fnId);
     if (!loadsRef.current.isLatest(fnId, token)) return;
@@ -998,7 +1017,14 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     const cur = buildRef.current;
     if (cur === undefined || !expRef.current.some((x) => x.fnId === fnId)) return;
     const store = charts?.store;
-    setExp(toggleFold(placeAll(cur, expRef.current), fnId, foldId, source, placeView(cur), flow.coupling, (chart) => store?.messagesOf(fnId, chart) ?? chart));
+    // The unfolded chart gets the same annotations as a loaded one: its messages, then its resource peers.
+    const finish = (chart: FunctionFlow): FunctionFlow => {
+      const withMessages = store?.messagesOf(fnId, chart) ?? chart;
+      const annotate = source.annotateChart;
+      if (annotate === undefined) return withMessages;
+      return annotateOrKeep(withMessages, () => annotate(cur, fnId, withMessages));
+    };
+    setExp(toggleFold(placeAll(cur, expRef.current), fnId, foldId, chartSource, placeView(cur), flow.coupling, finish));
   };
 
   /**
@@ -1615,7 +1641,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
                 data-sd={e.d}
                 className={edgeClass(e)}
                 style={{ strokeWidth: edgeWidth(e) }}
-                markerEnd={`url(#${arrowId})`}
+                // A sync edge between two peers (a lock, say) has no direction, so it has no arrowhead; a channel's runs sender to receiver.
+                markerEnd={e.kind === "sync" && e.directed !== true ? undefined : `url(#${arrowId})`}
               >
                 <title>{edgeTitle(e)}</title>
               </path>
@@ -1704,6 +1731,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
                         }}
                         callersOpenOf={(n) => n.target !== undefined && callersAt(expansions, n.target, { kind: "step", fnId: e.fnId, stepId: n.id })}
                         motion={motion}
+                        runsOn={view !== undefined ? source.runsOn?.(view, e.fnId) : undefined}
                       />
                     )}
                   </g>

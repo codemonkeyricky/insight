@@ -378,6 +378,13 @@ describe("runtime model: C++ fixture", () => {
     expect((s.resources ?? []).some((r) => r.id.includes("thread:"))).toBe(false);
   });
 
+  it("gives a lock no dequeue, so an unlock and a condvar wait on a lock add no fact", () => {
+    const s = sys();
+    const lockIds = new Set((s.resources ?? []).filter((r) => r.kind === "lock").map((r) => r.id));
+    expect(lockIds.size).toBeGreaterThan(0);
+    expect((s.edges ?? []).filter((e) => e.verb === "dequeues" && lockIds.has(e.from))).toEqual([]);
+  });
+
   it("matches the committed snapshot of the grounded C++ runtime", () => {
     const s = sys();
     expect({ runtimes: s.runtimes, slices: s.slices, resources: s.resources, edges: s.edges }).toMatchSnapshot();

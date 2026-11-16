@@ -41,6 +41,8 @@ interface Props {
   callersOpenOf?: (node: FlowNode) => boolean;
   /** Whether the chart's edges march and pulse (the Flow motion choice; see FlowChart). */
   motion?: boolean;
+  /** The threads the function runs on, for the tooltip: "Main thread, Worker". Absent when not known. */
+  runsOn?: string;
 }
 
 /** The ends of a callout: its geometry in world units before the side shift, and the x each edge moves with (see ZoomMap's writeShift). */
@@ -75,7 +77,7 @@ export function CalloutShape({ ends, closing = false, reduced = false }: { ends:
   );
 }
 
-export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClick, onNodeOpen, onSelect, onClose, onCallers, callersOpen = false, onNodeCallers, callersOpenOf, motion = true }: Props) {
+export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClick, onNodeOpen, onSelect, onClose, onCallers, callersOpen = false, onNodeCallers, callersOpenOf, motion = true, runsOn }: Props) {
   const { chart, x, y, w, h } = expansion;
   // The title is the function's display name; the tooltip and the accessible name keep the full name. The detail's letter
   // stays in the accessible name only.
@@ -89,7 +91,7 @@ export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClic
   const label = fitLabel(runtime === undefined ? own : runtime.label.endsWith(own) ? runtime.label : `${runtime.label} · ${own}`, labelChars((w - headRoom) * k));
   return (
     <g className={`zm-expansion${runtime !== undefined ? " is-runtime" : ""}`} role="group" aria-label={`Detail ${detailLetter(expansion.index)}: ${chart.name}`}>
-      <title>{chart.coupling !== undefined ? `${chart.name}\n${chart.coupling.summary}` : chart.name}</title>
+      <title>{[chart.name, chart.coupling?.summary, runsOn !== undefined ? `runs on ${runsOn}` : undefined].filter((x) => x !== undefined).join("\n")}</title>
       <rect x={x} y={y} width={w} height={h} rx={14} className="zm-expansion-body" />
       <rect x={x} y={y + CALLOUT_INSET} width={3} height={Math.max(0, h - 2 * CALLOUT_INSET)} rx={1.5} className="zm-expansion-accent" />
       <g className="zm-expansion-title" onClick={onSelect}>

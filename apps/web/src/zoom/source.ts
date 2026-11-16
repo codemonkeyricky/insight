@@ -2,7 +2,7 @@
 // (ExecStore, execStore.ts), a scene of threads, coroutines, file groups and functions. A source loads what a focus
 // needs and lays it out; the map only places the camera, culls, applies the open/close hysteresis and keeps the URL in
 // step. Pure types and helpers, no DOM, so they are unit tested.
-import type { Placed, PlacedEdge, SceneEdgeKind } from "@insight/flow";
+import type { FunctionFlow, Placed, PlacedEdge, SceneEdgeKind, SceneSyncResource } from "@insight/flow";
 
 /** One node as the map draws it. */
 export interface MapNode {
@@ -33,8 +33,12 @@ export interface MapNode {
   external?: boolean;
 }
 
-/** An edge as the map draws it. A call has no kind (or "call"); spawns and dispatches get their own class. */
-export type MapEdge = PlacedEdge & { kind?: SceneEdgeKind; how?: string };
+/**
+ * An edge as the map draws it. A call has no kind (or "call"); spawns and dispatches get their own class. A sync edge names
+ * the resources the two threads share (`resources`), says whether it runs one way (`directed`, a channel), and lists the
+ * sites of those resources as its tooltip lines (`sites`, see ExecStore.build).
+ */
+export type MapEdge = PlacedEdge & { kind?: SceneEdgeKind; how?: string; resources?: SceneSyncResource[]; directed?: boolean; sites?: string[] };
 
 /** Where the focused function runs, and where else. Set for a function focus only. */
 export interface MapSelected {
@@ -138,6 +142,10 @@ export interface MapSource {
   expandMore?(build: MapBuild, nodeId: string): Promise<void>;
   /** Whether a chain box's function is a dispatch target (an await or a start) of the thread that holds the box `boxId`. */
   asyncOf?(build: MapBuild, fnId: string, boxId: string): boolean;
+  /** The threads a function runs on, as the tooltip of its open box says ("Main thread, Worker"). Undefined when it is not known. */
+  runsOn?(build: MapBuild, fnId: string): string | undefined;
+  /** A function's chart as the build draws it: its sync rows annotated with their peers (see withResourcePeers). Absent, the chart is drawn as it is. */
+  annotateChart?(build: MapBuild, fnId: string, chart: FunctionFlow): FunctionFlow;
 }
 
 export interface Box {
@@ -212,20 +220,54 @@ export function runtimeLine(kind: string, parentLine: RuntimeLine = "none"): Run
 /** The class a node is drawn with for its line type, such as `zm-line-thread`. */
 export const lineClass = (line: RuntimeLine): string => `zm-line-${line}`;
 
-/** The edge's classes: stubs dashed, candidates dotted, spawns and dispatches marked by kind, sync edges by what is shared. */
-export function edgeClass(e: Pick<MapEdge, "stub" | "candidate" | "kind" | "how">): string {
+/** The kinds of resource a sync edge names, in the order the classes and the tooltip list them. */
+const SYNC_KINDS = ["lock", "channel", "condvar", "semaphore", "atomic"] as const;
+
+/** The resource kinds a sync edge carries: its named resources, else its `how` (the first resource's kind). */
+function syncKinds(e: Pick<MapEdge, "resources" | "how">): string[] {
+  const kinds = new Set<string>((e.resources ?? []).map((r) => r.kind));
+  if (kinds.size === 0 && e.how !== undefined) kinds.add(e.how);
+  return SYNC_KINDS.filter((k) => kinds.has(k));
+}
+
+/** The edge's classes: stubs dashed, candidates dotted, spawns and dispatches marked by kind, sync edges by each kind they share. */
+export function edgeClass(e: Pick<MapEdge, "stub" | "candidate" | "kind" | "how" | "resources">): string {
   const base = e.stub ? "zm-edge stub" : e.candidate ? "zm-edge candidate" : "zm-edge";
-  if (e.kind === "sync") return `${base} sync${e.how === "lock" || e.how === "channel" ? ` ${e.how}` : ""}`;
+  if (e.kind === "sync") return [base, "sync", ...syncKinds(e)].join(" ");
   return e.kind === "spawn" || e.kind === "dispatch" ? `${base} ${e.kind}` : base;
 }
 
-/** The edge's tooltip. */
-export function edgeTitle(e: Pick<MapEdge, "stub" | "count" | "stubCount" | "kind" | "how">): string {
-  if (e.kind === "sync" && e.how === "channel") return e.count === 1 ? "Sends on a channel the other receives" : `${e.count} channels from one to the other`;
-  if (e.kind === "sync") return e.count === 1 ? "Both take the same lock" : `${e.count} locks both take`;
+/** The names of a sync edge's resources by kind, as "lock queue_mu, condvar cv": one phrase per kind, in SYNC_KINDS order. */
+export function syncResourceText(resources: readonly SceneSyncResource[]): string {
+  return SYNC_KINDS.flatMap((k) => {
+    const names = [...new Set(resources.filter((r) => r.kind === k).map((r) => r.name))];
+    return names.length === 0 ? [] : [`${k} ${names.join(", ")}`];
+  }).join(", ");
+}
+
+/** The edge's tooltip: what the two ends share, then the sites of the shared resources, one line each. */
+export function edgeTitle(e: Pick<MapEdge, "stub" | "count" | "stubCount" | "kind" | "how" | "resources" | "directed" | "sites">): string {
+  if (e.kind === "sync") {
+    const head = syncEdgeHead(e);
+    return e.sites !== undefined && e.sites.length > 0 ? [head, ...e.sites].join("\n") : head;
+  }
   if (e.kind === "spawn") return e.count === 1 ? "Spawns this" : `${e.count} spawns`;
   if (e.kind === "dispatch") return e.count === 1 ? "1 dispatch" : `${e.count} dispatches`;
   return e.stub ? `${e.count} calls, ${e.stubCount} leave the scope` : `${e.count} calls`;
+}
+
+/** The first line of a sync edge's tooltip. A channel names its direction; the others name what both use. */
+function syncEdgeHead(e: { how?: string; count: number; resources?: readonly SceneSyncResource[]; directed?: boolean }): string {
+  const resources = e.resources ?? [];
+  const channels = resources.filter((r) => r.kind === "channel");
+  if (channels.length > 0 && e.directed === true) {
+    const names = [...new Set(channels.map((r) => r.name))].join(", ");
+    return `Channel ${names}: sends → receives`;
+  }
+  if (resources.length > 0) return `Shares ${syncResourceText(resources)}`;
+  if (e.how === "channel") return e.count === 1 ? "Sends on a channel the other receives" : `${e.count} channels from one to the other`;
+  if (e.how === "lock") return e.count === 1 ? "Both take the same lock" : `${e.count} locks both take`;
+  return e.count === 1 ? `Both use the same ${e.how}` : `${e.count} ${e.how}s both use`;
 }
 
 /** The edge's stroke width in screen pixels: thicker for more calls, and a spawn one pixel thicker again. */

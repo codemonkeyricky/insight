@@ -299,6 +299,8 @@ export function emitUnit(project: Project, rel: string): IRBatch {
   const exitTests = new Set<string>();
   const emittedTests = new Set<string>();
   const armIds = new Map<string, string>();
+  // A scoped lock guard variable (`std::unique_lock lk(m)`) to the lock it holds, per function: `lk.unlock()` gives up m.
+  const guardMutex = new Map<string, string>();
   const shadowCache = new Map<string, Set<string>>();
   const records: IRRecord[] = [];
   const deps = new Set<string>(project.macroDeps.get(rel) ?? []);
@@ -430,7 +432,10 @@ export function emitUnit(project: Project, rel: string): IRBatch {
       emitNode(call, container, "sync", "sync.condvar", "cv", attrs, prov);
       return;
     }
-    if (isAtomicMethod(v.type, method)) emitNode(call, container, "sync", "sync.atomic-op", "atomic", { op: "op", api }, prov);
+    if (isAtomicMethod(v.type, method)) {
+      // Named by the resolved variable, as condvars and semaphores are: Class::member, a qualified global, or <dynamic> for a local.
+      emitNode(call, container, "sync", "sync.atomic-op", "atomic", { op: "op", api, lock: v.channel }, prov);
+    }
   };
 
   /** The POSIX semaphore and condition variable calls. A name that is not a plain name is <dynamic>. */
@@ -487,14 +492,16 @@ export function emitUnit(project: Project, rel: string): IRBatch {
       if (args.length === 0) {
         const method = fnNode.childForFieldName("field")?.text;
         const recv = fnNode.childForFieldName("argument")?.text;
-        if (recv !== undefined && (method === "lock" || method === "unlock")) {
-          const lock = lockIdentity(recv, cls, project.members);
+        if (recv !== undefined && (method === "lock" || method === "try_lock" || method === "unlock")) {
+          // A guard variable (`lk` in `std::unique_lock lk(m)`) names the mutex it holds, not itself.
+          const lock = guardMutex.get(`${fn?.id ?? ""}|${recv}`) ?? lockIdentity(recv, cls, project.members);
+          const acquire = method !== "unlock";
           node({
             id: ids.take(`${rel}@${method}:${call.startPosition.row}:${call.startPosition.column}`),
             facet: "sync",
-            kind: method === "lock" ? "sync.lock-acquire" : "sync.lock-release",
+            kind: acquire ? "sync.lock-acquire" : "sync.lock-release",
             parent: container,
-            attrs: method === "lock" ? { lock, mode: "exclusive", api: "lock" } : { lock, api: "unlock" },
+            attrs: acquire ? { lock, mode: "exclusive", api: "lock" } : { lock, api: "unlock" },
             span: spanOf(rel, call),
             provenance: syncProv,
           });
@@ -538,7 +545,7 @@ export function emitUnit(project: Project, rel: string): IRBatch {
     const v = resolveVar(project, ref.name, n, classAt(project, rel, n), ref.viaThis);
     if (v?.type !== "std::atomic") return;
     const op = n.childForFieldName("operator")?.text === "--" ? "operator--" : "operator++";
-    emitNode(n, container, "sync", "sync.atomic-op", "atomic", { op: "op", api: `std::atomic::${op}` }, prov);
+    emitNode(n, container, "sync", "sync.atomic-op", "atomic", { op: "op", api: `std::atomic::${op}`, lock: v.channel }, prov);
   };
 
   const handleDeclaration = (decl: SyntaxNode, container: NodeId, fn: FnDecl | undefined) => {
@@ -584,13 +591,27 @@ export function emitUnit(project: Project, rel: string): IRBatch {
     // An out-of-line definition (void Store::put) has no class in its scope; its name carries it.
     const cls = scopeOf(decl).cls ?? fn?.cls;
     const locks = declArgs(decl).filter((p) => !NO_LOCK_ARGS.has(norm(p.text)));
+    const guardName = declarator.childForFieldName("declarator")?.text;
+    const firstLock = locks[0];
+    if (guardName !== undefined && firstLock !== undefined) guardMutex.set(`${fn?.id ?? ""}|${guardName}`, lockIdentity(firstLock.text, cls, project.members));
+    // A guard built with defer_lock or try_to_lock takes its lock later, with lk.lock() or lk.try_lock(); one built with
+    // adopt_lock takes a lock already held. None of them acquires at construction, but each still releases at scope end.
+    const acquiresAtDecl = !declArgs(decl).some((p) => NO_LOCK_ARGS.has(norm(p.text)));
+    // The last explicit lock or unlock call on the guard in its block: an unlock with nothing after it leaves no release.
+    const lastGuardOp = (text: string, guard: string): string | undefined => {
+      let last: string | undefined;
+      if (!/^\w+$/.test(guard)) return undefined;
+      for (const m of text.matchAll(new RegExp(`\\b${guard}\\s*\\.\\s*(lock|try_lock|unlock)\\s*\\(`, "g"))) last = m[1];
+      return last;
+    };
+    const explicitlyUnlocked = guardName !== undefined && lastGuardOp(block?.text ?? "", guardName) === "unlock";
     locks.forEach((arg, i) => {
       const lock = lockIdentity(arg.text, cls, project.members);
       // A shared_mutex taken by any guard is a read-write lock: shared for shared_lock, exclusive otherwise. It is
       // emitted as sync.rwlock-acquire alone, which extends sync.lock-acquire, so each guard is one acquire node.
       const ref = refOf(arg);
       const mutexType = ref ? resolveVar(project, ref.name, decl, cls, ref.viaThis)?.type : undefined;
-      if (mutexType === "std::shared_mutex") {
+      if (acquiresAtDecl && mutexType === "std::shared_mutex") {
         node({
           id: ids.take(`${rel}@rwlock:${decl.startPosition.row}:${decl.startPosition.column}:${i}`),
           facet: "sync",
@@ -600,7 +621,7 @@ export function emitUnit(project: Project, rel: string): IRBatch {
           span: spanOf(rel, decl),
           provenance: syncProv,
         });
-      } else {
+      } else if (acquiresAtDecl) {
         node({
           id: ids.take(`${rel}@guard:${decl.startPosition.row}:${decl.startPosition.column}:${i}`),
           facet: "sync",
@@ -611,7 +632,7 @@ export function emitUnit(project: Project, rel: string): IRBatch {
           provenance: syncProv,
         });
       }
-      if (block) {
+      if (block && !explicitlyUnlocked) {
         node({
           id: ids.take(`${rel}@release:${block.endPosition.row}:${block.endPosition.column}:${i}`),
           facet: "sync",

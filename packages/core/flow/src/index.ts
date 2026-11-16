@@ -20,6 +20,7 @@ export * from "./runtime-boxes.js";
 export * from "./names.js";
 export * from "./modules.js";
 export * from "./coupling.js";
+export * from "./resource-peers.js";
 
 /** What the coupling view needs from the whole project: its modules and every function's footprint. Built once per snapshot. */
 export interface CouplingIndex {

@@ -256,7 +256,7 @@ function Station({ node, cx, cy, resolved }: { node: FlowNode; cx: number; cy: n
     );
   }
   if (role === "call") return <CallStation cx={cx} cy={cy} open={resolved || node.target === undefined} />;
-  if (role === "effect") return <rect className="st effect" x={cx - 3.5} y={cy - 3.5} width={7} height={7} rx={1.5} />;
+  if (role === "effect" || role === "sync") return <rect className="st effect" x={cx - 3.5} y={cy - 3.5} width={7} height={7} rx={1.5} />;
   if (shape === "label") return <path className="st tick" d={`M${cx - 4} ${cy}H${cx + 4}`} />;
   return <circle className="st step" cx={cx} cy={cy} r={3.5} />;
 }
