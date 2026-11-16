@@ -29,8 +29,8 @@ export type FlowRole =
   | "continue";
 
 /**
- * What a chart row is for the coupling view: a local row, or the boundary it crosses. `ctl` is reserved for phase 4 of the
- * coupling view: no row takes it yet.
+ * What a chart row is for the coupling view: a local row, or the boundary it crosses. `ctl` is a branch or loop kept
+ * because its condition reads a local that carries an external value (the phase-4 taint pass), even when its body is local.
  */
 export type CouplingClass = "local" | "cross" | "io" | "state" | "conc" | "escape" | "ctl";
 

@@ -52,6 +52,8 @@ interface Ctx {
   footprints: ReadonlyMap<string, CouplingFootprint>;
   /** The function is on its module's surface. */
   onSurface: boolean;
+  /** Branches and loops kept because their condition reads a tainted local, with the reads that are tainted. */
+  taint?: ReadonlyMap<Item, string[]>;
 }
 
 /** How a state row classifies: whether it is kept, and its flags. */
@@ -115,6 +117,78 @@ function effective(targets: string[], caught: boolean, ctx: Ctx): FootprintEntry
   return out;
 }
 
+/** The local names a call row's result is bound or assigned to. */
+function bindNames(item: StepItem): string[] {
+  const b = item.binds;
+  if (b === undefined) return [];
+  return Array.isArray(b) ? b : [b];
+}
+
+/**
+ * Whether a call or await row's result carries a value from outside the function's own code: a cross call, or a local
+ * call whose hoisted footprint has IO or state. This is the taint source of phase 4.
+ */
+function carriesExternal(item: StepItem, caught: boolean, ctx: Ctx): boolean {
+  const targets = targetsOf(item);
+  if (targets.some((t) => isCross(t, ctx.M, ctx.modules))) return true;
+  return effective(targets, caught, ctx).some((e) => e.cls === "io" || e.cls === "state");
+}
+
+/**
+ * The taint pass: one forward walk in source order. A local is tainted when a call or await whose result carries an
+ * external value (`carriesExternal`) binds it; a branch or loop whose condition reads a tainted local is kept even when its
+ * body is all local. Only direct binds are seen: the IR records no assignment from one local to another, so `const c2 = cfg`
+ * is not followed. A state read is not bound to a local either, so it is not a direct taint source here.
+ *
+ * The class is `ctl` (already in the class set, reserved for phase 4): the row is control flow kept for the value its
+ * condition depends on, not for anything its own body reaches.
+ */
+function taintedControlsOf(items: readonly Item[], caught: boolean, ctx: Ctx): Map<Item, string[]> {
+  const tainted = new Set<string>();
+  const out = new Map<Item, string[]>();
+  const hit = (reads: readonly string[] | undefined): string[] => (reads ?? []).filter((r) => tainted.has(r));
+  const walk = (list: readonly Item[], caughtHere: boolean): void => {
+    for (const item of list) {
+      switch (item.t) {
+        case "step":
+          if ((item.role === "call" || item.role === "await") && item.binds !== undefined && carriesExternal(item, caughtHere, ctx)) {
+            for (const name of bindNames(item)) tainted.add(name);
+          }
+          break;
+        case "fork": {
+          const reads = hit(item.reads);
+          if (reads.length > 0) out.set(item, reads);
+          for (const a of item.arms) walk(a.body, armCaught(item, a, caughtHere));
+          break;
+        }
+        case "loop": {
+          const reads = hit(item.reads);
+          if (reads.length > 0) out.set(item, reads);
+          walk(item.body, caughtHere);
+          break;
+        }
+      }
+    }
+  };
+  walk(items, caught);
+  return out;
+}
+
+/**
+ * The branch and loop items kept because their condition reads a local a cross, io or state call binds. Exported for the
+ * no-loss property test, which checks each one is present in the coupling chart.
+ */
+export function taintedControls(
+  fnId: string,
+  items: readonly Item[],
+  modules: ModuleMap,
+  footprints: ReadonlyMap<string, CouplingFootprint>,
+  surface?: ReadonlySet<string>,
+): Map<Item, string[]> {
+  const ctx: Ctx = { M: modules.moduleOf(fnId), modules, footprints, onSurface: surface === undefined || surface.has(fnId) };
+  return taintedControlsOf(items, false, ctx);
+}
+
 function strongest(entries: FootprintEntry[]): CouplingClass {
   return ORDER.find((c) => entries.some((e) => e.cls === c)) ?? "local";
 }
@@ -170,9 +244,9 @@ function kept(item: Item, caught: boolean, ctx: Ctx): boolean {
     case "term":
       return item.role === "throw" && !caught;
     case "fork":
-      return item.role === "lock" || item.arms.some((a) => a.body.some((b) => kept(b, armCaught(item, a, caught), ctx)));
+      return ctx.taint?.has(item) === true || item.role === "lock" || item.arms.some((a) => a.body.some((b) => kept(b, armCaught(item, a, caught), ctx)));
     case "loop":
-      return item.body.some((b) => kept(b, caught, ctx));
+      return ctx.taint?.has(item) === true || item.body.some((b) => kept(b, caught, ctx));
   }
 }
 
@@ -210,26 +284,42 @@ function keepItem(item: Item, caught: boolean, ctx: Ctx, st: { next: number }): 
       const hoisted = info.hoisted;
       const baseLabel = hoisted !== undefined ? `${item.label} ⇢ ${hoisted}` : item.label;
       const baseTitle = hoisted !== undefined ? `${item.title ?? item.label} ⇢ ${hoisted}` : item.title;
+      // A kept call whose result goes into a local shows where it goes: `cfg ← config.loadConfig()`.
+      const bind = item.role === "call" || item.role === "await" ? (item.binds === undefined ? undefined : bindNames(item).join(", ")) : undefined;
+      const boundLabel = bind !== undefined ? `${bind} ← ${baseLabel}` : baseLabel;
+      const boundTitle = bind !== undefined ? `${bind} ← ${baseTitle ?? baseLabel}` : baseTitle;
       return {
         ...item,
         ...(info.coupling !== undefined ? { coupling: info.coupling } : {}),
         ...(hoisted !== undefined ? { hoisted } : {}),
-        label: suspends ? `⏸ ${baseLabel}` : baseLabel,
+        label: suspends ? `⏸ ${boundLabel}` : boundLabel,
         ...(suspends
-          ? { title: `${baseTitle ?? baseLabel} (other coroutines may run here)` }
-          : baseTitle !== undefined ? { title: baseTitle } : {}),
+          ? { title: `${boundTitle ?? boundLabel} (other coroutines may run here)` }
+          : boundTitle !== undefined ? { title: boundTitle } : {}),
       };
     }
     case "term":
       return { ...item, coupling: "escape" };
-    case "fork":
+    case "fork": {
+      const dep = ctx.taint?.get(item);
+      const label = dep === undefined ? item.label : `${item.label} ⇠ ${dep.join(", ")}`;
+      const title = dep === undefined ? item.title : `${item.title ?? item.label} ⇠ ${dep.join(", ")}`;
       return {
         ...item,
-        ...(item.role === "lock" ? { coupling: "conc" as const } : {}),
+        // A taint-kept branch is control flow that depends on a local carrying an external value (`ctl`); a lock frame is conc.
+        ...(item.role === "lock" ? { coupling: "conc" as const } : dep !== undefined ? { coupling: "ctl" as const } : {}),
+        ...(dep !== undefined ? { label, title } : {}),
         arms: item.arms.map((a) => ({ ...a, body: prune(a.body, armCaught(item, a, caught), ctx, st) })),
       };
-    case "loop":
-      return { ...item, body: prune(item.body, caught, ctx, st) };
+    }
+    case "loop": {
+      const dep = ctx.taint?.get(item);
+      return {
+        ...item,
+        ...(dep !== undefined ? { coupling: "ctl" as const, label: `${item.label} ⇠ ${dep.join(", ")}`, title: `${item.title ?? item.label} ⇠ ${dep.join(", ")}` } : {}),
+        body: prune(item.body, caught, ctx, st),
+      };
+    }
   }
 }
 
@@ -481,7 +571,9 @@ export function couplingChart(
 ): { items: Item[]; info: CouplingInfo } {
   const M = modules.moduleOf(fnId);
   const fp = footprints.get(fnId) ?? { entries: [], modules: [], escape: false, state: { writes: 0, reads: 0, hidden: false } };
-  const out = prune(items, false, { M, modules, footprints, onSurface: surface === undefined || surface.has(fnId) }, { next: 0 });
+  const ctx: Ctx = { M, modules, footprints, onSurface: surface === undefined || surface.has(fnId) };
+  ctx.taint = taintedControlsOf(items, false, ctx);
+  const out = prune(items, false, ctx, { next: 0 });
   return { items: out, info: { module: M ?? ".", footprint: fp, summary: footprintSummary(fp) } };
 }
 

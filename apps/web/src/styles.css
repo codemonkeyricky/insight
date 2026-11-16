@@ -281,6 +281,9 @@ a.flow-node { cursor: pointer; }
 .flow-node.cp-global .flow-text { text-decoration: underline; }
 .flow-node.cp-escape .flow-text { fill: var(--red-text); font-weight: 600; }
 .flow-node.cp-escape .st { stroke: var(--red-text); }
+/* A control row kept because its condition reads a local carrying an external value (`ctl`). */
+.flow-node.cp-ctl .flow-text { font-weight: 600; }
+.flow-node.cp-ctl .st { stroke: var(--accent-text); stroke-dasharray: 3 2.5; }
 .flow-fold .flow-text { fill: var(--muted); font-size: 11px; font-style: italic; }
 .flow-fold .flow-chev { fill: var(--muted); }
 .flow-fold .st { stroke: var(--muted); stroke-dasharray: 3 2.5; }

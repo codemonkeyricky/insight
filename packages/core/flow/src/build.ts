@@ -76,6 +76,10 @@ interface Ev {
   text?: string;
   /** The lock or channel a sync row names, for peers. Undefined for an unnamed or dynamic one. */
   resource?: SyncResource;
+  /** A call: the local(s) its result is bound or assigned to (`calls.call.attrs.binds`). */
+  binds?: string | string[];
+  /** A branch or loop: the local names its condition reads (`flow.branch.attrs.reads`, `flow.loop.attrs.reads`). */
+  reads?: string[];
   children: Ev[];
 }
 
@@ -95,6 +99,8 @@ export type Item =
       targets?: string[];
       /** A state row: the variable it reads or writes (coupling view only). */
       state?: StateRef;
+      /** A call row: the local(s) its result is bound or assigned to. */
+      binds?: string | string[];
       /** Coupling pass: the row's class. */
       coupling?: CouplingClass;
       /** Coupling pass: the classes and labels a local call hoists. */
@@ -121,8 +127,8 @@ export type Item =
       global?: true;
     }
   | { t: "term"; role: "return" | "throw" | "break" | "continue"; label: string; span?: FlowSpan; coupling?: CouplingClass }
-  | { t: "fork"; role: "branch" | "switch" | "try" | "lock"; label: string; title?: string; span?: FlowSpan; arms: Arm[]; complete: boolean; lock?: string; text?: string; resource?: SyncResource; coupling?: CouplingClass }
-  | { t: "loop"; label: string; title?: string; span?: FlowSpan; body: Item[] };
+  | { t: "fork"; role: "branch" | "switch" | "try" | "lock"; label: string; title?: string; span?: FlowSpan; arms: Arm[]; complete: boolean; lock?: string; text?: string; resource?: SyncResource; coupling?: CouplingClass; reads?: string[] }
+  | { t: "loop"; label: string; title?: string; span?: FlowSpan; body: Item[]; coupling?: CouplingClass; reads?: string[] };
 
 export interface Arm {
   label: string;
@@ -246,20 +252,42 @@ function syncResourceOf(n: IRNode): SyncResource | undefined {
   }
 }
 
+/** The local names a branch or loop condition reads, when the record carries them. */
+function readsOf(attrs: Record<string, unknown>): string[] | undefined {
+  const raw = attrs.reads;
+  if (!Array.isArray(raw)) return undefined;
+  const reads = raw.filter((r): r is string => typeof r === "string" && r !== "");
+  return reads.length > 0 ? reads : undefined;
+}
+
+/** The local(s) a call's result is bound or assigned to: one name or several. */
+function bindsOf(attrs: Record<string, unknown>): string | string[] | undefined {
+  const raw = attrs.binds;
+  if (typeof raw === "string") return raw === "" ? undefined : raw;
+  if (!Array.isArray(raw)) return undefined;
+  const names = raw.filter((b): b is string => typeof b === "string" && b !== "");
+  if (names.length === 0) return undefined;
+  return names;
+}
+
 function toEvent(n: IRNode): Ev | undefined {
   if (!n.span) return undefined;
   const base = { start: n.span.start as Pos, end: n.span.end as Pos, span: spanOf(n), children: [] as Ev[], kind: n.kind };
   const a = n.attrs;
   const str = (v: unknown) => (typeof v === "string" ? v : "");
   switch (n.kind) {
-    case "flow.branch":
-      return { ...base, type: "branch", rank: RANK.branch, label: clip(str(a.condition) || "condition", 60) };
+    case "flow.branch": {
+      const reads = readsOf(a);
+      return { ...base, type: "branch", rank: RANK.branch, label: clip(str(a.condition) || "condition", 60), ...(reads !== undefined ? { reads } : {}) };
+    }
     case "flow.switch":
       return { ...base, type: "switch", rank: RANK.switch, label: "switch" };
     case "flow.branch-arm":
       return { ...base, type: "arm", rank: RANK.arm, label: str(a.label) };
-    case "flow.loop":
-      return { ...base, type: "loop", rank: RANK.loop, label: clip(`${str(a.variant)} ${str(a.condition)}`.trim(), 60) };
+    case "flow.loop": {
+      const reads = readsOf(a);
+      return { ...base, type: "loop", rank: RANK.loop, label: clip(`${str(a.variant)} ${str(a.condition)}`.trim(), 60), ...(reads !== undefined ? { reads } : {}) };
+    }
     case "flow.block":
       return { ...base, type: "block", rank: RANK.block, label: str(a.label) };
     case "flow.try":
@@ -334,6 +362,7 @@ function step(role: FlowRole, ev: Ev, label: string, sources: boolean): Extract<
     ...(ev.span ? { span: ev.span } : {}),
     ...(ev.target ? { target: ev.target } : {}),
     ...(ev.handler ? { handler: true as const } : {}),
+    ...(ev.binds !== undefined ? { binds: ev.binds } : {}),
     ...(sources && ev.kind !== undefined ? { kind: ev.kind } : {}),
     ...(sources && ev.targets !== undefined ? { targets: ev.targets } : {}),
   };
@@ -371,7 +400,11 @@ function convert(ev: Ev, sources: boolean): Item[] {
       const inner = wrapped?.label ?? "";
       const items = convertAll(rest, sources);
       if (wrapped?.type === "call") items.push(...convertAll(wrapped.children, sources));
-      const wrap = { ...(wrapped?.target ? { target: wrapped.target } : {}), ...(wrapped?.targets ? { targets: wrapped.targets } : {}) };
+      const wrap = {
+        ...(wrapped?.target ? { target: wrapped.target } : {}),
+        ...(wrapped?.targets ? { targets: wrapped.targets } : {}),
+        ...(wrapped?.binds !== undefined ? { binds: wrapped.binds } : {}),
+      };
       if (ev.type === "await") return [...items, step("await", { ...ev, ...wrap }, inner ? `await ${inner}` : "await", sources)];
       // Effects keep their own label; a resolved call inside only adds the link to its target.
       return [...items, step(ev.type, { ...ev, ...wrap }, ev.label, sources)];
@@ -409,13 +442,14 @@ function convert(ev: Ev, sources: boolean): Item[] {
         ...(ev.span ? { span: ev.span } : {}),
         arms: out,
         complete,
+        ...(ev.reads !== undefined ? { reads: ev.reads } : {}),
       };
       return [...convertAll(head, sources), fork];
     }
     case "loop": {
       const body = ev.children.filter((c) => c.type === "block" && c.label === "body");
       const head = ev.children.filter((c) => !body.includes(c));
-      const loop: Item = { t: "loop", label: ev.label, title: ev.label, ...(ev.span ? { span: ev.span } : {}), body: convertAll(body.flatMap((b) => b.children), sources) };
+      const loop: Item = { t: "loop", label: ev.label, title: ev.label, ...(ev.span ? { span: ev.span } : {}), body: convertAll(body.flatMap((b) => b.children), sources), ...(ev.reads !== undefined ? { reads: ev.reads } : {}) };
       return [...convertAll(head, sources), loop];
     }
     case "try": {
@@ -588,6 +622,7 @@ export function factsForFile(file: string, nodes: Iterable<IRNode>, edges: Itera
     const target = targets.nodes[0];
     // A multi-candidate call has no resolved node: its candidates are the targets.
     const all = targets.nodes.length > 0 ? targets.nodes : targets.candidates;
+    const binds = bindsOf(e.attrs ?? {});
     add(e.from, {
       type: "call",
       start: e.span.start as Pos,
@@ -597,6 +632,7 @@ export function factsForFile(file: string, nodes: Iterable<IRNode>, edges: Itera
       span: spanOf(e),
       ...(target !== undefined ? { target } : {}),
       kind: "calls.call",
+      ...(binds !== undefined ? { binds } : {}),
       ...(sources && all.length > 1 ? { targets: [...all] } : {}),
       children: [],
     });
