@@ -22,10 +22,12 @@ import {
 import {
   buildFileFlow,
   couplingIndex,
+  couplingReport,
   execModel,
   summarizeFlows,
   summarizeScope,
   type CouplingIndex,
+  type CouplingReport,
   type ExecModel,
   type FileFlow,
   type FileFlowSummary,
@@ -352,6 +354,26 @@ export function fileFlow(paths: ProjectPaths, snapshot: string, file: string): F
 export function flowSummary(paths: ProjectPaths, snapshot: string): FileFlowSummary[] {
   const snap = loadSnapshot(paths, snapshot);
   return summarizeFlows(snap.nodes.values(), snap.edges);
+}
+
+/**
+ * The coupling report of one snapshot (see `couplingReport` in @insight/flow): every function of `scope` (the project, a
+ * folder or a file), or exactly the function `fn` when given. It reuses the snapshot's cached coupling index and the same
+ * scope check the other scope routes use: a path that leaves the project is a 400, and one that names no indexed file is
+ * a 404. An `fn` that is not a function of the snapshot is a 404 too.
+ */
+export function couplingReportOf(paths: ProjectPaths, snapshot: string, opts: { scope?: string; fn?: string } = {}): CouplingReport {
+  const index = couplingFor(paths, snapshot);
+  if (opts.fn !== undefined) {
+    if (!index.functions.has(opts.fn)) throw new ProjectError(404, `no function ${opts.fn}`);
+    return couplingReport(index, { ids: [opts.fn] });
+  }
+  if (opts.scope !== undefined) {
+    const scope = normalizeScope(opts.scope);
+    if (!scopeKindOf(loadSnapshot(paths, snapshot), scope)) throw new ProjectError(404, "no such scope");
+    return couplingReport(index, { scope });
+  }
+  return couplingReport(index);
 }
 
 /**

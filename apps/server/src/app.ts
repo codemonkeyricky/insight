@@ -28,6 +28,7 @@ import {
   allFindings,
   analysisFor,
   type ScopeReadOptions,
+  couplingReportOf,
   fileFacts,
   fileFlow,
   flowSummary,
@@ -504,6 +505,26 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
     const snapshot = resolveSnapshot(pathsFor(p), req.query.snapshot);
     return { snapshot: snapshot ?? null, files: snapshot ? flowSummary(pathsFor(p), snapshot) : [] };
   });
+
+  // The coupling footprint of a scope's functions, or of one function: what each reaches outside its own module, as the
+  // CLI's `insight coupling --json` returns it. `scope` is a file or folder path from the root, as the scope routes take
+  // it; absent or empty is the whole project. `fn` names one function id and takes precedence over `scope`. A path that
+  // leaves the project is a 400, an unknown scope or function is a 404, and a project with no snapshot is a 404.
+  app.get<{ Params: ProjectParams; Querystring: SnapshotQuery & { scope?: string; fn?: string } }>(
+    "/api/projects/:id/coupling",
+    async (req) => {
+      const p = project(req.params.id);
+      const { scope, fn } = req.query;
+      if (scope !== undefined && typeof scope !== "string") throw new ProjectError(400, "scope must be given once");
+      if (fn !== undefined && typeof fn !== "string") throw new ProjectError(400, "fn must be given once");
+      const snapshot = resolveSnapshot(pathsFor(p), req.query.snapshot);
+      if (!snapshot) throw new ProjectError(404, "project has no snapshot yet");
+      return couplingReportOf(pathsFor(p), snapshot, {
+        ...(scope !== undefined ? { scope } : {}),
+        ...(fn !== undefined ? { fn } : {}),
+      });
+    },
+  );
 
   app.get<{ Params: ProjectParams; Querystring: { file?: string; start?: string; end?: string; context?: string } }>(
     "/api/projects/:id/source",
