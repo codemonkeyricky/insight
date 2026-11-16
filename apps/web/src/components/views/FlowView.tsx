@@ -1,5 +1,5 @@
 import { readLambdas, writeLambdas } from "../../zoom/lambdaPref";
-import { readDetail, writeDetail } from "../../zoom/detailPref";
+import { readDetail, readFlowFocus, writeDetail, writeFlowFocus, type FlowFocus } from "../../zoom/detailPref";
 import { readFlowMotion, writeFlowMotion } from "../../zoom/flowMotionPref";
 import { readRuntimeBoxes, writeRuntimeBoxes } from "../../zoom/runtimePref";
 import { useEffect, useMemo, useState } from "react";
@@ -53,8 +53,10 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
   const { showCode } = useCodeTarget();
   const kind = scopeKind(scope, files);
   /** What the map shows: frames and calls on by default, findings off until the reader turns the layer on, lambdas off (folded). */
-  const [shown, setShown] = useState<LayerState>(() => ({ frames: true, calls: true, findings: findingKind !== undefined, lambdas: readLambdas(), motion: readFlowMotion(), runtime: readRuntimeBoxes(), coupling: readDetail() === "coupling" }));
-  const exec = useMemo(() => new ExecStore(id, roots, shown.lambdas, shown.runtime), [id, roots, shown.lambdas, shown.runtime]);
+  const [shown, setShown] = useState<LayerState>(() => ({ frames: true, calls: true, findings: findingKind !== undefined, lambdas: readLambdas(), motion: readFlowMotion(), runtime: readRuntimeBoxes(), coupling: readDetail() === "coupling", intermodule: readFlowFocus() === "intermodule" }));
+  /** The flow focus the charts are read under: the inter-module focus, or the full chart. */
+  const flowFocus: FlowFocus = shown.intermodule ? "intermodule" : "all";
+  const exec = useMemo(() => new ExecStore(id, roots, shown.lambdas, shown.runtime, flowFocus), [id, roots, shown.lambdas, shown.runtime, flowFocus]);
   // A "Show in Flow" link for a kind turns the findings layer on, even when the flow is already open.
   useEffect(() => {
     if (findingKind !== undefined) setShown((s) => (s.findings ? s : { ...s, findings: true }));
@@ -113,7 +115,7 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
       <div className="sh-sheet">
         <div className="sh-canvas">
           <ZoomMap
-            key={`${roots ? "roots" : "all"}-${shown.lambdas ? "lambdas" : "folded"}-${shown.runtime ? "runtime" : "flat"}-${shown.coupling ? "coupling" : "full"}`}
+            key={`${roots ? "roots" : "all"}-${shown.lambdas ? "lambdas" : "folded"}-${shown.runtime ? "runtime" : "flat"}-${shown.coupling ? "coupling" : "full"}-${flowFocus}`}
             id={id}
             source={exec}
             scope={scope}
@@ -147,6 +149,12 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
                 // The store reads the choice when it picks a function's chart; the map remounts below, so its charts are drawn again.
                 store.setDetail(on ? "coupling" : "all");
                 writeDetail(on ? "coupling" : "all");
+              }
+              if (key === "intermodule") {
+                // The store loads its charts under the focus; the map remounts below, so the charts are read again.
+                const next: FlowFocus = on ? "intermodule" : "all";
+                store.setFocus(next);
+                writeFlowFocus(next);
               }
               if (key === "lambdas") writeLambdas(on);
               if (key === "motion") writeFlowMotion(on);

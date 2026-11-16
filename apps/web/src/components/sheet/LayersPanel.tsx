@@ -11,8 +11,10 @@ export interface LayerState {
   motion: boolean;
   /** The roots-only view's runtime boxes: process and thread frames around the roots. On by default. */
   runtime: boolean;
-  /** Detail: the coupling chart of each function (on by default), or the full control-flow chart (off). */
+  /** Detail: the coupling chart of each function (on by default), or the full control-flow chart (off). Off while the inter-module focus is on. */
   coupling: boolean;
+  /** Inter-module calls only: each chart keeps its calls to exported functions of other files, and drops kernel and env effects. On by default. */
+  intermodule: boolean;
 }
 
 interface Props {
@@ -62,7 +64,18 @@ export function LayersPanel({ shown, findingCount, onChange, onClose, roots }: P
         <input type="checkbox" checked={shown.runtime} onChange={(e) => onChange("runtime", e.target.checked)} /> Runtime boxes
       </label>
       <label className="sh-check">
-        <input type="checkbox" checked={shown.coupling} onChange={(e) => onChange("coupling", e.target.checked)} /> Coupling only
+        <input type="checkbox" checked={shown.intermodule} onChange={(e) => onChange("intermodule", e.target.checked)} /> Inter-module calls only
+      </label>
+      <p className="muted">Hides file/OS/env access, try frames, and calls to functions that are not exported from another file. Empty branches and loops are pruned.</p>
+      <label className="sh-check">
+        <input
+          type="checkbox"
+          checked={shown.coupling}
+          disabled={shown.intermodule}
+          title={shown.intermodule ? "Off while Inter-module calls only is on: the two are not combined" : undefined}
+          onChange={(e) => onChange("coupling", e.target.checked)}
+        />{" "}
+        Coupling only
       </label>
       <div className="sh-coupling-legend" aria-label="Coupling legend">
         <div><span className="cp-key cp-cross" /> cross module</div>

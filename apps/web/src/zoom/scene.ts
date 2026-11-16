@@ -3,12 +3,14 @@
 import { type FunctionFlow, type ScopeFlow } from "@insight/flow";
 import { api } from "../api";
 import { fileOfId, isPostStep, messageReceivers, withMessageTargets, type MessageReceiver } from "../flowTargets";
-import { readDetail, type FlowDetail } from "./detailPref";
+import { readDetail, readFlowFocus, type FlowDetail, type FlowFocus } from "./detailPref";
 
 export class ZoomStore {
   private readonly id: string;
   /** Which chart a function shows: its coupling chart, or its full chart. Set from the Detail choice (see setDetail). */
   private detail: FlowDetail;
+  /** Which chart is loaded: the inter-module focus, or the full chart. Set from the flow focus (see setFocus). */
+  private focus: FlowFocus;
   private flows = new Map<string, ScopeFlow>();
   private scopeLoads = new Map<string, Promise<void>>();
   private fns = new Map<string, FunctionFlow>();
@@ -17,10 +19,23 @@ export class ZoomStore {
   private receivers = new Map<string, Promise<MessageReceiver[]>>();
   private loadedReceivers = new Map<string, MessageReceiver[]>();
 
-  /** `detail` defaults to the reader's saved Detail choice. */
-  constructor(id: string, detail: FlowDetail = readDetail()) {
+  /** `detail` and `focus` default to the reader's saved choices. */
+  constructor(id: string, detail: FlowDetail = readDetail(), focus: FlowFocus = readFlowFocus()) {
     this.id = id;
     this.detail = detail;
+    this.focus = focus;
+  }
+
+  /**
+   * The flow focus the charts are loaded with. A change drops the loaded charts, so the next read loads them again with the
+   * new focus. The map that shows them remounts on the change (FlowView keys its map on the focus).
+   */
+  setFocus(focus: FlowFocus): void {
+    if (focus === this.focus) return;
+    this.focus = focus;
+    this.fns.clear();
+    this.fileLoads.clear();
+    this.messages.clear();
   }
 
   /**
@@ -39,21 +54,23 @@ export class ZoomStore {
   /**
    * A function's chart, loading its file's charts if needed. Undefined when the snapshot has no such function. With the
    * "coupling" detail, a function that has a coupling chart shows it (its coupling is kept, so the panel shows the summary);
-   * otherwise the full chart is returned, still carrying `coupling`. A chart with a postMessage step names the handler the
-   * message reaches (see withMessageTargets).
+   * otherwise the full chart is returned, still carrying `coupling`. The inter-module focus replaces the Detail: its chart is
+   * returned as it is, never the coupling chart. A chart with a postMessage step names the handler the message reaches
+   * (see withMessageTargets).
    */
   async chartOf(fnId: string): Promise<FunctionFlow | undefined> {
     await this.ensureFunction(fnId);
     const fn = this.fns.get(fnId);
     if (fn === undefined) return undefined;
-    const chart: FunctionFlow = this.detail === "coupling" && fn.coupling !== undefined ? { ...fn.coupling.chart, coupling: fn.coupling } : fn;
+    const coupled = this.focus === "all" && this.detail === "coupling" && fn.coupling !== undefined;
+    const chart: FunctionFlow = coupled ? { ...fn.coupling!.chart, coupling: fn.coupling } : fn;
     if (!chart.nodes.some(isPostStep)) return chart;
     return this.messaged(fnId, chart);
   }
 
   /** The chart with its message steps pointed at their receivers, loaded once per function and detail. */
   private messaged(fnId: string, chart: FunctionFlow): Promise<FunctionFlow> {
-    const key = `${this.detail}\0${fnId}`;
+    const key = `${this.focus}\0${this.detail}\0${fnId}`;
     let load = this.messages.get(key);
     if (load === undefined) {
       load = this.receiversOf(fnId).then(
@@ -127,18 +144,23 @@ export class ZoomStore {
     return load;
   }
 
-  /** Loads a file's function charts. A function's chart is the one thing that needs the file's layout flow. */
+  /** Loads a file's function charts, with the focus they are read under. A function's chart is the one thing that needs the file's layout flow. */
   private ensureFunction(fnId: string): Promise<void> {
     if (this.fns.has(fnId)) return Promise.resolve();
     const file = fileOfId(fnId);
+    const focus = this.focus;
     let load = this.fileLoads.get(file);
     if (load === undefined) {
-      load = api.flow(this.id, file).then(
+      load = api.flow(this.id, file, focus).then(
         (res) => {
+          // A focus change while the load was in flight drops its charts (they were read under the old focus), and asks again
+          // under the current one, so a chartOf awaiting this load still finds its function.
+          if (this.focus !== focus) return this.ensureFunction(fnId);
           for (const f of res.functions) this.fns.set(f.id, f);
         },
         (e: unknown) => {
-          this.fileLoads.delete(file);
+          // A focus change cleared this load and a newer one may own the entry now: only this load's entry is dropped.
+          if (this.fileLoads.get(file) === load) this.fileLoads.delete(file);
           throw e;
         },
       );

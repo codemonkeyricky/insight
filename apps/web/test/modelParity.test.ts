@@ -87,6 +87,29 @@ describe("browser scope payloads equal the server's", () => {
     expect(modelCalls).toHaveLength(1);
   }, 600_000);
 
+  it("the live api and the demo api size the exec boxes by the inter-module focus, as the server does", async () => {
+    const liveFetch = globalThis.fetch;
+    const modelText = JSON.stringify(await serverJson(`/api/projects/${id}/model`));
+    const projectText = JSON.stringify({ project: { id }, overview: {} });
+    for (const scope of SCOPES) {
+      const q = `?path=${encodeURIComponent(scope)}&focus=intermodule`;
+      const route = await serverJson(`/api/projects/${id}/scope/exec${q}`);
+      expect(await api.getScopeExec(id, scope, { focus: "intermodule" }), `live exec ${scope} focus`).toEqual(route);
+      // The demo api, fed the demo capture's model.json, answers the same focused model.
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/demo/model.json")) return new Response(modelText, { headers: { "content-type": "application/json" } });
+        if (url.endsWith("/demo/project.json")) return new Response(projectText, { headers: { "content-type": "application/json" } });
+        return new Response("missing", { status: 404, headers: { "content-type": "text/html" } });
+      }) as typeof fetch;
+      try {
+        expect(await staticApi.getScopeExec(id, scope, { focus: "intermodule" }), `demo exec ${scope} focus`).toEqual(route);
+      } finally {
+        globalThis.fetch = liveFetch;
+      }
+    }
+  }, 600_000);
+
   it("the live api names the same error as the server for a scope that leaves the project", async () => {
     const server400 = await server.app.inject({ method: "GET", url: `/api/projects/${id}/scope/flow?path=${encodeURIComponent("../x")}` });
     await expect(api.scopeFlow(id, "../x")).rejects.toMatchObject({ status: 400, message: server400.json().error });

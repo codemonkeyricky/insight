@@ -1,6 +1,7 @@
 import type { IREdge, IRNode } from "@insight/ir";
 import { factsForFile, type StateIndex } from "./build.js";
-import { couplingChart, couplingFacts, type CouplingFootprint } from "./coupling.js";
+import type { FocusCallee } from "./focus.js";
+import { couplingChart, couplingFacts, couplingInfoOf, type CouplingFootprint } from "./coupling.js";
 import { layoutFunction, measure } from "./layout.js";
 import { moduleMap, type ModuleMap } from "./modules.js";
 import type { UnguardedState } from "./state-writes.js";
@@ -27,6 +28,7 @@ export * from "./scope-input.js";
 export * from "./resource-peers.js";
 export * from "./state-writes.js";
 export * from "./unguarded.js";
+export * from "./focus.js";
 
 /** A function of the snapshot as a coupling report names it: its id, display name, and declaration site. */
 export interface CouplingFunction {
@@ -36,6 +38,8 @@ export interface CouplingFunction {
   file?: string;
   /** The 1-based line the function starts on, when it has a span. */
   line?: number;
+  /** Whether the function is exported (`attrs.exported`). An external stub is never exported. */
+  exported: boolean;
 }
 
 /**
@@ -61,6 +65,8 @@ export function couplingIndex(nodes: readonly IRNode[], edges: readonly IREdge[]
   const { modules, footprints, surface, state, facts } = couplingFacts(nodes, edges);
   const filePaths = new Set<string>();
   for (const n of nodes) if (n.kind === "structure.file") filePaths.add(String(n.attrs.path ?? n.id));
+  const exportedIds = new Set<string>();
+  for (const n of nodes) if (n.kind === "structure.function" && n.attrs.exported === true && n.attrs.external !== true) exportedIds.add(n.id);
   const functions = new Map<string, CouplingFunction>();
   for (const [id, f] of facts) {
     // A file's top-level flow has no span; its id is the file path, so it still names its file.
@@ -70,9 +76,46 @@ export function couplingIndex(nodes: readonly IRNode[], edges: readonly IREdge[]
       name: f.name,
       ...(file !== undefined ? { file } : {}),
       ...(f.span !== undefined ? { line: f.span.start[0] + 1 } : {}),
+      exported: exportedIds.has(id),
     });
   }
   return { modules, footprints, surface, state, functions, unguarded: unguardedStateFromFacts(facts.values(), nodes, edges, state) };
+}
+
+/**
+ * The call targets of the inter-module focus: every function of the project with its file and export flag, by id. A call
+ * whose target is missing here (external, unresolved, a candidate list) is never kept. Built from `index.functions`.
+ */
+export function calleeMapOf(index: CouplingIndex): Map<string, FocusCallee> {
+  const hit = calleeMaps.get(index);
+  if (hit) return hit;
+  const out = new Map<string, FocusCallee>();
+  for (const [id, fn] of index.functions) if (fn.file !== undefined) out.set(id, { file: fn.file, exported: fn.exported });
+  calleeMaps.set(index, out);
+  return out;
+}
+
+/** The call-target map of each index, built once. The map is shared: read it, never write it. */
+const calleeMaps = new WeakMap<CouplingIndex, Map<string, FocusCallee>>();
+
+/** The call-target maps of each node list, built once. The map is shared: read it, never write it. */
+const calleeMapsOfNodes = new WeakMap<readonly IRNode[], ReadonlyMap<string, FocusCallee>>();
+
+/**
+ * The call targets of the inter-module focus, read straight from the IR: every function with a span and no external stub, by
+ * id, with its file and export flag. It equals `calleeMapOf` of the index over the same records, without building the index.
+ * Memoized by the array's identity, so a graph's nodes are read once.
+ */
+export function calleeMapFromNodes(nodes: readonly IRNode[]): ReadonlyMap<string, FocusCallee> {
+  const hit = calleeMapsOfNodes.get(nodes);
+  if (hit) return hit;
+  const out = new Map<string, FocusCallee>();
+  for (const n of nodes) {
+    if (n.kind !== "structure.function" || n.span === undefined || n.attrs.external === true) continue;
+    out.set(n.id, { file: n.span.file, exported: n.attrs.exported === true });
+  }
+  calleeMapsOfNodes.set(nodes, out);
+  return out;
 }
 
 /**
@@ -84,15 +127,32 @@ export function couplingIndex(nodes: readonly IRNode[], edges: readonly IREdge[]
  *
  * With `opts.coupling`, each function also carries its coupling chart (see `FunctionFlow.coupling`).
  * The index describes the whole project; `nodes` and `edges` may hold only this file.
+ *
+ * With `opts.focus` (the inter-module focus), the function's chart is the focused one, and the coupling view replaces the
+ * coupling chart: the function still carries its coupling info (module, footprint, summary), read from the index's unfiltered
+ * footprints. `opts.callees` defaults to the index's call-target map; `opts.state` to the index's state index.
  */
-export function buildFileFlow(file: string, nodes: Iterable<IRNode>, edges: Iterable<IREdge>, opts: { coupling?: CouplingIndex } = {}): FileFlow {
+export function buildFileFlow(
+  file: string,
+  nodes: Iterable<IRNode>,
+  edges: Iterable<IREdge>,
+  opts: { coupling?: CouplingIndex; focus?: "intermodule"; callees?: ReadonlyMap<string, FocusCallee>; state?: StateIndex } = {},
+): FileFlow {
   const coupling = opts.coupling;
-  const facts = factsForFile(file, nodes, edges, coupling ? { sources: true, state: coupling.state } : {});
+  // The focus needs the state index too: state rows are built only when factsForFile has one. The coupling index carries it.
+  const focused = opts.focus === "intermodule";
+  const focus = focused
+    ? { focus: "intermodule" as const, callees: opts.callees ?? (coupling !== undefined ? calleeMapOf(coupling) : new Map<string, FocusCallee>()), state: opts.state ?? coupling?.state }
+    : {};
+  const facts = factsForFile(file, nodes, edges, { ...(coupling ? { sources: true, state: coupling.state } : {}), ...focus });
   return {
     file,
     functions: facts.map((f) => {
       const flow = layoutFunction(f);
       if (coupling === undefined || flow.tooLarge) return flow;
+      // Under the focus the focused chart replaces the coupling chart. Its rows.all is the focused count too: the unfocused
+      // chart is not built for a focus request, and no view reads rows.all.
+      if (focused) return { ...flow, coupling: { ...couplingInfoOf(f.id, coupling.modules, coupling.footprints), chart: flow, rows: { all: flow.nodes.length, coupling: flow.nodes.length } } };
       const pruned = couplingChart(f.id, f.items, coupling.modules, coupling.footprints, coupling.surface, new Set(coupling.unguarded.variables.keys()));
       const chart = layoutFunction({ id: f.id, name: f.name, async: f.async, ...(f.span ? { span: f.span } : {}), items: pruned.items });
       return { ...flow, coupling: { ...pruned.info, chart, rows: { all: flow.nodes.length, coupling: chart.nodes.length } } };

@@ -107,6 +107,18 @@ const deferred = <T,>() => {
 };
 
 describe("the map's callers wiring", () => {
+  it("a single click on a box only selects it; a double-click opens its chart, and a second one closes it", async () => {
+    await mount();
+    const nF = () => document.querySelector('[data-fid="nF"]')!;
+    fireEvent.click(nF());
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(chartBox("F")).toBeUndefined();
+    fireEvent.doubleClick(nF());
+    await waitFor(() => expect(chartBox("F")).toBeDefined());
+    fireEvent.doubleClick(nF());
+    await waitFor(() => expect(chartBox("F")).toBeUndefined());
+  });
+
   it("a card's chip opens its callers box, and pressing it again closes it", async () => {
     getRefs.mockResolvedValue({ calledBy: [refRow("P")] });
     await mount();
@@ -121,10 +133,10 @@ describe("the map's callers wiring", () => {
     getRefs.mockResolvedValue({ calledBy: [refRow("P")] });
     const build = vi.spyOn(source, "build");
     await mount();
-    // Click F: its chart opens and F is selected. Click again: the chart closes, F stays selected.
-    fireEvent.click(document.querySelector('[data-fid="nF"]')!);
+    // Double-click F: its chart opens beside it. Double-click again: the chart closes.
+    fireEvent.doubleClick(document.querySelector('[data-fid="nF"]')!);
     await waitFor(() => expect(chartBox("F")).toBeDefined());
-    fireEvent.click(document.querySelector('[data-fid="nF"]')!);
+    fireEvent.doubleClick(document.querySelector('[data-fid="nF"]')!);
     await waitFor(() => expect(chartBox("F")).toBeUndefined());
     fireEvent.click(chip("F")!);
     await waitFor(() => expect(callersBox("F")).not.toBeNull());
@@ -225,7 +237,7 @@ describe("the map's callers wiring", () => {
     const slowA = deferred<FunctionFlow>();
     chartOf.mockImplementation(async (id: string) => (id === "F" ? flow("F", ["A", "B"]) : id === "A" ? slowA.promise : flat(id)));
     await mount();
-    fireEvent.click(document.querySelector('[data-fid="nF"]')!);
+    fireEvent.doubleClick(document.querySelector('[data-fid="nF"]')!);
     await waitFor(() => expect(screen.queryByRole("button", { name: "Open b()" })).not.toBeNull());
     fireEvent.click(screen.getByRole("button", { name: "Open a()" }));
     fireEvent.click(screen.getByRole("button", { name: "Open b()" }));
@@ -241,7 +253,7 @@ describe("the map's callers wiring", () => {
     const slowX = deferred<FunctionFlow>();
     chartOf.mockImplementation(async (id: string) => (id === "X" ? slowX.promise : flow(id)));
     await mount();
-    fireEvent.click(document.querySelector('[data-fid="nF"]')!);
+    fireEvent.doubleClick(document.querySelector('[data-fid="nF"]')!);
     await waitFor(() => expect(chartBox("F")).toBeDefined());
     fireEvent.click(screen.getByRole("button", { name: "Open x()" }));
     const header = chartBox("F")!.querySelector(".zm-callers-btn")!;
@@ -258,7 +270,7 @@ describe("the map's callers wiring", () => {
     const slowX = deferred<FunctionFlow>();
     chartOf.mockImplementation(async (id: string) => (id === "X" ? slowX.promise : flow(id)));
     await mount();
-    fireEvent.click(document.querySelector('[data-fid="nF"]')!);
+    fireEvent.doubleClick(document.querySelector('[data-fid="nF"]')!);
     await waitFor(() => expect(chartBox("F")).toBeDefined());
     const header = () => chartBox("F")!.querySelector(".zm-callers-btn")!;
     fireEvent.click(header());
@@ -304,7 +316,7 @@ function foldedChart(id: string, post: boolean): FunctionFlow {
 describe("unfolding a coupling fold", () => {
   async function openFold() {
     await mount();
-    fireEvent.click(document.querySelector('[data-fid="nF"]')!);
+    fireEvent.doubleClick(document.querySelector('[data-fid="nF"]')!);
     await waitFor(() => expect(document.querySelector('[data-fold="F1"]')).not.toBeNull());
     // A fold opens from a double click or Enter (a single click selects it).
     fireEvent.keyDown(document.querySelector('[data-fold="F1"]')!, { key: "Enter" });
@@ -329,7 +341,7 @@ describe("unfolding a coupling fold", () => {
     chartOf.mockImplementation(async () => withSync());
     render(<ZoomMap id="p" source={annotated} scope="" charts={charts()} flat hint={false} />);
     await waitFor(() => expect(document.querySelector('[data-fid="nF"]')).not.toBeNull());
-    fireEvent.click(document.querySelector('[data-fid="nF"]')!);
+    fireEvent.doubleClick(document.querySelector('[data-fid="nF"]')!);
     await waitFor(() => expect(document.querySelector('[data-fold="F1"]')).not.toBeNull());
     fireEvent.keyDown(document.querySelector('[data-fold="F1"]')!, { key: "Enter" });
     await waitFor(() => expect(document.querySelector('[data-fold="F1"].flow-fold-open')).not.toBeNull());
@@ -341,7 +353,7 @@ describe("unfolding a coupling fold", () => {
     chartOf.mockImplementation(async () => foldedChart("F", false));
     render(<ZoomMap id="p" source={throwing} scope="" charts={charts()} flat hint={false} />);
     await waitFor(() => expect(document.querySelector('[data-fid="nF"]')).not.toBeNull());
-    fireEvent.click(document.querySelector('[data-fid="nF"]')!);
+    fireEvent.doubleClick(document.querySelector('[data-fid="nF"]')!);
     await waitFor(() => expect(document.querySelector('[data-fold="F1"]')).not.toBeNull());
   });
 
@@ -350,7 +362,7 @@ describe("unfolding a coupling fold", () => {
     chartOf.mockImplementation(async () => foldedChart("F", false));
     render(<ZoomMap id="p" source={throwing} scope="" charts={charts()} flat hint={false} />);
     await waitFor(() => expect(document.querySelector('[data-fid="nF"]')).not.toBeNull());
-    fireEvent.click(document.querySelector('[data-fid="nF"]')!);
+    fireEvent.doubleClick(document.querySelector('[data-fid="nF"]')!);
     await waitFor(() => expect(document.querySelector('[data-fold="F1"]')).not.toBeNull());
     fireEvent.keyDown(document.querySelector('[data-fold="F1"]')!, { key: "Enter" });
     await waitFor(() => expect(document.querySelector('[data-fold="F1"].flow-fold-open')).not.toBeNull());
