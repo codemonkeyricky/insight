@@ -1359,16 +1359,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
    * destructuring. `await`, parentheses, `as`, `!` and `satisfies` are transparent. A call anywhere else (an argument,
    * a member, a return) binds no local.
    */
-  const callBinds = (call: ts.CallExpression): string | string[] | undefined => {
-    const namesOf = (name: ts.BindingName): string[] => {
-      if (ts.isIdentifier(name)) return [name.text];
-      const out: string[] = [];
-      for (const el of name.elements) {
-        if (ts.isOmittedExpression(el)) continue;
-        out.push(...namesOf(el.name));
-      }
-      return out;
-    };
+  const callBindIdents = (call: ts.CallExpression): ts.Identifier[] | undefined => {
     let value: ts.Expression = call;
     let p: ts.Node | undefined = value.parent;
     while (
@@ -1379,11 +1370,24 @@ export function emitFile(project: Project, rel: string): IRBatch {
       value = p as ts.Expression;
       p = p.parent;
     }
-    let names: string[] | undefined;
-    if (ts.isVariableDeclaration(p) && p.initializer === value) names = namesOf(p.name);
-    else if (ts.isBinaryExpression(p) && p.operatorToken.kind === ts.SyntaxKind.EqualsToken && p.right === value && ts.isIdentifier(p.left)) names = [p.left.text];
-    if (names === undefined || names.length === 0) return undefined;
-    return names.length === 1 ? names[0] : names;
+    let ids: ts.Identifier[] | undefined;
+    if (ts.isVariableDeclaration(p) && p.initializer === value) ids = bindingIdents(p.name);
+    else if (ts.isBinaryExpression(p) && p.operatorToken.kind === ts.SyntaxKind.EqualsToken && p.right === value && ts.isIdentifier(p.left)) ids = [p.left];
+    if (ids === undefined || ids.length === 0) return undefined;
+    return ids;
+  };
+
+  /** The `binds` attribute of a call: one name as a string, several (a destructuring) as an array. */
+  const callBinds = (call: ts.CallExpression): string | string[] | undefined => {
+    const ids = callBindIdents(call);
+    if (ids === undefined) return undefined;
+    return ids.length === 1 ? ids[0]!.text : ids.map((i) => i.text);
+  };
+
+  /** The identifiers a binding pattern declares, in source order: `a` for `a`, `a` and `b` for `{ a, b }`. */
+  const bindingIdents = (name: ts.BindingName): ts.Identifier[] => {
+    if (ts.isIdentifier(name)) return [name];
+    return name.elements.flatMap((el) => (ts.isOmittedExpression(el) ? [] : bindingIdents(el.name)));
   };
 
   /**
@@ -1391,7 +1395,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
    * a module-level variable (a `data.variable`), an imported binding or a global is not one. Member names, declaration
    * names and called function names are not reads.
    */
-  const localReads = (expr: ts.Node): string[] => {
+  const localReads = (expr: ts.Node, skipFunctions = false): string[] => {
     const out = new Set<string>();
     const isLocalDecl = (d: ts.Declaration): boolean => {
       for (let p: ts.Node | undefined = d.parent; p !== undefined; p = p.parent) {
@@ -1421,6 +1425,8 @@ export function emitFile(project: Project, rel: string): IRBatch {
       (ts.isCallExpression(p) && p.expression === n) ||
       (ts.isNewExpression(p) && p.expression === n);
     const visitName = (n: ts.Node): void => {
+      // A function written inside the expression is its own function, with its own locals: its reads are not this expression's.
+      if (skipFunctions && ts.isFunctionLike(n)) return;
       if (ts.isIdentifier(n)) {
         if (isName(n, n.parent)) return;
         const decls = project.checker.getSymbolAtLocation(n)?.declarations;
@@ -1437,6 +1443,105 @@ export function emitFile(project: Project, rel: string): IRBatch {
   const readsAttr = (expr: ts.Node | undefined): { reads?: string[] } => {
     const reads = expr === undefined ? [] : localReads(expr);
     return reads.length > 0 ? { reads } : {};
+  };
+
+  /**
+   * The `reads` attribute of a call: the locals its receiver and its arguments read, in first-seen order. A function written as
+   * an argument (an arrow or a function expression) is its own function and is not descended into. The callee's name is not a read.
+   */
+  const callReadsAttr = (call: ts.CallExpression): { reads?: string[] } => {
+    const callee = call.expression;
+    const parts: ts.Node[] = [];
+    if (ts.isPropertyAccessExpression(callee)) parts.push(callee.expression);
+    else if (ts.isElementAccessExpression(callee)) parts.push(callee);
+    parts.push(...call.arguments);
+    const reads = [...new Set(parts.flatMap((p) => localReads(p, true)))];
+    return reads.length > 0 ? { reads } : {};
+  };
+
+  /**
+   * The checker's type text of a bound local, for `calls.call` `bindsType`: one line, at most 60 characters (the last one an
+   * ellipsis). Undefined for an any, unknown or error type, which says nothing.
+   */
+  const boundTypeText = (id: ts.Identifier): string | undefined => {
+    const type = project.checker.getTypeAtLocation(id);
+    if ((type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) !== 0) return undefined;
+    const text = project.checker.typeToString(type).replace(/\s+/g, " ").trim();
+    if (text === "" || text === "any" || text === "unknown" || text === "error") return undefined;
+    return text.length > 60 ? `${text.slice(0, 59)}…` : text;
+  };
+
+  const ASSIGN_OPERATORS = new Set<ts.SyntaxKind>([
+    ts.SyntaxKind.EqualsToken, ts.SyntaxKind.PlusEqualsToken, ts.SyntaxKind.MinusEqualsToken, ts.SyntaxKind.AsteriskEqualsToken,
+    ts.SyntaxKind.AsteriskAsteriskEqualsToken, ts.SyntaxKind.SlashEqualsToken, ts.SyntaxKind.PercentEqualsToken,
+    ts.SyntaxKind.LessThanLessThanEqualsToken, ts.SyntaxKind.GreaterThanGreaterThanEqualsToken,
+    ts.SyntaxKind.GreaterThanGreaterThanGreaterThanEqualsToken, ts.SyntaxKind.AmpersandEqualsToken, ts.SyntaxKind.BarEqualsToken,
+    ts.SyntaxKind.CaretEqualsToken, ts.SyntaxKind.AmpersandAmpersandEqualsToken, ts.SyntaxKind.BarBarEqualsToken,
+    ts.SyntaxKind.QuestionQuestionEqualsToken,
+  ]);
+
+  /** The identifiers an assignment writes to: `a` for `a = …`, each element of an array or object pattern on the left. */
+  const assignTargets = (e: ts.Expression): ts.Identifier[] => {
+    if (ts.isIdentifier(e)) return [e];
+    if (ts.isParenthesizedExpression(e)) return assignTargets(e.expression);
+    if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.EqualsToken) return assignTargets(e.left);
+    if (ts.isArrayLiteralExpression(e)) return e.elements.flatMap((el) => assignTargets(el));
+    if (ts.isSpreadElement(e)) return assignTargets(e.expression);
+    if (ts.isObjectLiteralExpression(e)) {
+      return e.properties.flatMap((p) => {
+        if (ts.isShorthandPropertyAssignment(p)) return [p.name];
+        if (ts.isPropertyAssignment(p)) return assignTargets(p.initializer);
+        if (ts.isSpreadAssignment(p)) return assignTargets(p.expression);
+        return [];
+      });
+    }
+    return [];
+  };
+
+  /**
+   * The `derives` attribute of a function: each local variable its body declares, mapped to the distinct locals its initializer and
+   * every assignment to it (`=` or compound) in this function read. A destructuring target gets the whole right side's reads.
+   * Parameters have no entry, and nested functions and classes are not descended into. Omitted when no local reads a local.
+   */
+  const derivesAttr = (fnNode: ts.Node): { derives?: Record<string, string[]> } => {
+    if (!ts.isFunctionLike(fnNode)) return {};
+    const body = (fnNode as { body?: ts.Node }).body;
+    if (body === undefined) return {};
+    const entries = new Map<ts.Symbol, { name: string; reads: Set<string> }>();
+    const assigns: Array<{ targets: ts.Identifier[]; value: ts.Expression }> = [];
+    const walk = (n: ts.Node): void => {
+      if (ts.isFunctionLike(n) || ts.isClassLike(n)) return;
+      if (ts.isVariableDeclaration(n)) {
+        for (const id of bindingIdents(n.name)) {
+          const sym = project.checker.getSymbolAtLocation(id);
+          if (sym === undefined) continue;
+          let e = entries.get(sym);
+          if (e === undefined) {
+            e = { name: id.text, reads: new Set() };
+            entries.set(sym, e);
+          }
+          if (n.initializer !== undefined) for (const r of localReads(n.initializer, true)) e.reads.add(r);
+        }
+      } else if (ts.isBinaryExpression(n) && ASSIGN_OPERATORS.has(n.operatorToken.kind)) {
+        assigns.push({ targets: assignTargets(n.left), value: n.right });
+      }
+      ts.forEachChild(n, walk);
+    };
+    walk(body);
+    for (const a of assigns) {
+      const reads = localReads(a.value, true);
+      for (const id of a.targets) {
+        const sym = project.checker.getSymbolAtLocation(id);
+        const e = sym === undefined ? undefined : entries.get(sym);
+        if (e !== undefined) for (const r of reads) e.reads.add(r);
+      }
+    }
+    const derives: Record<string, string[]> = {};
+    for (const e of entries.values()) {
+      if (e.reads.size === 0) continue;
+      derives[e.name] = [...new Set([...(derives[e.name] ?? []), ...e.reads])];
+    }
+    return Object.keys(derives).length > 0 ? { derives } : {};
   };
 
   const visit = (node: ts.Node, container: string, fn: string): void => {
@@ -1475,6 +1580,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
             ...(decl.entity.nodeEntry ? { nodeEntry: true } : {}),
             ...(decl.entity.packageEntry ? { packageEntry: true } : {}),
             ...(decl.entity.programEntry !== undefined ? { programEntry: decl.entity.programEntry } : {}),
+            ...derivesAttr(node),
           },
           span,
           provenance: PROV,
@@ -1656,6 +1762,10 @@ export function emitFile(project: Project, rel: string): IRBatch {
       const callee = call.expression;
       // The local the call's result goes into, if any: `cfg ← loadConfig()`.
       const binds = callBinds(call);
+      // The call's data facts: the locals its receiver and arguments read, and the type of the one local its result is bound to.
+      const bindIds = callBindIdents(call);
+      const bindsType = bindIds?.length === 1 ? boundTypeText(bindIds[0]!) : undefined;
+      const dataAttrs = { ...callReadsAttr(call), ...(bindsType !== undefined ? { bindsType } : {}) };
       const sym = project.checker.getSymbolAtLocation(nameOf(callee));
       const target = declOf(project, sym);
       // A call through a fixed registry runs whichever of its functions the key picks, so every one is a candidate. The registry
@@ -1672,7 +1782,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
           to: callTarget.id,
           facet: "calls",
           kind: "calls.call",
-          attrs: { callee: callee.getText(sf).slice(0, 200), callEnd: pos(sf, call.getEnd()), ...(binds !== undefined ? { binds } : {}) },
+          attrs: { callee: callee.getText(sf).slice(0, 200), callEnd: pos(sf, call.getEnd()), ...(binds !== undefined ? { binds } : {}), ...dataAttrs },
           span: spanOf(rel, sf, callee),
           provenance: PROV,
         };
@@ -1688,7 +1798,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
           to: { candidates: [first, ...rest] },
           facet: "calls",
           kind: "calls.call",
-          attrs: { callee: callee.getText(sf).slice(0, 200), how: "registry", callEnd: pos(sf, call.getEnd()), ...(binds !== undefined ? { binds } : {}), ...(truncated ? { truncated: true } : {}) },
+          attrs: { callee: callee.getText(sf).slice(0, 200), how: "registry", callEnd: pos(sf, call.getEnd()), ...(binds !== undefined ? { binds } : {}), ...dataAttrs, ...(truncated ? { truncated: true } : {}) },
           span: spanOf(rel, sf, callee),
           provenance: { frontend: FRONTEND_ID, confidence: "heuristic" },
         });
@@ -1705,7 +1815,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
             to: { candidates: [first, ...rest] },
             facet: "calls",
             kind: "calls.call",
-            attrs: { callee: callee.getText(sf).slice(0, 200), how: "interface", callEnd: pos(sf, call.getEnd()), ...(binds !== undefined ? { binds } : {}), ...(truncated ? { truncated: true } : {}) },
+            attrs: { callee: callee.getText(sf).slice(0, 200), how: "interface", callEnd: pos(sf, call.getEnd()), ...(binds !== undefined ? { binds } : {}), ...dataAttrs, ...(truncated ? { truncated: true } : {}) },
             span: spanOf(rel, sf, callee),
             provenance: { frontend: FRONTEND_ID, confidence: "heuristic" },
           });
