@@ -47,3 +47,31 @@ export function classifyHost(host: string, path = ""): { id: string; label: stri
   }
   return { id: `host:${bare}`, label: bare, category: "service", host: bare };
 }
+
+/** A store a database driver opens: its external id in the System model and its label. */
+export interface StoreDriver {
+  id: string;
+  label: string;
+}
+
+const STORE_DRIVER_LIST: ReadonlyArray<{ specifiers: readonly string[]; store: StoreDriver }> = [
+  { specifiers: ["better-sqlite3", "sqlite3", "node:sqlite"], store: { id: "store:sqlite", label: "SQLite" } },
+  { specifiers: ["pg"], store: { id: "store:postgresql", label: "PostgreSQL" } },
+  { specifiers: ["mysql2"], store: { id: "store:mysql", label: "MySQL" } },
+  { specifiers: ["mongodb"], store: { id: "store:mongodb", label: "MongoDB" } },
+  { specifiers: ["redis", "ioredis"], store: { id: "store:redis", label: "Redis" } },
+  { specifiers: ["@vercel/kv"], store: { id: "store:vercel-kv", label: "Vercel KV" } },
+  { specifiers: ["@vercel/blob"], store: { id: "store:vercel-blob", label: "Vercel Blob" } },
+  { specifiers: ["@aws-sdk/client-s3"], store: { id: "store:s3", label: "S3" } },
+];
+
+/** The import specifiers that open a store, by the package they import. A subpath of one (`pg/lib/x`) counts too. */
+export const STORE_DRIVERS: ReadonlyMap<string, StoreDriver> = new Map(STORE_DRIVER_LIST.flatMap((d) => d.specifiers.map((s) => [s, d.store] as const)));
+
+/** The store an import specifier opens, or undefined when it is not a database driver. */
+export function storeDriverOf(specifier: string): StoreDriver | undefined {
+  const exact = STORE_DRIVERS.get(specifier);
+  if (exact !== undefined) return exact;
+  const slash = specifier.indexOf("/", specifier.startsWith("@") ? specifier.indexOf("/") + 1 : 0);
+  return slash === -1 ? undefined : STORE_DRIVERS.get(specifier.slice(0, slash));
+}

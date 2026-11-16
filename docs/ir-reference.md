@@ -113,9 +113,10 @@ Base kinds shipped by the core:
 | `data.write` | data | edge | – | A function (or the file, for module-level code) writes a `data.variable`. `attrs.how` is `assign` (`=`), `update` (`++`, `--`, `+=` and the other compound assignments), `mutate` (a mutating method such as `set` or `push`, or a property or element assignment through the variable; heuristic provenance) or `address`. |
 | `effects.fs.read` | effects | node | – | Optional `attrs.syscall`, see below. |
 | `effects.fs.write` | effects | node | – | Optional `attrs.syscall`, see below. |
-| `effects.net.connect` | effects | node | – | Optional `attrs.syscall`, see below. |
+| `effects.net.connect` | effects | node | – | Optional `attrs.protocol`, `sse` or `websocket`, for a long-lived connection (unset for plain request/response), and optional `attrs.syscall`, see below. |
 | `effects.net.listen` | effects | node | – | Optional `attrs.syscall`, see below. |
-| `effects.net.serve` | effects | node | – | An HTTP route a file serves: registered on a server object, or exported under an HTTP verb name. Required `attrs.framework`, `attrs.method` and `attrs.path`. Optional `attrs.handler` and `attrs.syscall`. |
+| `effects.net.serve` | effects | node | – | An HTTP route a file serves: registered on a server object, or exported under an HTTP verb name. Required `attrs.framework`, `attrs.method` and `attrs.path`. Optional `attrs.handler`, `attrs.platform` (hosting platform, e.g. `cloudflare`), `attrs.name` (the deployable that serves the route) and `attrs.syscall`. |
+| `effects.store.access` | effects | node | – | A read, write, list or delete on a storage service. Required `attrs.api`, `attrs.store` (e.g. `cloudflare-kv`, `cloudflare-r2`, `cloudflare-d1`) and `attrs.op`, one of `read`, `write`, `list` or `delete`. Optional `attrs.binding` (the platform binding name, e.g. `INDEX`), `attrs.name` and `attrs.syscall`. |
 | `effects.proc.exec` | effects | node | – | Optional `attrs.syscall`, see below. |
 | `effects.env.read` | effects | node | – | Optional `attrs.syscall`, see below. |
 | `effects.clock.read` | effects | node | – | Optional `attrs.syscall`, see below. |

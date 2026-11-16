@@ -7,26 +7,127 @@ import type { SysBox } from "../src/arch/system-layout";
 import type { SystemModel, SystemSlice } from "@insight/model";
 import { SLICE_LIMIT } from "../src/arch/system-frames";
 import { PA, TW, CO, A, B, C, runtimes, model, slice } from "./systemFixtures";
+import { tierEdges, tierFixture } from "./tierFixtures";
+import { SYSTEM_MODE_KEY } from "../src/arch/system-mode";
 
-const { getSystem } = vi.hoisted(() => ({ getSystem: vi.fn() }));
-vi.mock("../src/api", () => ({ api: { getSystem } }));
+const { getSystem, getTiers } = vi.hoisted(() => ({ getSystem: vi.fn(), getTiers: vi.fn() }));
+vi.mock("../src/api", () => ({ api: { getSystem, getTiers } }));
+
+/** A Tiers model with too few units: the view falls back to Runtime. */
+const noUnits = { ...tierFixture({ nodes: [], edges: [] }), reason: "not enough deployable units at this scope (0 found, need 2)" };
 
 afterEach(() => {
   cleanup();
   getSystem.mockReset();
+  getTiers.mockReset();
+  try {
+    window.localStorage.removeItem(SYSTEM_MODE_KEY);
+  } catch {
+    // Storage blocked: nothing to clear.
+  }
 });
 
-describe("Computing runtime", () => {
+describe("Computing line", () => {
   it("paints the message before the model is computed and the diagram appears", async () => {
     getSystem.mockResolvedValue(model());
+    getTiers.mockResolvedValue(noUnits);
     render(<SystemView id="p" scope="" />);
     // The first render shows only the message; the model is requested on a later task.
-    expect(screen.getByRole("status").textContent).toBe("Computing runtime…");
+    expect(screen.getByRole("status").textContent).toBe("Computing tiers…");
     expect(document.querySelector(".sysv-svg")).toBeNull();
     expect(getSystem).not.toHaveBeenCalled();
     await waitFor(() => expect(document.querySelector(".sysv-svg")).not.toBeNull());
     expect(getSystem).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("status")).toBeNull();
+  });
+});
+
+describe("System tab modes", () => {
+  it("draws Tiers by default: Frontend and Backend columns, no runtime load", async () => {
+    getTiers.mockResolvedValue(tierFixture());
+    render(<SystemView id="p" scope="" />);
+    await waitFor(() => expect(document.querySelector(".sysv-svg")).not.toBeNull());
+    expect(getTiers).toHaveBeenCalledWith("p", "", false);
+    expect(getSystem).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Tiers" }).getAttribute("aria-pressed")).toBe("true");
+    const titles = [...document.querySelectorAll(".sysv-col")].map((t) => t.textContent);
+    expect(titles).toEqual(["Frontend", "Backend", "Storage", "External"]);
+    expect(document.querySelector('[data-node="apps/web"]')).not.toBeNull();
+  });
+
+  it("switching to Runtime loads the traced view and remembers the choice", async () => {
+    const user = userEvent.setup();
+    getTiers.mockResolvedValue(tierFixture());
+    getSystem.mockResolvedValue(model());
+    render(<SystemView id="p" scope="" />);
+    await waitFor(() => expect(document.querySelector(".sysv-svg")).not.toBeNull());
+    await user.click(screen.getByRole("button", { name: "Runtime" }));
+    await waitFor(() => expect(getSystem).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("button", { name: "Runtime" }).getAttribute("aria-pressed")).toBe("true");
+    await waitFor(() => expect(document.querySelector('[data-frame="program:svc"]')).not.toBeNull());
+    expect(window.localStorage.getItem(SYSTEM_MODE_KEY)).toBe("runtime");
+  });
+
+  it("a saved Runtime choice opens the runtime view without asking for tiers", async () => {
+    window.localStorage.setItem(SYSTEM_MODE_KEY, "runtime");
+    getSystem.mockResolvedValue(model());
+    render(<SystemView id="p" scope="" />);
+    await waitFor(() => expect(getSystem).toHaveBeenCalledTimes(1));
+    expect(getTiers).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Runtime" }).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("a Tiers model with a reason shows the note and draws the Runtime view", async () => {
+    getTiers.mockResolvedValue(noUnits);
+    getSystem.mockResolvedValue(model());
+    render(<SystemView id="p" scope="" />);
+    await waitFor(() => expect(document.querySelector('[data-frame="program:svc"]')).not.toBeNull());
+    expect(getSystem).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/Tiers unavailable here/).textContent).toContain("not enough deployable units");
+    expect(document.querySelector(".sysv-col")?.textContent).not.toBe("Frontend");
+  });
+});
+
+/** Opens the evidence panel of the edge whose label contains `text`, by its hit path. */
+function pickEdgeLabelled(text: string) {
+  const g = document.querySelector<SVGGElement>(`g[data-edge][aria-label*="${text}"]`);
+  expect(g).not.toBeNull();
+  fireEvent.click(g!.querySelector(".sysv-hit")!);
+}
+
+describe("edge evidence table", () => {
+  it("shows the Syscall and Level columns for a Runtime edge", async () => {
+    window.localStorage.setItem(SYSTEM_MODE_KEY, "runtime");
+    getSystem.mockResolvedValue(model());
+    render(<SystemView id="p" scope="" />);
+    await waitFor(() => expect(document.querySelector('g[data-edge][aria-label*="openat"]')).not.toBeNull());
+    pickEdgeLabelled("openat");
+    expect([...document.querySelectorAll(".sysv-evidence th")].map((th) => th.textContent)).toEqual(["API", "Syscall", "Level", "Count"]);
+  });
+
+  it("hides the Syscall and Level columns for a Tiers edge", async () => {
+    getTiers.mockResolvedValue(tierFixture({ edges: [{ ...tierEdges[0], apis: [{ api: "fetch", count: 1 }] }, ...tierEdges.slice(1)] }));
+    render(<SystemView id="p" scope="" />);
+    await waitFor(() => expect(document.querySelector('g[data-edge][aria-label*="GET /api/items"]')).not.toBeNull());
+    pickEdgeLabelled("GET /api/items");
+    expect([...document.querySelectorAll(".sysv-evidence th")].map((th) => th.textContent)).toEqual(["API", "Count"]);
+  });
+});
+
+describe("mode switch after a failed load", () => {
+  it("clears the old error, and shows the loading line until the new load resolves", async () => {
+    const user = userEvent.setup();
+    getTiers.mockResolvedValueOnce(tierFixture());
+    getSystem.mockRejectedValue(new Error("runtime down"));
+    render(<SystemView id="p" scope="" />);
+    await waitFor(() => expect(document.querySelector(".sysv-svg")).not.toBeNull());
+    await user.click(screen.getByRole("button", { name: "Runtime" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("runtime down"));
+    // The Tiers load never settles here: the error from Runtime must not stay on screen.
+    getTiers.mockReturnValue(new Promise(() => {}));
+    await user.click(screen.getByRole("button", { name: "Tiers" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe("Computing tiers…");
   });
 });
 

@@ -6,9 +6,11 @@ export const ARCH_MODE_KEY = "insight-arch-mode";
 export const ARCH_MODES: readonly ArchMode[] = ["pipeline", "packages"];
 export const ARCH_MODE_LABELS: Record<ArchMode, string> = { pipeline: "Pipeline", packages: "Packages" };
 
-type Store = Pick<Storage, "getItem" | "setItem">;
+/** The part of localStorage the mode helpers use. Shared with system-mode.ts, which keeps its own key. */
+export type Store = Pick<Storage, "getItem" | "setItem">;
 
-const defaultStore = (): Store | undefined => {
+/** localStorage, or undefined when the browser blocks it (reading the global itself can throw). */
+export const defaultStore = (): Store | undefined => {
   try {
     return globalThis.localStorage;
   } catch {

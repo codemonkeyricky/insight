@@ -28,9 +28,9 @@ import type {
   SourceSlice,
   TargetType,
 } from "./api";
-import type { CallerOptions, PipelineModel, SerializedModel, SystemModel } from "@insight/model";
+import type { CallerOptions, PipelineModel, SerializedModel, SystemModel, TierModel } from "@insight/model";
 import { buildFileFlow, couplingIndex, type CouplingIndex } from "@insight/flow";
-import { callerGraphFor, pipelineFor, refsFor, scopeCallersFor, scopeExecFor, scopeFlowFor, systemFor, type CallerGraphPayload, type ScopeRefsPayload } from "./model/payloads";
+import { callerGraphFor, pipelineFor, refsFor, scopeCallersFor, scopeExecFor, scopeFlowFor, systemFor, tiersFor, type CallerGraphPayload, type ScopeRefsPayload } from "./model/payloads";
 import { models } from "./model/store";
 import { canonicalScope, scopeKey, scopeProblem } from "./scopeKey";
 
@@ -395,6 +395,14 @@ export function makeStaticApi(baseFor: (projectId: string) => string | Promise<s
       if (problem) throw new ApiError(400, problem);
       const { model } = await modelOf(id);
       return pipelineFor(model, scope, opts.tests === true);
+    },
+    /** The Tiers view of a scope, computed from the project's model (like getSystem). */
+    getTiers: async (id: string, scope: string, tests = false): Promise<TierModel> => {
+      await checkProject(id);
+      const problem = scopeProblem(scope);
+      if (problem) throw new ApiError(400, problem);
+      const { model } = await modelOf(id);
+      return tiersFor(model, scope, tests);
     },
     /**
      * The architecture model as the export saved it. The model covers the whole project, so the export writes it

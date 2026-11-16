@@ -6,7 +6,7 @@ import { isNoisePath } from "@insight/flow";
 import { edgeTargets } from "@insight/sdk";
 import type { ProjectModel } from "./model.js";
 import { inScope, normalizeScope, ROOT_SCOPE } from "./scope.js";
-import { classifyHost } from "./services.js";
+import { classifyHost, storeDriverOf } from "./services.js";
 import { scopeView } from "./view.js";
 import { buildRuntimePlan, type SystemEvidence, type SystemResource, type SystemRuntime, type SystemRuntimeMode, type SystemSlice } from "./system-runtime.js";
 
@@ -41,8 +41,9 @@ export interface SystemComponent {
   label: string;
   path: string;
   kind: "package" | "folder" | "file";
-  files: number;
-  functions: number;
+  /** Absent for a unit whose counts the model does not hold (the Tiers view's deployable units carry them when known). */
+  files?: number;
+  functions?: number;
   entry: boolean;
 }
 export interface SystemRoute {
@@ -82,6 +83,13 @@ const SITE_CAP = 20;
 
 /** Directories whose package.json files describe fixtures, not packages of the project (same rule as the Arch tab). */
 const NOT_A_PACKAGE = /(^|\/)(node_modules|test|tests|fixtures|__fixtures__|samples)(\/|$)/;
+
+/**
+ * Folders that are not deployable units of the project either: builds, examples, tool state, and the test and fixture folders
+ * of NOT_A_PACKAGE. Used by deployRoots only. The same folder names as NOISE_PAGE_DIR in packages/frontend/typescript/src/index.ts
+ * (the frontend cannot import this package), so keep the two equal.
+ */
+const NOISE_DIR = /(^|\/)(node_modules|dist|build|test|tests|__tests__|fixtures|__fixtures__|samples|examples|\.claude)(\/|$)/;
 
 const EMPTY_LABEL = "(scope)";
 
@@ -165,7 +173,7 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
 
   const inside = (file: string | undefined): file is string => file !== undefined && inScope(file, scope) && fileSet.has(file);
   const fileSet = new Set(files);
-  const packages = packageRoots(model.files, nodePackageRoots(model));
+  const packages = packageRoots(model.files, [...nodePackageRoots(model), ...deployRoots(model.files)]);
 
   // Ownership: a file belongs to the outermost package strictly under the scope, else to its child folder or file.
   const compOf = new Map<string, Comp>();
@@ -357,6 +365,24 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
       for (const s of sourcesOf(owner, file, comp)) addFact(s.from, id, "listens", "listen", site, exact, { fact: node.id });
       continue;
     }
+    if (node.kind === "effects.store.access") {
+      // A binding or SDK call into a store (a Worker's KV or D1 binding, a bucket). The Cloudflare KV and R2 ids are the ones
+      // classifyHost gives their REST calls, so a binding and a REST call reach one external.
+      const store = typeof attrs.store === "string" ? attrs.store : "other";
+      const ext = storeAccessExternal(store);
+      const id = ensureExternal(ext);
+      const verb: SystemEdge["verb"] = attrs.op === "write" || attrs.op === "delete" ? "writes" : "reads";
+      const api = typeof attrs.api === "string" ? attrs.api : "store";
+      // The binding name is kept on the store external, as an env var name is kept on the environment.
+      const binding = typeof attrs.binding === "string" ? attrs.binding : undefined;
+      if (binding !== undefined && binding !== "") {
+        const target = externals.get(id) as SystemExternal;
+        if (!target.names?.includes(binding)) target.names = [...(target.names ?? []), binding].sort();
+      }
+      const ev = evidenceOf(attrs, false);
+      for (const s of sourcesOf(owner, file, comp)) addFact(s.from, id, verb, api, site, exact, ev ? { ev, fact: node.id } : { fact: node.id });
+      continue;
+    }
     if (node.kind === "effects.os.call") {
       const op = typeof attrs.op === "string" ? attrs.op : "info";
       const target = typeof attrs.target === "string" ? attrs.target : undefined;
@@ -448,7 +474,9 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
     if (relative && path !== "") {
       const hit = matchRoute(path, method, routes);
       if (hit !== undefined) {
-        if (hit.component !== comp) for (const s of sources) addFact(s.from, targetOf(s.rt, hit.component), "requests", `${hit.method} ${hit.path}`, site, exact);
+        // A match that needed a glued :param stripped (review:param → review) is a guess about the request's literal, so inferred.
+        const hitExact = exact && !hit.stripped;
+        if (hit.route.component !== comp) for (const s of sources) addFact(s.from, targetOf(s.rt, hit.route.component), "requests", `${hit.route.method} ${hit.route.path}`, site, hitExact);
         continue;
       }
       const label = `${method ?? "*"} ${path}`;
@@ -678,6 +706,22 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
   }
   for (const [key, ib] of importEdges) buckets.set(key, ib);
 
+  // Database drivers: a runtime import (not `import type`) of a driver package opens its store. The import is unresolved,
+  // since a package is not a project file; the edge runs from the importing component.
+  for (const e of model.doc.edges) {
+    if (e.kind !== "packaging.import" || (e.attrs as { typeOnly?: unknown } | undefined)?.typeOnly === true) continue;
+    const fromFile = model.fileOf(e.from);
+    if (!inside(fromFile)) continue;
+    const text = edgeTargets(e).unresolved?.text;
+    const driver = text === undefined ? undefined : storeDriverOf(text);
+    if (text === undefined || driver === undefined) continue;
+    const ext = ensureExternal({ id: driver.id, label: driver.label, category: "store" });
+    const exact = e.provenance.confidence === "exact";
+    const site = siteOf(fromFile, e.span, undefined);
+    const comp = compOf.get(fromFile)?.id as string;
+    for (const s of sourcesOf(undefined, fromFile, comp)) addFact(s.from, ext, "opens", text, site, exact);
+  }
+
   const routeList = routes;
 
   const edges: SystemEdge[] = [];
@@ -880,6 +924,25 @@ export function packageRoots(files: string[], extra: string[] = []): string[] {
   return [...roots].sort();
 }
 
+/** The files that mark a folder as a deployable unit (a Cloudflare Worker or a Vercel project), even with no package.json. */
+const DEPLOY_FILES = new Set(["wrangler.toml", "wrangler.json", "wrangler.jsonc", "vercel.json"]);
+
+/**
+ * The folders that hold a deploy config (wrangler or vercel), outside fixture folders. A Worker folder with a wrangler.toml
+ * and no package.json is a component of its own. The project root is not one here.
+ */
+export function deployRoots(files: string[]): string[] {
+  const roots = new Set<string>();
+  for (const file of files) {
+    const slash = file.lastIndexOf("/");
+    if (slash === -1 || !DEPLOY_FILES.has(file.slice(slash + 1))) continue;
+    const dir = file.slice(0, slash);
+    if (NOISE_DIR.test(dir)) continue;
+    roots.add(dir);
+  }
+  return [...roots].sort();
+}
+
 const nodeRootCache = new WeakMap<ProjectModel, string[]>();
 
 /** The package roots of structure.package nodes (a build system's packages, such as Bazel's), from each node's `root` attribute. The root package "." is not one here. */
@@ -897,6 +960,19 @@ export function nodePackageRoots(model: ProjectModel): string[] {
   return list;
 }
 
+/**
+ * The external a store access (`effects.store.access`) stands for. Cloudflare KV and R2 take the ids classifyHost gives
+ * their REST calls, so a Worker binding and a REST call to the same service share one external.
+ */
+function storeAccessExternal(store: string): SystemExternal {
+  if (store === "cloudflare-kv" || store === "cloudflare-r2") {
+    const svc = classifyHost("api.cloudflare.com", store === "cloudflare-kv" ? "/storage/kv/" : "/r2/");
+    return { id: svc.id, label: svc.label, category: "store" };
+  }
+  if (store === "cloudflare-d1") return { id: "store:cloudflare-d1", label: "Cloudflare D1", category: "store" };
+  return { id: `store:${store}`, label: store, category: "store" };
+}
+
 /** The verb of an HTTP method: reads for GET and HEAD, writes for the rest that change state, calls when unknown. */
 function methodVerb(method: string | undefined): SystemEdge["verb"] {
   if (method === "GET" || method === "HEAD") return "reads";
@@ -904,31 +980,79 @@ function methodVerb(method: string | undefined): SystemEdge["verb"] {
   return "calls";
 }
 
-/** The route a relative request is answered by: same method (any when the request omits it), segments matched with `:param` as a wildcard. */
-function matchRoute(path: string, method: string | undefined, routes: SystemRoute[]): SystemRoute | undefined {
-  let req = segments(path);
-  if (!path.startsWith("/") && req.length > 1) req = req.slice(1);
-  let best: { route: SystemRoute; literal: number } | undefined;
-  for (const route of routes) {
-    if (route.path === "" || (method !== undefined && method !== route.method)) continue;
-    const want = segments(route.path);
-    if (want.length !== req.length) continue;
-    let literal = 0;
-    let ok = true;
-    for (let i = 0; i < want.length; i++) {
-      const w = want[i] as string;
-      const r = req[i] as string;
-      if (w.startsWith(":") || r.startsWith(":")) continue;
-      if (w !== r) {
-        ok = false;
-        break;
-      }
-      literal++;
-    }
-    if (!ok) continue;
-    if (best === undefined || literal > best.literal || (literal === best.literal && cmp(route.id, best.route.id) < 0)) best = { route, literal };
+/**
+ * The route a relative request is answered by. Same method (any when the request omits it; a route method of `*` or `ALL`
+ * takes any). Segments match with `:param` as a wildcard, a trailing `*` takes the rest of the path (at least one segment,
+ * and the route needs a literal segment before it), and worker routes are on another origin, so they never answer a relative
+ * request. Ties, in order: more literal segments, then the exact method, then a `:param` route over a trailing-`*` one, then
+ * the lower id. `stripped` is set when the match needed a glued `:param` removed from the request's segment.
+ */
+function matchRoute(path: string, method: string | undefined, routes: SystemRoute[]): { route: SystemRoute; stripped: boolean } | undefined {
+  const raw = segments(path);
+  let req = raw.map(literalSegment);
+  let rawReq = raw;
+  if (!path.startsWith("/") && req.length > 1) {
+    req = req.slice(1);
+    rawReq = rawReq.slice(1);
   }
-  return best?.route;
+  let best: { route: SystemRoute; literal: number; exact: boolean; wildcard: boolean; stripped: boolean } | undefined;
+  for (const route of routes) {
+    if (route.path === "" || route.framework === "worker") continue;
+    const anyMethod = route.method === "*" || route.method === "ALL";
+    if (method !== undefined && !anyMethod && method !== route.method) continue;
+    const want = segments(route.path);
+    const match = matchSegments(want, req, rawReq);
+    if (match === undefined) continue;
+    const cand = {
+      route,
+      literal: match.literal,
+      exact: method !== undefined && route.method === method,
+      wildcard: want[want.length - 1] === "*",
+      stripped: match.stripped,
+    };
+    if (best === undefined || beats(cand, best)) best = cand;
+  }
+  return best === undefined ? undefined : { route: best.route, stripped: best.stripped };
+}
+
+/** True when candidate a answers a request before b: more literal segments, the exact method, a `:param` route, then the lower id. */
+function beats(
+  a: { route: SystemRoute; literal: number; exact: boolean; wildcard: boolean },
+  b: { route: SystemRoute; literal: number; exact: boolean; wildcard: boolean },
+): boolean {
+  if (a.literal !== b.literal) return a.literal > b.literal;
+  if (a.exact !== b.exact) return a.exact;
+  if (a.wildcard !== b.wildcard) return !a.wildcard;
+  return cmp(a.route.id, b.route.id) < 0;
+}
+
+/**
+ * How many literal segments a route matches against the request's segments, and whether a glued `:param` was stripped to
+ * make a literal match, or undefined when it does not match. A trailing `*` takes at least one remaining request segment,
+ * and the route needs a literal segment.
+ */
+function matchSegments(want: string[], req: string[], rawReq: string[]): { literal: number; stripped: boolean } | undefined {
+  const trailing = want[want.length - 1] === "*";
+  const fixed = trailing ? want.slice(0, -1) : want;
+  if (trailing ? req.length <= fixed.length : req.length !== fixed.length) return undefined;
+  if (trailing && !fixed.some((w) => !w.startsWith(":"))) return undefined;
+  let literal = 0;
+  let stripped = false;
+  for (let i = 0; i < fixed.length; i++) {
+    const w = fixed[i] as string;
+    const r = req[i] as string;
+    if (w.startsWith(":") || r.startsWith(":")) continue;
+    if (w !== r) return undefined;
+    literal++;
+    if (rawReq[i] !== r) stripped = true;
+  }
+  return { literal, stripped };
+}
+
+/** A request segment with a `:param` glued to its end is its literal: a query string was appended (`review${q}` → `review:param`). */
+function literalSegment(seg: string): string {
+  const bare = seg.replace(/(:param)+$/, "");
+  return bare === "" ? seg : bare;
 }
 
 /** The path split into its segments, without the query string or trailing slashes. */

@@ -250,10 +250,24 @@ const SOLID_VERBS: ReadonlySet<SystemEdge["verb"]> = new Set(["produces", "feeds
 
 /** Options of the layout: the column titles (one per column, left to right) and a note drawn as a chip on a component's card. */
 export interface LayoutOptions {
-  /** Without titles the first column is "Entry" and the rest have none. */
+  /** Without titles the first column is "Entry" and the rest have none. Titles are per stage, so an empty stage keeps its place. */
   titles?: readonly string[];
   notes?: ReadonlyMap<string, string>;
+  /** The outside systems, one column per entry, left to right. An outside system goes in the first column that names its category, else the last. Absent: one "Outside" column. */
+  externalColumns?: { title: string; categories: string[] }[];
+  /** The line under a component's name, by component id. Absent: its file and function counts. */
+  subs?: ReadonlyMap<string, string>;
+  /** Keep a last column of components nothing connects to, instead of folding it into the column before (the Pipeline and System default). */
+  keepStages?: boolean;
+  /**
+   * Verb pills stay near their own edge: within COMPACT_NUDGES of its curve, clear of the column headers, and where no clear spot
+   * exists, the spot that overlaps least. Without it a pill may slide far off its curve to find a clear spot (the grounded views).
+   */
+  compactPills?: boolean;
 }
+
+/** Vertical offsets a compact pill may take from its curve, nearest first. The largest is the farthest a pill sits from its edge. */
+export const COMPACT_NUDGES = [0, 26, -26, 52, -52];
 
 /** The geometry of one System model. The Pipeline view passes its column titles and host notes through `opts`. */
 export function layoutSystem(sys: SystemModel, opts: LayoutOptions = {}): SysLayout {
@@ -276,19 +290,27 @@ export function layoutSystem(sys: SystemModel, opts: LayoutOptions = {}): SysLay
   const top = SYS_PAD + SYS_HEADER_H;
 
   // Component columns, one per stage. Stages with no known component (never from the model) are skipped.
-  const stages = sys.stages.map((s) => s.filter((id) => compById.has(id))).filter((s) => s.length > 0);
+  // Each stage keeps the index it had in the model, so its title stays with it when an empty stage is dropped (-1: no title).
+  const kept = sys.stages.map((s, idx) => ({ idx, ids: s.filter((id) => compById.has(id)) })).filter((s) => s.ids.length > 0);
+  const stages = kept.map((s) => s.ids);
+  const stageIdx = kept.map((s) => s.idx);
   const placed = new Set(stages.flat());
   const stray = sys.components.filter((c) => !placed.has(c.id)).map((c) => c.id);
-  if (stray.length > 0) stages.push(stray);
+  if (stray.length > 0) {
+    stages.push(stray);
+    stageIdx.push(-1);
+  }
   // A last column of components nothing connects to is folded into the column before it, so it does not cost a column of width.
   const linked = new Set(sys.edges.filter((e) => e.from !== e.to).flatMap((e) => [e.from, e.to]));
-  while (stages.length > 1 && (stages[stages.length - 1] as string[]).every((id) => !linked.has(id))) {
+  while (opts.keepStages !== true && stages.length > 1 && (stages[stages.length - 1] as string[]).every((id) => !linked.has(id))) {
     const last = stages.pop() as string[];
+    stageIdx.pop();
     (stages[stages.length - 1] as string[]).push(...last);
   }
   const stacks: Array<{ column: number; items: SysBox[]; headers: Array<{ category: SystemExternal["category"]; before: number }> }> = [];
   stages.forEach((stage, i) => {
-    columns.push({ index: i, title: opts.titles?.[i] ?? (i === 0 ? "Entry" : ""), x, w: SYS_CARD_W });
+    const titleAt = stageIdx[i] as number;
+    columns.push({ index: i, title: (titleAt >= 0 ? opts.titles?.[titleAt] : undefined) ?? (i === 0 ? "Entry" : ""), x, w: SYS_CARD_W });
     const items = stage.map((id): SysBox => {
       const c = compById.get(id) as SystemComponent;
       const routes = routesBy.get(id) ?? [];
@@ -305,7 +327,7 @@ export function layoutSystem(sys: SystemModel, opts: LayoutOptions = {}): SysLay
         w: SYS_CARD_W,
         h: SYS_COMP_H + chips.length * SYS_CHIP_H,
         title: cardTitle(c, base),
-        sub: `${plural(c.files, "file")} · ${plural(c.functions, "function")}`,
+        sub: opts.subs?.get(id) ?? [c.files !== undefined ? plural(c.files, "file") : undefined, c.functions !== undefined ? plural(c.functions, "function") : undefined].filter((s) => s !== undefined).join(" · "),
         chips,
         component: c,
       };
@@ -314,14 +336,23 @@ export function layoutSystem(sys: SystemModel, opts: LayoutOptions = {}): SysLay
     x += SYS_CARD_W + SYS_GAP_X;
   });
 
-  // The external systems: one column, grouped by category with a small header per group.
-  if (sys.externals.length > 0) {
+  // The external systems: one column (or one per entry of opts.externalColumns), grouped by category with a small header per group.
+  const extColumns = opts.externalColumns ?? [{ title: "Outside", categories: [...CATEGORY_ORDER] }];
+  const columnOf = (e: SystemExternal): number => {
+    const i = extColumns.findIndex((c) => c.categories.includes(e.category));
+    return i === -1 ? extColumns.length - 1 : i;
+  };
+  extColumns.forEach((ext, ci) => {
+    const members = sys.externals.filter((e) => columnOf(e) === ci);
+    if (members.length === 0) return;
     const col = columns.length;
-    columns.push({ index: col, title: "Outside", x, w: SYS_EXT_W });
+    columns.push({ index: col, title: ext.title, x, w: SYS_EXT_W });
     const items: SysBox[] = [];
     const headers: Array<{ category: SystemExternal["category"]; before: number }> = [];
-    for (const category of CATEGORY_ORDER) {
-      const list = sys.externals.filter((e) => e.category === category);
+    // Categories in the order the column names them, then the rest in the default order.
+    const order = [...new Set([...ext.categories, ...CATEGORY_ORDER])] as SystemExternal["category"][];
+    for (const category of order) {
+      const list = members.filter((e) => e.category === category);
       if (list.length === 0) continue;
       headers.push({ category, before: items.length });
       for (const e of list) {
@@ -343,7 +374,7 @@ export function layoutSystem(sys: SystemModel, opts: LayoutOptions = {}): SysLay
     }
     stacks.push({ column: col, items, headers });
     x += SYS_EXT_W + SYS_GAP_X;
-  }
+  });
 
   // Heights: each stack is centred on the tallest one.
   const heightOf = (s: (typeof stacks)[number]): number =>
@@ -479,6 +510,8 @@ export function layoutSystem(sys: SystemModel, opts: LayoutOptions = {}): SysLay
   // Pills sit on their curve, slid along it (t 0.3 to 0.7) and then offset off it until they touch no card and no other pill.
   const taken: Array<{ x: number; y: number; w: number; h: number }> = boxes.map((b) => ({ x: b.x - 4, y: b.y - 4, w: b.w + 8, h: b.h + 8 }));
   for (const g of groups) taken.push({ x: g.x - 2, y: g.y - 16, w: 150, h: 22 });
+  // The column headers' band: a compact pill never sits on a title (the header row is SYS_PAD to SYS_PAD + SYS_HEADER_H).
+  if (opts.compactPills === true) for (const col of columns) if (col.title !== "") taken.push({ x: col.x, y: SYS_PAD, w: col.w, h: SYS_HEADER_H });
   const arrows: SysArrow[] = [];
   const NUDGES = [0, 26, -26, 52, -52, 78, -78, 104, -104, 130, -130, 156, -156, 182, -182, 208, -208, 234, -234, 260, -260, 312, -312, 364, -364, 416, -416];
   const TS = [0.5, 0.45, 0.55, 0.4, 0.6, 0.35, 0.65, 0.3, 0.7];
@@ -490,19 +523,37 @@ export function layoutSystem(sys: SystemModel, opts: LayoutOptions = {}): SysLay
     const text = pillText(e);
     const w = pillWidth(text);
     let chosen: { x: number; y: number } | undefined;
-    for (const ts of [TS, WIDE_TS]) {
-      for (const off of NUDGES) {
-        for (const t of ts) {
+    if (opts.compactPills === true) {
+      // Nearest offset first, then the slides along the curve. No clear spot: the candidate that overlaps the least.
+      let least: { x: number; y: number; area: number } | undefined;
+      search: for (const off of COMPACT_NUDGES) {
+        for (const t of [...TS, ...WIDE_TS]) {
           const c = at(t);
           const r = { x: c.x - w / 2, y: c.y + off - SYS_PILL_H / 2, w, h: SYS_PILL_H };
-          if (!taken.some((o) => overlaps(r, o))) {
+          const area = taken.reduce((sum, o) => sum + overlapArea(r, o), 0);
+          if (area === 0) {
             chosen = { x: c.x, y: c.y + off };
-            break;
+            break search;
           }
+          if (least === undefined || area < least.area) least = { x: c.x, y: c.y + off, area };
+        }
+      }
+      if (chosen === undefined && least !== undefined) chosen = { x: least.x, y: least.y };
+    } else {
+      for (const ts of [TS, WIDE_TS]) {
+        for (const off of NUDGES) {
+          for (const t of ts) {
+            const c = at(t);
+            const r = { x: c.x - w / 2, y: c.y + off - SYS_PILL_H / 2, w, h: SYS_PILL_H };
+            if (!taken.some((o) => overlaps(r, o))) {
+              chosen = { x: c.x, y: c.y + off };
+              break;
+            }
+          }
+          if (chosen !== undefined) break;
         }
         if (chosen !== undefined) break;
       }
-      if (chosen !== undefined) break;
     }
     const c = chosen ?? at(0.5);
     taken.push({ x: c.x - w / 2, y: c.y - SYS_PILL_H / 2, w, h: SYS_PILL_H });
@@ -572,4 +623,11 @@ function inside(p: Pt, b: { x: number; y: number; w: number; h: number }, margin
 
 function overlaps(a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }): boolean {
   return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
+/** The area two rectangles share (0 when they touch or do not meet). */
+function overlapArea(a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }): number {
+  const w = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+  const h = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+  return w > 0 && h > 0 ? w * h : 0;
 }
