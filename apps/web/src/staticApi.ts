@@ -29,7 +29,7 @@ import type {
   TargetType,
 } from "./api";
 import type { CallerOptions, PipelineModel, SerializedModel, SystemModel, TierModel } from "@insight/model";
-import { buildFileFlow, calleeMapOf, couplingIndex, type CouplingIndex } from "@insight/flow";
+import { buildFileFlow, calleeMapFromNodes, couplingIndex, type CouplingIndex } from "@insight/flow";
 import type { FlowFocus } from "./zoom/detailPref";
 import { callerGraphFor, pipelineFor, refsFor, scopeCallersFor, scopeExecFor, scopeFlowFor, systemFor, tiersFor, type CallerGraphPayload, type ScopeRefsPayload } from "./model/payloads";
 import { models } from "./model/store";
@@ -335,9 +335,12 @@ export function makeStaticApi(baseFor: (projectId: string) => string | Promise<s
       const edges = graph.edges.filter((e) => e.span?.file === path);
       type FlowInput = Parameters<typeof buildFileFlow>;
       const index = await couplingOf(id, graph);
-      // The inter-module focus takes the call-target map only: it never stacks the coupling chart (see server fileFlow).
-      if (focus === "intermodule") return buildFileFlow(path, nodes as unknown as FlowInput[1], edges as unknown as FlowInput[2], { focus: "intermodule", callees: calleeMapOf(index), state: index.state });
-      return buildFileFlow(path, nodes as unknown as FlowInput[1], edges as unknown as FlowInput[2], { coupling: index });
+      // The inter-module focus replaces the coupling chart, never stacks it (see server fileFlow). Its call targets are read
+      // from the graph's nodes, which is cheaper than the index's callee map.
+      const fileNodes = nodes as unknown as FlowInput[1];
+      const fileEdges = edges as unknown as FlowInput[2];
+      if (focus === "intermodule") return buildFileFlow(path, fileNodes, fileEdges, { coupling: index, focus: "intermodule", callees: calleeMapFromNodes(graph.nodes as unknown as Parameters<typeof calleeMapFromNodes>[0]) });
+      return buildFileFlow(path, fileNodes, fileEdges, { coupling: index });
     },
     flowSummary: async (id: string): Promise<FileFlowSummary[]> => {
       await checkProject(id);

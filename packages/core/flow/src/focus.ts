@@ -3,6 +3,9 @@ import type { Item } from "./build.js";
 /**
  * Effect kinds the inter-module focus hides: kernel access (files, OS, processes) and the environment. Network and clock
  * effects are kept. Extend this list to hide more kinds.
+ *
+ * `effects.proc.*` rows are hidden, but process launches (`concurrency.spawn-process` rows, a spawn role, not an effect) are
+ * kept on purpose: a spawned process is a runtime boundary, part of the coupling story. The prefix list never matches them.
  */
 export const HIDDEN_EFFECT_PREFIXES: readonly string[] = ["effects.fs.", "effects.os.", "effects.proc.", "effects.env."];
 
@@ -20,9 +23,9 @@ export interface FocusOptions {
 }
 
 /**
- * The inter-module view of a chart. Keeps control flow, awaits, spawns, returns, throws, lock and sync rows, state rows,
- * handler rows and net or clock effects. Drops:
- * - kernel and environment effects (see HIDDEN_EFFECT_PREFIXES);
+ * The inter-module view of a chart. Keeps control flow, awaits, spawns (process launches included, as runtime boundaries),
+ * returns, throws, lock and sync rows, state rows, handler rows and net or clock effects. Drops:
+ * - kernel and environment effects (see HIDDEN_EFFECT_PREFIXES: the `effects.*` rows, never the spawn rows);
  * - calls that do not resolve to one exported function of another file (unresolved, candidate-only, same-file, internal), and
  *   an await of such a call (an await of only hidden effects goes too);
  * - the `finally` marker, while a `try` frame is unwrapped so its try and catch bodies are spliced inline in order;

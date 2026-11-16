@@ -59,7 +59,7 @@ const isIncDec = (k: ts.SyntaxKind) => k === ts.SyntaxKind.PlusPlusToken || k ==
 const hasMod = (n: ts.Node, k: ts.SyntaxKind): boolean => ts.canHaveModifiers(n) && (ts.getModifiers(n) ?? []).some((m) => m.kind === k);
 
 const exportListCache = new WeakMap<ts.SourceFile, Set<string>>();
-/** The local names a file lists in an `export { … }` without a module specifier. */
+/** The local names a file exports by a list: `export { … }` without a module specifier, and `export default <name>`. */
 export function exportedLocals(sf: ts.SourceFile): Set<string> {
   let names = exportListCache.get(sf);
   if (names === undefined) {
@@ -67,6 +67,8 @@ export function exportedLocals(sf: ts.SourceFile): Set<string> {
     for (const st of sf.statements) {
       if (ts.isExportDeclaration(st) && st.moduleSpecifier === undefined && st.exportClause && ts.isNamedExports(st.exportClause)) {
         for (const e of st.exportClause.elements) names.add((e.propertyName ?? e.name).text);
+      } else if (ts.isExportAssignment(st) && !st.isExportEquals && ts.isIdentifier(st.expression)) {
+        names.add(st.expression.text);
       }
     }
     exportListCache.set(sf, names);

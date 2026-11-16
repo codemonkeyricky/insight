@@ -176,6 +176,7 @@ function exportedOwner(owner: ts.Node, name: string, sf: ts.SourceFile): boolean
   return top === sf && exportedLocals(sf).has(name);
 }
 
+/** A class member is exported unless it is `private` or `#private`. A `protected` member stays exported: a subclass in another module calls it. */
 function classMemberExported(member: ts.ClassElement, sf: ts.SourceFile): boolean {
   if (hasModifier(member, ts.SyntaxKind.PrivateKeyword) || (member.name !== undefined && ts.isPrivateIdentifier(member.name))) return false;
   const cls = member.parent;

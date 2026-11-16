@@ -267,6 +267,20 @@ interface OffMap {
  * are named by node id, so a click or key that names a node is turned into a focus by the source first (`focusOf`).
  */
 
+/** How `show` makes a focus the selection. `animate` and `writeUrl` are always given; the other flags default to false. */
+interface ShowOptions {
+  /** The camera animates to the focus. */
+  animate: boolean;
+  /** The URL follows the focus. */
+  writeUrl: boolean;
+  /** A function focus closes its expansion when it is open, and opens it when closed (a toggle). */
+  toggle?: boolean;
+  /** A selection alone: the source panel and the URL move, the expansions stay open and the camera does not move. */
+  select?: boolean;
+  /** Opens the box's chart beside the box, even on a slotted build (a double-click). */
+  side?: boolean;
+}
+
 export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFocus, hint = true, inset = 0, leftInset = 0, bottomInset = 0, findings, layers = { frames: true, calls: true }, flat = false, motion = true }: Props) {
   /** The details that are closing: they stay drawn for EXIT_CLOSE_MS while they shrink and fade (see setExp). */
   const [leaving, setLeaving] = useState<readonly Expansion[]>([]);
@@ -687,7 +701,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
    * fits the focus, unless a toggle left it alone, then shows the expansion it opened or closed.
    */
   // `side` opens the box's chart beside the box, even on a slotted build (a double-click); otherwise a slotted build opens it in place.
-  const show = async (focus: string, animate: boolean, writeUrl: boolean, toggle = false, select = false, side = false) => {
+  const show = async (focus: string, { animate, writeUrl, toggle = false, select = false, side = false }: ShowOptions) => {
     const seq = ++seqRef.current;
     let b: MapBuild;
     try {
@@ -762,7 +776,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   const expandMore = (nodeId: string): boolean => {
     const b = buildRef.current;
     if (!b || !source.expandMore || !nodeId.endsWith(MORE_SUFFIX)) return false;
-    void source.expandMore(b, nodeId).then(() => show(b.focus, false, true));
+    void source.expandMore(b, nodeId).then(() => show(b.focus, { animate: false, writeUrl: true }));
     return true;
   };
 
@@ -774,7 +788,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     // focus would fall to the page, so the stage takes it here.
     stageRef.current?.focus({ preventScroll: true });
     // Enter and a link toggle the chart in place (boxAction "enter"), so the camera stays put.
-    if (b) void show(source.focusOf?.(b, nodeId) ?? nodeId, true, true, boxAction("enter", { hasChart: b.node(nodeId)?.chart !== undefined }) === "toggle");
+    if (b) void show(source.focusOf?.(b, nodeId) ?? nodeId, { animate: true, writeUrl: true, toggle: boxAction("enter", { hasChart: b.node(nodeId)?.chart !== undefined }) === "toggle" });
   };
 
   /**
@@ -789,10 +803,10 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     if (!b) return;
     const focus = source.focusOf?.(b, nodeId) ?? nodeId;
     const action = boxAction("click", { hasChart: b.node(nodeId)?.chart !== undefined, open: anchoredTo(expRef.current, nodeId) !== undefined, touch: touchPointerRef.current });
-    if (action === "select") void show(focus, true, true, false, true);
-    else if (action === "navigate") void show(focus, true, true, false);
+    if (action === "select") void show(focus, { animate: true, writeUrl: true, select: true });
+    else if (action === "navigate") void show(focus, { animate: true, writeUrl: true });
     // show toggles the chart beside the box: closed, it opens; open, it closes (close-side).
-    else void show(focus, true, true, true, false, true);
+    else void show(focus, { animate: true, writeUrl: true, toggle: true, side: true });
   };
 
   /**
@@ -806,9 +820,9 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     stageRef.current?.focus({ preventScroll: true });
     const focus = source.focusOf?.(b, nodeId) ?? nodeId;
     const action = boxAction("dblclick", { hasChart: b.node(nodeId)?.chart !== undefined, open: anchoredTo(expRef.current, nodeId) !== undefined });
-    if (action === "navigate") void show(focus, true, true, false);
+    if (action === "navigate") void show(focus, { animate: true, writeUrl: true });
     // show toggles the chart beside the box: closed, it opens; open, it closes (close-side).
-    else void show(focus, true, true, true, false, true);
+    else void show(focus, { animate: true, writeUrl: true, toggle: true, side: true });
   };
 
   /**
@@ -959,7 +973,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     const node = source.placeFunction?.(b, fnId);
     if (node !== undefined) {
       if (node === b.nodeId && offMapRef.current === undefined) return;
-      void show(source.focusOf?.(b, node) ?? node, false, true, false, true);
+      void show(source.focusOf?.(b, node) ?? node, { animate: false, writeUrl: true, select: true });
       return;
     }
     if (charts === undefined) return;
@@ -1117,7 +1131,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
    * starts at, in place of the box's own chart, and it is selected.
    */
   const showChain = async (focus: string, chain: readonly string[]) => {
-    await show(focus, false, false);
+    await show(focus, { animate: false, writeUrl: false });
     const b = buildRef.current;
     const root = chain[0];
     const last = chain[chain.length - 1];
@@ -1322,7 +1336,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
       const next = await source.resolve(scope, fn);
       if (cancelled) return;
       if (next === focusRef.current && buildRef.current !== undefined) return;
-      await show(next, buildRef.current !== undefined, false);
+      await show(next, { animate: buildRef.current !== undefined, writeUrl: false });
     })().catch((e: unknown) => {
       if (!cancelled) setError(messageOf(e));
     });
@@ -1397,7 +1411,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
         const parent = b.node(b.nodeId)?.parent;
         if (last === undefined) {
           // Nothing is expanded: Escape goes up one level.
-          if (parent !== undefined) void show(source.focusOf?.(b, parent) ?? parent, true, true);
+          if (parent !== undefined) void show(source.focusOf?.(b, parent) ?? parent, { animate: true, writeUrl: true });
           break;
         }
         // Escape closes the last expansion (and any chained from it). When it hangs from the selected box, the selection
@@ -1407,7 +1421,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
         setExp(closeExpansion(list, last.fnId));
         // A callers box is no detail of the selection: it closes alone, and the map does not go up a level.
         if (last.kind !== "callers" && last.anchor.kind === "box" && last.anchor.nodeId === b.nodeId && parent !== undefined) {
-          void show(source.focusOf?.(b, parent) ?? parent, true, true);
+          void show(source.focusOf?.(b, parent) ?? parent, { animate: true, writeUrl: true });
         } else if (last.anchor.kind === "step" && selectedRef === last.fnId) {
           // A chart opened from a callers box returns the selection to the function whose callers they are.
           void selectFunction(refOfCallersKey(last.anchor.fnId));

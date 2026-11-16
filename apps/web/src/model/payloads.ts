@@ -2,7 +2,7 @@
 // /scope/flow and /scope/exec routes answer (apps/server/src/reader.ts, scopeFlowOf and scopeExecOf): the same
 // flow and exec functions run on the same scoped IR, so the payloads are equal. Pure, with no React and no
 // browser globals: the demo capture (scripts/capture-demo.mjs) imports this file too.
-import { calleeMapOf, couplingIndex, execModel, summarizeScope, type ExecFunctionRef, type ExecModel, type FocusCallee, type ScopeFlow } from "@insight/flow";
+import { calleeMapFromNodes, execModel, summarizeScope, type ExecFunctionRef, type ExecModel, type FocusCallee, type ScopeFlow } from "@insight/flow";
 import { callerGraph, CALLER_DEFAULTS, pipelineModel, refsOf, scopeView, ScopeError, systemModel, tierModel, type CallerGraph, type CallerOptions, type PipelineModel, type ProjectModel, type Refs, type ScopeKindName, type SystemModel, type TierModel } from "@insight/model";
 // The extension is written so the capture script can load this file with Node's type stripping (see scripts/capture-demo.mjs).
 import { ApiError } from "../apiError.ts";
@@ -26,15 +26,9 @@ function remember<T>(model: ProjectModel, key: string, compute: () => T): T {
   return value;
 }
 
-/** The call-target map of a model (every function by id, with its file and export flag), built once per model, as the server builds it per snapshot. */
-const calleesMemo = new WeakMap<ProjectModel, ReadonlyMap<string, FocusCallee>>();
+/** The call-target map of a model (every function by id, with its file and export flag), read from its nodes (see calleeMapFromNodes). */
 export function calleesOf(model: ProjectModel): ReadonlyMap<string, FocusCallee> {
-  let callees = calleesMemo.get(model);
-  if (callees === undefined) {
-    callees = calleeMapOf(couplingIndex(model.doc.nodes, model.doc.edges));
-    calleesMemo.set(model, callees);
-  }
-  return callees;
+  return calleeMapFromNodes(model.doc.nodes);
 }
 
 /** The scope's canonical path, or a 400 with the server's message when the path leaves the project. */

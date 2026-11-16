@@ -147,4 +147,21 @@ describe("ZoomStore charts per focus", () => {
     await store.chartOf("src/m.ts#run");
     expect(flow).toHaveBeenCalledTimes(1);
   });
+
+  it("a chart awaited across a focus change is asked for again under the new focus, never resolved to nothing", async () => {
+    const { full, withCoupling } = charts();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const flow = vi.spyOn(api, "flow").mockImplementation(async (_id, _path, focus) => {
+      if (focus === "intermodule") await gate;
+      return { snapshot: null, file: "src/m.ts", functions: [focus === "intermodule" ? full : withCoupling] } as never;
+    });
+    const store = new ZoomStore("p", "coupling", "intermodule");
+    const pending = store.chartOf("src/m.ts#run");
+    store.setFocus("all");
+    release();
+    const chart = await pending;
+    expect(chart).toBeDefined();
+    expect(flow).toHaveBeenLastCalledWith("p", "src/m.ts", "all");
+  });
 });

@@ -380,7 +380,7 @@ export function fileFlow(paths: ProjectPaths, snapshot: string, file: string, fo
   const nodes = [...snap.nodes.values()].filter((n) => n.span?.file === file);
   const edges = snap.edges.filter((e) => e.span?.file === file);
   if (focus === "intermodule") {
-    return buildFileFlow(file, nodes, edges, { focus: "intermodule", callees: calleesFor(paths, snapshot), state: couplingFor(paths, snapshot).state });
+    return buildFileFlow(file, nodes, edges, { coupling: couplingFor(paths, snapshot), focus: "intermodule", callees: calleesFor(paths, snapshot) });
   }
   return buildFileFlow(file, nodes, edges, { coupling: couplingFor(paths, snapshot) });
 }

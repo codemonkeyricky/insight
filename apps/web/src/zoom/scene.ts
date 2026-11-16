@@ -153,8 +153,9 @@ export class ZoomStore {
     if (load === undefined) {
       load = api.flow(this.id, file, focus).then(
         (res) => {
-          // A focus change while the load was in flight drops its charts: they were read under the old focus.
-          if (this.focus !== focus) return;
+          // A focus change while the load was in flight drops its charts (they were read under the old focus), and asks again
+          // under the current one, so a chartOf awaiting this load still finds its function.
+          if (this.focus !== focus) return this.ensureFunction(fnId);
           for (const f of res.functions) this.fns.set(f.id, f);
         },
         (e: unknown) => {

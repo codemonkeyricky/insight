@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeAll } from "vitest";
 import type { IREdge, IRNode } from "@insight/ir";
-import { buildFileFlow, calleeMapOf, couplingIndex, execModel, filterChartItems, HIDDEN_EFFECT_PREFIXES, layoutFunction, type FocusCallee, type Item } from "../src/index.js";
+import { buildFileFlow, calleeMapFromNodes, calleeMapOf, couplingIndex, execModel, filterChartItems, HIDDEN_EFFECT_PREFIXES, layoutFunction, type FocusCallee, type Item } from "../src/index.js";
 import { factsForFile } from "../src/build.js";
 import { indexFixture } from "./coupling-fixture.js";
 
@@ -253,6 +253,33 @@ export function run(path: string): number {
     expect(labels(plainRun?.items ?? []).some((l) => l.includes("fork:try"))).toBe(true);
     expect(labels(plainRun?.items ?? []).some((l) => l.includes("local"))).toBe(true);
     expect(plainRun?.items.some((i) => i.t === "step" && i.kind !== undefined)).toBe(false);
+  });
+
+  it("calleeMapFromNodes equals calleeMapOf on the same records, and is read once per node list", () => {
+    const fromNodes = calleeMapFromNodes(nodes);
+    expect(fromNodes).toEqual(calleeMapOf(index));
+    expect(fromNodes.has("node:fs#readFileSync")).toBe(false);
+    expect(calleeMapFromNodes(nodes)).toBe(fromNodes);
+  });
+
+  it("with the focus, each function keeps its coupling info from the unfiltered index, and its chart is the focused one", () => {
+    const plain = buildFileFlow("src/a.ts", nodes, edges, { coupling: index });
+    const focused = buildFileFlow("src/a.ts", nodes, edges, { coupling: index, focus: "intermodule" });
+    expect(focused.functions.map((f) => f.id)).toEqual(plain.functions.map((f) => f.id));
+    for (const f of focused.functions) {
+      const p = plain.functions.find((x) => x.id === f.id);
+      expect(f.coupling).toBeDefined();
+      expect(p?.coupling).toBeDefined();
+      const { chart, rows, ...info } = f.coupling!;
+      const { chart: plainChart, rows: plainRows, ...plainInfo } = p!.coupling!;
+      expect(info).toEqual(plainInfo);
+      expect(chart.nodes).toEqual(f.nodes);
+      expect(rows.coupling).toBe(f.nodes.length);
+      expect(plainChart).toBeDefined();
+      expect(plainRows).toBeDefined();
+    }
+    const run = focused.functions.find((f) => f.id === "src/a.ts#run");
+    expect(run?.coupling?.summary).toBe(plain.functions.find((f) => f.id === "src/a.ts#run")?.coupling?.summary);
   });
 });
 

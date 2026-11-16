@@ -71,13 +71,18 @@ describe("inter-module focus on the file flow API", () => {
     expect(labelsOf(focused.json(), "other").some((l) => l.includes("helper"))).toBe(true);
   });
 
-  it("omits the coupling chart under focus, and keeps it for the default", async () => {
+  it("keeps each function's coupling info under focus, with the focused chart in place of the coupling chart", async () => {
     const all = await flow("src/a.ts");
     const focused = await flow("src/a.ts", "intermodule");
-    const allRun = (all.json().functions as { name: string; coupling?: unknown }[]).find((f) => f.name === "run");
-    const focusRun = (focused.json().functions as { name: string; coupling?: unknown }[]).find((f) => f.name === "run");
+    type Fn = { name: string; nodes: unknown[]; coupling?: { summary: string; footprint: unknown; module: string; chart: { nodes: unknown[] } } };
+    const allRun = (all.json().functions as Fn[]).find((f) => f.name === "run");
+    const focusRun = (focused.json().functions as Fn[]).find((f) => f.name === "run");
     expect(allRun?.coupling).toBeDefined();
-    expect(focusRun?.coupling).toBeUndefined();
+    expect(focusRun?.coupling).toBeDefined();
+    expect(focusRun?.coupling?.summary).toBe(allRun?.coupling?.summary);
+    expect(focusRun?.coupling?.footprint).toEqual(allRun?.coupling?.footprint);
+    expect(focusRun?.coupling?.module).toBe(allRun?.coupling?.module);
+    expect(focusRun?.coupling?.chart.nodes).toEqual(focusRun?.nodes);
   });
 
   it("caches the two answers separately: each request returns its own focus, in either order", async () => {

@@ -8,7 +8,7 @@ import frontend from "../src/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "fixtures", "exported-ts");
-const files = ["src/lib.ts"];
+const files = ["src/lib.ts", "src/defaults.ts", "src/protected.ts"];
 const root: ProjectRoot = { path: fixtureRoot, name: "exported-ts", allowBuildTools: false };
 const readFile = async (rel: string) => readFileSync(join(fixtureRoot, rel), "utf8");
 
@@ -20,12 +20,12 @@ async function extractAll(): Promise<IRBatch[]> {
 }
 
 /** The exported flag of every function node, by its qualified name. */
-async function exportedByName(): Promise<Map<string, boolean>> {
+async function exportedByName(file = "src/lib.ts"): Promise<Map<string, boolean>> {
   const batches = await extractAll();
   const nodes = batches.flatMap((b) => b.records).flatMap((r): IRNode[] => ("node" in r ? [r.node] : []));
   const out = new Map<string, boolean>();
   for (const n of nodes) {
-    if (n.kind !== "structure.function" || n.span?.file !== "src/lib.ts") continue;
+    if (n.kind !== "structure.function" || n.span?.file !== file) continue;
     out.set(String(n.attrs.qualifiedName ?? n.attrs.name ?? n.id), n.attrs.exported === true);
   }
   return out;
@@ -59,5 +59,19 @@ describe("frontend-typescript exported flag", () => {
     const hidden = [...exp.entries()].find(([k]) => k.startsWith("Store.") && k.includes("hidden"));
     expect(hidden).toBeDefined();
     expect(hidden?.[1]).toBe(false);
+  });
+});
+
+describe("frontend-typescript exported flag: default exports and protected members", () => {
+  it("a local function named by `export default <name>` is exported", async () => {
+    const exp = await exportedByName("src/defaults.ts");
+    expect(exp.get("defaultHelper")).toBe(true);
+    expect(exp.get("unexported")).toBe(false);
+  });
+
+  it("a protected method stays exported, so a subclass in another module can call it", async () => {
+    const exp = await exportedByName("src/protected.ts");
+    expect(exp.get("Base.shared")).toBe(true);
+    expect(exp.get("Child.call")).toBe(true);
   });
 });
