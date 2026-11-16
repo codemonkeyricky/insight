@@ -466,6 +466,15 @@
     }
   },
   {
+    "kind": "effects.store.access",
+    "facet": "effects",
+    "on": "node",
+    "description": "A read, write, list or delete on a storage service (key-value, object or SQL store) through an API or a platform binding. Required attrs are api, store and op; optional binding and name.",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/effects.json#/$defs/EffectsStoreAccess"
+    }
+  },
+  {
     "kind": "effects.proc.exec",
     "facet": "effects",
     "on": "node",

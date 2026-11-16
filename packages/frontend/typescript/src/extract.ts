@@ -3,7 +3,8 @@ import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import ts from "typescript";
 import type { IREdge, IRFinding, IRNode, IRRecord, NodeId, Provenance, Span, UnresolvedRef } from "@insight/ir";
 import type { IRBatch } from "@insight/sdk";
-import { importBindings, matchCall, matchEnvRead, matchExportRoute, matchFetch, matchSchedule, matchServe, matchWorker, nodeScriptArgument, scriptPath, urlText, type ImportBinding, type ScriptPath, type UrlText, type WorkerEnv } from "./effects.js";
+import { importBindings, matchCall, matchDispatchTable, matchEnvRead, matchEventSource, matchExportRoute, matchFetch, matchSchedule, matchServe, matchStoreAccess, matchWorker, nodeScriptArgument, scriptPath, urlText, workerEnvNames, type ImportBinding, type ScriptPath, type UrlText, type WorkerEnv } from "./effects.js";
+import { workerEntries, type WorkerDeploy, type WranglerInfo } from "./deploy.js";
 import { channelIndex, matchChannelRecv, matchChannelSend } from "./channels.js";
 import { scriptKind } from "./digest.js";
 import { emitState } from "./state.js";
@@ -80,6 +81,8 @@ export interface Project {
   resolveModule(spec: string, fromAbs: string): string | undefined;
   /** Project-relative paths of every workspace package.json. A bare import's answer depends on each of them. */
   manifestRels: string[];
+  /** The Worker entry files a wrangler config deploys, keyed by project-relative path (see deploy.ts). */
+  workers: Map<string, WorkerDeploy>;
 }
 
 const isFnInit = (n: ts.Expression): boolean => ts.isArrowFunction(n) || ts.isFunctionExpression(n);
@@ -416,17 +419,21 @@ function nodeEntryFiles(
 const SCRIPT_SRC = /<script\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/gi;
 
 /**
- * The project source files an HTML page loads with a script tag. A leading slash is the project root, as in Vite; any
- * other path is relative to the page. `html` maps the page's project path to its text.
+ * The project source files an HTML page loads with a script tag. A leading slash is the page's own folder, its Vite root,
+ * so an apps/web/index.html that loads /src/main.tsx loads apps/web/src/main.tsx; any other path is relative to the page.
+ * A page under public/ keeps the project root for a leading slash, as it did before nested pages were read.
+ * `html` maps the page's project path to its text.
  */
 function htmlScriptEntries(html: Map<string, string>, rels: Set<string>): Set<string> {
   const out = new Set<string>();
+  const sourceAt = (base: string | undefined): string | undefined => (base === undefined ? undefined : candidatesAt(base).find((c) => rels.has(c)));
   for (const [page, text] of html) {
+    const folder = dirOf(page);
     for (const m of text.matchAll(SCRIPT_SRC)) {
       const src = (m[1] ?? "").split(/[?#]/)[0] ?? "";
       if (src === "" || src.startsWith("//") || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(src)) continue;
-      const at = src.startsWith("/") ? joinRel("", src.slice(1)) : joinRel(dirOf(page), src);
-      const hit = at === undefined ? undefined : candidatesAt(at).find((c) => rels.has(c));
+      let hit = sourceAt(src.startsWith("/") ? joinRel(folder, src.slice(1)) : joinRel(folder, src));
+      if (hit === undefined && src.startsWith("/") && /(^|\/)public$/.test(folder)) hit = sourceAt(joinRel("", src.slice(1)));
       if (hit !== undefined) out.add(hit);
     }
   }
@@ -472,6 +479,7 @@ export function buildProject(
   html: Map<string, string> = new Map(),
   manifests: Map<string, string> = new Map(),
   packageJsons: Map<string, string> = new Map(),
+  wranglers: Map<string, WranglerInfo> = new Map(),
 ): Project {
   const options = compilerOptions(root);
   const abs = (rel: string) => join(root, rel);
@@ -547,6 +555,7 @@ export function buildProject(
     sourceOf: declarationSources(root, relSet, decls),
     resolveModule,
     manifestRels,
+    workers: workerEntries(wranglers, relSet),
   };
 }
 
@@ -1303,6 +1312,9 @@ export function emitFile(project: Project, rel: string): IRBatch {
   // A spawn runs a script's module entry when the script has one, and the file otherwise.
   const spawnTarget = (to: string): string => project.moduleOf(to) ?? to;
   const workerEnv = workerEnvFor(project, sf);
+  // A file a wrangler config deploys: its platform bindings and the names it takes as env (see matchStoreAccess).
+  const deploy = project.workers.get(rel);
+  const deployEnv = deploy !== undefined ? { bindings: deploy.bindings, names: workerEnvNames(sf) } : undefined;
   const chans = channelIndex(project.checker, sf, rel);
   const usedIds = new Set<string>();
   const uniqueId = (base: string): string => {
@@ -1742,6 +1754,19 @@ export function emitFile(project: Project, rel: string): IRBatch {
           provenance: PROV,
         });
       }
+      // A call on a platform binding the Worker's wrangler config declares: env.INDEX.get(…) reads that store.
+      const store = deployEnv !== undefined ? matchStoreAccess(call, deployEnv.bindings, deployEnv.names) : undefined;
+      if (store) {
+        push({
+          id: uniqueId(`store:${pos(sf, call.getStart(sf)).join(":")}`),
+          facet: "effects",
+          kind: store.kind,
+          parent: owner,
+          attrs: store.attrs,
+          span: spanOf(rel, sf, call),
+          provenance: PROV,
+        });
+      }
       // A message a worker or page posts to its peer: a step of its own, since the runtime has no call the project declares.
       if (!effect && !send && target === undefined && ts.isPropertyAccessExpression(callee) && callee.name.text === "postMessage") {
         push({
@@ -1925,6 +1950,19 @@ export function emitFile(project: Project, rel: string): IRBatch {
       }
       const ctor = callableOf(project, declOf(project, project.checker.getSymbolAtLocation(nameOf(node.expression))));
       if (ctor) reference(ctor, "new", node.expression);
+      // A new EventSource(url) is a server-sent events stream the page opens: a GET that connects to the URL.
+      const stream = matchEventSource(node, imports, workerEnv);
+      if (stream) {
+        push({
+          id: uniqueId(`effect:${pos(sf, node.getStart(sf)).join(":")}`),
+          facet: "effects",
+          kind: stream.kind,
+          parent: owner,
+          attrs: stream.attrs,
+          span: spanOf(rel, sf, node),
+          provenance: PROV,
+        });
+      }
     }
 
     if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
@@ -1990,8 +2028,26 @@ export function emitFile(project: Project, rel: string): IRBatch {
     // An HTTP verb exported from a file is a route the deployment serves.
     if (ts.isFunctionDeclaration(node) || ts.isVariableStatement(node) || ts.isExportDeclaration(node) || ts.isExportAssignment(node)) {
       for (const serve of matchExportRoute(node)) {
+        // A Worker a wrangler config deploys runs on Cloudflare, under that config's name.
+        const attrs = serve.attrs.framework === "worker" && deploy !== undefined
+          ? { ...serve.attrs, platform: "cloudflare", ...(deploy.name !== undefined ? { name: deploy.name } : {}) }
+          : serve.attrs;
         push({
           id: uniqueId(`serve:${pos(sf, node.getStart(sf)).join(":")}`),
+          facet: "effects",
+          kind: serve.kind,
+          parent: owner,
+          attrs,
+          span: spanOf(rel, sf, node),
+          provenance: PROV,
+        });
+      }
+    }
+    // A route table a file dispatches on by path: one served route per key (see matchDispatchTable).
+    if (ts.isVariableStatement(node)) {
+      matchDispatchTable(node, sf).forEach((serve, i) => {
+        push({
+          id: uniqueId(`serve:${pos(sf, node.getStart(sf)).join(":")}:${i}`),
           facet: "effects",
           kind: serve.kind,
           parent: owner,
@@ -1999,7 +2055,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
           span: spanOf(rel, sf, node),
           provenance: PROV,
         });
-      }
+      });
     }
 
     ts.forEachChild(node, (child) => {
