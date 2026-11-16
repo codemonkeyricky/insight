@@ -1857,15 +1857,17 @@ export function FrameShape({
   const { rect } = item;
   const head = ZOOM_SIZE.head;
   const text = headerLabels(node?.label ?? nameOfId(item.id), node?.detail, rect.w * k);
+  const unguarded = node?.unguarded !== undefined && node.unguarded.length > 0;
   return (
-    <g className={`zm-frame${node ? ` zm-${node.kind}` : ""} ${lineClass(line)}`} data-sx={rect.x} data-sw={rect.w} data-fid={item.id}>
-      <title>{node?.title || (node ? (node.detail ? `${node.label} (${node.detail})` : node.label) : item.id)}</title>
+    <g className={`zm-frame${node ? ` zm-${node.kind}` : ""} ${lineClass(line)}${unguarded ? " zm-unguarded" : ""}`} data-sx={rect.x} data-sw={rect.w} data-fid={item.id}>
+      <title>{`${node?.title || (node ? (node.detail ? `${node.label} (${node.detail})` : node.label) : item.id)}${unguarded ? ` · ⚠ unguarded shared state: ${node?.unguarded?.join(", ")}` : ""}`}</title>
       <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={16} className="zm-frame-body" />
       <g className="zm-hit" onClick={() => onOpen(item.id)}>
         <rect x={rect.x} y={rect.y} width={rect.w} height={head} rx={16} className="zm-frame-head" />
         {text.label !== null && (
           <text x={rect.x + 12} y={rect.y + head / 2} dominantBaseline="central" className="zm-label">
             <tspan className="zm-frame-dot">●</tspan>{" "}{text.label}
+            {unguarded && <tspan className="zm-warn">{" ⚠"}</tspan>}
           </text>
         )}
         {text.detail !== null && (
@@ -1916,6 +1918,9 @@ export function BoxShape({
   const { rect } = item;
   // The function's display name on the map (the full name stays in the tooltip).
   const shown = displayName(node.label, node.ref);
+  // A thread box carries a badge when its code writes unguarded shared state (see scene.ts).
+  const unguarded = node.unguarded !== undefined && node.unguarded.length > 0;
+  const unguardedTitle = unguarded ? ` · ⚠ unguarded shared state: ${node.unguarded?.join(", ")}` : "";
   // The mid tier's name is 10-13 px on screen (the zoom's inverse scales it): its characters are measured at that size.
   const fontPx = small ? Math.min(13, Math.max(10, Math.round(rect.h * k * 0.42))) : 0;
   const label = bare ? null : small ? fitLabel(shown, labelChars(rect.w * k, fontPx * 0.6, 10)) : fitLabel(shown, labelChars(rect.w * k));
@@ -1959,14 +1964,15 @@ export function BoxShape({
     const compactCallers = showCallers && (fullName !== shown || k < FULL_K);
     const name = compactCallers ? nameIn(CALLERS_COMPACT_W + 26) : fullName;
     return (
-      <g className={`zm-box zm-${node.kind} zm-card ${lineClass(line)}${holdsChart ? " zm-has-chart" : ""}${chartOpen ? " expanded" : ""}`} data-sx={rect.x} data-fid={item.id} onClick={() => onOpen(item.id)}>
-        <title>{node.detail !== undefined ? `${node.label} (${node.detail})` : node.title || node.label}</title>
+      <g className={`zm-box zm-${node.kind} zm-card ${lineClass(line)}${holdsChart ? " zm-has-chart" : ""}${chartOpen ? " expanded" : ""}${unguarded ? " zm-unguarded" : ""}`} data-sx={rect.x} data-fid={item.id} onClick={() => onOpen(item.id)}>
+        <title>{`${node.detail !== undefined ? `${node.label} (${node.detail})` : node.title || node.label}${unguardedTitle}`}</title>
         {/* The pop-in sits on this inner group: the outer one carries the slide transform (writeShift and the FLIP). */}
         <g className="zm-pop" style={{ ["--d" as string]: `${popDelay(rank)}ms` }}>
           <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={12} className="zm-box-body" />
           {name !== null && (
             <text x={rect.x + 12 + (showCallers ? (compactCallers ? CALLERS_COMPACT_W : CALLERS_BTN_W) - 4 + 6 : 0)} y={rect.y + rect.h / 2} dominantBaseline="central" className="zm-label">
               <tspan className="zm-card-glyph">ƒ</tspan>{" "}{name}
+              {unguarded && <tspan className="zm-warn">{" ⚠"}</tspan>}
             </text>
           )}
         </g>
@@ -1978,11 +1984,11 @@ export function BoxShape({
   }
   return (
     <g
-      className={`zm-box zm-${node.kind} ${lineClass(line)}${holdsChart ? " zm-has-chart" : ""}${chartOpen ? " expanded" : ""}${bare ? " zm-tile" : ""}`}
+      className={`zm-box zm-${node.kind} ${lineClass(line)}${holdsChart ? " zm-has-chart" : ""}${chartOpen ? " expanded" : ""}${bare ? " zm-tile" : ""}${unguarded ? " zm-unguarded" : ""}`}
       data-sx={rect.x}
       onClick={() => onOpen(item.id)}
     >
-      <title>{node.title || node.label}</title>
+      <title>{`${node.title || node.label}${unguardedTitle}`}</title>
       <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={10} className="zm-box-body" />
       {label !== null && (
         <text
@@ -1993,6 +1999,7 @@ export function BoxShape({
           style={small ? { fontSize: `calc(${fontPx}px * var(--zinv, 1))` } : undefined}
         >
           {label}
+          {unguarded && <tspan className="zm-warn">{" ⚠"}</tspan>}
         </text>
       )}
     </g>

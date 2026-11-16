@@ -51,6 +51,11 @@ export interface SceneNode {
   external?: boolean;
   /** The tooltip of a frame's header or a box, when it is not the note: a program's entry file path. */
   title?: string;
+  /**
+   * A thread whose code writes shared state another thread also writes with no lock held in common at every write
+   * (`⚠ unguarded shared state`): the variable names. The map draws the badge on the thread's box.
+   */
+  unguarded?: string[];
 }
 
 /**

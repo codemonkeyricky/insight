@@ -29,8 +29,8 @@ export type FlowRole =
   | "continue";
 
 /**
- * What a chart row is for the coupling view: a local row, or the boundary it crosses. `ctl` is reserved for phase 4 of the
- * coupling view: no row takes it yet.
+ * What a chart row is for the coupling view: a local row, or the boundary it crosses. `ctl` is a branch or loop kept
+ * because its condition reads a local that carries an external value (the phase-4 taint pass), even when its body is local.
  */
 export type CouplingClass = "local" | "cross" | "io" | "state" | "conc" | "escape" | "ctl";
 
@@ -68,6 +68,8 @@ export interface FlowNode {
   hidden?: true;
   /** A state row (coupling view only): global state, visible from every module. */
   global?: true;
+  /** A state write (coupling view only): the variable is also written from another thread with no lock held in common. */
+  unguarded?: true;
   /** Absolute lane of the node's station (line map layout). */
   lane?: number;
   /** Absolute x where the label text starts. */

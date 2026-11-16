@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { IREdge, IRNode, IRRecord } from "@insight/ir";
 import { projectPaths, readSnapshot, runIndex } from "../src/index.js";
 // The flow package is not a dependency of the indexer, so its sources are imported by path.
-import { couplingChart, couplingFacts, stateClass, type CouplingFootprint } from "../../flow/src/coupling.js";
+import { couplingChart, couplingFacts, stateClass, taintedControls, type CouplingFootprint } from "../../flow/src/coupling.js";
 import type { Item } from "../../flow/src/build.js";
 import type { ModuleMap } from "../../flow/src/modules.js";
 import { layoutFunction } from "../../flow/src/layout.js";
@@ -121,6 +121,8 @@ interface Measured {
   histogram: Map<string, number>;
   hoisted: number;
   emptyCharts: number;
+  /** Branch and loop rows kept because their condition reads a tainted local. */
+  taintControls: number;
 }
 
 /** Every state row of a list (including inside forks and loops), with its span and variable. */
@@ -137,7 +139,7 @@ function stateRowsOf(items: readonly Item[], out: Step[] = []): Step[] {
 function measure(index: IndexRecords): Measured {
   const { modules, facts, footprints, surface } = couplingFacts(index.nodes, index.edges);
   const fp = footprints as ReadonlyMap<string, CouplingFootprint>;
-  const m: Measured = { functions: 0, lossFailures: [], checked: 0, allRows: [], couplingRows: [], folds: [], histogram: new Map(), hoisted: 0, emptyCharts: 0 };
+  const m: Measured = { functions: 0, lossFailures: [], checked: 0, allRows: [], couplingRows: [], folds: [], histogram: new Map(), hoisted: 0, emptyCharts: 0, taintControls: 0 };
   for (const [id, f] of facts) {
     const full = layoutFunction(f);
     if (full.tooLarge || full.nodes.length === 0) continue;
@@ -156,10 +158,28 @@ function measure(index: IndexRecords): Measured {
     }
 
     const required = mustKeep(f.items, M, modules, onSurface);
-    const kept = new Set([...allRows(pruned.items).map((r) => spanKey(r.span)), ...lockHeads(pruned.items)]);
+    // Every non-fold row that survives, including branch and loop heads (forks are not in allRows).
+    const kept = new Set<string>();
+    const gather = (list: readonly Item[]): void => {
+      for (const item of list) {
+        if (item.t === "step" && item.foldId !== undefined) continue;
+        if (item.span) kept.add(spanKey(item.span));
+        if (item.t === "fork") for (const a of item.arms) gather(a.body);
+        else if (item.t === "loop") gather(item.body);
+      }
+    };
+    gather(pruned.items);
+    for (const key of lockHeads(pruned.items)) kept.add(key);
     for (const [key, why] of required) {
       m.checked++;
       if (!kept.has(key)) m.lossFailures.push(`${id} ${why} ${key}`);
+    }
+    // Phase 4a: every branch or loop whose condition reads a local that a cross/io/state call binds stays in the chart.
+    for (const [item] of taintedControls(id, f.items, modules, fp, surface)) {
+      m.taintControls++;
+      m.checked++;
+      const key = spanKey(item.span);
+      if (!kept.has(key)) m.lossFailures.push(`${id} taint-control ${key}`);
     }
 
     m.functions++;
@@ -191,6 +211,7 @@ function report(name: string, m: Measured, elapsedMs?: number): void {
     `(iii) functions with 0 content rows in Coupling: ${m.emptyCharts} of ${m.functions} (${((100 * m.emptyCharts) / Math.max(1, m.functions)).toFixed(1)}%)`,
     `(iv) total content rows Coupling/All: ${total(m.couplingRows)}/${total(m.allRows)} = ${(total(m.couplingRows) / Math.max(1, total(m.allRows))).toFixed(3)}`,
     `(v) kept-row classes in Coupling: ${hist || "none"}; of which carry hoisted callee rows: ${m.hoisted}`,
+    `(vi) branch/loop rows kept by taint: ${m.taintControls}`,
     `no-loss: ${m.checked} required rows checked, ${m.lossFailures.length} lost`,
   ];
   console.log(lines.join("\n"));
