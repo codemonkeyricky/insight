@@ -7,6 +7,12 @@ import { isWorkspaceManifest } from "./packages.js";
 
 const SKIP_DIRS = new Set(["node_modules", ".git", ".insight", "dist"]);
 
+/** Folders whose pages are not an app's entry: tests, fixtures, examples, builds and tool state. */
+const NOISE_PAGE_DIR = /(^|\/)(node_modules|dist|build|test|tests|__tests__|fixtures|examples|\.claude)\//;
+
+/** An index.html the project lists outside those folders. */
+const isEntryPage = (f: string): boolean => (f === "index.html" || f.endsWith("/index.html")) && !NOISE_PAGE_DIR.test(f);
+
 /** Finds a TypeScript or JavaScript source file within a few levels of the root. */
 function findSource(dir: string, depth: number): string | undefined {
   if (depth < 0) return undefined;
@@ -23,7 +29,7 @@ function findSource(dir: string, depth: number): string | undefined {
 
 export const frontend: Frontend = {
   id: FRONTEND_ID,
-  version: "0.2.7",
+  version: "0.2.8",
   provides: ["structure", "packaging", "flow", "calls", "effects", "concurrency", "sync", "state", "data"],
 
   async detect(root: ProjectRoot) {
@@ -38,10 +44,14 @@ export const frontend: Frontend = {
     const rels = ctx.listFiles().filter((f) => SOURCE_RE.test(f));
     const texts = new Map<string, string>();
     for (const rel of rels) texts.set(join(ctx.root.path, rel), await ctx.readFile(rel));
-    // The pages whose script tags load a module's entry: the project's index.html and public/index.html.
+    // The pages whose script tags load a module's entry: the project's index.html and public/index.html, then every
+    // other index.html the project lists (a nested app such as apps/web/index.html), outside test and build folders.
     const html = new Map<string, string>();
     for (const page of ["index.html", "public/index.html"]) {
       if (existsSync(join(ctx.root.path, page))) html.set(page, await ctx.readFile(page));
+    }
+    for (const page of ctx.listFiles()) {
+      if (isEntryPage(page) && !html.has(page)) html.set(page, await ctx.readFile(page));
     }
     // The root package.json names the Node scripts of "bin" and "scripts" (see nodeEntryFiles).
     const manifests = new Map<string, string>();

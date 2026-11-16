@@ -125,10 +125,19 @@ export function matchCall(call: ts.CallExpression, imports: Map<string, ImportBi
   return { kind: entry.kind, attrs };
 }
 
-/** process.env.NAME, read as a property access. Returns the name, or undefined. */
+/** Vite's built-in import.meta.env names: they are not the project's own environment variables. */
+const VITE_BUILTIN_ENV = new Set(["BASE_URL", "MODE", "DEV", "PROD", "SSR"]);
+
+/**
+ * process.env.NAME, or Vite's import.meta.env.NAME (minus its built-ins), read as a property access. Returns the name, or
+ * undefined.
+ */
 export function matchEnvRead(node: ts.PropertyAccessExpression, imports: Map<string, ImportBinding>): string | undefined {
   const inner = node.expression;
   if (!ts.isPropertyAccessExpression(inner) || inner.name.text !== "env") return undefined;
+  if (ts.isMetaProperty(inner.expression) && inner.expression.keywordToken === ts.SyntaxKind.ImportKeyword) {
+    return VITE_BUILTIN_ENV.has(node.name.text) ? undefined : node.name.text;
+  }
   if (!ts.isIdentifier(inner.expression) || inner.expression.text !== "process") return undefined;
   if (imports.has("process")) return undefined;
   return node.name.text;
@@ -547,29 +556,12 @@ export interface FetchHooks {
   method?: (e: ts.Expression) => string | undefined;
 }
 
-export function matchFetch(call: ts.CallExpression, imports: Map<string, ImportBinding>, env: WorkerEnv = {}, hooks: FetchHooks = {}): FetchMatch | undefined {
-  const callee = unwrapAll(call.expression) as ts.Expression;
-  let name: string | undefined;
-  let exact = false;
-  if (ts.isIdentifier(callee)) {
-    name = callee.text;
-    exact = name === "fetch" && !imports.has("fetch") && !env.declared?.(callee);
-  } else if (ts.isPropertyAccessExpression(callee)) {
-    name = callee.name.text;
-    const base = callee.expression;
-    exact =
-      name === "fetch" &&
-      ts.isIdentifier(base) &&
-      GLOBAL_FETCH_BASES.has(base.text) &&
-      !imports.has(base.text) &&
-      !env.declared?.(base);
-  }
-  if (name === undefined) return undefined;
-  if (!exact && !/fetch/i.test(name)) return undefined;
-  const [urlArg, opts] = call.arguments;
-  if (urlArg === undefined) return undefined;
-
-  const attrs: Record<string, unknown> = { api: callee.getText().slice(0, 40) };
+/**
+ * The URL attributes a network call's first argument gives: the host or the relative path, and the env variable the URL
+ * reads. fetch and EventSource both name their URL this way, so they reach the same route.
+ */
+function fetchUrlAttrs(urlArg: ts.Expression, imports: Map<string, ImportBinding>, env: WorkerEnv, hooks: FetchHooks = {}): Record<string, unknown> {
+  const attrs: Record<string, unknown> = {};
   const found = urlText(urlArg, imports, env, true, hooks.url);
   const envName = found?.env ?? envOf(urlArg, imports, env);
   if (found === undefined) {
@@ -603,6 +595,32 @@ export function matchFetch(call: ts.CallExpression, imports: Map<string, ImportB
   }
   if (attrs.path === undefined) delete attrs.path;
   if (envName !== undefined) attrs.env = envName;
+  return attrs;
+}
+
+export function matchFetch(call: ts.CallExpression, imports: Map<string, ImportBinding>, env: WorkerEnv = {}, hooks: FetchHooks = {}): FetchMatch | undefined {
+  const callee = unwrapAll(call.expression) as ts.Expression;
+  let name: string | undefined;
+  let exact = false;
+  if (ts.isIdentifier(callee)) {
+    name = callee.text;
+    exact = name === "fetch" && !imports.has("fetch") && !env.declared?.(callee);
+  } else if (ts.isPropertyAccessExpression(callee)) {
+    name = callee.name.text;
+    const base = callee.expression;
+    exact =
+      name === "fetch" &&
+      ts.isIdentifier(base) &&
+      GLOBAL_FETCH_BASES.has(base.text) &&
+      !imports.has(base.text) &&
+      !env.declared?.(base);
+  }
+  if (name === undefined) return undefined;
+  if (!exact && !/fetch/i.test(name)) return undefined;
+  const [urlArg, opts] = call.arguments;
+  if (urlArg === undefined) return undefined;
+
+  const attrs: Record<string, unknown> = { api: callee.getText().slice(0, 40), ...fetchUrlAttrs(urlArg, imports, env, hooks) };
 
   // The method: the second argument's `method` string, GET when the options object omits it, and absent when it is not literal.
   if (opts === undefined) {
@@ -633,6 +651,26 @@ export function matchFetch(call: ts.CallExpression, imports: Map<string, ImportB
     }
   }
   attrs.confidence = exact ? "exact" : "inferred";
+  return { kind: "effects.net.connect", attrs };
+}
+
+/**
+ * `new EventSource(url)`, the browser's server-sent events stream: a GET to the URL, with the protocol "sse". The URL is
+ * named as fetch names one, so the stream and a fetch of the same path reach the same route.
+ */
+export function matchEventSource(node: ts.NewExpression, imports: Map<string, ImportBinding>, env: WorkerEnv = {}): FetchMatch | undefined {
+  const callee = unwrapAll(node.expression) as ts.Expression;
+  if (!ts.isIdentifier(callee) || callee.text !== "EventSource") return undefined;
+  const urlArg = node.arguments?.[0];
+  if (urlArg === undefined) return undefined;
+  const exact = !imports.has("EventSource") && !env.declared?.(callee);
+  const attrs: Record<string, unknown> = {
+    api: "EventSource",
+    ...fetchUrlAttrs(urlArg, imports, env),
+    method: "GET",
+    protocol: "sse",
+    confidence: exact ? "exact" : "inferred",
+  };
   return { kind: "effects.net.connect", attrs };
 }
 

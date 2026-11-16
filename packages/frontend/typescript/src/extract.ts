@@ -3,7 +3,7 @@ import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import ts from "typescript";
 import type { IREdge, IRFinding, IRNode, IRRecord, NodeId, Provenance, Span, UnresolvedRef } from "@insight/ir";
 import type { IRBatch } from "@insight/sdk";
-import { importBindings, matchCall, matchEnvRead, matchExportRoute, matchFetch, matchSchedule, matchServe, matchWorker, nodeScriptArgument, scriptPath, urlText, type ImportBinding, type ScriptPath, type UrlText, type WorkerEnv } from "./effects.js";
+import { importBindings, matchCall, matchEnvRead, matchEventSource, matchExportRoute, matchFetch, matchSchedule, matchServe, matchWorker, nodeScriptArgument, scriptPath, urlText, type ImportBinding, type ScriptPath, type UrlText, type WorkerEnv } from "./effects.js";
 import { channelIndex, matchChannelRecv, matchChannelSend } from "./channels.js";
 import { scriptKind } from "./digest.js";
 import { emitState } from "./state.js";
@@ -416,17 +416,21 @@ function nodeEntryFiles(
 const SCRIPT_SRC = /<script\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/gi;
 
 /**
- * The project source files an HTML page loads with a script tag. A leading slash is the project root, as in Vite; any
- * other path is relative to the page. `html` maps the page's project path to its text.
+ * The project source files an HTML page loads with a script tag. A leading slash is the page's own folder, its Vite root,
+ * so an apps/web/index.html that loads /src/main.tsx loads apps/web/src/main.tsx; any other path is relative to the page.
+ * A page under public/ keeps the project root for a leading slash, as it did before nested pages were read.
+ * `html` maps the page's project path to its text.
  */
 function htmlScriptEntries(html: Map<string, string>, rels: Set<string>): Set<string> {
   const out = new Set<string>();
+  const sourceAt = (base: string | undefined): string | undefined => (base === undefined ? undefined : candidatesAt(base).find((c) => rels.has(c)));
   for (const [page, text] of html) {
+    const folder = dirOf(page);
     for (const m of text.matchAll(SCRIPT_SRC)) {
       const src = (m[1] ?? "").split(/[?#]/)[0] ?? "";
       if (src === "" || src.startsWith("//") || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(src)) continue;
-      const at = src.startsWith("/") ? joinRel("", src.slice(1)) : joinRel(dirOf(page), src);
-      const hit = at === undefined ? undefined : candidatesAt(at).find((c) => rels.has(c));
+      let hit = sourceAt(src.startsWith("/") ? joinRel(folder, src.slice(1)) : joinRel(folder, src));
+      if (hit === undefined && src.startsWith("/") && /(^|\/)public$/.test(folder)) hit = sourceAt(joinRel("", src.slice(1)));
       if (hit !== undefined) out.add(hit);
     }
   }
@@ -1925,6 +1929,19 @@ export function emitFile(project: Project, rel: string): IRBatch {
       }
       const ctor = callableOf(project, declOf(project, project.checker.getSymbolAtLocation(nameOf(node.expression))));
       if (ctor) reference(ctor, "new", node.expression);
+      // A new EventSource(url) is a server-sent events stream the page opens: a GET that connects to the URL.
+      const stream = matchEventSource(node, imports, workerEnv);
+      if (stream) {
+        push({
+          id: uniqueId(`effect:${pos(sf, node.getStart(sf)).join(":")}`),
+          facet: "effects",
+          kind: stream.kind,
+          parent: owner,
+          attrs: stream.attrs,
+          span: spanOf(rel, sf, node),
+          provenance: PROV,
+        });
+      }
     }
 
     if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
