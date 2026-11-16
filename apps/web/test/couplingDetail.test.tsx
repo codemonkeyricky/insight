@@ -57,7 +57,7 @@ describe("LayersPanel coupling checkbox", () => {
   afterEach(cleanup);
 
   it("calls onChange with coupling when the Coupling only box is toggled", () => {
-    const shown: LayerState = { frames: true, calls: true, findings: false, lambdas: false, motion: true, runtime: true, coupling: true };
+    const shown: LayerState = { frames: true, calls: true, findings: false, lambdas: false, motion: true, runtime: true, coupling: true, intermodule: false };
     const onChange = vi.fn();
     render(<LayersPanel shown={shown} onChange={onChange} onClose={() => {}} />);
     fireEvent.click(screen.getByLabelText(/Coupling only/));
@@ -72,7 +72,8 @@ describe("ZoomStore.chartOf by detail", () => {
       ...full,
       coupling: { module: "m", footprint: { entries: [], modules: [], escape: false }, summary: "", chart: coupling, rows: { all: full.nodes.length, coupling: coupling.nodes.length } },
     };
-    const store = new ZoomStore("p", "coupling");
+    // The coupling Detail applies under the full chart; the inter-module focus replaces it (see flowFocus.test.tsx).
+    const store = new ZoomStore("p", "coupling", "all");
     (store as unknown as { fns: Map<string, FunctionFlow> }).fns.set("m#run", withCoupling);
     const c = await store.chartOf("m#run");
     expect(c?.coupling).toBeDefined();

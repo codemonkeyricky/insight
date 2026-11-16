@@ -2,10 +2,11 @@
 // /scope/flow and /scope/exec routes answer (apps/server/src/reader.ts, scopeFlowOf and scopeExecOf): the same
 // flow and exec functions run on the same scoped IR, so the payloads are equal. Pure, with no React and no
 // browser globals: the demo capture (scripts/capture-demo.mjs) imports this file too.
-import { execModel, summarizeScope, type ExecFunctionRef, type ExecModel, type ScopeFlow } from "@insight/flow";
+import { calleeMapOf, couplingIndex, execModel, summarizeScope, type ExecFunctionRef, type ExecModel, type FocusCallee, type ScopeFlow } from "@insight/flow";
 import { callerGraph, CALLER_DEFAULTS, pipelineModel, refsOf, scopeView, ScopeError, systemModel, tierModel, type CallerGraph, type CallerOptions, type PipelineModel, type ProjectModel, type Refs, type ScopeKindName, type SystemModel, type TierModel } from "@insight/model";
 // The extension is written so the capture script can load this file with Node's type stripping (see scripts/capture-demo.mjs).
 import { ApiError } from "../apiError.ts";
+import type { FlowFocus } from "../zoom/detailPref.ts";
 
 /** The fields a route adds around a payload. */
 export type ScopeFlowPayload = ScopeFlow & { snapshot: string; scope: string; kind: ScopeKindName };
@@ -23,6 +24,17 @@ function remember<T>(model: ProjectModel, key: string, compute: () => T): T {
   byKey.set(key, value);
   if (byKey.size > LIMIT) byKey.delete(byKey.keys().next().value as string);
   return value;
+}
+
+/** The call-target map of a model (every function by id, with its file and export flag), built once per model, as the server builds it per snapshot. */
+const calleesMemo = new WeakMap<ProjectModel, ReadonlyMap<string, FocusCallee>>();
+export function calleesOf(model: ProjectModel): ReadonlyMap<string, FocusCallee> {
+  let callees = calleesMemo.get(model);
+  if (callees === undefined) {
+    callees = calleeMapOf(couplingIndex(model.doc.nodes, model.doc.edges));
+    calleesMemo.set(model, callees);
+  }
+  return callees;
 }
 
 /** The scope's canonical path, or a 400 with the server's message when the path leaves the project. */
@@ -65,14 +77,17 @@ export function scopeFlowFor(snapshot: string, model: ProjectModel, path: string
 
 /**
  * The execution model of a scope, as GET /scope/exec answers it. It reads the whole snapshot, not the cut. Lambdas are
- * folded into their owner unless `lambdas` is true (see execModel). The server answers the folded model only.
+ * folded into their owner unless `lambdas` is true (see execModel). `focus: "intermodule"` sizes the boxes by the
+ * inter-module chart (see execModel), as the server's `focus` query does; the default is the full chart.
  */
-export function scopeExecFor(snapshot: string, model: ProjectModel, path: string, opts: { lambdas?: boolean } = {}): ScopeExecPayload {
+export function scopeExecFor(snapshot: string, model: ProjectModel, path: string, opts: { lambdas?: boolean; focus?: FlowFocus } = {}): ScopeExecPayload {
   const scope = canonical(model, path);
   const lambdas = opts.lambdas === true;
-  return remember(model, `exec\0${scope}\0${lambdas ? "lambdas" : "folded"}`, () => {
+  const focus: FlowFocus = opts.focus === "intermodule" ? "intermodule" : "all";
+  return remember(model, `exec\0${scope}\0${lambdas ? "lambdas" : "folded"}\0${focus}`, () => {
     const kind = kindOf(model, scope);
-    return { snapshot, kind, ...execModel(model.doc.nodes, model.doc.edges, scope, { lambdas }) };
+    const focused = focus === "intermodule" ? { focus, callees: calleesOf(model) } : {};
+    return { snapshot, kind, ...execModel(model.doc.nodes, model.doc.edges, scope, { lambdas, ...focused }) };
   }) as ScopeExecPayload;
 }
 

@@ -29,7 +29,8 @@ import type {
   TargetType,
 } from "./api";
 import type { CallerOptions, PipelineModel, SerializedModel, SystemModel, TierModel } from "@insight/model";
-import { buildFileFlow, couplingIndex, type CouplingIndex } from "@insight/flow";
+import { buildFileFlow, calleeMapOf, couplingIndex, type CouplingIndex } from "@insight/flow";
+import type { FlowFocus } from "./zoom/detailPref";
 import { callerGraphFor, pipelineFor, refsFor, scopeCallersFor, scopeExecFor, scopeFlowFor, systemFor, tiersFor, type CallerGraphPayload, type ScopeRefsPayload } from "./model/payloads";
 import { models } from "./model/store";
 import { canonicalScope, scopeKey, scopeProblem } from "./scopeKey";
@@ -327,14 +328,16 @@ export function makeStaticApi(baseFor: (projectId: string) => string | Promise<s
      * A file's function charts, laid out from the project's graph the way the live server lays them out (its fileFlow). The
      * export has no flow/* files (the spec computes flow layouts in the client), so this reads the graph, not a file.
      */
-    flow: async (id: string, path: string): Promise<FileFlow> => {
+    flow: async (id: string, path: string, focus: FlowFocus = "all"): Promise<FileFlow> => {
       await checkProject(id);
       const { graph } = await loadGraph(id);
       const nodes = graph.nodes.filter((n) => n.span?.file === path);
       const edges = graph.edges.filter((e) => e.span?.file === path);
       type FlowInput = Parameters<typeof buildFileFlow>;
-      const coupling = await couplingOf(id, graph);
-      return buildFileFlow(path, nodes as unknown as FlowInput[1], edges as unknown as FlowInput[2], { coupling });
+      const index = await couplingOf(id, graph);
+      // The inter-module focus takes the call-target map only: it never stacks the coupling chart (see server fileFlow).
+      if (focus === "intermodule") return buildFileFlow(path, nodes as unknown as FlowInput[1], edges as unknown as FlowInput[2], { focus: "intermodule", callees: calleeMapOf(index) });
+      return buildFileFlow(path, nodes as unknown as FlowInput[1], edges as unknown as FlowInput[2], { coupling: index });
     },
     flowSummary: async (id: string): Promise<FileFlowSummary[]> => {
       await checkProject(id);
@@ -349,7 +352,7 @@ export function makeStaticApi(baseFor: (projectId: string) => string | Promise<s
       return scopeFlowFor(snapshot, model, scope);
     },
     /** A scope's execution model, computed from the project's model the way the live server computes it. */
-    getScopeExec: async (id: string, scope: string, execOpts: { lambdas?: boolean } = {}): Promise<ExecModel> => {
+    getScopeExec: async (id: string, scope: string, execOpts: { lambdas?: boolean; focus?: FlowFocus } = {}): Promise<ExecModel> => {
       await checkProject(id);
       const problem = scopeProblem(scope);
       if (problem) throw new ApiError(400, problem);
@@ -415,10 +418,12 @@ export function makeStaticApi(baseFor: (projectId: string) => string | Promise<s
       return (await scopeFile<ArchModel>(id, "", "arch.json")) ?? EMPTY_ARCH;
     },
     /** A scope's execution scene laid out whole, as the export saved it. Undefined when it saved none. */
-    scopeExecLayout: async (id: string, scope: string): Promise<SceneLayout | undefined> => {
+    scopeExecLayout: async (id: string, scope: string, focus: FlowFocus = "all"): Promise<SceneLayout | undefined> => {
       await checkProject(id);
       const problem = scopeProblem(scope);
       if (problem) throw new ApiError(400, problem);
+      // The export saved the full chart's layout only. An inter-module layout is laid out in the page instead.
+      if (focus === "intermodule") return undefined;
       return scopeFile<SceneLayout>(id, scope, "exec-layout.json");
     },
     // Comparing commits and keeping review decisions and notes need a git history and a writable

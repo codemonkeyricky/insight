@@ -21,6 +21,7 @@ import {
 } from "@insight/indexer";
 import {
   buildFileFlow,
+  calleeMapOf,
   couplingIndex,
   couplingReport,
   execModel,
@@ -33,6 +34,7 @@ import {
   type ExecModel,
   type FileFlow,
   type FileFlowSummary,
+  type FocusCallee,
   type ScopeFlow,
   type SceneLayout,
 } from "@insight/flow";
@@ -345,11 +347,40 @@ function couplingFor(paths: ProjectPaths, snapshot: string): CouplingIndex {
   return index;
 }
 
-/** The control-flow charts of the functions in one file, rebuilt from the snapshot's IR, each with its coupling chart. */
-export function fileFlow(paths: ProjectPaths, snapshot: string, file: string): FileFlow {
+/**
+ * Which chart a flow or exec answer draws. `all` is the full chart with its coupling chart (the default, as before).
+ * `intermodule` is the inter-module focus: calls to exported functions of other files, and no kernel or env effects.
+ * It replaces the coupling chart, so the two are never stacked.
+ */
+export type FlowFocus = "intermodule" | "all";
+
+/** The `focus` query of a flow or exec route: absent or `all` is the full chart, `intermodule` the focus. Anything else is a 400. */
+export function focusOf(raw: unknown): FlowFocus {
+  if (raw === undefined || raw === "all") return "all";
+  if (raw === "intermodule") return "intermodule";
+  throw new ProjectError(400, "focus must be intermodule or all");
+}
+
+const calleesCache = new Map<string, ReadonlyMap<string, FocusCallee>>();
+
+/** The call-target map of a snapshot (every function by id, with its file and export flag), built once from its coupling index. */
+function calleesFor(paths: ProjectPaths, snapshot: string): ReadonlyMap<string, FocusCallee> {
+  const key = `${paths.state}\0${snapshot}`;
+  const hit = calleesCache.get(key);
+  if (hit) return hit;
+  const callees = calleeMapOf(couplingFor(paths, snapshot));
+  calleesCache.set(key, callees);
+  if (calleesCache.size > CACHE_LIMIT) calleesCache.delete(calleesCache.keys().next().value as string);
+  return callees;
+}
+
+/** The control-flow charts of the functions in one file, rebuilt from the snapshot's IR, each with its coupling chart (or, for the inter-module focus, the focused chart). */
+export function fileFlow(paths: ProjectPaths, snapshot: string, file: string, focus: FlowFocus = "all"): FileFlow {
   const snap = loadSnapshot(paths, snapshot);
   const nodes = [...snap.nodes.values()].filter((n) => n.span?.file === file);
-  return buildFileFlow(file, nodes, snap.edges.filter((e) => e.span?.file === file), { coupling: couplingFor(paths, snapshot) });
+  const edges = snap.edges.filter((e) => e.span?.file === file);
+  if (focus === "intermodule") return buildFileFlow(file, nodes, edges, { focus: "intermodule", callees: calleesFor(paths, snapshot) });
+  return buildFileFlow(file, nodes, edges, { coupling: couplingFor(paths, snapshot) });
 }
 
 /** How branchy each file is, for the folder and project scopes of the flow view. */
@@ -539,17 +570,18 @@ const scopeExecs = new Map<string, ScopeExecView>();
 /**
  * The execution model of a scope: its threads, coroutines and dispatches (see docs/exec-model.md). It reads the
  * whole snapshot, not the cut, because a thread's reach follows calls out of the scope. A snapshot never changes,
- * so each scope's model is kept until enough other scopes push it out.
+ * so each scope's model is kept until enough other scopes push it out. The focus sizes the boxes by their charts.
  */
-export function scopeExecOf(paths: ProjectPaths, snapshot: string, path: string): ScopeExecView {
+export function scopeExecOf(paths: ProjectPaths, snapshot: string, path: string, focus: FlowFocus = "all"): ScopeExecView {
   const scope = normalizeScope(path);
-  const key = `${paths.state}\0${snapshot}\0${scope}`;
+  const key = `${paths.state}\0${snapshot}\0${scope}\0${focus}`;
   const hit = scopeExecs.get(key);
   if (hit) return hit;
   const snap = loadSnapshot(paths, snapshot);
   const kind = scopeKindOf(snap, scope);
   if (!kind) throw new ProjectError(404, "no such scope");
-  const view: ScopeExecView = { scope, kind, exec: execModel(snap.model.doc.nodes, snap.model.doc.edges, scope) };
+  const opts = focus === "intermodule" ? { focus: "intermodule" as const, callees: calleesFor(paths, snapshot) } : {};
+  const view: ScopeExecView = { scope, kind, exec: execModel(snap.model.doc.nodes, snap.model.doc.edges, scope, opts) };
   scopeExecs.set(key, view);
   if (scopeExecs.size > SCOPE_EXEC_LIMIT) scopeExecs.delete(scopeExecs.keys().next().value as string);
   return view;
@@ -610,13 +642,13 @@ const scopeExecLayouts = new Map<string, Promise<ScopeExecLayoutView>>();
  * as a promise: a second request, even one that arrives while the first is still solving, waits for the same work.
  * A failed solve is dropped from the cache, so the next request tries again.
  */
-export function scopeExecLayoutOf(paths: ProjectPaths, snapshot: string, path: string): Promise<ScopeExecLayoutView> {
+export function scopeExecLayoutOf(paths: ProjectPaths, snapshot: string, path: string, focus: FlowFocus = "all"): Promise<ScopeExecLayoutView> {
   const scope = normalizeScope(path);
-  const key = `${paths.state}\0${snapshot}\0${scope}`;
+  const key = `${paths.state}\0${snapshot}\0${scope}\0${focus}`;
   const hit = scopeExecLayouts.get(key);
   if (hit) return hit;
   const solved = (async (): Promise<ScopeExecLayoutView> => {
-    const { kind, exec } = scopeExecOf(paths, snapshot, scope);
+    const { kind, exec } = scopeExecOf(paths, snapshot, scope, focus);
     layoutSolves += 1;
     return { scope, kind, layout: await solveExecLayout(exec) };
   })();

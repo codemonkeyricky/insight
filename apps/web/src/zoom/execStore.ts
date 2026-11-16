@@ -23,6 +23,7 @@ import {
   type SceneLayout,
 } from "@insight/flow";
 import { api } from "../api";
+import type { FlowFocus } from "./detailPref";
 import { solve } from "./elk";
 import { execBuild, execCallChain, execFocus, execIndex, execOpenSet, execPlacementFor, execResolve, execRunsOn, execThreadKeyOf, execUrl, splitExecFocus, syncSites, type ExecIndex } from "./execMap";
 import type { MapBuild, MapSource, MapUrl } from "./source";
@@ -57,6 +58,8 @@ export class ExecStore implements MapSource {
   private readonly lambdas: boolean;
   /** Whether a roots-only store draws the runtime containers (process and thread boxes) when the model has them. */
   private readonly runtime: boolean;
+  /** The chart the boxes are sized by: the inter-module focus, or the full chart (`all`, the default). */
+  private readonly focus: FlowFocus;
   private readonly loads = new Map<string, Promise<ExecView>>();
   private readonly views = new Map<string, ExecView>();
   /** The threads whose "+N more" card was clicked, as `scope NUL thread id`. Kept across loads of the scope. */
@@ -64,18 +67,20 @@ export class ExecStore implements MapSource {
 
   /**
    * `rootsOnly` makes the store's scenes the roots-only cut; `lambdas` shows anonymous functions; `runtime` draws the process
-   * and thread boxes around the roots (roots-only only, and only when the model has runtime context). One store per flags.
+   * and thread boxes around the roots (roots-only only, and only when the model has runtime context); `focus` sizes the boxes
+   * by the inter-module chart. One store per flags.
    */
-  constructor(id: string, rootsOnly = false, lambdas = false, runtime = true) {
+  constructor(id: string, rootsOnly = false, lambdas = false, runtime = true, focus: FlowFocus = "all") {
     this.id = id;
     this.rootsOnly = rootsOnly;
     this.lambdas = lambdas;
     this.runtime = runtime;
+    this.focus = focus;
   }
 
   /** The cache key of a scope: its scene depends on the scope and on whether the store is roots-only. */
   private keyOf(scope: string): string {
-    return `${this.rootsOnly ? "roots" : "all"}\u0000${this.lambdas ? "lambdas" : "folded"}\u0000${this.runtime ? "runtime" : "flat"}\u0000${scope}`;
+    return `${this.rootsOnly ? "roots" : "all"}\u0000${this.lambdas ? "lambdas" : "folded"}\u0000${this.runtime ? "runtime" : "flat"}\u0000${this.focus}\u0000${scope}`;
   }
 
   /**
@@ -111,8 +116,8 @@ export class ExecStore implements MapSource {
     let load = this.loads.get(key);
     if (load === undefined) {
       // The server's saved layout is for the folded, full scene only.
-      const saved$ = this.rootsOnly || this.lambdas ? Promise.resolve(undefined) : api.scopeExecLayout(this.id, scope);
-      load = Promise.all([api.getScopeExec(this.id, scope, { lambdas: this.lambdas }), saved$, api.getScopeCallers(this.id, scope)])
+      const saved$ = this.rootsOnly || this.lambdas ? Promise.resolve(undefined) : api.scopeExecLayout(this.id, scope, this.focus);
+      load = Promise.all([api.getScopeExec(this.id, scope, { lambdas: this.lambdas, focus: this.focus }), saved$, api.getScopeCallers(this.id, scope)])
         .then(async ([model, saved, callers]) => {
           const { scene, containers } = this.sceneOf(model, scope);
           // The saved layout is the full scene's, with the default containers open. A roots-only scene is a different scene,
