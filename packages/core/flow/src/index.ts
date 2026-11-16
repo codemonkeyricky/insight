@@ -21,6 +21,7 @@ export * from "./names.js";
 export * from "./modules.js";
 export * from "./coupling.js";
 export * from "./coupling-report.js";
+export * from "./scope-input.js";
 export * from "./resource-peers.js";
 
 /** A function of the snapshot as a coupling report names it: its id, display name, and declaration site. */

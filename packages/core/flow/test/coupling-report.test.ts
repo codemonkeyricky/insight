@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { couplingIndex, couplingReport, type CouplingIndex } from "../src/index.js";
+import * as fx from "@insight/sdk/testing";
+import { COUPLING_REPORT_FUNCTION_LIMIT, couplingIndex, couplingReport, type CouplingIndex } from "../src/index.js";
 import { indexFixture } from "./coupling-fixture.js";
 
 // Two packages: a calls into b. The report is the CLI/API view of the same footprints the coupling chart draws.
@@ -103,5 +104,24 @@ describe("couplingReport", () => {
   it("is deterministic when the IR records arrive in another order", () => {
     const reversed = couplingIndex([...nodes].reverse(), [...edges].reverse());
     expect(JSON.stringify(couplingReport(reversed))).toBe(JSON.stringify(couplingReport(index)));
+  });
+
+  it("caps a report by function count and marks it truncated", () => {
+    const count = COUPLING_REPORT_FUNCTION_LIMIT + 1;
+    const many = Array.from({ length: count }, (_, i) =>
+      fx.node(`big.ts#f${String(i).padStart(4, "0")}`, "structure", "structure.function", {
+        attrs: { name: `f${i}` },
+        span: fx.span("big.ts", i, 0, i, 1),
+      }),
+    );
+    many.push(fx.node("big.ts", "structure", "structure.file", { attrs: { path: "big.ts" } }));
+    const report = couplingReport(couplingIndex(many, []));
+    expect(report.functions).toHaveLength(COUPLING_REPORT_FUNCTION_LIMIT);
+    expect(report.truncated).toBe(true);
+    // The cap keeps the first ids in the report's stable id order.
+    expect(report.functions[0]?.id).toBe("big.ts#f0000");
+    expect(report.functions.at(-1)?.id).toBe("big.ts#f0199");
+    // A report the cap does not cut carries no marker.
+    expect(couplingReport(index).truncated).toBeUndefined();
   });
 });

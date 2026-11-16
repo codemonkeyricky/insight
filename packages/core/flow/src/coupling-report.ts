@@ -1,5 +1,6 @@
 import { footprintSummary, type CouplingFootprint, type FootprintEntry } from "./coupling.js";
-import type { CouplingIndex } from "./index.js";
+import type { CouplingFunction, CouplingIndex } from "./index.js";
+import { normalizeScopeInput } from "./scope-input.js";
 
 /** One row of a function's coupling footprint, as an agent reads it. */
 export interface CouplingReportEntry {
@@ -29,9 +30,23 @@ export interface CouplingReportFunction {
   escape: CouplingReportEntry[];
 }
 
+/**
+ * How many functions one report lists, and how many entries one class bucket of one function lists. A whole-project
+ * report of a large repository is otherwise unbounded and the hosted Function buffers its body. The cap applies to the
+ * CLI, the local server and the hosted Function alike (they share this builder); when it cuts anything the JSON carries
+ * `"truncated": true`, so a reader can tell a short report from a complete one.
+ *
+ * 200 functions × at most 50 footprint entries (FOOTPRINT_CAP) is a few hundred KB in practice, well inside the
+ * Function's response budget. The per-class cap is a second guard for a footprint that hoists rows past the cap.
+ */
+export const COUPLING_REPORT_FUNCTION_LIMIT = 200;
+export const COUPLING_REPORT_CLASS_LIMIT = 100;
+
 /** The coupling footprint of a set of functions, in the JSON shape the CLI `--json` and the HTTP route share. */
 export interface CouplingReport {
   functions: CouplingReportFunction[];
+  /** Present and true only when the function or class cap cut the report. */
+  truncated?: true;
 }
 
 /** How to choose the functions a report covers. */
@@ -51,16 +66,6 @@ const EMPTY: CouplingFootprint = { entries: [], modules: [], escape: false, stat
 
 /** Code-unit order, so the output does not depend on the machine's locale. */
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
-
-/** The scope path with `\` as `/`, no empty or `.` segments; `""` stays the whole project. */
-function normalizeScope(scope: string | undefined): string {
-  if (scope === undefined) return "";
-  return scope
-    .replace(/\\/g, "/")
-    .split("/")
-    .filter((part) => part !== "" && part !== ".")
-    .join("/");
-}
 
 /** The report entry of one footprint entry, with the target's declaration when the index knows it. */
 function reportEntry(e: FootprintEntry, index: CouplingIndex): CouplingReportEntry {
@@ -98,10 +103,23 @@ function sortedEntries(entries: Iterable<FootprintEntry>, index: CouplingIndex):
     );
 }
 
-/** The five class buckets of a footprint, each sorted the same way. */
-function buckets(fp: CouplingFootprint, index: CouplingIndex) {
-  const of = (cls: FootprintEntry["cls"]) => sortedEntries(fp.entries.filter((e) => e.cls === cls), index);
-  return { cross: of("cross"), io: of("io"), state: of("state"), conc: of("conc"), escape: of("escape") };
+/** The five class buckets of a footprint, each sorted the same way and capped; `truncated` says whether any was cut. */
+function buckets(fp: CouplingFootprint, index: CouplingIndex): {
+  cross: CouplingReportEntry[];
+  io: CouplingReportEntry[];
+  state: CouplingReportEntry[];
+  conc: CouplingReportEntry[];
+  escape: CouplingReportEntry[];
+  truncated: boolean;
+} {
+  let truncated = false;
+  const of = (cls: FootprintEntry["cls"]) => {
+    const all = sortedEntries(fp.entries.filter((e) => e.cls === cls), index);
+    if (all.length <= COUPLING_REPORT_CLASS_LIMIT) return all;
+    truncated = true;
+    return all.slice(0, COUPLING_REPORT_CLASS_LIMIT);
+  };
+  return { cross: of("cross"), io: of("io"), state: of("state"), conc: of("conc"), escape: of("escape"), truncated };
 }
 
 /**
@@ -116,11 +134,14 @@ function buckets(fp: CouplingFootprint, index: CouplingIndex) {
  *
  * The function list includes functions with no coupling (`summary` is `no coupling`): an agent asking about one function
  * gets an answer, not an omission. The summary is `footprintSummary`, the string the canvas and the panel show.
+ *
+ * The report is capped (see COUPLING_REPORT_FUNCTION_LIMIT and COUPLING_REPORT_CLASS_LIMIT): functions are sorted by id
+ * before the cap, so the same snapshot always yields the same cut, and `truncated: true` marks a report the cap shortened.
  */
 export function couplingReport(index: CouplingIndex, opts: CouplingReportOptions = {}): CouplingReport {
   const ids = opts.ids === undefined ? undefined : new Set(opts.ids);
-  const scope = normalizeScope(opts.scope);
-  const functions: CouplingReportFunction[] = [];
+  const scope = opts.scope === undefined ? "" : normalizeScopeInput(opts.scope);
+  const selected: { id: string; fn: CouplingFunction }[] = [];
   for (const [id, fn] of index.functions) {
     if (ids !== undefined) {
       if (!ids.has(id)) continue;
@@ -128,16 +149,23 @@ export function couplingReport(index: CouplingIndex, opts: CouplingReportOptions
       const file = fn.file;
       if (file === undefined || !(file === scope || file.startsWith(`${scope}/`))) continue;
     }
+    selected.push({ id, fn });
+  }
+  selected.sort((a, b) => cmp(a.id, b.id));
+  let truncated = selected.length > COUPLING_REPORT_FUNCTION_LIMIT;
+  const functions: CouplingReportFunction[] = [];
+  for (const { id, fn } of selected.slice(0, COUPLING_REPORT_FUNCTION_LIMIT)) {
     const fp = index.footprints.get(id) ?? EMPTY;
+    const { truncated: cut, ...bucketsOf } = buckets(fp, index);
     functions.push({
       id,
       name: fn.name,
       ...(fn.file !== undefined ? { file: fn.file } : {}),
       module: index.modules.moduleOf(id) ?? ".",
       summary: footprintSummary(fp),
-      ...buckets(fp, index),
+      ...bucketsOf,
     });
+    if (cut) truncated = true;
   }
-  functions.sort((a, b) => cmp(a.id, b.id));
-  return { functions };
+  return truncated ? { functions, truncated: true } : { functions };
 }
