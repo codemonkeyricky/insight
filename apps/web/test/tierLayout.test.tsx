@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { tierSystem } from "../src/arch/tier-layout";
-import { layoutSystem } from "../src/arch/system-layout";
+import { tierEdgeText, tierSystem } from "../src/arch/tier-layout";
+import { COMPACT_NUDGES, layoutSystem, SYS_HEADER_H, SYS_PAD } from "../src/arch/system-layout";
+import type { TierEdge } from "@insight/model";
 import { readSystemMode, SYSTEM_MODE_KEY, writeSystemMode } from "../src/arch/system-mode";
 import { SystemModeToggle } from "../src/components/views/SystemView";
-import { API, DISK, FN, GH, SQLITE, WEB, tierFixture, tierNodes } from "./tierFixtures";
+import { API, DISK, FN, GH, SQLITE, WEB, tierEdges, tierFixture, tierNodes } from "./tierFixtures";
 
 const memStore = () => {
   const m = new Map<string, string>();
@@ -88,6 +89,59 @@ describe("tierSystem", () => {
     }
   });
 });
+
+describe("tier edge labels and placement", () => {
+  it("never says the verb twice: a label that repeats the verb is dropped", () => {
+    expect(tierEdgeText({ verb: "reads", label: "read" })).toBe("reads");
+    expect(tierEdgeText({ verb: "writes", label: "write" })).toBe("writes");
+    expect(tierEdgeText({ verb: "opens", label: "better-sqlite3" })).toBe("opens better-sqlite3");
+    expect(tierEdgeText({ verb: "spawns", label: "child_process.spawn" })).toBe("spawns child_process.spawn");
+    expect(tierEdgeText({ verb: "requests", label: "" })).toBe("requests");
+  });
+
+  it("writes no duplicated verb into any pill, for the edges of a spawning model", () => {
+    const spawn: TierEdge = { id: "a>spawns>b", from: WEB, to: API, verb: "spawns", label: "child_process.spawn", count: 1, sites: [], confidence: "exact", apis: [] };
+    const { sys, layout } = tierSystem(tierFixture({ edges: [...tierEdges, spawn] }));
+    const out = layoutSystem(sys, layout);
+    for (const a of out.arrows) expect(a.pill.text).not.toMatch(/^(\w+) \1\b/);
+    expect(out.arrows.find((a) => a.edge.verb === "spawns")?.pill.text).toMatch(/^spawns child_process\./);
+  });
+
+  it("keeps every pill clear of the column headers", () => {
+    const { sys, layout } = tierSystem(tierFixture());
+    const out = layoutSystem(sys, layout);
+    const headers = out.columns.filter((c) => c.title !== "").map((c) => ({ x: c.x, y: SYS_PAD, w: c.w, h: SYS_HEADER_H }));
+    for (const a of out.arrows) {
+      const r = { x: a.pill.x - a.pill.w / 2, y: a.pill.y - a.pill.h / 2, w: a.pill.w, h: a.pill.h };
+      for (const h of headers) expect(overlaps(r, h), `${a.pill.text} over a header`).toBe(false);
+    }
+  });
+
+  it("keeps every pill within COMPACT_NUDGES of its own edge path, even when edges crowd", () => {
+    const crowd: TierEdge[] = ["GET /a", "GET /b", "POST /c", "PUT /d", "DELETE /e"].map((label, i) => ({
+      id: `${WEB}>requests>${API}#${i}`,
+      from: WEB,
+      to: API,
+      verb: "requests",
+      label,
+      count: 1,
+      sites: [],
+      confidence: "exact",
+      apis: [],
+    }));
+    const { sys, layout } = tierSystem(tierFixture({ edges: [...tierEdges, ...crowd] }));
+    const out = layoutSystem(sys, layout);
+    const limit = Math.max(...COMPACT_NUDGES.map(Math.abs)) + 8;
+    for (const a of out.arrows) {
+      const near = Math.min(...a.samples.map((p) => Math.hypot(p.x - a.pill.x, p.y - a.pill.y)));
+      expect(near, `${a.pill.text} is ${near.toFixed(1)} px from its edge`).toBeLessThanOrEqual(limit);
+    }
+  });
+});
+
+function overlaps(a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }): boolean {
+  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
 
 describe("system mode", () => {
   it("defaults to Tiers, and remembers a Runtime choice", () => {

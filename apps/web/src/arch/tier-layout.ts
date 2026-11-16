@@ -35,9 +35,29 @@ function externalOf(n: TierNode): SystemExternal {
   return { ...(n.external ?? { id: n.id, label: n.label, category: fallback }), id: n.id, label: n.label };
 }
 
-/** An edge as the System view draws it: its label leads with the verb, as the pill text does. */
+/**
+ * The text of a tier edge: its verb, then its label. A label that only repeats the verb ("reads" with "read", the op of a
+ * store) is dropped, so the verb is never said twice.
+ */
+export function tierEdgeText(e: Pick<TierEdge, "verb" | "label">): string {
+  const repeats = e.label === "" || e.label === e.verb || e.label === e.verb.replace(/s$/, "");
+  return repeats ? e.verb : `${e.verb} ${e.label}`;
+}
+
+/** An edge as the System view draws it: its label leads with the verb, as the pill text does. Its APIs show in the panel's evidence. */
 function edgeOf(e: TierEdge): SystemEdge {
-  return { id: e.id, from: e.from, to: e.to, verb: e.verb, label: `${e.verb} ${e.label}`, count: e.count, sites: e.sites, confidence: e.confidence };
+  const evidence = e.apis.map((api) => ({ api, level: "unknown" as const, count: e.count }));
+  return {
+    id: e.id,
+    from: e.from,
+    to: e.to,
+    verb: e.verb,
+    label: tierEdgeText(e),
+    count: e.count,
+    sites: e.sites,
+    confidence: e.confidence,
+    ...(evidence.length > 0 ? { evidence } : {}),
+  };
 }
 
 /** The subtitle of a component card: its role, and its route count when it serves any. */
@@ -76,6 +96,7 @@ export function tierSystem(t: TierModel): TierSystem {
       notes,
       subs,
       keepStages: true,
+      compactPills: true,
       externalColumns: [
         { title: "Storage", categories: ["store", "filesystem"] },
         { title: "External", categories: ["service", "worker"] },

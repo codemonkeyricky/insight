@@ -259,7 +259,15 @@ export interface LayoutOptions {
   subs?: ReadonlyMap<string, string>;
   /** Keep a last column of components nothing connects to, instead of folding it into the column before (the Pipeline and System default). */
   keepStages?: boolean;
+  /**
+   * Verb pills stay near their own edge: within COMPACT_NUDGES of its curve, clear of the column headers, and where no clear spot
+   * exists, the spot that overlaps least. Without it a pill may slide far off its curve to find a clear spot (the grounded views).
+   */
+  compactPills?: boolean;
 }
+
+/** Vertical offsets a compact pill may take from its curve, nearest first. The largest is the farthest a pill sits from its edge. */
+export const COMPACT_NUDGES = [0, 26, -26, 52, -52];
 
 /** The geometry of one System model. The Pipeline view passes its column titles and host notes through `opts`. */
 export function layoutSystem(sys: SystemModel, opts: LayoutOptions = {}): SysLayout {
@@ -502,6 +510,8 @@ export function layoutSystem(sys: SystemModel, opts: LayoutOptions = {}): SysLay
   // Pills sit on their curve, slid along it (t 0.3 to 0.7) and then offset off it until they touch no card and no other pill.
   const taken: Array<{ x: number; y: number; w: number; h: number }> = boxes.map((b) => ({ x: b.x - 4, y: b.y - 4, w: b.w + 8, h: b.h + 8 }));
   for (const g of groups) taken.push({ x: g.x - 2, y: g.y - 16, w: 150, h: 22 });
+  // The column headers' band: a compact pill never sits on a title (the header row is SYS_PAD to SYS_PAD + SYS_HEADER_H).
+  if (opts.compactPills === true) for (const col of columns) if (col.title !== "") taken.push({ x: col.x, y: SYS_PAD, w: col.w, h: SYS_HEADER_H });
   const arrows: SysArrow[] = [];
   const NUDGES = [0, 26, -26, 52, -52, 78, -78, 104, -104, 130, -130, 156, -156, 182, -182, 208, -208, 234, -234, 260, -260, 312, -312, 364, -364, 416, -416];
   const TS = [0.5, 0.45, 0.55, 0.4, 0.6, 0.35, 0.65, 0.3, 0.7];
@@ -513,19 +523,37 @@ export function layoutSystem(sys: SystemModel, opts: LayoutOptions = {}): SysLay
     const text = pillText(e);
     const w = pillWidth(text);
     let chosen: { x: number; y: number } | undefined;
-    for (const ts of [TS, WIDE_TS]) {
-      for (const off of NUDGES) {
-        for (const t of ts) {
+    if (opts.compactPills === true) {
+      // Nearest offset first, then the slides along the curve. No clear spot: the candidate that overlaps the least.
+      let least: { x: number; y: number; area: number } | undefined;
+      search: for (const off of COMPACT_NUDGES) {
+        for (const t of [...TS, ...WIDE_TS]) {
           const c = at(t);
           const r = { x: c.x - w / 2, y: c.y + off - SYS_PILL_H / 2, w, h: SYS_PILL_H };
-          if (!taken.some((o) => overlaps(r, o))) {
+          const area = taken.reduce((sum, o) => sum + overlapArea(r, o), 0);
+          if (area === 0) {
             chosen = { x: c.x, y: c.y + off };
-            break;
+            break search;
           }
+          if (least === undefined || area < least.area) least = { x: c.x, y: c.y + off, area };
+        }
+      }
+      if (chosen === undefined && least !== undefined) chosen = { x: least.x, y: least.y };
+    } else {
+      for (const ts of [TS, WIDE_TS]) {
+        for (const off of NUDGES) {
+          for (const t of ts) {
+            const c = at(t);
+            const r = { x: c.x - w / 2, y: c.y + off - SYS_PILL_H / 2, w, h: SYS_PILL_H };
+            if (!taken.some((o) => overlaps(r, o))) {
+              chosen = { x: c.x, y: c.y + off };
+              break;
+            }
+          }
+          if (chosen !== undefined) break;
         }
         if (chosen !== undefined) break;
       }
-      if (chosen !== undefined) break;
     }
     const c = chosen ?? at(0.5);
     taken.push({ x: c.x - w / 2, y: c.y - SYS_PILL_H / 2, w, h: SYS_PILL_H });
@@ -595,4 +623,11 @@ function inside(p: Pt, b: { x: number; y: number; w: number; h: number }, margin
 
 function overlaps(a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }): boolean {
   return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
+/** The area two rectangles share (0 when they touch or do not meet). */
+function overlapArea(a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }): number {
+  const w = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+  const h = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+  return w > 0 && h > 0 ? w * h : 0;
 }

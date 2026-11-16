@@ -19,7 +19,7 @@ export const tierNodes: TierNode[] = [
   unit({ id: GH, label: "GitHub API", tier: "external", external: { id: GH, label: "GitHub API", category: "service", host: "api.github.com" } }),
 ];
 
-const edge = (over: Partial<TierEdge> & Pick<TierEdge, "id" | "from" | "to" | "verb" | "label">): TierEdge => ({ count: 1, sites: [], confidence: "exact", ...over });
+const edge = (over: Partial<TierEdge> & Pick<TierEdge, "id" | "from" | "to" | "verb" | "label">): TierEdge => ({ count: 1, sites: [], confidence: "exact", apis: [], ...over });
 
 export const tierEdges: TierEdge[] = [
   edge({ id: `${WEB}>requests>${API}`, from: WEB, to: API, verb: "requests", label: "GET /api/items" }),
