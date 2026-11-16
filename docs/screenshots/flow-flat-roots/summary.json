@@ -1,0 +1,131 @@
+{
+  "counts": [
+    {
+      "run": "before",
+      "scope": "core/physics",
+      "viewport": "1800x1100",
+      "url": "http://127.0.0.1:4317/#/projects/aaaac4a7/view/flow?scope=core%2Fphysics",
+      "function": 19,
+      "uniqueFids": 19,
+      "more": [],
+      "frames": 0,
+      "bodyHasThreadWord": false,
+      "errors": []
+    },
+    {
+      "run": "before",
+      "scope": "core/physics",
+      "viewport": "1800x2400",
+      "url": "http://127.0.0.1:4317/#/projects/aaaac4a7/view/flow?scope=core%2Fphysics",
+      "function": 53,
+      "uniqueFids": 53,
+      "more": [
+        "+4 more (Click to show every root card of this thread)ƒ +4 more"
+      ],
+      "frames": 0,
+      "bodyHasThreadWord": false,
+      "errors": []
+    },
+    {
+      "run": "before",
+      "scope": "(root)",
+      "viewport": "1800x1100",
+      "url": "http://127.0.0.1:4317/#/projects/aaaac4a7/view/flow",
+      "function": 37,
+      "uniqueFids": 37,
+      "more": [
+        "+16 more (Click to show every root card of this thread)ƒ +16 more"
+      ],
+      "frames": 0,
+      "bodyHasThreadWord": true,
+      "errors": []
+    },
+    {
+      "run": "before",
+      "scope": "(root)",
+      "viewport": "1800x2400",
+      "url": "http://127.0.0.1:4317/#/projects/aaaac4a7/view/flow",
+      "function": 97,
+      "uniqueFids": 97,
+      "more": [
+        "+16 more (Click to show every root card of this thread)ƒ +16 more",
+        "+17 more (Click to show every root card of this thread)ƒ +17 more",
+        "+37 more (Click to show every root card of this thread)ƒ +37 more"
+      ],
+      "frames": 0,
+      "bodyHasThreadWord": true,
+      "errors": []
+    },
+    {
+      "run": "after",
+      "scope": "core/physics",
+      "viewport": "1800x1100",
+      "url": "http://127.0.0.1:4362/#/projects/9cac16c5/view/flow?scope=core%2Fphysics",
+      "function": 23,
+      "uniqueFids": 23,
+      "more": [
+        "+12 more (Click to show every card in this scope)ƒ +12 more"
+      ],
+      "frames": 0,
+      "bodyHasThreadWord": false,
+      "errors": []
+    },
+    {
+      "run": "after",
+      "scope": "core/physics",
+      "viewport": "1800x2400",
+      "url": "http://127.0.0.1:4362/#/projects/9cac16c5/view/flow?scope=core%2Fphysics",
+      "function": 23,
+      "uniqueFids": 23,
+      "more": [
+        "+12 more (Click to show every card in this scope)ƒ +12 more"
+      ],
+      "frames": 0,
+      "bodyHasThreadWord": false,
+      "errors": []
+    },
+    {
+      "run": "after",
+      "scope": "(root)",
+      "viewport": "1800x1100",
+      "url": "http://127.0.0.1:4362/#/projects/9cac16c5/view/flow",
+      "function": 23,
+      "uniqueFids": 23,
+      "more": [
+        "+2 more (Click to show every card in this scope)ƒ +2 more"
+      ],
+      "frames": 0,
+      "bodyHasThreadWord": false,
+      "errors": []
+    },
+    {
+      "run": "after",
+      "scope": "(root)",
+      "viewport": "1800x2400",
+      "url": "http://127.0.0.1:4362/#/projects/9cac16c5/view/flow",
+      "function": 23,
+      "uniqueFids": 23,
+      "more": [
+        "+2 more (Click to show every card in this scope)ƒ +2 more"
+      ],
+      "frames": 0,
+      "bodyHasThreadWord": false,
+      "errors": []
+    }
+  ],
+  "click": {
+    "clickedLabel": "ƒ analyseC…",
+    "titleText": "analyseCam (camAnalysis.ts:75)",
+    "hashAfterClick": "#/projects/9cac16c5/view/flow?scope=core%2Fphysics&fn=core%2Fphysics%2FcamAnalysis.ts%23analyseCam",
+    "callersChips": 23,
+    "hashAfterReload": "#/projects/9cac16c5/view/flow?scope=core%2Fphysics&fn=core%2Fphysics%2FcamAnalysis.ts%23analyseCam",
+    "deepLinkShowsName": false,
+    "errors": []
+  },
+  "system": {
+    "mentionsThreads": false,
+    "mentionsNotOnThread": false,
+    "errors": []
+  },
+  "errors": {}
+}
