@@ -625,3 +625,51 @@ describe("tierModel static folders and config files", () => {
     expect(tiers.nodes.find((n) => n.id === "cra")).toMatchObject({ tier: "frontend", role: "spa", platform: "browser" });
   });
 });
+
+describe("tierModel calls to an outside service", () => {
+  it("draws a browser app's calls with no method to outside services as requests on the external nodes", () => {
+    // fetch(url, init) with init a variable: the method is unknown, so the System verb is calls. It must not be dropped.
+    const WEB = "web/src/main.ts";
+    const tiers = tiersOf({
+      nodes: [
+        file("web/package.json"),
+        file("web/index.html"),
+        file(WEB),
+        fn(WEB, "load"),
+        effect(WEB, "load", 3, "effects.net.connect", net("fetch", { host: "api.github.com", path: "/repos/o/r" })),
+        effect(WEB, "load", 4, "effects.net.connect", net("fetch", { host: "api.stripe.com", path: "/v1/charges" })),
+      ],
+      edges: [imp(WEB, "react-dom/client")],
+      findings: [],
+    });
+    const external = tiers.nodes.filter((n) => n.tier === "external").map((n) => n.id);
+    expect(external).toContain("svc:github-api");
+    expect(external).toContain("host:api.stripe.com");
+    const requests = tiers.edges.filter((e) => e.from === "web" && e.verb === "requests").map((e) => e.to);
+    expect(requests).toContain("svc:github-api");
+    expect(requests).toContain("host:api.stripe.com");
+  });
+});
+
+describe("tierModel routes in a build config file", () => {
+  it("does not make a ui package with a mock server in its vite config a backend", () => {
+    // No index.html: the only route is a mock server in the build config, which is not the app's own server.
+    const APP = "ui/src/main.jsx";
+    const CFG = "ui/vite.config.js";
+    const tiers = tiersOf({
+      nodes: [
+        file("ui/package.json"),
+        file(APP),
+        fn(APP, "start"),
+        file(CFG),
+        fn(CFG, "config"),
+        effect(CFG, "config", 3, "effects.net.serve", { framework: "express", method: "GET", path: "/mock/items", handler: "items" }),
+      ],
+      edges: [imp(APP, "react-dom/client")],
+      findings: [],
+    });
+    const ui = tiers.nodes.find((n) => n.id === "ui");
+    expect(ui?.role).not.toBe("server");
+    expect(ui?.tier).not.toBe("backend");
+  });
+});

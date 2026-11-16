@@ -260,6 +260,10 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
   // A site set that is the app's own: no sites (unknown), or one site outside a build or tool config file.
   const appSite = (sites: Site[]): boolean => sites.length === 0 || sites.some((s) => !CONFIG_FILE.test(s.file));
   const listens = new Set(links.filter((l) => l.e.verb === "listens" && appSite(l.e.sites)).map((l) => l.from));
+  // The routes that are the app's own: a route in a build or tool config file (a mock server in vite.config) is not one the
+  // component serves. Every role below is decided on these, never on the routes of all sites.
+  const appRoutesOf = new Map<string, SystemRoute[]>();
+  for (const [id, list] of routesOf) appRoutesOf.set(id, list.filter((r) => appSite([r.site])));
   // A component that listens, or has a server route that is not an exported or dispatched handler, is a server of its own.
   // A listen or route in a config file does not count.
   const ownsServer = (id: string, rs: SystemRoute[]): boolean =>
@@ -274,7 +278,7 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
     const roots = (runtimeById.get(s.runtime)?.roots ?? []).map((root) => root.split("#")[0] ?? root).filter((file) => ownerOfPath(file) === s.component);
     if (roots.length === 0) continue;
     const served = roots.every((file) => inStaticFolder(file, comps.get(s.component)?.path ?? ""));
-    if (!served || !ownsServer(s.component, routesOf.get(s.component) ?? [])) browserComponents.add(s.component);
+    if (!served || !ownsServer(s.component, appRoutesOf.get(s.component) ?? [])) browserComponents.add(s.component);
   }
   // Env reads by owner: each name with the places it is read (its file and its function). A build or tool config file's reads
   // are not the app's own, so they are dropped.
@@ -319,7 +323,7 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
   const signals = new Map<string, string[]>();
   for (const c of sys.components) {
     if (!shown.has(c.id)) continue;
-    const rs = routesOf.get(c.id) ?? [];
+    const rs = appRoutesOf.get(c.id) ?? [];
     const imports = [...(importsOf.get(c.id) ?? [])].sort(cmp);
     const sig: string[] = [];
     const ui = imports.filter((t) => UI_IMPORT.test(t) && !SERVER_SUBPATH.test(t));
@@ -378,7 +382,7 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
   }
   for (const c of sys.components) {
     if (!shown.has(c.id) || role.has(c.id) || !c.entry) continue;
-    if ((routesOf.get(c.id) ?? []).length > 0 || listens.has(c.id)) continue;
+    if ((appRoutesOf.get(c.id) ?? []).length > 0 || listens.has(c.id)) continue;
     const calledByDeployable = (linksTo.get(c.id) ?? []).some((l) => firstPass.has(l.from) && !isImportOnly(l.e));
     if (calledByDeployable) continue;
     const out = (linksFrom.get(c.id) ?? []).find((l) => (l.e.verb === "requests" || l.e.verb === "spawns") && backendRole(l.to));
@@ -396,8 +400,10 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
   const factsOut = new Map<string, Link[]>();
   for (const l of links) {
     if (!shown.has(l.from)) continue;
-    if (l.e.verb === "calls") {
-      if (isImportOnly(l.e) || !shown.has(l.to)) continue;
+    // A call to an outside service is a fact out of the component (drawn as a request), not a call into the library closure.
+    if (l.e.verb === "calls" && isImportOnly(l.e)) continue;
+    if (l.e.verb === "calls" && !exts.has(l.to)) {
+      if (!shown.has(l.to)) continue;
       const calls = callsOut.get(l.from) ?? [];
       calls.push(l.to);
       callsOut.set(l.from, calls);
