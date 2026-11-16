@@ -83,5 +83,7 @@ export function formatCoupling(r: CouplingReport): string {
       for (const e of entries) lines.push(formatCouplingEntry(e));
     }
   }
+  // The JSON carries `"truncated": true`; say it here too, so a text reader is not misled by a short report.
+  if (r.truncated === true) lines.push("", "truncated: the report hit the function or class cap");
   return lines.join("\n");
 }
