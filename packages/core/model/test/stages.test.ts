@@ -172,7 +172,7 @@ describe("stage graph: interface fan-out and ambiguous calls", () => {
     const detect = g.body[0];
     expect(detect?.kind === "call" && detect.fanout?.how).toBe("interface");
     expect(detect?.kind === "call" && detect.fanout?.targets.map((t) => t.component)).toEqual(["b", "b", "c", "c", "c"]);
-    expect(g.coverage).toContain("1 calls with several possible targets shown once");
+    expect(g.coverage).toContain("1 call with several possible targets shown once");
     // The ambiguous call carries how many distinct targets it could be.
     const amb = g.body[2];
     expect(amb?.kind === "call" && amb.candidates).toBe(2);
@@ -233,6 +233,12 @@ describe("stage graph: exits", () => {
 });
 
 describe("stage graph: coverage notes", () => {
+  it("pluralises the ambiguous-call note: one call is singular, several are plural", () => {
+    const edges = [call(DRV, [stageId("s5"), stageId("s6")], 6, 2, 6, { callee: "amb" }), call(DRV, [stageId("s5"), stageId("s6")], 8, 2, 6, { callee: "amb2" })];
+    const g = graphOf(doc({ edges }));
+    expect(g.coverage).toContain("2 calls with several possible targets shown once");
+  });
+
   it("notes approximate call order, missing early exits, and ambiguous calls", () => {
     const nodes = [flow("loop:3:2", "flow.loop", [3, 2, 5, 3], { variant: "for-of", condition: "xs" })];
     const edges = [call(DRV, stageId("s1"), 4, 4, 6, { callEnd: undefined }), call(DRV, [stageId("s5"), stageId("s6")], 6, 2, 6, { callee: "amb" })];
@@ -240,7 +246,7 @@ describe("stage graph: coverage notes", () => {
     expect(g.coverage).toEqual([
       "Nested call order approximate",
       "Early exits not shown",
-      "1 calls with several possible targets shown once",
+      "1 call with several possible targets shown once",
       "No data-flow facts for this language",
     ]);
   });
@@ -823,7 +829,14 @@ describe("stage graph: named property arrows and callback marks (review r3)", ()
     const parse = stageNamed(g.body, "parser.parse");
     expect(parse).toBeDefined();
     expect(parse?.ambiguous).toBe(true);
+    expect(parse?.slot).toBe(true);
+    expect(parse?.candidates).toBeUndefined();
     expect(g.edges).toEqual([{ from: parse?.id, to: idOf(g, "s4"), label: "ast" }]);
+  });
+
+  it("does not count a kept callback slot as an ambiguous call in the coverage note", () => {
+    const g = graphOf(docWithDriver({ params: [] }, { nodes: [parseNode({ anonymous: true, callbackSlot: true })], edges: [parseCall(), saveCall()] }));
+    expect(g.coverage.some((c) => c.includes("several possible targets"))).toBe(false);
   });
 
   it("drops an unbound callback slot (a fire-and-forget call such as opts.onProgress)", () => {

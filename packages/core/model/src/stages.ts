@@ -51,6 +51,7 @@ export type StageNode =
       fanout?: { how: "interface" | "registry"; targets: { fn: NodeId; name: string; component?: string }[]; truncated?: boolean };
       ambiguous?: boolean; // candidates without how interface|registry: ONE stage, no fan-out
       candidates?: number; // with ambiguous: how many distinct targets the call could be
+      slot?: boolean; // a kept callback slot (its result is bound): one ambiguous stage that is a callback, not a candidate call
       body?: StageNode[]; // inlined local helper (named fn nested in the driver), depth <= 3, cycle-guarded
       repeatOf?: string; // the helper was inlined by an earlier call (this one: id of that call): no body, "same as above"
       binds?: string[];
@@ -484,7 +485,7 @@ function resolveCall(group: Rel[], env: Env): StageNode | undefined {
         // A slot whose result is bound (`const ast = this.s.parse(t)`) produces data a later statement may read: it stays one
         // ambiguous stage so that data edge survives. A slot with no bound result (fire-and-forget) is dropped.
         if (binds === undefined) return undefined;
-        return { kind: "call", id, name: callee ?? "call", site, ambiguous: true, candidates: targets.length, ...dataAttrs };
+        return { kind: "call", id, name: callee ?? "call", site, ambiguous: true, slot: true, ...dataAttrs };
       }
       const shown = targets.slice(0, FANOUT_CAP).map((t): { fn: NodeId; name: string; component?: string } => {
         const f = ctx.model.functionById.get(t) as FunctionEntity;
@@ -659,7 +660,8 @@ function scoreBody(model: ProjectModel, body: StageNode[]): number | undefined {
 function countAmbiguous(nodes: StageNode[]): number {
   let n = 0;
   for (const node of nodes) {
-    if (node.kind === "call") n += (node.ambiguous === true ? 1 : 0) + (node.body ? countAmbiguous(node.body) : 0);
+    // A kept callback slot is a callback the caller passes in, not a call with several possible targets: it is not counted.
+    if (node.kind === "call") n += (node.ambiguous === true && node.slot !== true ? 1 : 0) + (node.body ? countAmbiguous(node.body) : 0);
     else if (node.kind === "loop") n += countAmbiguous(node.body);
     else if (node.kind === "branch") for (const a of node.arms) n += countAmbiguous(a.body);
     else if (node.kind === "try") n += countAmbiguous(node.body) + countAmbiguous(node.handler);
@@ -975,7 +977,7 @@ function coverageOf(ctx: Ctx, body: StageNode[], driverId: NodeId): string[] {
   const hasExit = flows.some((n) => n.kind === "flow.jump" || n.kind === "flow.return");
   if (hasLoop && !hasExit) notes.push("Early exits not shown");
   const ambiguous = countAmbiguous(body);
-  if (ambiguous > 0) notes.push(`${ambiguous} calls with several possible targets shown once`);
+  if (ambiguous > 0) notes.push(`${ambiguous} ${ambiguous === 1 ? "call" : "calls"} with several possible targets shown once`);
   return notes;
 }
 

@@ -292,7 +292,8 @@ function keepItem(item: Item, caught: boolean, ctx: Ctx, st: { next: number }): 
       const baseLabel = hoisted !== undefined ? `${item.label} ⇢ ${hoisted}` : item.label;
       const baseTitle = hoisted !== undefined ? `${item.title ?? item.label} ⇢ ${hoisted}` : item.title;
       // A kept call whose result goes into a local shows where it goes: `cfg ← config.loadConfig()`.
-      const bind = item.role === "call" || item.role === "await" ? (item.binds === undefined ? undefined : bindNames(item).map(displayLocals(bindNames(item))).join(", ")) : undefined;
+      const names = (item.role === "call" || item.role === "await") && item.binds !== undefined ? bindNames(item) : undefined;
+      const bind = names?.map(displayLocals(names)).join(", ");
       const boundLabel = bind !== undefined ? `${bind} ← ${baseLabel}` : baseLabel;
       const boundTitle = bind !== undefined ? `${bind} ← ${baseTitle ?? baseLabel}` : baseTitle;
       return {

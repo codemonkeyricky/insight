@@ -541,3 +541,18 @@ describe("stages layout: a link between non-card stages (review r3)", () => {
     expect(diamond?.members).toContain(link?.to);
   });
 });
+
+describe("stages layout: callback slots", () => {
+  it("labels a kept callback slot 'callback slot', never a count of possible targets; an ordinary ambiguous call keeps its count", () => {
+    const g: StageGraph = {
+      driver: { id: "app/src/run.ts#run", name: "run", file: "app/src/run.ts" },
+      body: [call("sl1", "parse", { ambiguous: true, slot: true }), call("am1", "pick", { ambiguous: true, candidates: 2 })],
+      edges: [],
+      coverage: [],
+    };
+    const subs = cards(layoutStages(g).nodes).map((c) => c.sub);
+    expect(subs).toContain("callback slot");
+    expect(subs).toContain("2 possible");
+    expect(subs.some((s) => s?.includes("1 possible") || s?.includes("several possible"))).toBe(false);
+  });
+});

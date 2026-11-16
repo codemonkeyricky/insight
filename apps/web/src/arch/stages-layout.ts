@@ -404,6 +404,7 @@ function callSized(n: Extract<StageNode, { kind: "call" }>, o: Ctx): Sized | und
       more: all.length - chips.length,
     });
   }
+  if (n.slot === true) return cardSized({ title: n.name, sub: "callback slot", tone: "ambiguous", site: n.site });
   if (n.ambiguous === true) {
     const sub = n.candidates !== undefined ? `${n.candidates} possible` : "several possible";
     return cardSized({ title: n.name, sub, tone: "ambiguous", site: n.site });
