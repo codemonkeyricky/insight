@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { IRDocument, IRNode } from "@insight/ir";
 import * as fx from "@insight/sdk/testing";
 import { buildProjectModel, loadModel, serializeModel, systemModel, type SystemModel } from "../src/index.js";
+import { deployRoots } from "../src/system.js";
 
 const file = (path: string): IRNode => fx.node(path, "structure", "structure.file", { attrs: { path }, span: fx.span(path, 0, 0, 0, 0) });
 
@@ -363,5 +364,64 @@ describe("systemModel follow-ups", () => {
     // A and C have no callers but facts going out; B is called by A; D has nothing in or out.
     expect(sys.stages).toEqual([[A, C], [B], [D]]);
     expect(sys.components.every((c) => !c.entry)).toBe(true);
+  });
+});
+
+/** A browser app (web) that makes the given relative requests, and a Fastify server (server) with the given routes. */
+function routedDoc(requests: Array<{ path: string; method?: string }>, routes: Array<{ path: string; method: string; handler: string }>): IRDocument {
+  const nodes: IRNode[] = [
+    file("web/package.json"),
+    file("web/index.html"),
+    file("web/src/api.ts"),
+    fn("web/src/api.ts", "load"),
+    file("server/package.json"),
+    file("server/src/routes.ts"),
+    fn("server/src/routes.ts", "register"),
+  ];
+  requests.forEach((r, i) => nodes.push(effect("web/src/api.ts", "load", 3 + i, "effects.net.connect", net("fetch", { relative: true, path: r.path, method: r.method ?? "GET" }))));
+  routes.forEach((r, i) => nodes.push(effect("server/src/routes.ts", "register", 3 + i, "effects.net.serve", { framework: "fastify", method: r.method, path: r.path, handler: r.handler })));
+  return { nodes, edges: [], findings: [] };
+}
+
+describe("route matching", () => {
+  it("matches a request to a :param route before a trailing-* route with the same literal count", () => {
+    const sys = systemModel(modelOf(routedDoc([{ path: "/api/x" }], [{ method: "GET", path: "/api/*", handler: "any" }, { method: "GET", path: "/api/:id", handler: "one" }])), "");
+    expect(sys.edges.find((e) => e.from === "web" && e.to === "server")?.label).toBe("GET /api/:id");
+  });
+
+  it("does not let a trailing * match the bare prefix: /api/* does not answer GET /api", () => {
+    const sys = systemModel(modelOf(routedDoc([{ path: "/api" }], [{ method: "GET", path: "/api/*", handler: "any" }])), "");
+    expect(sys.edges.some((e) => e.from === "web" && e.to === "server")).toBe(false);
+    expect(sys.externals.some((x) => x.id === "api:GET /api")).toBe(true);
+  });
+
+  it("marks the edge inferred when a glued :param was stripped to make the match", () => {
+    const glued = systemModel(modelOf(routedDoc([{ path: "/api/review:param" }], [{ method: "GET", path: "/api/review", handler: "review" }])), "");
+    expect(glued.edges.find((e) => e.from === "web" && e.to === "server")?.confidence).toBe("inferred");
+    const plain = systemModel(modelOf(routedDoc([{ path: "/api/review" }], [{ method: "GET", path: "/api/review", handler: "review" }])), "");
+    expect(plain.edges.find((e) => e.from === "web" && e.to === "server")?.confidence).toBe("exact");
+  });
+});
+
+describe("deploy roots and noise folders", () => {
+  it("does not make a wrangler config in examples, tests, build or tool folders a component root", () => {
+    expect(deployRoots(["examples/foo/wrangler.toml", "apps/a/wrangler.toml", ".claude/x/wrangler.toml", "dist/wrangler.toml", "build/vercel.json", "__tests__/vercel.json"])).toEqual(["apps/a"]);
+  });
+
+  it("keeps a packages/build or examples package.json folder as a System component (the noise list is for deploy roots only)", () => {
+    const doc: IRDocument = {
+      nodes: [
+        file("packages/build/package.json"),
+        file("packages/build/src/a.ts"),
+        fn("packages/build/src/a.ts", "run"),
+        file("examples/app/package.json"),
+        file("examples/app/src/b.ts"),
+        fn("examples/app/src/b.ts", "main"),
+      ],
+      edges: [],
+      findings: [],
+    };
+    const sys = systemModel(buildProjectModel(doc), "");
+    expect(sys.components.map((c) => c.id)).toEqual(expect.arrayContaining(["packages/build", "examples/app"]));
   });
 });

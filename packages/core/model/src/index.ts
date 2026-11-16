@@ -48,6 +48,7 @@ export {
   type ArchFile,
   type ArchFileImport,
 } from "./arch/arch.js";
+export { tierModel, type Tier, type TierEdge, type TierModel, type TierNode, type TierOptions } from "./tiers.js";
 export { pipelineModel, stageOwnership, type PipelineEdge, type PipelineModel, type PipelineOptions, type PipelinePoint } from "./pipeline.js";
 export { MIN_STAGES, sequencePipelines, type PipelineSequence, type PipelineStage } from "./sequence.js";
 export { stageDrivers, stageGraph, type DataEdge, type StageDriver, type StageGraph, type StageNode } from "./stages.js";

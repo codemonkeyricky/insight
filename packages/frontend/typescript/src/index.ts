@@ -4,8 +4,18 @@ import type { ExtractContext, Frontend, IRBatch, ProjectRoot } from "@insight/sd
 import { buildProject, emitFile, FRONTEND_ID, SOURCE_RE } from "./extract.js";
 import { apiDigest } from "./digest.js";
 import { isWorkspaceManifest } from "./packages.js";
+import { WRANGLER_RE, parseWrangler, type WranglerInfo } from "./deploy.js";
 
 const SKIP_DIRS = new Set(["node_modules", ".git", ".insight", "dist"]);
+
+/**
+ * Folders whose pages are not an app's entry: tests, fixtures, examples, builds and tool state. The same folder names as NOISE_DIR
+ * in packages/core/model/src/system.ts (the model's deploy-root noise list); the frontend cannot import the model, so keep them equal.
+ */
+const NOISE_PAGE_DIR = /(^|\/)(node_modules|dist|build|test|tests|__tests__|fixtures|__fixtures__|samples|examples|\.claude)\//;
+
+/** An index.html the project lists outside those folders. */
+const isEntryPage = (f: string): boolean => (f === "index.html" || f.endsWith("/index.html")) && !NOISE_PAGE_DIR.test(f);
 
 /** Finds a TypeScript or JavaScript source file within a few levels of the root. */
 function findSource(dir: string, depth: number): string | undefined {
@@ -23,7 +33,7 @@ function findSource(dir: string, depth: number): string | undefined {
 
 export const frontend: Frontend = {
   id: FRONTEND_ID,
-  version: "0.2.13",
+  version: "0.2.14",
   provides: ["structure", "packaging", "flow", "calls", "effects", "concurrency", "sync", "state", "data"],
 
   async detect(root: ProjectRoot) {
@@ -38,10 +48,14 @@ export const frontend: Frontend = {
     const rels = ctx.listFiles().filter((f) => SOURCE_RE.test(f));
     const texts = new Map<string, string>();
     for (const rel of rels) texts.set(join(ctx.root.path, rel), await ctx.readFile(rel));
-    // The pages whose script tags load a module's entry: the project's index.html and public/index.html.
+    // The pages whose script tags load a module's entry: the project's index.html and public/index.html, then every
+    // other index.html the project lists (a nested app such as apps/web/index.html), outside test and build folders.
     const html = new Map<string, string>();
     for (const page of ["index.html", "public/index.html"]) {
       if (existsSync(join(ctx.root.path, page))) html.set(page, await ctx.readFile(page));
+    }
+    for (const page of ctx.listFiles()) {
+      if (isEntryPage(page) && !html.has(page)) html.set(page, await ctx.readFile(page));
     }
     // The root package.json names the Node scripts of "bin" and "scripts" (see nodeEntryFiles).
     const manifests = new Map<string, string>();
@@ -51,7 +65,14 @@ export const frontend: Frontend = {
     for (const f of ctx.listFiles()) {
       if (isWorkspaceManifest(f)) packageJsons.set(f, await ctx.readFile(f));
     }
-    const project = buildProject(ctx.root.path, rels, texts, html, manifests, packageJsons);
+    // Every wrangler config outside test, fixture and build folders, keyed by its folder (see deploy.ts).
+    const wranglers = new Map<string, WranglerInfo>();
+    for (const f of ctx.listFiles()) {
+      if (WRANGLER_RE.test(f) && !NOISE_PAGE_DIR.test(f)) {
+        wranglers.set(f.includes("/") ? f.slice(0, f.lastIndexOf("/")) : "", parseWrangler(await ctx.readFile(f), f));
+      }
+    }
+    const project = buildProject(ctx.root.path, rels, texts, html, manifests, packageJsons, wranglers);
     for (const rel of ctx.files) {
       yield emitFile(project, rel);
     }

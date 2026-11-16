@@ -1,6 +1,6 @@
 {
   "id": "frontend-typescript",
-  "version": "0.2.13",
+  "version": "0.2.14",
   "description": "TypeScript and JavaScript: structure, imports, calls, control flow and known effects.",
   "irVersion": "^1.0",
   "detect": [
@@ -24,7 +24,9 @@
   ],
   "inputs": [
     "tsconfig*.json",
-    "jsconfig.json"
+    "jsconfig.json",
+    "**/wrangler.{toml,json,jsonc}",
+    "**/index.html"
   ],
   "provides": [
     "calls",

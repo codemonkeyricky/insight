@@ -5,6 +5,8 @@ import { api } from "../../api";
 import { fileTarget, useCodeTarget } from "../../codeTarget";
 import { layoutSystem, pillText, routeText, type SysArrow, type SysBox, type SysFrame, type SysLayout } from "../../arch/system-layout";
 import { frameHeaderText, layoutSystemFrames } from "../../arch/system-frames";
+import { SYSTEM_MODES, SYSTEM_MODE_LABELS, readSystemMode, writeSystemMode, type SystemMode } from "../../arch/system-mode";
+import { tierSystem } from "../../arch/tier-layout";
 import { hrefView } from "../../router";
 import { PipelineSummary } from "./PipelineSummary";
 
@@ -47,21 +49,57 @@ export function fitCamera(layout: Pick<SysLayout, "width" | "height"> & { focusY
 export const dirname = (file: string): string => (file.includes("/") ? file.slice(0, file.lastIndexOf("/")) : "");
 const fnName = (fn: string): string => fn.slice(fn.lastIndexOf("#") + 1);
 
+/** What the System tab loads: the model to draw, and the layout options when it is the Tiers view (drawn flat, not as frames). */
+interface Loaded {
+  sys: SystemModel;
+  layout?: LayoutOptions;
+  /** Set when the Tiers view was chosen but the scope has too few units for it: the Runtime view is drawn, and this says why. */
+  reason?: string;
+}
+
+/** The Tiers | Runtime control of the System tab, as a segmented control (the same markup as the Arch tab's). */
+export function SystemModeToggle({ mode, onChange }: { mode: SystemMode; onChange: (m: SystemMode) => void }) {
+  return (
+    <div className="seg sysv-mode" role="group" aria-label="System view">
+      {SYSTEM_MODES.map((m) => (
+        <button key={m} type="button" aria-pressed={mode === m} onClick={() => onChange(m)}>
+          {SYSTEM_MODE_LABELS[m]}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /**
- * The System view of the explorer scope: the components inside it, the routes they serve, the outside systems they touch and
- * the verbs between them, computed in the page from the project model (so it works in the demo and hosted builds too).
+ * The System view of the explorer scope. Tiers (the default) draws the deployable units left to right, frontend then backend, with
+ * the stores and outside services after them; Runtime draws the traced components, routes and outside systems. Both are computed in
+ * the page from the project model (so they work in the demo and hosted builds too).
  */
 export function SystemView({ id, scope }: { id: string; scope: string }) {
   const [tests, setTests] = useState(false);
-  const [done, setDone] = useState<{ key: string; sys?: SystemModel; error?: string } | null>(null);
-  const key = `${id}\0${scope}\0${tests}`;
+  const [mode, setMode] = useState<SystemMode>(() => readSystemMode());
+  const pick = (m: SystemMode) => {
+    setMode(m);
+    writeSystemMode(m);
+  };
+  const [done, setDone] = useState<{ key: string; loaded?: Loaded; error?: string } | null>(null);
+  const key = `${id}\0${scope}\0${tests}\0${mode}`;
   useEffect(() => {
     let cancelled = false;
-    // The model is computed on a later task, so "Computing runtime…" paints before the work starts.
+    // The model is computed on a later task, so the "Computing…" line paints before the work starts.
     const timer = setTimeout(() => {
-      api.getSystem(id, scope, tests).then(
-        (sys) => {
-          if (!cancelled) setDone({ key, sys });
+      const runtime = (reason?: string): Promise<Loaded> => api.getSystem(id, scope, tests).then((sys) => (reason === undefined ? { sys } : { sys, reason }));
+      const load: Promise<Loaded> =
+        mode === "runtime"
+          ? runtime()
+          : api.getTiers(id, scope, tests).then((t) => {
+              if (t.reason !== undefined) return runtime(t.reason);
+              const tiers = tierSystem(t);
+              return { sys: tiers.sys, layout: tiers.layout };
+            });
+      load.then(
+        (loaded) => {
+          if (!cancelled) setDone({ key, loaded });
         },
         (e: unknown) => {
           if (!cancelled) setDone({ key, error: e instanceof Error ? e.message : String(e) });
@@ -72,10 +110,23 @@ export function SystemView({ id, scope }: { id: string; scope: string }) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [id, scope, tests, key]);
-  if (done === null) return <p className="muted" role="status">Computing runtime…</p>;
-  if (done.sys === undefined) return <p className="error" role="alert">{done.error}</p>;
-  return <SystemDiagram id={id} sys={done.sys} tests={tests} onTests={setTests} stale={done.key !== key} />;
+  }, [id, scope, tests, mode, key]);
+  const loaded = done?.loaded;
+  // An error belongs to the load it came from: after a mode switch the previous mode's error is not shown until the new load settles.
+  const error = done?.key === key ? done.error : undefined;
+  return (
+    <div className="sysv-tab">
+      <div className="sysv-modebar">
+        <SystemModeToggle mode={mode} onChange={pick} />
+        {loaded?.reason !== undefined && <span className="muted small sysv-tiers-note">Tiers unavailable here ({loaded.reason}); showing Runtime.</span>}
+      </div>
+      {loaded === undefined && error === undefined && <p className="muted" role="status">{mode === "tiers" ? "Computing tiers…" : "Computing runtime…"}</p>}
+      {loaded === undefined && error !== undefined && <p className="error" role="alert">{error}</p>}
+      {loaded !== undefined && (
+        <SystemDiagram id={id} sys={loaded.sys} layoutOptions={loaded.layout} flat={loaded.layout !== undefined} apiEvidenceOnly={loaded.layout !== undefined} tests={tests} onTests={setTests} stale={done?.key !== key} />
+      )}
+    </div>
+  );
 }
 
 export interface SystemDiagramProps {
@@ -88,10 +139,16 @@ export interface SystemDiagramProps {
   layoutOptions?: LayoutOptions;
   /** The Pipeline model `sys` was converted from: its side panel shows when nothing is selected, and its reason fills the empty state. */
   pipeline?: PipelineModel;
+  /** A flat diagram (the Pipeline's or the Tiers view's): no frames, strips or kernel band. */
+  flat?: boolean;
+  /** The Tiers view: an edge's evidence is its APIs and counts only, so the panel's Syscall and Level columns are left out. */
+  apiEvidenceOnly?: boolean;
 }
 
 /** The diagram, its toolbar and its side panel for one System model. Pure of data loading, so it renders from a model alone. */
-export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOptions, pipeline }: SystemDiagramProps) {
+export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOptions, pipeline, flat = false, apiEvidenceOnly = false }: SystemDiagramProps) {
+  // The Pipeline and Tiers views are flat: their layout has no frames, strips or kernel band.
+  const flatLayout = pipeline !== undefined || flat;
   // The Pipeline view keeps its own layout; the System view draws frames, strips and the kernel band.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const [widened, setWidened] = useState<ReadonlySet<string>>(() => new Set());
@@ -106,7 +163,7 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
     setWidened(new Set());
     setOpen(new Set());
   }
-  const layout = useMemo(() => (pipeline !== undefined ? layoutSystem(sys, layoutOptions) : layoutSystemFrames(sys, { collapsed, widened, open })), [sys, layoutOptions, pipeline, collapsed, widened, open]);
+  const layout = useMemo(() => (flatLayout ? layoutSystem(sys, layoutOptions) : layoutSystemFrames(sys, { collapsed, widened, open })), [sys, layoutOptions, flatLayout, collapsed, widened, open]);
   const toggleOpen = useCallback((key: string) => {
     setOpen((o) => {
       const next = new Set(o);
@@ -155,10 +212,10 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
     // The legend sits along the bottom edge, so the diagram is fitted above it.
     // On a phone the legend wraps onto several lines, so measure it rather than assume one row.
     const legendH = Math.max(LEGEND_H, (el?.querySelector<HTMLElement>(".sysv-legend")?.offsetHeight ?? 0) + 16);
-    const cam = fitCamera(layoutRef.current, w, h - legendH, pipeline === undefined ? SYSTEM_FIT_MIN_K : FIT_MIN_K);
+    const cam = fitCamera(layoutRef.current, w, h - legendH, flatLayout ? FIT_MIN_K : SYSTEM_FIT_MIN_K);
     fitK.current = cam.k;
     setCam(cam);
-  }, [expanded, pipeline]);
+  }, [expanded, flatLayout]);
   // Fits when a new model arrives (a new scope, the tests flag), the view expands or the layout options change. Collapsing,
   // widening or grouping changes the layout but keeps the user's zoom and pan.
   useLayoutEffect(() => {
@@ -322,7 +379,7 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
             </span>
           )}
         </span>
-        {pipeline === undefined && sys.runtime === "none" && sys.components.length > 0 && (
+        {pipeline === undefined && !flat && sys.runtime === "none" && sys.components.length > 0 && (
           <span className="muted small sysv-note">No runtime entry in this scope</span>
         )}
         {pipeline === undefined && sys.runtime === "truncated" && (
@@ -573,8 +630,8 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
           )}
           {cutRight && <div className="sysv-fade" aria-hidden="true" />}
           {cut && sel === null && <span className="sysv-hint small muted">drag to pan · Fit</span>}
-          {!empty && sel === null && <Legend pipeline={pipeline !== undefined} />}
-          {sel !== null && <Panel id={id} sys={sys} layout={layout} sel={sel} onSelect={setSel} onOpen={openScope} onClose={() => setSel(null)} onToggle={toggleFrame} onWiden={widen} />}
+          {!empty && sel === null && <Legend pipeline={pipeline !== undefined} flat={flat} />}
+          {sel !== null && <Panel id={id} sys={sys} layout={layout} sel={sel} apiEvidenceOnly={apiEvidenceOnly} onSelect={setSel} onOpen={openScope} onClose={() => setSel(null)} onToggle={toggleFrame} onWiden={widen} />}
         </div>
         {!empty && sel === null && pipeline !== undefined && <PipelineSummary pipeline={pipeline} />}
       </div>
@@ -638,7 +695,7 @@ function LevelMarks() {
   );
 }
 
-function Legend({ pipeline }: { pipeline: boolean }) {
+function Legend({ pipeline, flat }: { pipeline: boolean; flat: boolean }) {
   if (pipeline) {
     return (
       <ul className="sysv-legend small muted" aria-label="Legend">
@@ -657,20 +714,20 @@ function Legend({ pipeline }: { pipeline: boolean }) {
         <span className="sw w" /> writes
       </li>
       <li>
-        <span className="sw" /> reads, calls, requests
+        <span className="sw" /> {flat ? "reads, requests, opens" : "reads, calls, requests"}
       </li>
       <li>
-        <span className="sw dashed" /> runs, spawns
+        <span className="sw dashed" /> {flat ? "spawns" : "runs, spawns"}
       </li>
       <li>
         <span className="sw inferred" /> inferred
       </li>
-      <LevelMarks />
+      {!flat && <LevelMarks />}
     </ul>
   );
 }
 
-function Panel({ id, sys, layout, sel, onSelect, onOpen, onClose, onToggle, onWiden }: { id: string; sys: SystemModel; layout: SysLayout; sel: NonNullable<Selection>; onSelect: (s: Selection) => void; onOpen: (path: string) => void; onClose: () => void; onToggle: (id: string) => void; onWiden: (id: string) => void }) {
+function Panel({ id, sys, layout, sel, apiEvidenceOnly, onSelect, onOpen, onClose, onToggle, onWiden }: { id: string; sys: SystemModel; layout: SysLayout; sel: NonNullable<Selection>; apiEvidenceOnly: boolean; onSelect: (s: Selection) => void; onOpen: (path: string) => void; onClose: () => void; onToggle: (id: string) => void; onWiden: (id: string) => void }) {
   const nameOf = (nodeId: string): string => {
     const b = layout.boxes.find((x) => x.id === nodeId);
     return b ? (b.kind === "component" ? (b.component?.label ?? nodeId) : (b.external?.label ?? nodeId)) : nodeId;
@@ -685,7 +742,7 @@ function Panel({ id, sys, layout, sel, onSelect, onOpen, onClose, onToggle, onWi
     if (!a) return <aside className="sysv-panel" />;
     return (
       <aside className="sysv-panel" aria-label="Selection">{close}
-        <EdgeDetail id={id} edge={a.edge} fromName={nameOf(a.from)} toName={nameOf(a.to)} />
+        <EdgeDetail id={id} edge={a.edge} fromName={nameOf(a.from)} toName={nameOf(a.to)} apiOnly={apiEvidenceOnly} />
       </aside>
     );
   }
@@ -929,7 +986,8 @@ function ResourceDetail({ id, sys, box, layout, onSelect }: { id: string; sys: S
   );
 }
 
-function EdgeDetail({ id, edge, fromName, toName }: { id: string; edge: SystemEdge; fromName: string; toName: string }) {
+/** The evidence table of an edge. `apiOnly` (the Tiers view) leaves out the Syscall and Level columns: a tier edge has neither. */
+function EdgeDetail({ id, edge, fromName, toName, apiOnly }: { id: string; edge: SystemEdge; fromName: string; toName: string; apiOnly: boolean }) {
   return (
     <>
       <h2 className="mono">
@@ -947,8 +1005,8 @@ function EdgeDetail({ id, edge, fromName, toName }: { id: string; edge: SystemEd
           <thead>
             <tr>
               <th>API</th>
-              <th>Syscall</th>
-              <th>Level</th>
+              {!apiOnly && <th>Syscall</th>}
+              {!apiOnly && <th>Level</th>}
               <th>Count</th>
             </tr>
           </thead>
@@ -956,8 +1014,8 @@ function EdgeDetail({ id, edge, fromName, toName }: { id: string; edge: SystemEd
             {edge.evidence.map((ev) => (
               <tr key={`${ev.api}\0${ev.syscall ?? ""}\0${ev.level}`}>
                 <td className="mono">{ev.api}</td>
-                <td className="mono">{ev.syscall ?? "·"}</td>
-                <td>{LEVEL_TEXT[ev.level]}</td>
+                {!apiOnly && <td className="mono">{ev.syscall ?? "·"}</td>}
+                {!apiOnly && <td>{LEVEL_TEXT[ev.level]}</td>}
                 <td>{ev.count}</td>
               </tr>
             ))}

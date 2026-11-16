@@ -1,0 +1,16 @@
+{
+  "name": "fixture-server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node --import tsx src/index.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "better-sqlite3": "11.10.0",
+    "fastify": "5.6.0"
+  },
+  "devDependencies": {
+    "vitest": "3.2.4"
+  }
+}

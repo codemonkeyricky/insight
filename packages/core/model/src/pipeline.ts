@@ -6,7 +6,7 @@ import type { NodeId, Span, IREdge } from "@insight/ir";
 import { isNoisePath } from "@insight/flow";
 import type { ProjectModel, Rel } from "./model.js";
 import { normalizeScope, ROOT_SCOPE } from "./scope.js";
-import { componentOf, nodePackageRoots, packageRoots, systemModel, type Site, type SystemComponent, type SystemModel, type SystemOptions } from "./system.js";
+import { componentOf, deployRoots, nodePackageRoots, packageRoots, systemModel, type Site, type SystemComponent, type SystemModel, type SystemOptions } from "./system.js";
 import { scopeView } from "./view.js";
 import { enclosingFn, sequencePipelines, type PipelineSequence } from "./sequence.js";
 
@@ -87,7 +87,7 @@ function testsOf(scope: string, opts: PipelineOptions): boolean {
  */
 function fileOwners(model: ProjectModel, sys: SystemModel, inner: string, tests: boolean): (file: string | undefined) => string | undefined {
   const view = scopeView(model, inner);
-  const packages = packageRoots(model.files, nodePackageRoots(model));
+  const packages = packageRoots(model.files, [...nodePackageRoots(model), ...deployRoots(model.files)]);
   const sysById = new Map(sys.components.map((c) => [c.id, c] as const));
   const compOfFile = new Map<string, string>();
   for (const file of view.files()) {

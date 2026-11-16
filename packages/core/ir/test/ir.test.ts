@@ -335,3 +335,52 @@ describe("data facet", () => {
     expect(report.errors.some((e) => e.line === 3 && e.message.includes("storage"))).toBe(true);
   });
 });
+
+describe("effects.store.access, serve platform/name, connect protocol (tiers U2)", () => {
+  // One file and one node of the given facet and kind, whose attrs are the argument.
+  const withNode = (facet: string, kind: string, attrs: unknown) => {
+    const file = { node: { id: "app/a.ts", facet: "structure", kind: "structure.file", attrs: { path: "app/a.ts", language: "typescript", parseStatus: "ok" }, provenance: { frontend: "test", confidence: "exact" } } };
+    const node = { node: { id: "app/a.ts#n", facet, kind, parent: "app/a.ts", attrs, provenance: { frontend: "test", confidence: "exact" } } };
+    return [file, node].map((r) => JSON.stringify(r)).join("\n");
+  };
+  const check = (ndjson: string) => validateIR(ndjson, createCoreRegistry());
+
+  it("accepts an effects.store.access for a Worker KV binding read", () => {
+    const report = check(withNode("effects", "effects.store.access", { api: "env.INDEX.get", store: "cloudflare-kv", op: "read", binding: "INDEX" }));
+    expect(report.errors).toEqual([]);
+    expect(report.ok).toBe(true);
+    expect(report.opaqueKinds).toEqual([]);
+  });
+
+  it("rejects an effects.store.access with an op outside the enum", () => {
+    const report = check(withNode("effects", "effects.store.access", { api: "env.INDEX.put", store: "cloudflare-kv", op: "upsert" }));
+    expect(report.ok).toBe(false);
+    expect(report.errors.some((e) => e.message.includes("op must be equal to one of the allowed values"))).toBe(true);
+  });
+
+  it("rejects an effects.store.access without store", () => {
+    const report = check(withNode("effects", "effects.store.access", { api: "env.INDEX.get", op: "read" }));
+    expect(report.ok).toBe(false);
+    expect(report.errors.some((e) => e.message.includes("must have required property 'store'"))).toBe(true);
+  });
+
+  it("accepts optional platform and name on effects.net.serve", () => {
+    const report = check(withNode("effects", "effects.net.serve", { framework: "worker", method: "*", path: "/", platform: "cloudflare", name: "fixture-storage" }));
+    expect(report.errors).toEqual([]);
+    expect(report.ok).toBe(true);
+  });
+
+  it("accepts protocol sse or websocket on effects.net.connect", () => {
+    for (const protocol of ["sse", "websocket"]) {
+      const report = check(withNode("effects", "effects.net.connect", { api: "EventSource", method: "GET", protocol }));
+      expect(report.errors).toEqual([]);
+      expect(report.ok).toBe(true);
+    }
+  });
+
+  it("rejects a protocol outside sse and websocket on effects.net.connect", () => {
+    const report = check(withNode("effects", "effects.net.connect", { api: "EventSource", protocol: "grpc" }));
+    expect(report.ok).toBe(false);
+    expect(report.errors.some((e) => e.message.includes("protocol must be equal to one of the allowed values"))).toBe(true);
+  });
+});

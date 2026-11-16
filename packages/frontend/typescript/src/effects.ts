@@ -125,10 +125,19 @@ export function matchCall(call: ts.CallExpression, imports: Map<string, ImportBi
   return { kind: entry.kind, attrs };
 }
 
-/** process.env.NAME, read as a property access. Returns the name, or undefined. */
+/** Vite's built-in import.meta.env names: they are not the project's own environment variables. */
+const VITE_BUILTIN_ENV = new Set(["BASE_URL", "MODE", "DEV", "PROD", "SSR"]);
+
+/**
+ * process.env.NAME, or Vite's import.meta.env.NAME (minus its built-ins), read as a property access. Returns the name, or
+ * undefined.
+ */
 export function matchEnvRead(node: ts.PropertyAccessExpression, imports: Map<string, ImportBinding>): string | undefined {
   const inner = node.expression;
   if (!ts.isPropertyAccessExpression(inner) || inner.name.text !== "env") return undefined;
+  if (ts.isMetaProperty(inner.expression) && inner.expression.keywordToken === ts.SyntaxKind.ImportKeyword) {
+    return VITE_BUILTIN_ENV.has(node.name.text) ? undefined : node.name.text;
+  }
   if (!ts.isIdentifier(inner.expression) || inner.expression.text !== "process") return undefined;
   if (imports.has("process")) return undefined;
   return node.name.text;
@@ -547,29 +556,12 @@ export interface FetchHooks {
   method?: (e: ts.Expression) => string | undefined;
 }
 
-export function matchFetch(call: ts.CallExpression, imports: Map<string, ImportBinding>, env: WorkerEnv = {}, hooks: FetchHooks = {}): FetchMatch | undefined {
-  const callee = unwrapAll(call.expression) as ts.Expression;
-  let name: string | undefined;
-  let exact = false;
-  if (ts.isIdentifier(callee)) {
-    name = callee.text;
-    exact = name === "fetch" && !imports.has("fetch") && !env.declared?.(callee);
-  } else if (ts.isPropertyAccessExpression(callee)) {
-    name = callee.name.text;
-    const base = callee.expression;
-    exact =
-      name === "fetch" &&
-      ts.isIdentifier(base) &&
-      GLOBAL_FETCH_BASES.has(base.text) &&
-      !imports.has(base.text) &&
-      !env.declared?.(base);
-  }
-  if (name === undefined) return undefined;
-  if (!exact && !/fetch/i.test(name)) return undefined;
-  const [urlArg, opts] = call.arguments;
-  if (urlArg === undefined) return undefined;
-
-  const attrs: Record<string, unknown> = { api: callee.getText().slice(0, 40) };
+/**
+ * The URL attributes a network call's first argument gives: the host or the relative path, and the env variable the URL
+ * reads. fetch and EventSource both name their URL this way, so they reach the same route.
+ */
+function fetchUrlAttrs(urlArg: ts.Expression, imports: Map<string, ImportBinding>, env: WorkerEnv, hooks: FetchHooks = {}): Record<string, unknown> {
+  const attrs: Record<string, unknown> = {};
   const found = urlText(urlArg, imports, env, true, hooks.url);
   const envName = found?.env ?? envOf(urlArg, imports, env);
   if (found === undefined) {
@@ -603,6 +595,32 @@ export function matchFetch(call: ts.CallExpression, imports: Map<string, ImportB
   }
   if (attrs.path === undefined) delete attrs.path;
   if (envName !== undefined) attrs.env = envName;
+  return attrs;
+}
+
+export function matchFetch(call: ts.CallExpression, imports: Map<string, ImportBinding>, env: WorkerEnv = {}, hooks: FetchHooks = {}): FetchMatch | undefined {
+  const callee = unwrapAll(call.expression) as ts.Expression;
+  let name: string | undefined;
+  let exact = false;
+  if (ts.isIdentifier(callee)) {
+    name = callee.text;
+    exact = name === "fetch" && !imports.has("fetch") && !env.declared?.(callee);
+  } else if (ts.isPropertyAccessExpression(callee)) {
+    name = callee.name.text;
+    const base = callee.expression;
+    exact =
+      name === "fetch" &&
+      ts.isIdentifier(base) &&
+      GLOBAL_FETCH_BASES.has(base.text) &&
+      !imports.has(base.text) &&
+      !env.declared?.(base);
+  }
+  if (name === undefined) return undefined;
+  if (!exact && !/fetch/i.test(name)) return undefined;
+  const [urlArg, opts] = call.arguments;
+  if (urlArg === undefined) return undefined;
+
+  const attrs: Record<string, unknown> = { api: callee.getText().slice(0, 40), ...fetchUrlAttrs(urlArg, imports, env, hooks) };
 
   // The method: the second argument's `method` string, GET when the options object omits it, and absent when it is not literal.
   if (opts === undefined) {
@@ -633,6 +651,26 @@ export function matchFetch(call: ts.CallExpression, imports: Map<string, ImportB
     }
   }
   attrs.confidence = exact ? "exact" : "inferred";
+  return { kind: "effects.net.connect", attrs };
+}
+
+/**
+ * `new EventSource(url)`, the browser's server-sent events stream: a GET to the URL, with the protocol "sse". The URL is
+ * named as fetch names one, so the stream and a fetch of the same path reach the same route.
+ */
+export function matchEventSource(node: ts.NewExpression, imports: Map<string, ImportBinding>, env: WorkerEnv = {}): FetchMatch | undefined {
+  const callee = unwrapAll(node.expression) as ts.Expression;
+  if (!ts.isIdentifier(callee) || callee.text !== "EventSource") return undefined;
+  const urlArg = node.arguments?.[0];
+  if (urlArg === undefined) return undefined;
+  const exact = !imports.has("EventSource") && !env.declared?.(callee);
+  const attrs: Record<string, unknown> = {
+    api: "EventSource",
+    ...fetchUrlAttrs(urlArg, imports, env),
+    method: "GET",
+    protocol: "sse",
+    confidence: exact ? "exact" : "inferred",
+  };
   return { kind: "effects.net.connect", attrs };
 }
 
@@ -765,4 +803,207 @@ export function matchExportRoute(node: ts.Node): ServeMatch[] {
     return out;
   }
   return [];
+}
+
+/**
+ * The method on a platform binding that reads, lists, writes or deletes, and the store op it is. D1: prepare reads (it
+ * compiles a statement; the statement's own run is not seen), exec and batch write (they run statements that may change
+ * rows), and dump reads (it exports the database).
+ */
+const STORE_OPS: Record<string, string> = {
+  get: "read",
+  getWithMetadata: "read",
+  list: "list",
+  put: "write",
+  delete: "delete",
+  prepare: "read",
+  exec: "write",
+  batch: "write",
+  dump: "read",
+};
+
+const WRITE_SQL = /^\s*(INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER)\b/i;
+/** A WITH statement writes when a write keyword is code in it. REPLACE counts as the statement, not the replace() function. */
+const WRITE_WITH = /\b(INSERT|UPDATE|DELETE)\b|\bREPLACE\b(?!\s*\()/i;
+/** SQL comments, string literals and quoted identifiers, in the order they are met (one pass, so a `--` in a string is a string). */
+const SQL_TOKEN = /\/\*[\s\S]*?\*\/|--[^\n]*|'(?:[^']|'')*'|"(?:[^"]|"")*"/g;
+
+/** The statement's code: each comment is blanked, and each string or quoted identifier is emptied, so a keyword counts only as code. */
+function sqlCode(sql: string): string {
+  return sql.replace(SQL_TOKEN, (tok) => (tok.startsWith("/*") || tok.startsWith("--") ? " " : tok.startsWith("'") ? "''" : '""'));
+}
+
+/**
+ * Whether a D1 statement's text, when it is a literal (a string, or a template whose text before the first substitution is
+ * read), is a write: it starts with a write keyword after any leading comments, or it is a WITH statement that holds an
+ * INSERT, UPDATE, DELETE or REPLACE keyword as code. A statement that is not a literal is read as a read.
+ */
+function sqlWrites(arg: ts.Expression | undefined): boolean {
+  if (arg === undefined) return false;
+  const e = unwrapAll(arg);
+  let text: string | undefined;
+  if (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) text = e.text;
+  else if (ts.isTemplateExpression(e)) text = e.head.text;
+  if (text === undefined) return false;
+  const code = sqlCode(text);
+  if (WRITE_SQL.test(code)) return true;
+  return /^\s*WITH\b/i.test(code) && WRITE_WITH.test(code);
+}
+
+export interface StoreMatch {
+  kind: "effects.store.access";
+  attrs: Record<string, unknown>;
+}
+
+/**
+ * A call on a platform binding a Worker's wrangler config declares: `env.INDEX.get(…)` reads the store INDEX names. The
+ * receiver must be a name the Worker takes as its env (see workerEnvNames) and the binding must be one the config declares.
+ */
+export function matchStoreAccess(call: ts.CallExpression, bindings: Map<string, string>, envNames: Set<string>): StoreMatch | undefined {
+  const callee = unwrapAll(call.expression);
+  if (!ts.isPropertyAccessExpression(callee)) return undefined;
+  // An own key only: a method such as valueOf or constructor is a prototype member, not a store op.
+  const method = callee.name.text;
+  if (!Object.hasOwn(STORE_OPS, method)) return undefined;
+  const op = method === "prepare" ? (sqlWrites(call.arguments[0]) ? "write" : "read") : STORE_OPS[method];
+  if (op === undefined) return undefined;
+  const target = unwrapAll(callee.expression);
+  if (!ts.isPropertyAccessExpression(target) || !ts.isIdentifier(target.expression)) return undefined;
+  const binding = target.name.text;
+  const store = bindings.get(binding);
+  if (store === undefined || !envNames.has(target.expression.text)) return undefined;
+  return {
+    kind: "effects.store.access",
+    attrs: { api: `${target.expression.text}.${binding}.${callee.name.text}`, store, op, binding },
+  };
+}
+
+/**
+ * The names a Worker file takes as its env: the second parameter of every `fetch` handler, and any parameter named `env`
+ * (helpers such as `signingKey(env)` receive the binding object the same way). An alias made by destructuring is not followed.
+ */
+export function workerEnvNames(sf: ts.SourceFile): Set<string> {
+  const names = new Set<string>();
+  const visit = (node: ts.Node): void => {
+    if (ts.isFunctionLike(node) && "parameters" in node) {
+      const params = (node as ts.SignatureDeclaration).parameters;
+      for (const p of params) if (ts.isIdentifier(p.name) && p.name.text === "env") names.add("env");
+      const fetchNamed =
+        (ts.isMethodDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node)) &&
+        (ts.isMethodDeclaration(node) ? ts.isIdentifier(node.name) && node.name.text === "fetch" : propertyNamedFetch(node));
+      const second = params[1];
+      if (fetchNamed && second !== undefined && ts.isIdentifier(second.name)) names.add(second.name.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return names;
+}
+
+/** True when a function expression is the value of an object property named fetch: `{ fetch: (req, env) => … }`. */
+function propertyNamedFetch(fn: ts.Node): boolean {
+  const parent = fn.parent;
+  return parent !== undefined && ts.isPropertyAssignment(parent) && ts.isIdentifier(parent.name) && parent.name.text === "fetch";
+}
+
+/** Property access names that touch a binding object, per file: X[…pathname] makes X a dispatch table. */
+const dispatchTablesOf = new WeakMap<ts.SourceFile, Set<string>>();
+/** A lookup key that reads the page's own location is the client's route, not the path of a request. */
+const LOCATION_READ = /\blocation\b/;
+
+function dispatchedNames(sf: ts.SourceFile): Set<string> {
+  const cached = dispatchTablesOf.get(sf);
+  if (cached !== undefined) return cached;
+  const names = new Set<string>();
+  const visit = (node: ts.Node): void => {
+    if (ts.isElementAccessExpression(node) && ts.isIdentifier(node.expression)) {
+      const key = node.argumentExpression.getText(sf);
+      if (key.endsWith("pathname") && !LOCATION_READ.test(key)) names.add(node.expression.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  dispatchTablesOf.set(sf, names);
+  return names;
+}
+
+/** A parameter that takes a request: named req, request or Request, or typed as a Request (`Request`, `Web.Request`). */
+function isRequestParam(p: ts.ParameterDeclaration): boolean {
+  if (!ts.isIdentifier(p.name)) return false;
+  if (p.name.text === "req" || p.name.text === "request" || p.name.text === "Request") return true;
+  const t = p.type;
+  if (t === undefined || !ts.isTypeReferenceNode(t)) return false;
+  const name = ts.isIdentifier(t.typeName) ? t.typeName.text : t.typeName.right.text;
+  return name === "Request";
+}
+
+/** An object literal with a member named fetch: the shape of a request handler export (`export default { fetch(...) }`). */
+function hasFetchMember(expr: ts.Expression): boolean {
+  return (
+    ts.isObjectLiteralExpression(expr) &&
+    expr.properties.some((p) => (ts.isPropertyAssignment(p) || ts.isMethodDeclaration(p) || ts.isShorthandPropertyAssignment(p)) && ts.isIdentifier(p.name) && p.name.text === "fetch")
+  );
+}
+
+const serverSignalOf = new WeakMap<ts.SourceFile, boolean>();
+
+/**
+ * Whether a file is server code, the rule a path table needs before it counts as a route table. The file has one of:
+ * an `export default` of an object with a fetch member; a function that takes a request (see isRequestParam); or
+ * `new URL(x.url)` where x is a parameter of some function in the file. Anything else (a page's client code) is not a
+ * server, so its path tables are not served routes. This is one file-level rule, not a flow analysis.
+ */
+function hasServerSignal(sf: ts.SourceFile): boolean {
+  const cached = serverSignalOf.get(sf);
+  if (cached !== undefined) return cached;
+  let found = false;
+  const paramNames = new Set<string>();
+  const urlBases = new Set<string>();
+  const visit = (node: ts.Node): void => {
+    if (ts.isFunctionLike(node) && "parameters" in node) {
+      for (const p of (node as ts.SignatureDeclaration).parameters) {
+        if (ts.isIdentifier(p.name)) paramNames.add(p.name.text);
+        if (isRequestParam(p)) found = true;
+      }
+    }
+    if (ts.isExportAssignment(node) && hasFetchMember(unwrapAll(node.expression))) found = true;
+    if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "URL") {
+      const arg = node.arguments?.[0];
+      if (arg !== undefined && ts.isPropertyAccessExpression(arg) && arg.name.text === "url" && ts.isIdentifier(arg.expression)) urlBases.add(arg.expression.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  if ([...urlBases].some((name) => paramNames.has(name))) found = true;
+  serverSignalOf.set(sf, found);
+  return found;
+}
+
+/**
+ * A route table a file dispatches on by path: `const X = { "/api/a": handlerA, "/api/b": "b" }` with at least two keys, every
+ * key a string literal starting with "/", the same file reading `X[<expr>.pathname]` (not the page's own location), and the
+ * file being server code (see hasServerSignal). Each key is one route the file serves, under the dispatch framework and any
+ * method. The value is the handler: its text, or a string value's content.
+ */
+export function matchDispatchTable(stmt: ts.VariableStatement, sf: ts.SourceFile): ServeMatch[] {
+  if (!hasServerSignal(sf)) return [];
+  const out: ServeMatch[] = [];
+  const used = dispatchedNames(sf);
+  for (const d of stmt.declarationList.declarations) {
+    if (!ts.isIdentifier(d.name) || !used.has(d.name.text) || d.initializer === undefined) continue;
+    const init = unwrapAll(d.initializer);
+    if (!ts.isObjectLiteralExpression(init) || init.properties.length === 0) continue;
+    const routes: ServeMatch[] = [];
+    for (const p of init.properties) {
+      if (!ts.isPropertyAssignment(p) || !ts.isStringLiteral(p.name) || !p.name.text.startsWith("/")) {
+        routes.length = 0;
+        break;
+      }
+      const value = unwrapAll(p.initializer);
+      const handler = ts.isStringLiteralLike(value) ? value.text : p.initializer.getText(sf);
+      routes.push({ kind: "effects.net.serve", attrs: { framework: "dispatch", method: "*", path: p.name.text, handler } });
+    }
+    if (routes.length >= 2) out.push(...routes);
+  }
+  return out;
 }

@@ -124,6 +124,34 @@ describe("pipelineModel on the pipeline fixture", () => {
   });
 });
 
+describe("pipelineModel packages", () => {
+  it("counts a packages/build package.json folder as a pipeline component", () => {
+    const MAKE = "packages/build/src/make.ts";
+    const PLUG = "plugins/a/src/a.ts";
+    const doc: IRDocument = {
+      nodes: [
+        file("host/package.json"),
+        file("host/src/run.ts"),
+        fn("host/src/run.ts", "run"),
+        file("packages/build/package.json"),
+        file(MAKE),
+        fn(MAKE, "make"),
+        file("plugins/a/package.json"),
+        file(PLUG),
+        fn(PLUG, "detect"),
+      ],
+      // An interface call with two implementers, one in packages/build and one in plugins/a: a pipeline point.
+      edges: [
+        dispatch("host/src/run.ts#run", [`${MAKE}#make`, `${PLUG}#detect`], "host/src/run.ts", 10, "plugin.make"),
+        dispatch("host/src/run.ts#run", [`${MAKE}#make`, `${PLUG}#detect`], "host/src/run.ts", 11, "plugin.detect"),
+      ],
+      findings: [],
+    };
+    const m = pipelineModel(modelOf(doc), "");
+    expect(m.components.map((c) => c.id)).toContain("packages/build");
+  });
+});
+
 describe("pipelineModel order and rules", () => {
   it("flips the order when the helper's call moves above the frontend sites", () => {
     const m = pipelineModel(modelOf(pipelineDoc(5)), "");
