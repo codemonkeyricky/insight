@@ -412,3 +412,85 @@ describe("stages layout: link labels", () => {
     expect(layout.width - 2 * MARGIN - 2 * ROW_INDENT).toBeLessThanOrEqual(rowW);
   });
 });
+
+/** A fanout card three frames deep (loop, try, loop). Forty-eight long-labelled links join two top-level cards with a card between them, so their labels fill the top line and stack above it. */
+function deepFanoutGraph(): StageGraph {
+  const targets = ["bazel", "cmake", "cpp", "jsonschema", "systemverilog", "typescript"].map((c) => ({
+    fn: `pkg/${c}/x.ts#x`,
+    name: "extract",
+    component: `frontends/${c}`,
+  }));
+  const fanout = call("d1", "detect", { fanout: { how: "interface", targets } });
+  const inner = { kind: "loop", id: "dloop2", variant: "for-of", condition: "const f of files", site: site(8), body: [fanout] } as StageNode;
+  const tr = {
+    kind: "try",
+    id: "dtry",
+    site: site(9),
+    body: [inner],
+    handler: [{ kind: "exit", id: "dex", how: "continue", site: site(10) }],
+  } as StageNode;
+  const outer = { kind: "loop", id: "dloop1", variant: "for-of", condition: "const lf of plugins.frontends", site: site(7), body: [tr] } as StageNode;
+  const edges: StageGraph["edges"] = Array.from({ length: 48 }, (_, i) => ({ from: "k0", to: "k2", label: `loaded plugin ${i}`, type: "LoadedPluginsSnapshot" }));
+  return {
+    driver: { id: "app/src/run.ts#run", name: "run", file: "app/src/run.ts" },
+    body: [call("k0", "loadStage0"), call("k1", "loadStage1"), call("k2", "loadStage2"), outer],
+    edges: [...edges, { from: "k0", to: "d1", label: "files", type: "LoadedPluginsSnapshot" }, { from: "d1", to: "k2", label: "back" }],
+    coverage: [],
+  };
+}
+
+describe("stages layout: nested fanout geometry", () => {
+  const nested = () => layoutStages(deepFanoutGraph(), { data: true });
+  const chipsOf = (nodes: LayoutNode[]) => cards(nodes).flatMap((c) => c.chips.map((ch) => ({ card: c, chip: ch })));
+  const innerRect = (c: { x: number; y: number; w: number; h: number }): Rect => ({ x: c.x, y: c.y, w: c.w, h: c.h });
+
+  it("is a real stacking case: the diagram is lifted by labels stacked above the top line, and the fanout sits three frames deep", () => {
+    const layout = nested();
+    // The same graph without its links has the same body; the only difference in height is the lift that stacked labels need.
+    const base = layoutStages({ ...deepFanoutGraph(), edges: [] }, { data: true });
+    expect(layout.height).toBeGreaterThan(base.height);
+    const detect = cards(layout.nodes).find((c) => c.stage === "d1");
+    expect(detect).toBeDefined();
+    const holding = frames(layout.nodes).filter((f) => inside(innerRect(detect!), rectOf(f)));
+    expect(holding.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("every chip of every card lies inside that card's box", () => {
+    const layout = nested();
+    const pairs = chipsOf(layout.nodes);
+    expect(pairs.filter((p) => p.card.stage === "d1").length).toBe(6);
+    for (const { card, chip } of pairs) {
+      expect(inside({ x: chip.x, y: chip.y, w: chip.w, h: chip.h }, innerRect(card)), `chip ${chip.label} in ${card.title}`).toBe(true);
+    }
+  });
+
+  it("every card and frame lies inside its parent frame, below the parent's header", () => {
+    const layout = nested();
+    const frameList = frames(layout.nodes);
+    const nodes: Array<{ name: string; box: Rect }> = [
+      ...cards(layout.nodes).map((c) => ({ name: c.title, box: innerRect(c) })),
+      ...frameList.map((f) => ({ name: `frame ${f.label}`, box: innerRect(f) })),
+    ];
+    for (const n of nodes) {
+      const parents = frameList.filter((f) => f.x !== n.box.x || f.y !== n.box.y || f.w !== n.box.w || f.h !== n.box.h).filter((f) => inside(n.box, rectOf(f)));
+      if (parents.length === 0) continue;
+      const parent = parents.reduce((a, b) => (a.w * a.h <= b.w * b.h ? a : b));
+      expect(inside(n.box, rectOf(parent)), `${n.name} inside ${parent.label}`).toBe(true);
+      expect(n.box.y, `${n.name} below the header of ${parent.label}`).toBeGreaterThanOrEqual(parent.y + LABEL_H);
+    }
+  });
+
+  it("no two sibling cards or frames overlap: any two that neither contains the other are apart", () => {
+    const layout = nested();
+    const boxes: Array<{ name: string; box: Rect }> = [
+      ...cards(layout.nodes).map((c) => ({ name: c.title, box: innerRect(c) })),
+      ...frames(layout.nodes).map((f) => ({ name: `frame ${f.label}`, box: innerRect(f) })),
+    ];
+    boxes.forEach((a, i) =>
+      boxes.slice(i + 1).forEach((b) => {
+        if (inside(a.box, b.box) || inside(b.box, a.box)) return;
+        expect(overlaps(a.box, b.box), `${a.name} vs ${b.name}`).toBe(false);
+      }),
+    );
+  });
+});

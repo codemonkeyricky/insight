@@ -748,11 +748,17 @@ export function layoutStages(graph: StageGraph, opts: StageLayoutOptions = {}): 
   };
 }
 
+/** A node moved down by `dy`. A card's chips are positioned in the same drawing, so they move with it. */
+function shiftNode(n: LayoutNode, dy: number): LayoutNode {
+  if (n.kind === "card") return { ...n, y: n.y + dy, chips: n.chips.map((c) => ({ ...c, y: c.y + dy })) };
+  return { ...n, y: n.y + dy } as LayoutNode;
+}
+
 /** The drawing moved down by `dy`: its nodes, polylines and link labels with their arcs. */
 function moveDown(out: Out, links: LayoutDataLink[], dy: number): { nodes: LayoutNode[]; paths: LayoutPath[]; links: LayoutDataLink[] } {
   const down = (p: Point): Point => [p[0], p[1] + dy];
   return {
-    nodes: out.nodes.map((n) => ({ ...n, y: n.y + dy }) as LayoutNode),
+    nodes: out.nodes.map((n) => shiftNode(n, dy)),
     paths: out.paths.map((p) => ({ ...p, points: p.points.map(down) })),
     links: links.map((l) => ({ ...l, y: l.y + dy, points: l.points.map(down) })),
   };
