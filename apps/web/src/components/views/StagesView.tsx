@@ -43,7 +43,7 @@ type FrameNode = Extract<LayoutNode, { kind: "frame" }>;
  * payload is computed in the page from the project model (api.getStages). A card or a frame opens the Code pane at its call
  * line; a component chip opens that component's System scope.
  */
-export function StagesView({ id, scope, tests = false }: { id: string; scope: string; tests?: boolean }) {
+export function StagesView({ id, scope, tests = false, onTests }: { id: string; scope: string; tests?: boolean; onTests?: (on: boolean) => void }) {
   const [showAll, setShowAll] = useState(false);
   const [pick, setPick] = useState<{ scope: string; driver: string } | null>(null);
   // The picked driver is kept for the scope it was picked in; a new scope starts with its first driver.
@@ -76,6 +76,8 @@ export function StagesView({ id, scope, tests = false }: { id: string; scope: st
       showAll={showAll}
       onShowAll={setShowAll}
       onDriver={(d) => setPick({ scope, driver: d })}
+      tests={tests}
+      onTests={onTests}
       stale={done.key !== key}
     />
   );
@@ -89,6 +91,8 @@ export function StagesDiagram({
   showAll,
   onShowAll,
   onDriver,
+  tests = false,
+  onTests,
   stale = false,
 }: {
   id: string;
@@ -97,6 +101,8 @@ export function StagesDiagram({
   showAll: boolean;
   onShowAll: (on: boolean) => void;
   onDriver: (driverId: string) => void;
+  tests?: boolean;
+  onTests?: (on: boolean) => void;
   stale?: boolean;
 }) {
   const [stageEl, setStageEl] = useState<HTMLDivElement | null>(null);
@@ -154,6 +160,11 @@ export function StagesDiagram({
         <label className="sysv-tests small">
           <input type="checkbox" checked={showData} onChange={(e) => setShowData(e.target.checked)} /> Data
         </label>
+        {onTests !== undefined && (
+          <label className="sysv-tests small">
+            <input type="checkbox" checked={tests} onChange={(e) => onTests(e.target.checked)} /> Show tests
+          </label>
+        )}
         <span className="sysv-zoom" role="group" aria-label="Zoom">
           <button type="button" onClick={() => pz.zoomBy(1 / 1.25)} aria-label="Zoom out">
             −

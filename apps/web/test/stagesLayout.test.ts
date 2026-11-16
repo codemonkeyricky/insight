@@ -331,6 +331,19 @@ function obstaclesOf(nodes: LayoutNode[]): Array<{ x: number; y: number; w: numb
   });
 }
 
+/** Eight cards on one spine, each linked to every card two or more places on, with long types: the links over one span crowd the top line. */
+function crowdedGraph(): StageGraph {
+  const edges: StageGraph["edges"] = [];
+  for (let i = 0; i < 8; i++)
+    for (let j = i + 2; j < 8; j++) edges.push({ from: `k${i}`, to: `k${j}`, label: `plugins${i}${j}`, type: "LoadedPluginsSnapshot" });
+  return {
+    driver: { id: "app/src/run.ts#run", name: "run", file: "app/src/run.ts" },
+    body: Array.from({ length: 8 }, (_, i) => call(`k${i}`, `loadStage${i}`)),
+    edges,
+    coverage: [],
+  };
+}
+
 describe("stages layout: link labels", () => {
   const layouts = () => [layoutStages(dataGraph(), { data: true }), layoutStages(framedGraph(), { data: true }), layoutStages(spanGraph(), { data: true, rowW: 600 })];
 
@@ -366,6 +379,23 @@ describe("stages layout: link labels", () => {
         labels.slice(i + 1).forEach((lj) => expect(boxesCross(li, lj), `${JSON.stringify(li)} vs ${JSON.stringify(lj)}`).toBe(false));
       });
     }
+  });
+
+  it("stacks a label on a line above when the top line is full: no two link labels or labels and cards overlap, all stay in the margin", () => {
+    const layout = layoutStages(crowdedGraph(), { data: true });
+    const labels = layout.links.map((l) => ({ x: l.x, y: l.y, w: l.w, h: DATA_H }));
+    expect(labels.length).toBeGreaterThan(8);
+    // The crowded top line is full, so some labels sit on different lines.
+    expect(new Set(labels.map((l) => l.y)).size).toBeGreaterThan(1);
+    const obstacles = obstaclesOf(layout.nodes);
+    labels.forEach((li, i) => {
+      for (const o of obstacles) expect(boxesCross(li, o), `label ${JSON.stringify(li)} vs ${JSON.stringify(o)}`).toBe(false);
+      labels.slice(i + 1).forEach((lj) => expect(boxesCross(li, lj), `${JSON.stringify(li)} vs ${JSON.stringify(lj)}`).toBe(false));
+      expect(li.y).toBeGreaterThanOrEqual(-MARGIN);
+      expect(li.x).toBeGreaterThanOrEqual(0);
+      expect(li.x + li.w).toBeLessThanOrEqual(layout.width);
+      expect(li.y + li.h).toBeLessThanOrEqual(layout.height);
+    });
   });
 
   it("wraps the spine so that each row fits the row width with its connectors and pills counted", () => {

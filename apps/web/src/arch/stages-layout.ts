@@ -673,12 +673,15 @@ function placeLinks(spans: LinkSpan[], obstacles: Box[], width: number): LayoutD
       const y = apexY - up * LABEL_NUDGE_Y;
       return { apex: [x + pill.w / 2, y], label: { x, y: y - DATA_H / 2, w: pill.w, h: DATA_H } };
     };
-    const clear = (label: Box): boolean =>
-      label.y >= -MARGIN && !obstacles.some((o) => overlaps(label, o, LABEL_GAP)) && !placed.some((p) => overlaps(label, p, LABEL_GAP));
-    // Labels in the top band can only move sideways, so the search reaches across the whole width.
+    const clear = (label: Box): boolean => !obstacles.some((o) => overlaps(label, o, LABEL_GAP)) && !placed.some((p) => overlaps(label, p, LABEL_GAP));
+    // Labels on a line can only move sideways, so the search reaches across the whole width. When the line is full, the label
+    // stacks on a line above it, and the diagram grows upward to take it (see layoutStages). Above everything that is drawn or
+    // placed there is always a free line, so the search always finds a slot.
     const maxSteps = Math.ceil(width / LABEL_NUDGE_X);
+    const floor = Math.min(0, ...obstacles.map((o) => o.y), ...placed.map((p) => p.y));
+    const lastUp = Math.max(0, Math.ceil((apexY + DATA_H / 2 + LABEL_GAP - floor) / LABEL_NUDGE_Y));
     let chosen: { apex: Point; label: Box } | undefined;
-    for (let up = 0; up <= LABEL_NUDGE_STEPS && chosen === undefined; up++) {
+    for (let up = 0; up <= lastUp && chosen === undefined; up++) {
       for (let k = 0; k <= maxSteps && chosen === undefined; k++) {
         for (const dx of k === 0 ? [0] : [k * LABEL_NUDGE_X, -k * LABEL_NUDGE_X]) {
           const c = at(dx, up);
@@ -689,7 +692,7 @@ function placeLinks(spans: LinkSpan[], obstacles: Box[], width: number): LayoutD
         }
       }
     }
-    const { apex, label } = chosen ?? at(0, 0);
+    const { apex, label } = chosen ?? at(0, lastUp);
     placed.push(label);
     return {
       key: `l${i}`,
@@ -728,15 +731,30 @@ export function layoutStages(graph: StageGraph, opts: StageLayoutOptions = {}): 
     if (n.kind === "frame") return [{ x: n.x, y: n.y, w: n.w, h: LABEL_H }];
     return [];
   });
-  const links = placeLinks(spans, obstacles, width);
+  const laid = placeLinks(spans, obstacles, width);
+  // A label stacked above the top line can rise past the margin. The whole drawing then moves down by the room it needs, so that
+  // every label and arc stays at -MARGIN or below, and the diagram is taller by the same amount.
+  const reach = Math.min(0, ...laid.flatMap((l) => [l.y, ...l.points.map((p) => p[1])]));
+  const lift = Math.max(0, Math.ceil(-MARGIN - reach));
+  const { nodes, paths, links } = lift > 0 ? moveDown(pass.out, laid, lift) : { nodes: pass.out.nodes, paths: pass.out.paths, links: laid };
   const top = Math.min(0, ...links.flatMap((l) => [l.y, ...l.points.map((p) => p[1])]));
   return {
     width,
-    height: Math.ceil(pass.body.h + 2 * MARGIN),
-    nodes: pass.out.nodes,
-    paths: pass.out.paths,
+    height: Math.ceil(pass.body.h + 2 * MARGIN) + lift,
+    nodes,
+    paths,
     links,
     top,
+  };
+}
+
+/** The drawing moved down by `dy`: its nodes, polylines and link labels with their arcs. */
+function moveDown(out: Out, links: LayoutDataLink[], dy: number): { nodes: LayoutNode[]; paths: LayoutPath[]; links: LayoutDataLink[] } {
+  const down = (p: Point): Point => [p[0], p[1] + dy];
+  return {
+    nodes: out.nodes.map((n) => ({ ...n, y: n.y + dy }) as LayoutNode),
+    paths: out.paths.map((p) => ({ ...p, points: p.points.map(down) })),
+    links: links.map((l) => ({ ...l, y: l.y + dy, points: l.points.map(down) })),
   };
 }
 

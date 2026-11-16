@@ -32,13 +32,15 @@ export function ArchTab({ id, scope, initial, onSystemActive }: { id: string; sc
     setMode(m);
     writeArchMode(m);
   };
+  // The Show tests setting is shared by the Stages and Pipeline views, so both draw the same test folders or neither does.
+  const [tests, setTests] = useState(false);
   return (
     <div className="arch-tab">
       <ArchModeToggle mode={mode} onChange={pick} />
       {mode === "pipeline" && (
         <>
-          <StagesView id={id} scope={scope} />
-          <PipelineView id={id} scope={scope} />
+          <StagesView id={id} scope={scope} tests={tests} onTests={setTests} />
+          <PipelineView id={id} scope={scope} tests={tests} onTests={setTests} />
         </>
       )}
       {mode === "packages" && <ArchView id={id} scope={scope} />}
