@@ -129,6 +129,22 @@ export function loopOver(): void {
   for (const { a, b } of pairs) sinkD(a + b);
   for (const key in items) sinkD(key);
 }
+
+export function shadowLoops(items: string[]): void {
+  for (const f of items) sinkD(f);
+  for (const f of items) sinkD(f);
+}
+
+function sinkPair(...rest: unknown[]): void {
+  void rest;
+}
+
+export function argShapes(xs: string[]): void {
+  const n = xs.length;
+  sinkPair(xs, 2, n);
+  sinkPair(...xs);
+  sinkPair(1, "a");
+}
 `;
 
 let nodes: IRNode[];
@@ -314,5 +330,50 @@ describe("frontend-typescript data attrs validate against the IR schema", () => 
     const report = validateIR(text, createCoreRegistry());
     expect(report.errors.map((e) => e.message)).toEqual([]);
     expect(report.ok).toBe(true);
+  });
+});
+
+describe("frontend-typescript local keys and argument reads", () => {
+  /** The 1-based line of each source line holding the text, in order. */
+  const linesWith = (text: string): number[] =>
+    SOURCE.split("\n").flatMap((l, i) => (l.includes(text) ? [i + 1] : []));
+
+  it("keys a name declared in two loops of one function by its declaration line", () => {
+    const [first, second] = linesWith("for (const f of items) sinkD(f)");
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    expect(fnNamed("shadowLoops")?.attrs.derives).toEqual({ [`f@${first}`]: ["items"], [`f@${second}`]: ["items"] });
+  });
+
+  it("keys each loop body's read of f to the declaration it sits under", () => {
+    const [first, second] = linesWith("for (const f of items) sinkD(f)");
+    const at = (line: number) => callsTo("sinkD").filter((e) => e.span?.start[0] === line - 1);
+    expect(at(first!)[0]?.attrs.reads).toEqual([`f@${first}`]);
+    expect(at(second!)[0]?.attrs.reads).toEqual([`f@${second}`]);
+  });
+
+  it("emits argReads with one entry per positional argument", () => {
+    const [line] = linesWith("sinkPair(xs, 2, n)");
+    const call = callsTo("sinkPair").find((e) => e.span?.start[0] === line! - 1);
+    expect(call?.attrs.argReads).toEqual([["xs"], [], ["n"]]);
+    expect(call?.attrs).not.toHaveProperty("argSpread");
+  });
+
+  it("gives a spread argument's reads at its index and records the index as argSpread", () => {
+    const [line] = linesWith("sinkPair(...xs)");
+    const call = callsTo("sinkPair").find((e) => e.span?.start[0] === line! - 1);
+    expect(call?.attrs.argReads).toEqual([["xs"]]);
+    expect(call?.attrs.argSpread).toBe(0);
+  });
+
+  it("omits argReads when no argument reads a local", () => {
+    const [line] = linesWith('sinkPair(1, "a")');
+    const call = callsTo("sinkPair").find((e) => e.span?.start[0] === line! - 1);
+    expect(call?.attrs).not.toHaveProperty("argReads");
+  });
+
+  it("keeps a name declared once bare", () => {
+    expect(fnNamed("argShapes")?.attrs.params).toEqual(["xs"]);
+    expect(fnNamed("argShapes")?.attrs.derives).toEqual({ n: ["xs"] });
   });
 });

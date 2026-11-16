@@ -1381,13 +1381,61 @@ export function emitFile(project: Project, rel: string): IRBatch {
   const callBinds = (call: ts.CallExpression): string | string[] | undefined => {
     const ids = callBindIdents(call);
     if (ids === undefined) return undefined;
-    return ids.length === 1 ? ids[0]!.text : ids.map((i) => i.text);
+    return ids.length === 1 ? localKey(ids[0]!) : ids.map((i) => localKey(i));
   };
 
   /** The identifiers a binding pattern declares, in source order: `a` for `a`, `a` and `b` for `{ a, b }`. */
   const bindingIdents = (name: ts.BindingName): ts.Identifier[] => {
     if (ts.isIdentifier(name)) return [name];
     return name.elements.flatMap((el) => (ts.isOmittedExpression(el) ? [] : bindingIdents(el.name)));
+  };
+
+  /** The function a declaration sits in: its nearest function-like ancestor. */
+  const enclosingFunction = (d: ts.Node): ts.Node | undefined => {
+    for (let p: ts.Node | undefined = d.parent; p !== undefined; p = p.parent) if (ts.isFunctionLike(p)) return p;
+    return undefined;
+  };
+  const localsCache = new WeakMap<ts.Node, Map<string, ts.Identifier[]>>();
+  /** The identifiers a function declares itself, by name: its parameters and its variables. Nested functions are not descended into. */
+  const localsOf = (fn: ts.Node): Map<string, ts.Identifier[]> => {
+    const hit = localsCache.get(fn);
+    if (hit !== undefined) return hit;
+    const byName = new Map<string, ts.Identifier[]>();
+    const walk = (n: ts.Node): void => {
+      if (n !== fn && ts.isFunctionLike(n)) return;
+      if (ts.isVariableDeclaration(n) || ts.isParameter(n)) {
+        for (const id of bindingIdents(n.name)) {
+          const list = byName.get(id.text);
+          if (list) list.push(id);
+          else byName.set(id.text, [id]);
+        }
+      }
+      ts.forEachChild(n, walk);
+    };
+    walk(fn);
+    localsCache.set(fn, byName);
+    return byName;
+  };
+  /**
+   * The key a local is emitted under, resolved through the checker so every use of one local gives one key. A name its function
+   * declares once is the bare name. A name declared more than once in one function (shadowing, or the same name in sibling
+   * blocks or loops) is `name@line`: the 1-based line of the declared identifier, with `:col` (1-based) added when two of those
+   * declarations share a line. The model strips the suffix for display.
+   */
+  const localKey = (id: ts.Identifier): string => {
+    const sym = project.checker.getSymbolAtLocation(id);
+    const decl = sym?.valueDeclaration ?? sym?.declarations?.[0];
+    if (decl === undefined || !(ts.isVariableDeclaration(decl) || ts.isBindingElement(decl) || ts.isParameter(decl))) return id.text;
+    const fn = enclosingFunction(decl);
+    if (fn === undefined) return id.text;
+    const same = localsOf(fn).get(id.text) ?? [];
+    if (same.length < 2) return id.text;
+    const declId = same.find((d) => project.checker.getSymbolAtLocation(d) === sym);
+    if (declId === undefined) return id.text;
+    const posOf = (i: ts.Identifier) => i.getSourceFile().getLineAndCharacterOfPosition(i.getStart(i.getSourceFile()));
+    const at = posOf(declId);
+    const shared = same.some((d) => d !== declId && posOf(d).line === at.line);
+    return shared ? `${id.text}@${at.line + 1}:${at.character + 1}` : `${id.text}@${at.line + 1}`;
   };
 
   /**
@@ -1430,7 +1478,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
       if (ts.isIdentifier(n)) {
         if (isName(n, n.parent)) return;
         const decls = project.checker.getSymbolAtLocation(n)?.declarations;
-        if (decls?.some(isLocalDecl) === true) out.add(n.text);
+        if (decls?.some(isLocalDecl) === true) out.add(localKey(n));
         return;
       }
       ts.forEachChild(n, visitName);
@@ -1457,6 +1505,18 @@ export function emitFile(project: Project, rel: string): IRBatch {
     parts.push(...call.arguments);
     const reads = [...new Set(parts.flatMap((p) => localReads(p, true)))];
     return reads.length > 0 ? { reads } : {};
+  };
+
+  /**
+   * The `argReads` attribute of a call: the distinct locals each positional argument reads, one list per argument, keyed as `reads`
+   * are. `argSpread` is the index of the first spread argument; that argument's reads map to every parameter from there on. Omitted
+   * when no argument reads a local.
+   */
+  const argReadsAttr = (call: ts.CallExpression): { argReads?: string[][]; argSpread?: number } => {
+    const argReads = call.arguments.map((a) => [...new Set(localReads(a, true))]);
+    if (!argReads.some((r) => r.length > 0)) return {};
+    const spread = call.arguments.findIndex((a) => ts.isSpreadElement(a));
+    return { argReads, ...(spread >= 0 ? { argSpread: spread } : {}) };
   };
 
   /**
@@ -1504,7 +1564,8 @@ export function emitFile(project: Project, rel: string): IRBatch {
    * Parameters have no entry, and nested functions and classes are not descended into. A loop variable (`for (const x of xs)`,
    * `for (x in o)`, destructured or not) takes the reads of its iterable. A local that reads no local is omitted. Always present on a
    * function, `{}` when none remain: the key says the data-flow facts were emitted. The declaration holding a function (a const arrow,
-   * a class property arrow) is unwrapped to the function, so the attribute is on the function.
+   * a class property arrow) is unwrapped to the function, so the attribute is on the function. Keys and values are local keys (see
+   * `localKey`): a name the function declares more than once is `name@line`, so two loops' `f` are two entries.
    */
   /** The function a declaration holds: a function-like node, or the arrow or function expression a const or class property holds. */
   const functionOf = (node: ts.Node): ts.SignatureDeclaration | undefined => {
@@ -1518,7 +1579,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
   /** The `params` attribute: the parameter names in order, each name a destructured parameter binds included. Omitted when none. */
   const paramsAttr = (node: ts.Node): { params?: string[] } => {
     const names = (functionOf(node)?.parameters ?? []).flatMap((p) => bindingIdents(p.name));
-    return names.length > 0 ? { params: names.map((id) => id.text) } : {};
+    return names.length > 0 ? { params: names.map((id) => localKey(id)) } : {};
   };
 
   const derivesAttr = (node: ts.Node): { derives: Record<string, string[]> } => {
@@ -1532,7 +1593,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
       if (sym === undefined) return;
       let e = entries.get(sym);
       if (e === undefined) {
-        e = { name: id.text, reads: new Set() };
+        e = { name: localKey(id), reads: new Set() };
         entries.set(sym, e);
       }
       for (const r of reads) e.reads.add(r);
@@ -1794,7 +1855,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
       // The call's data facts: the locals its receiver and arguments read, and the type of the one local its result is bound to.
       const bindIds = callBindIdents(call);
       const bindsType = bindIds?.length === 1 ? boundTypeText(bindIds[0]!) : undefined;
-      const dataAttrs = { ...callReadsAttr(call), ...(bindsType !== undefined ? { bindsType } : {}) };
+      const dataAttrs = { ...callReadsAttr(call), ...argReadsAttr(call), ...(bindsType !== undefined ? { bindsType } : {}) };
       const sym = project.checker.getSymbolAtLocation(nameOf(callee));
       const target = declOf(project, sym);
       // A call through a fixed registry runs whichever of its functions the key picks, so every one is a candidate. The registry

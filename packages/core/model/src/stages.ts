@@ -46,6 +46,8 @@ export type StageNode =
       binds?: string[];
       bindsType?: string; // checker type of the one bound local (calls.call attrs.bindsType)
       reads?: string[]; // locals the receiver and arguments read (calls.call attrs.reads)
+      argReads?: string[][]; // the locals each positional argument reads (calls.call attrs.argReads)
+      argSpread?: number; // index of the first spread argument (calls.call attrs.argSpread)
     }
   | { kind: "loop"; id: string; variant: string; condition?: string; reads?: string[]; site: Site; body: StageNode[] }
   | {
@@ -170,6 +172,9 @@ const bindsOf = (v: unknown): string[] | undefined => {
 };
 /** A list of local names from an attribute; an empty list is kept (it says the facts were emitted and nothing is read). */
 const namesOf = (v: unknown): string[] | undefined => (Array.isArray(v) && v.every((x) => typeof x === "string") ? (v as string[]) : undefined);
+/** The per-argument reads of a call: one name list per positional argument. */
+const argReadsOf = (v: unknown): string[][] | undefined =>
+  Array.isArray(v) && v.every((a) => namesOf(a) !== undefined) ? (v as string[][]) : undefined;
 
 /**
  * The statements of one function as a tree. Flow parents are always the function, so nesting comes from span containment:
@@ -391,10 +396,14 @@ function resolveCall(group: Rel[], env: Env): StageNode | undefined {
   const binds = bindsOf(first.edge.attrs?.binds);
   const bindsType = str(first.edge.attrs?.bindsType);
   const reads = namesOf(first.edge.attrs?.reads);
+  const argReads = argReadsOf(first.edge.attrs?.argReads);
+  const argSpread = typeof first.edge.attrs?.argSpread === "number" ? first.edge.attrs.argSpread : undefined;
   const dataAttrs = {
     ...(binds !== undefined ? { binds } : {}),
     ...(bindsType !== undefined ? { bindsType } : {}),
     ...(reads !== undefined ? { reads } : {}),
+    ...(argReads !== undefined ? { argReads } : {}),
+    ...(argSpread !== undefined ? { argSpread } : {}),
   };
   // A call's `reads` key, even an empty list, says the frontend emitted call reads: the data-flow facts are present.
   if (reads !== undefined) ctx.facts = true;
@@ -637,8 +646,9 @@ export function stageGraph(
   const body = markRepeats(pruneList(emitList(membersOf(driverId, ctx), env)), new Map());
   const component = fn ? compOf(fn.file) : undefined;
   // Without data-flow facts there are no edges at all: no call to call, and no loop or branch that reads a local.
-  const edges = ctx.facts ? dataEdges(model, body, driverId) : [];
+  const { edges, approx } = ctx.facts ? dataEdges(model, body, driverId) : { edges: [], approx: false };
   const coverage = coverageOf(ctx, body, driverId);
+  if (approx) coverage.push("Helper arguments approximate");
   if (body.length > 0 && !ctx.facts) coverage.push("No data-flow facts for this language");
   return {
     driver: { id: driverId, name: fn?.name ?? driverId, file: fn?.file ?? "", ...(component !== undefined ? { component } : {}) },
@@ -655,6 +665,13 @@ const EDGE_IN_MAX = 3;
 /** A `bound→read` label is shown in full up to this length; a longer one shows the consumer's name alone. */
 const EDGE_LABEL_MAX = 24;
 
+/** The facts of the call that inlined a helper: its receiver-and-arguments reads, and each positional argument's reads when emitted. */
+interface CallArgs {
+  reads?: string[];
+  argReads?: string[][];
+  argSpread?: number;
+}
+
 /** A visible stage in call order. `index` and `end` bound it in the flat list, so `end <= consumer.index` means "finished before". */
 interface Flat {
   id: string;
@@ -664,8 +681,8 @@ interface Flat {
   binds?: string[];
   bindsType?: string;
   scope: NodeId[]; // the driver, then the helpers inlined around the stage
-  /** Per scope entry: the reads of the call that inlined it, as the call site reads them. Undefined for the driver. */
-  args: Array<string[] | undefined>;
+  /** Per scope entry: the call that inlined it, as the call site reads it. Undefined for the driver. */
+  args: Array<CallArgs | undefined>;
   /** The branch arms the stage sits in, outermost first: two stages in different arms of one branch never run together. */
   arms: Array<{ branch: string; arm: number }>;
 }
@@ -674,7 +691,7 @@ interface Flat {
 function flatten(
   nodes: StageNode[],
   scope: NodeId[],
-  args: Array<string[] | undefined>,
+  args: Array<CallArgs | undefined>,
   arms: Array<{ branch: string; arm: number }>,
   out: Flat[],
 ): void {
@@ -697,7 +714,12 @@ function flatten(
     if (n.kind === "call") {
       if (n.minor === true) continue;
       const e = open(n);
-      if (n.body && n.fn !== undefined) flatten(n.body, [...scope, n.fn], [...args, n.reads], arms, out);
+      const call: CallArgs = {
+        ...(n.reads !== undefined ? { reads: n.reads } : {}),
+        ...(n.argReads !== undefined ? { argReads: n.argReads } : {}),
+        ...(n.argSpread !== undefined ? { argSpread: n.argSpread } : {}),
+      };
+      if (n.body && n.fn !== undefined) flatten(n.body, [...scope, n.fn], [...args, call], arms, out);
       e.end = out.length;
     } else if (n.kind === "loop") {
       const e = open(n);
@@ -719,8 +741,13 @@ function flatten(
  * the enclosing functions, for a captured local) until they reach a local a stage call bound earlier, which is a producer. A
  * local bound by a stage stops the walk, so a producer's own inputs are not edges. Pure.
  */
-function dataEdges(model: ProjectModel, body: StageNode[], driverId: NodeId): DataEdge[] {
+/** A local's name for display: its `name@line` key (see the frontend's localKey) without the line. */
+const displayLocal = (key: string): string => key.replace(/@\d+(?::\d+)?$/, "");
+
+function dataEdges(model: ProjectModel, body: StageNode[], driverId: NodeId): { edges: DataEdge[]; approx: boolean } {
   const flat: Flat[] = [];
+  /** Some helper parameter took the union of its call's arguments' reads: the mapping is approximate. */
+  let approx = false;
   flatten(body, [driverId], [undefined], [], flat);
   const derivesOf = (fn: NodeId): Record<string, string[]> => {
     const node = model.byId.get(fn);
@@ -755,7 +782,19 @@ function dataEdges(model: ProjectModel, body: StageNode[], driverId: NodeId): Da
       const owner = consumer.scope[i] as NodeId;
       // A helper's parameter is the call site's argument: its reads, in the scope the call sits in. Never a local of the same name.
       if (i > 0 && paramsOf(owner).includes(name)) {
-        for (const next of consumer.args[i] ?? []) resolve(next, i - 1, consumer, read, seen, out);
+        const call = consumer.args[i];
+        let nexts: string[];
+        if (call?.argReads !== undefined) {
+          // The argument at this parameter's position; a parameter past a spread argument takes the spread's reads.
+          const p = paramsOf(owner).indexOf(name);
+          const at = call.argSpread !== undefined && p >= call.argSpread ? call.argSpread : p;
+          nexts = call.argReads[at] ?? [];
+        } else {
+          // No per-argument reads: every parameter gets every argument's reads.
+          nexts = call?.reads ?? [];
+          if (nexts.length > 0) approx = true;
+        }
+        for (const next of nexts) resolve(next, i - 1, consumer, read, seen, out);
         return;
       }
       const bound = producers.get(`${owner}\u0000${name}`);
@@ -788,13 +827,15 @@ function dataEdges(model: ProjectModel, body: StageNode[], driverId: NodeId): Da
     for (const f of found) if (f.producer.id !== c.id && !byProducer.has(f.producer.id)) byProducer.set(f.producer.id, f);
     const nearest = [...byProducer.values()].sort((a, b) => b.producer.index - a.producer.index).slice(0, EDGE_IN_MAX);
     for (const f of nearest) {
-      const full = `${f.bound}→${f.read}`;
-      const label = f.bound === f.read ? f.read : full.length <= EDGE_LABEL_MAX ? full : f.read;
+      const bound = displayLocal(f.bound);
+      const read = displayLocal(f.read);
+      const full = `${bound}→${read}`;
+      const label = f.bound === f.read ? read : full.length <= EDGE_LABEL_MAX ? full : read;
       const type = f.producer.bindsType !== undefined && f.producer.binds?.includes(f.bound) ? f.producer.bindsType : undefined;
       edges.push({ from: f.producer.id, to: c.id, label, ...(type !== undefined ? { type } : {}) });
     }
   }
-  return edges;
+  return { edges, approx };
 }
 
 /**

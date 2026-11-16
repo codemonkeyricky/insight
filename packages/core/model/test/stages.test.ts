@@ -417,6 +417,41 @@ describe("stage graph: data edges", () => {
     expect(g.edges.filter((e) => e.from === idOf(g, "s3")).length).toBe(0);
   });
 
+  it("maps a helper parameter to its own argument, not the union of the call's arguments", () => {
+    // digestFor(lf, prior) reads frontend and prior inside; frontend is argument 0 (lf), prior is argument 1 (prior).
+    const H = `${F}#run.digestFor`;
+    const nodes = [fn(H, "digestFor", F, DRV, { params: ["frontend", "prior"] })];
+    const edges = [
+      call(DRV, stageId("s3"), 2, 2, 6, { binds: "lf" }),
+      call(DRV, stageId("s4"), 3, 2, 6, { binds: "prior" }),
+      call(DRV, H, 8, 2, 8, { reads: ["lf", "prior"], argReads: [["lf"], ["prior"]] }),
+      call(H, stageId("s5"), 22, 4, 6, { reads: ["frontend"] }),
+      call(H, stageId("s6"), 23, 4, 6, { reads: ["prior"] }),
+    ];
+    const g = graphOf(doc({ nodes, edges }));
+    // Edges into the helper's own call stage are the call's reads; the inner stages are the ones under test.
+    const inner = g.edges.filter((e) => e.to.includes("digestFor@"));
+    expect(inner).toHaveLength(2);
+    expect(inner).toContainEqual({ from: idOf(g, "s3"), to: expect.stringContaining("digestFor@22:4"), label: "lf→frontend" });
+    expect(inner).toContainEqual({ from: idOf(g, "s4"), to: expect.stringContaining("digestFor@23:4"), label: "prior" });
+    expect(g.coverage).not.toContain("Helper arguments approximate");
+  });
+
+  it("falls back to the union of the call's reads, and says so, when the call has no argReads", () => {
+    const H = `${F}#run.digestFor`;
+    const nodes = [fn(H, "digestFor", F, DRV, { params: ["frontend", "prior"] })];
+    const edges = [
+      call(DRV, stageId("s3"), 2, 2, 6, { binds: "lf" }),
+      call(DRV, stageId("s4"), 3, 2, 6, { binds: "prior" }),
+      call(DRV, H, 8, 2, 8, { reads: ["lf", "prior"] }),
+      call(H, stageId("s5"), 22, 4, 6, { reads: ["frontend"] }),
+      call(H, stageId("s6"), 23, 4, 6, { reads: ["prior"] }),
+    ];
+    const g = graphOf(doc({ nodes, edges }));
+    expect(g.coverage).toContain("Helper arguments approximate");
+    expect(g.edges.some((e) => e.from === idOf(g, "s4") && e.to.includes("digestFor@22:4"))).toBe(true);
+  });
+
   it("has no edges, and says so, when the frontend gave no data-flow facts", () => {
     const g = graphOf(doc(nestingParts()));
     expect(g.edges).toEqual([]);
