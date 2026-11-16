@@ -46,6 +46,11 @@ describe("zoomTakes", () => {
     }
   });
 
+  it("leaves a double-click on a function box to the box (it opens or closes the chart, not a zoom)", () => {
+    const onBox = { closest: (sel: string) => (sel.split(", ").includes(".zm-box:not(.zm-external)") ? {} : null) };
+    expect(zoomTakes({ type: "dblclick", target: onBox })).toBe(false);
+  });
+
   it("still zooms on a double-click elsewhere on the map", () => {
     expect(zoomTakes({ type: "dblclick", target: onMap })).toBe(true);
   });
