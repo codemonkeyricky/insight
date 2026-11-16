@@ -153,7 +153,7 @@ describe("tierModel on the mini Insight", () => {
 
   it("merges the requests from the app into one edge per backend, with the route labels", () => {
     const toServer = tiers.edges.find((e) => e.from === "web" && e.to === "server");
-    expect(toServer).toMatchObject({ label: "GET /api/items, GET /api/items/:id/detail, GET /api/items/:id/events", count: 3 });
+    expect(toServer).toMatchObject({ label: "GET /api/items, GET /api/items/:id/detail, +1", count: 3 });
     expect(tiers.edges.find((e) => e.from === "web" && e.to === "fn")).toMatchObject({ label: "/api/index", count: 1 });
   });
 
@@ -196,6 +196,66 @@ describe("tierModel on the mini Insight", () => {
 
   it("is deterministic", () => {
     expect(tiersOf(miniInsight())).toEqual(tiers);
+  });
+});
+
+/**
+ * A browser app (acme-web) that fetches a URL it builds at run time, and reads the env vars `reads` lists, a Fastify server
+ * (acme-api) and a Cloudflare Worker named acme-storage. Every deployable shares the word `acme`.
+ */
+function envApp(reads: Array<{ file: string; name: string }>): IRDocument {
+  const nodes: IRNode[] = [
+    file("acme-web/package.json"),
+    file("acme-web/index.html"),
+    file("acme-web/src/main.ts"),
+    fn("acme-web/src/main.ts", "load"),
+    effect("acme-web/src/main.ts", "load", 3, "effects.net.connect", net("fetch", { host: "<dynamic>", method: "GET" })),
+    file("acme-api/package.json"),
+    file("acme-api/src/routes.ts"),
+    fn("acme-api/src/routes.ts", "list"),
+    effect("acme-api/src/routes.ts", "list", 3, "effects.net.serve", { framework: "fastify", method: "GET", path: "/api/items", handler: "list" }),
+    file("acme-storage/wrangler.toml"),
+    file("acme-storage/index.js"),
+    fn("acme-storage/index.js", "fetch"),
+    effect("acme-storage/index.js", "fetch", 2, "effects.net.serve", { framework: "worker", method: "*", path: "/", handler: "fetch", name: "acme-storage", platform: "cloudflare" }),
+  ];
+  const seen = new Set<string>();
+  reads.forEach((r, i) => {
+    // A read in the fetch's file is owned by its `load` function; a read elsewhere by a `read` function of its own file.
+    const owner = r.file === "acme-web/src/main.ts" ? "load" : "read";
+    if (owner === "read" && !seen.has(r.file)) {
+      seen.add(r.file);
+      nodes.push(file(r.file), fn(r.file, "read"));
+    }
+    nodes.push(effect(r.file, owner, 10 + i, "effects.env.read", { name: r.name }));
+  });
+  return { nodes, edges: [imp("acme-web/src/main.ts", "react-dom/client")], findings: [] };
+}
+
+describe("tierModel environment heuristic", () => {
+  it("ignores an env read in a build config file, so INSIGHT_API-style names match nothing", () => {
+    const tiers = tiersOf(envApp([{ file: "acme-web/vite.config.ts", name: "VITE_STORAGE_BASE" }]));
+    expect(tiers.edges.some((e) => e.from === "acme-web" && e.to === "acme-storage")).toBe(false);
+  });
+
+  it("does not match on a word shared by two or more deployables: ACME_API names no Worker, VITE_STORAGE_BASE does", () => {
+    const tiers = tiersOf(
+      envApp([
+        { file: "acme-web/src/main.ts", name: "ACME_API" },
+        { file: "acme-web/src/main.ts", name: "VITE_STORAGE_BASE" },
+      ]),
+    );
+    expect(tiers.edges.find((e) => e.from === "acme-web" && e.to === "acme-storage")).toMatchObject({ verb: "reads", label: "GET via VITE_STORAGE_BASE" });
+  });
+
+  it("prefers a name read in the fetch's own file when the matching names tie", () => {
+    const tiers = tiersOf(
+      envApp([
+        { file: "acme-web/src/other.ts", name: "VITE_STORAGE_BASE" },
+        { file: "acme-web/src/main.ts", name: "VITE_STORAGE_URL" },
+      ]),
+    );
+    expect(tiers.edges.find((e) => e.to === "acme-storage")).toMatchObject({ label: "GET via VITE_STORAGE_URL" });
   });
 });
 

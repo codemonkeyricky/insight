@@ -91,10 +91,10 @@ try {
   }
   console.log("");
   const label = new Map(tiers.nodes.map((n) => [n.id, n]));
-  console.log(`${pad("FROM", 26)}${pad("VERB", 10)}${pad("TO", 26)}${pad("LABEL", 22)}${pad("CONF", 10)}${pad("COUNT", 7)}`);
+  console.log(`${pad("FROM", 26)}${pad("VERB", 10)}${pad("TO", 26)}${pad("LABEL", 40)}${pad("CONF", 10)}${pad("COUNT", 7)}`);
   for (const e of tiers.edges) {
     console.log(
-      `${pad(label.get(e.from)?.label ?? e.from, 26)}${pad(e.verb, 10)}${pad(label.get(e.to)?.label ?? e.to, 26)}${pad(e.label, 22)}${pad(e.confidence, 10)}${pad(e.count, 7)}`,
+      `${pad(label.get(e.from)?.label ?? e.from, 26)}${pad(e.verb, 10)}${pad(label.get(e.to)?.label ?? e.to, 26)}${pad(e.label, 40)}${pad(e.confidence, 10)}${pad(e.count, 7)}`,
     );
   }
   console.log("");

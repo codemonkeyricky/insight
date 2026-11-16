@@ -30,10 +30,14 @@ export interface TierEdge {
   from: string;
   to: string;
   verb: "requests" | "reads" | "writes" | "opens" | "spawns";
+  /** The short text on the edge, without its verb: the route labels of a request (two, then "+N"), the op of a store ("read",
+   * "write", or the driver name), or the outside service's own label. */
   label: string;
   count: number;
   sites: Site[];
   confidence: "exact" | "inferred";
+  /** The APIs and syscalls the edge's facts went through, sorted and distinct (e.g. "fs.readFileSync", "fetch"). For the panel. */
+  apis: string[];
   /** The libraries a folded edge came through, sorted. Absent for a direct edge. */
   via?: string[];
 }
@@ -63,12 +67,22 @@ const ROLE_RANK: Record<string, number> = { spa: 0, client: 1, server: 2, functi
 /** Words that name no service: an env name or a Worker name made of only these says nothing about which Worker it means. */
 const STOP_WORDS = new Set(["vite", "base", "url", "api", "public", "root", "origin", "host", "endpoint", "app"]);
 const WRANGLER_FILES = ["wrangler.toml", "wrangler.json", "wrangler.jsonc"];
+/** Build and tool config files: an env read there belongs to the build, not the app (vite.config.ts reads INSIGHT_API at build time). */
+const CONFIG_FILE = /(^|\/)([^/]*\.config\.(c|m)?[jt]sx?|(vite|webpack|rollup|rspack|esbuild|tsup|babel|postcss|tailwind|jest|vitest|playwright|karma|next|nuxt|astro|svelte)\.[^/]*)$/;
+/** Distinct route labels a request edge shows before "+N". Other edges show every distinct label of their merged facts (or one). */
+const REQUEST_LABELS = 2;
+const OTHER_LABELS = 3;
 const UI_IMPORT = /^(react-dom|vue|svelte|preact|solid-js)(\/|$)/;
 const VERCEL_IMPORT = /^@vercel\//;
 const ROUTE_PREFIX = "route:";
 
 type Role = NonNullable<TierNode["role"]>;
 type Verb = TierEdge["verb"];
+/** Where an env var is read: the file, and the function that reads it. */
+interface EnvLoc {
+  file: string;
+  fn?: string;
+}
 
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -93,20 +107,27 @@ function dedupeSites(sites: Site[]): Site[] {
   return out;
 }
 
-/** The label of a merged edge: up to three distinct labels, then how many more. */
-function mergedLabel(parts: string[]): string {
+/** The label of a merged edge: up to `cap` distinct labels, then how many more. */
+function mergedLabel(parts: string[], cap: number): string {
   const sorted = [...new Set(parts)].sort(cmp);
-  if (sorted.length <= 3) return sorted.join(", ");
-  return `${sorted.slice(0, 3).join(", ")}, +${sorted.length - 3}`;
+  if (sorted.length <= cap) return sorted.join(", ");
+  return `${sorted.slice(0, cap).join(", ")}, +${sorted.length - cap}`;
 }
 
 /**
- * Labels of a System edge, with their " ×n" counts removed: "GET ×2, POST" → ["GET", "POST"]. A route that takes any method
- * is labelled by its path alone ("* /api/index" → "/api/index"): the request's own method is not in the System model.
+ * Labels of a System edge, with their " ×n" counts removed and its verb dropped: "GET ×2, POST" → ["GET", "POST"], and
+ * "spawns child_process.spawn" → ["child_process.spawn"]. A route that takes any method is labelled by its path alone
+ * ("* /api/index" → "/api/index"): the request's own method is not in the System model.
  */
-function labelParts(label: string): string[] {
-  return label.split(", ").map((part) => part.replace(/ ×\d+$/, "").replace(/^\* /, ""));
+function labelParts(label: string, verb: string): string[] {
+  return label
+    .split(", ")
+    .map((part) => part.replace(/ ×\d+$/, "").replace(/^\* /, "").replace(`${verb} `, ""))
+    .filter((part) => part !== "");
 }
+
+/** The APIs and syscalls a System edge's facts went through, sorted and distinct. */
+const apisOf = (e: SystemEdge): string[] => [...new Set((e.evidence ?? []).map((ev) => ev.api))].sort(cmp);
 
 /**
  * The Tiers model of one System model. Pure and deterministic: the same inputs always give the same output. `sys` is the
@@ -201,15 +222,24 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
     if (attrs.platform === "cloudflare") workerPlatform.add(r.component);
   }
   const listens = new Set(links.filter((l) => l.e.verb === "listens").map((l) => l.from));
-  const envNamesOf = new Map<string, Set<string>>();
+  // Env reads by owner: each name with the places it is read (its file and its function). A build or tool config file's reads
+  // are not the app's own, so they are dropped.
+  const envLocsOf = new Map<string, Map<string, EnvLoc[]>>();
   for (const node of model.doc.nodes) {
     if (node.kind !== "effects.env.read") continue;
     const name = (node.attrs as { name?: unknown }).name;
-    const owner = ownerOfPath(model.fileOf(node.id));
-    if (typeof name !== "string" || name === "" || owner === undefined) continue;
-    const set = envNamesOf.get(owner) ?? new Set<string>();
-    set.add(name);
-    envNamesOf.set(owner, set);
+    const file = model.fileOf(node.id);
+    const owner = ownerOfPath(file);
+    if (typeof name !== "string" || name === "" || owner === undefined || file === undefined || CONFIG_FILE.test(file)) continue;
+    const byName = envLocsOf.get(owner) ?? new Map<string, EnvLoc[]>();
+    byName.set(name, [...(byName.get(name) ?? []), { file, fn: node.parent }]);
+    envLocsOf.set(owner, byName);
+  }
+  // The functions each function calls (one hop of the call graph), for the env reads near a fetch.
+  const callees = new Map<string, string[]>();
+  for (const e of model.doc.edges) {
+    if (e.kind !== "calls.call") continue;
+    callees.set(e.from, [...(callees.get(e.from) ?? []), ...edgeTargets(e).nodes]);
   }
 
   // Components shown: dev folders are dropped unless `tests`. A dev component counts as hidden.
@@ -318,11 +348,12 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
     from: string;
     to: string;
     verb: Verb;
-    label: string;
+    parts: string[];
     count: number;
     sites: Site[];
     confidence: "exact" | "inferred";
     via: string[];
+    apis: string[];
   }
   const candidates: Candidate[] = [];
   const devEdges = new Set<string>();
@@ -350,32 +381,66 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
           devEdges.add(l.e.id);
           continue;
         }
+        // A store's label is its op, not its API names (those go in `apis`): "read", "write", or the driver an open names.
+        const ext = exts.get(l.to);
+        const store = ext !== undefined && (ext.category === "store" || ext.category === "filesystem");
+        const parts = store && verb !== "opens" ? [verb === "reads" ? "read" : "write"] : labelParts(l.e.label, verb);
         candidates.push({
           from: d,
           to: l.to,
           verb,
-          label: l.e.label,
+          parts,
           count: l.e.count,
           sites: l.e.sites,
           confidence: member === d ? l.e.confidence : "inferred",
           via: [...via],
+          apis: apisOf(l.e),
         });
       }
     }
   }
 
-  // Environment heuristic: a browser app that GETs a URL from an env var reads the Worker whose name or path shares a word with it.
+  // Environment heuristic: a browser app that GETs a URL from an env var reads the Worker whose name or path shares a word with
+  // it. A word counts only when it is the unit's own: a word shared by two or more deployables (`apps`, `acme`) names no one
+  // service. Among the app's env names that match, the most shared words win, then a name read near a fetch site (in its file,
+  // or in a function the fetch's function calls), then the alphabetically first.
+  const nameOfUnit = (d: string): string => workerName.get(d) ?? comps.get(d)?.label ?? d;
+  const unitCount = new Map<string, number>();
+  for (const d of deployables) {
+    for (const t of new Set([...tokens(nameOfUnit(d)), ...tokens(comps.get(d)?.path ?? "")])) unitCount.set(t, (unitCount.get(t) ?? 0) + 1);
+  }
+  const ownWords = (text: string): Set<string> => new Set(tokens(text).filter((t) => (unitCount.get(t) ?? 0) < 2));
   const workers = deployables.filter((d) => role.get(d) === "worker");
   for (const d of deployables) {
     if (role.get(d) !== "spa") continue;
+    const byName = envLocsOf.get(d) ?? new Map<string, EnvLoc[]>();
     for (const l of factsOut.get(d) ?? []) {
       if (l.e.verb !== "reads" || !(l.to === "dynamic-url" || l.to.startsWith("config:"))) continue;
-      const names = l.to.startsWith("config:") ? [l.to.slice("config:".length)] : [...(envNamesOf.get(d) ?? [])].sort(cmp);
+      const names = l.to.startsWith("config:") ? [l.to.slice("config:".length)] : [...byName.keys()].sort(cmp);
+      const siteFiles = new Set(l.e.sites.map((s) => s.file));
+      const siteFns = l.e.sites.map((s) => s.fn).filter((f): f is string => f !== undefined);
+      const nearFns = new Set([...siteFns, ...siteFns.flatMap((f) => callees.get(f) ?? [])]);
       for (const w of workers) {
-        const want = new Set([...tokens(workerName.get(w) ?? ""), ...tokens(comps.get(w)?.path ?? "")]);
-        const name = names.find((n) => tokens(n).some((t) => want.has(t)));
-        if (name === undefined) continue;
-        candidates.push({ from: d, to: w, verb: "reads", label: `GET via ${name}`, count: l.e.count, sites: l.e.sites, confidence: "inferred", via: [] });
+        const want = ownWords(`${nameOfUnit(w)} ${comps.get(w)?.path ?? ""}`);
+        let best: { name: string; score: number; near: boolean } | undefined;
+        for (const name of names) {
+          const score = [...ownWords(name)].filter((t) => want.has(t)).length;
+          if (score === 0) continue;
+          const near = (byName.get(name) ?? []).some((loc) => siteFiles.has(loc.file) || (loc.fn !== undefined && nearFns.has(loc.fn)));
+          if (best === undefined || score > best.score || (score === best.score && near && !best.near)) best = { name, score, near };
+        }
+        if (best === undefined) continue;
+        candidates.push({
+          from: d,
+          to: w,
+          verb: "reads",
+          parts: [`GET via ${best.name}`],
+          count: l.e.count,
+          sites: l.e.sites,
+          confidence: "inferred",
+          via: [],
+          apis: apisOf(l.e),
+        });
       }
     }
   }
@@ -390,16 +455,18 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
     sites: Site[];
     inferred: boolean;
     via: Set<string>;
+    apis: Set<string>;
   }
   const merged = new Map<string, Merged>();
   for (const c of candidates) {
     const key = `${c.from}\0${c.verb}\0${c.to}`;
-    const m = merged.get(key) ?? { from: c.from, to: c.to, verb: c.verb, parts: [], count: 0, sites: [], inferred: false, via: new Set<string>() };
-    m.parts.push(...labelParts(c.label));
+    const m = merged.get(key) ?? { from: c.from, to: c.to, verb: c.verb, parts: [], count: 0, sites: [], inferred: false, via: new Set<string>(), apis: new Set<string>() };
+    m.parts.push(...c.parts);
     m.count += c.count;
     m.sites.push(...c.sites);
     m.inferred ||= c.confidence === "inferred";
     for (const v of c.via) m.via.add(v);
+    for (const a of c.apis) m.apis.add(a);
     merged.set(key, m);
   }
   const edges: TierEdge[] = [...merged.values()]
@@ -408,10 +475,11 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
       from: m.from,
       to: m.to,
       verb: m.verb,
-      label: mergedLabel(m.parts),
+      label: mergedLabel(m.parts, m.verb === "requests" ? REQUEST_LABELS : OTHER_LABELS),
       count: m.count,
       sites: dedupeSites(m.sites).slice(0, SITE_CAP),
       confidence: m.inferred ? "inferred" : "exact",
+      apis: [...m.apis].sort(cmp),
       ...(m.via.size > 0 ? { via: [...m.via].sort(cmp) } : {}),
     }))
     .sort((x, y) => cmp(x.from, y.from) || cmp(x.to, y.to) || cmp(x.verb, y.verb) || cmp(x.id, y.id));
