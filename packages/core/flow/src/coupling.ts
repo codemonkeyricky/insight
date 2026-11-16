@@ -579,11 +579,19 @@ export function couplingChart(
   unguarded?: ReadonlySet<string>,
 ): { items: Item[]; info: CouplingInfo } {
   const M = modules.moduleOf(fnId);
-  const fp = footprints.get(fnId) ?? { entries: [], modules: [], escape: false, state: { writes: 0, reads: 0, hidden: false } };
   const ctx: Ctx = { M, modules, footprints, onSurface: surface === undefined || surface.has(fnId), ...(unguarded !== undefined ? { unguarded } : {}) };
   ctx.taint = taintedControlsOf(items, false, ctx);
   const out = prune(items, false, ctx, { next: 0 });
-  return { items: out, info: { module: M ?? ".", footprint: fp, summary: footprintSummary(fp) } };
+  return { items: out, info: couplingInfoOf(fnId, modules, footprints) };
+}
+
+/**
+ * A function's coupling info (its module, footprint and one-line summary) from the project's footprints, as `couplingChart`
+ * reports it. The footprints come from the unfiltered IR, so this is the same whatever chart a view draws.
+ */
+export function couplingInfoOf(fnId: string, modules: ModuleMap, footprints: ReadonlyMap<string, CouplingFootprint>): CouplingInfo {
+  const fp = footprints.get(fnId) ?? { entries: [], modules: [], escape: false, state: { writes: 0, reads: 0, hidden: false } };
+  return { module: modules.moduleOf(fnId) ?? ".", footprint: fp, summary: footprintSummary(fp) };
 }
 
 /** The chart with every fold whose id is in `open` replaced by the rows it folds, recursively. */

@@ -6,6 +6,7 @@ import { callerGraphFor, pipelineFor, refsFor, scopeCallersFor, scopeExecFor, sc
 import { models } from "./model/store";
 import { staticApi } from "./staticApi";
 import { hostedApi } from "./hostedApi";
+import type { FlowFocus } from "./zoom/detailPref";
 
 // Types only: the flow package is not bundled, its charts are drawn by components/FlowChart.tsx.
 // The architecture model is plain data from the lens package; the Arch tab draws it in components/views/ArchView.tsx.
@@ -493,14 +494,15 @@ const liveApi = {
   files: (id: string, snapshot?: string) =>
     call<{ snapshot: string | null; files: FileEntry[] }>("GET", `/api/projects/${id}/files${q({ snapshot })}`).then((r) => r.files),
   file: (id: string, path: string, snapshot?: string) => call<FileView>("GET", `/api/projects/${id}/file${q({ path, snapshot })}`),
-  flow: (id: string, path: string) => call<FileFlow>("GET", `/api/projects/${id}/flow${q({ path })}`),
+  // `focus` is sent on every call: `intermodule` draws the inter-module chart, `all` the full chart with its coupling chart.
+  flow: (id: string, path: string, focus: FlowFocus = "all") => call<FileFlow>("GET", `/api/projects/${id}/flow${q({ path, focus })}`),
   flowSummary: (id: string) =>
     call<{ snapshot: string | null; files: FileFlowSummary[] }>("GET", `/api/projects/${id}/flow-summary`).then((r) => r.files),
   // Computed in the page from the project model, which holds the same IR the server's /scope/flow route cuts.
   // The payload equals the route's (snapshot, scope and kind included); the route stays for other clients.
   scopeFlow: (id: string, scope: string): Promise<ScopeFlow> => liveModel(id).then(({ snapshot, model }) => scopeFlowFor(snapshot, model, scope)),
   // Computed in the page from the project model, as /scope/exec answers it (see scopeFlow above).
-  getScopeExec: (id: string, scope: string, opts: { lambdas?: boolean } = {}): Promise<ExecModel> =>
+  getScopeExec: (id: string, scope: string, opts: { lambdas?: boolean; focus?: FlowFocus } = {}): Promise<ExecModel> =>
     liveModel(id).then(({ snapshot, model }) => scopeExecFor(snapshot, model, scope, opts)),
   // The reverse references of a node, computed from the project model (no request). The lists cover the whole project.
   getRefs: (id: string, scope: string, fnId: string): Promise<ScopeRefsPayload> => liveModel(id).then(({ snapshot, model }) => refsFor(snapshot, model, scope, fnId)),
@@ -524,8 +526,8 @@ const liveApi = {
   getScopeArch: (id: string, scope: string) => call<ArchModel>("GET", `/api/projects/${id}/scope/arch?path=${encodeURIComponent(scope)}`),
   // The server lays the execution scene out whole and keeps it per snapshot. Any failure, a 404 included, gives undefined,
   // and the page then lays the scene out in its worker.
-  scopeExecLayout: (id: string, scope: string): Promise<SceneLayout | undefined> =>
-    call<SceneLayout>("GET", `/api/projects/${id}/scope/exec-layout?path=${encodeURIComponent(scope)}`).then(
+  scopeExecLayout: (id: string, scope: string, focus: FlowFocus = "all"): Promise<SceneLayout | undefined> =>
+    call<SceneLayout>("GET", `/api/projects/${id}/scope/exec-layout?path=${encodeURIComponent(scope)}&focus=${focus}`).then(
       (r) => ({ containers: r.containers }),
       () => undefined,
     ),

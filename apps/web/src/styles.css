@@ -481,7 +481,7 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 .zm-frame .zm-label { font-family: var(--font-ui); font-weight: 600; font-size: max(11px, calc(12px * var(--zinv, 1))); fill: var(--graphite); letter-spacing: 0.01em; }
 .zm-expansion-title .zm-label { font-family: var(--font-ui); font-weight: 600; }
 .zm-count { fill: color-mix(in srgb, var(--graphite) 75%, transparent); font-family: var(--font-ui); font-size: max(11px, calc(11px * var(--zinv, 1))); pointer-events: none; }
-.zm-box { cursor: pointer; }
+.zm-box { cursor: pointer; user-select: none; -webkit-user-select: none; }
 /* An external command: a muted leaf with no glyph and no pointer, since a click opens nothing (see BoxShape). */
 .zm-box.zm-external { cursor: default; }
 .zm-box.zm-external .zm-box-body { fill: color-mix(in srgb, var(--graphite) 4%, var(--sheet)); stroke-dasharray: 4 3; }

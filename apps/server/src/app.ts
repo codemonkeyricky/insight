@@ -32,6 +32,7 @@ import {
   fileFacts,
   fileFlow,
   flowSummary,
+  focusOf,
   languageOf,
   lensRecord,
   listFiles,
@@ -378,24 +379,27 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
 
   // The execution model of a scope: its threads, the functions each runs, and the coroutines it awaits.
   // Same errors as the flow route, which it shares its path and snapshot checks with.
-  app.get<{ Params: ProjectParams; Querystring: SnapshotQuery & { path?: string } }>("/api/projects/:id/scope/exec", async (req) => {
+  // `focus=intermodule` sizes the boxes by the inter-module chart (see fileFlow); the default `all` is the full chart.
+  app.get<{ Params: ProjectParams; Querystring: SnapshotQuery & { path?: string; focus?: string } }>("/api/projects/:id/scope/exec", async (req) => {
     const p = project(req.params.id);
     const path = scopePathOf(req.query.path);
+    const focus = focusOf(req.query.focus);
     const snapshot = resolveSnapshot(pathsFor(p), req.query.snapshot);
     if (!snapshot) throw new ProjectError(404, "project has no snapshot yet");
     // exec.scope is the normalized scope, so the spread supplies it. Naming it again would be overwritten.
-    const { kind, exec } = scopeExecOf(pathsFor(p), snapshot, path);
+    const { kind, exec } = scopeExecOf(pathsFor(p), snapshot, path, focus);
     return { snapshot, kind, ...exec };
   });
 
   // The exec scene of a scope, laid out whole on the server so the page does not solve it in its worker. Same path,
   // snapshot and errors as the exec route. The answer is the layout's containers, which the page checks against the scene.
-  app.get<{ Params: ProjectParams; Querystring: SnapshotQuery & { path?: string } }>("/api/projects/:id/scope/exec-layout", async (req) => {
+  app.get<{ Params: ProjectParams; Querystring: SnapshotQuery & { path?: string; focus?: string } }>("/api/projects/:id/scope/exec-layout", async (req) => {
     const p = project(req.params.id);
     const path = scopePathOf(req.query.path);
+    const focus = focusOf(req.query.focus);
     const snapshot = resolveSnapshot(pathsFor(p), req.query.snapshot);
     if (!snapshot) throw new ProjectError(404, "project has no snapshot yet");
-    const { kind, layout } = await scopeExecLayoutOf(pathsFor(p), snapshot, path);
+    const { kind, layout } = await scopeExecLayoutOf(pathsFor(p), snapshot, path, focus);
     return { snapshot, kind, ...layout };
   });
 
@@ -491,13 +495,16 @@ export async function buildServer(opts: ServerOptions = {}): Promise<InsightServ
     return { snapshot: snapshot ?? null, ...text, ...(language ? { language } : {}), ...facts };
   });
 
-  app.get<{ Params: ProjectParams; Querystring: SnapshotQuery & { path?: string } }>("/api/projects/:id/flow", async (req) => {
+  // `focus=intermodule` draws each function's inter-module chart (calls to exported functions of other files, no kernel or
+  // env effects) and no coupling chart. The default `all` is the full chart with its coupling chart, as before.
+  app.get<{ Params: ProjectParams; Querystring: SnapshotQuery & { path?: string; focus?: string } }>("/api/projects/:id/flow", async (req) => {
     const p = project(req.params.id);
     const path = req.query.path;
     if (!path) throw new ProjectError(400, "path is required");
+    const focus = focusOf(req.query.focus);
     const snapshot = resolveSnapshot(pathsFor(p), req.query.snapshot);
     if (!snapshot) throw new ProjectError(404, "project has no snapshot yet");
-    return { snapshot, ...fileFlow(pathsFor(p), snapshot, path) };
+    return { snapshot, ...fileFlow(pathsFor(p), snapshot, path, focus) };
   });
 
   app.get<{ Params: ProjectParams; Querystring: SnapshotQuery }>("/api/projects/:id/flow-summary", async (req) => {

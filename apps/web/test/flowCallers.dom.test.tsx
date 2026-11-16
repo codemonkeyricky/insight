@@ -229,7 +229,10 @@ describe("double-clicks on map controls (real DOM)", () => {
     };
     document.body.append(svg);
     for (const cls of ["zm-callers-btn", "zm-expansion zm-callers", "zm-expansion-close"]) expect(zoomTakes({ type: "dblclick", target: make(cls) })).toBe(false);
-    expect(zoomTakes({ type: "dblclick", target: make("zm-box zm-function") })).toBe(true);
+    // A function box's double-click opens or closes its chart, so it does not zoom the map either.
+    expect(zoomTakes({ type: "dblclick", target: make("zm-box zm-function") })).toBe(false);
+    // An external chip opens nothing, so its double-click zooms as it did.
+    expect(zoomTakes({ type: "dblclick", target: make("zm-box zm-external") })).toBe(true);
     svg.remove();
   });
 });

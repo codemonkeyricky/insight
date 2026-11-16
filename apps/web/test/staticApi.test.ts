@@ -114,3 +114,32 @@ describe("makeStaticApi coupling flow", () => {
     expect(run?.coupling?.rows.all).toBeGreaterThan(0);
   });
 });
+
+describe("makeStaticApi inter-module focus", () => {
+  it("keeps a function's state rows under the focus, as the live server does", async () => {
+    const span = (file: string, start: number[], end: number[]) => ({ file, start, end });
+    const prov = { confidence: "exact", frontend: "x" };
+    const graph = {
+      snapshot: "snap-focus-state",
+      nodes: [
+        { id: "a.ts#run", kind: "structure.function", facet: "structure", attrs: { name: "run", qualifiedName: "run", async: false, exported: true }, span: span("a.ts", [2, 0], [5, 1]), provenance: prov },
+        { id: "a.ts#var:total", kind: "data.variable", facet: "data", attrs: { name: "total", qualifiedName: "total", storage: "module", mutable: true, exported: false }, span: span("a.ts", [0, 0], [0, 16]), provenance: prov },
+      ],
+      edges: [{ from: "a.ts#run", to: "a.ts#var:total", kind: "data.write", facet: "data", attrs: { how: "assign" }, span: span("a.ts", [3, 2], [3, 14]), provenance: prov }],
+      incoming: {},
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/project.json")) return json(projectJson("focus"));
+        if (url.endsWith("/graph.json")) return json(graph);
+        return new Response("nope", { status: 404 });
+      }),
+    );
+    const api = makeStaticApi(() => "https://factory.test/focus/");
+    const focused = await api.flow("focus", "a.ts", "intermodule");
+    const run = focused.functions.find((f) => f.id === "a.ts#run");
+    expect(run).toBeDefined();
+    expect(JSON.stringify(run)).toContain("total");
+  });
+});

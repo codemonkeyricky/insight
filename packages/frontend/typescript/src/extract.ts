@@ -8,7 +8,7 @@ import { workerEntries, type WorkerDeploy, type WranglerInfo } from "./deploy.js
 import { channelIndex, matchChannelRecv, matchChannelSend } from "./channels.js";
 import { scriptKind } from "./digest.js";
 import { emitState } from "./state.js";
-import { emitData } from "./data.js";
+import { emitData, exportedLocals } from "./data.js";
 import { dispatchFor, MAX_DISPATCH_TARGETS, propName, registryFor } from "./dispatch.js";
 import { workspaceManifestPaths, workspacePackages, workspaceProgramEntries, workspaceSource, type ProgramEntry, type WorkspacePackage } from "./packages.js";
 
@@ -186,6 +186,31 @@ function isUnboundMember(node: ts.Node): boolean {
   return false;
 }
 
+/**
+ * Whether a function's owner (its declaration, or the statement or declarator of a const) is exported. A class member is
+ * exported when its class is, unless it is `private` or `#private`. A top-level declaration is exported by its own modifier
+ * or by an `export { name }` list in its file.
+ */
+function exportedOwner(owner: ts.Node, name: string, sf: ts.SourceFile): boolean {
+  if (ts.isClassElement(owner) && ts.isClassLike(owner.parent)) return classMemberExported(owner, sf);
+  if ((ts.getCombinedModifierFlags(owner as ts.Declaration) & ts.ModifierFlags.Export) !== 0) return true;
+  let top: ts.Node | undefined = owner.parent;
+  while (top !== undefined && (ts.isVariableDeclarationList(top) || ts.isVariableStatement(top))) top = top.parent;
+  return top === sf && exportedLocals(sf).has(name);
+}
+
+/** A class member is exported unless it is `private` or `#private`. A `protected` member stays exported: a subclass in another module calls it. */
+function classMemberExported(member: ts.ClassElement, sf: ts.SourceFile): boolean {
+  if (hasModifier(member, ts.SyntaxKind.PrivateKeyword) || (member.name !== undefined && ts.isPrivateIdentifier(member.name))) return false;
+  const cls = member.parent;
+  if (ts.isClassDeclaration(cls)) return exportedOwner(cls, cls.name?.text ?? "default", sf);
+  // `export const Thing = class { … }`: the class takes its variable's export.
+  if (ts.isClassExpression(cls) && ts.isVariableDeclaration(cls.parent) && ts.isIdentifier(cls.parent.name)) {
+    return exportedOwner(cls.parent, cls.parent.name.text, sf);
+  }
+  return false;
+}
+
 /** Decides whether a node becomes a structure node. Shared by the declaration pass and the emit pass. */
 function classify(node: ts.Node, sf: ts.SourceFile, literals: LiteralNames): Entity | undefined {
   // fnNode carries the async modifier; owner carries the export modifier (for a variable, its statement).
@@ -194,7 +219,7 @@ function classify(node: ts.Node, sf: ts.SourceFile, literals: LiteralNames): Ent
     name,
     async: hasModifier(fnNode, ts.SyntaxKind.AsyncKeyword),
     generator: (fnNode as ts.FunctionLikeDeclaration).asteriskToken !== undefined,
-    exported: (ts.getCombinedModifierFlags(owner as ts.Declaration) & ts.ModifierFlags.Export) !== 0,
+    exported: exportedOwner(owner, name, sf),
     anonymous,
   });
   if (ts.isClassDeclaration(node)) return { type: "type", name: node.name?.text ?? "default", typeKind: "class" };
