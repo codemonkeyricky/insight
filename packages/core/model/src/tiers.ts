@@ -144,7 +144,14 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
     }
     return false;
   };
-  const browserComponents = new Set((sys.slices ?? []).filter((s) => isBrowserRuntime(s.runtime)).map((s) => s.component));
+  // A browser program's own components: the ones that own a file its runtime runs (the roots are "file#fn"). A slice of a
+  // browser runtime in a component the browser only calls into (a backend, a library) does not make that component a frontend.
+  const browserComponents = new Set<string>();
+  for (const s of sys.slices ?? []) {
+    if (!isBrowserRuntime(s.runtime)) continue;
+    const roots = runtimeById.get(s.runtime)?.roots ?? [];
+    if (roots.some((root) => ownerOfPath(root.split("#")[0]) === s.component)) browserComponents.add(s.component);
+  }
 
   // Collapse runtimes and slices to their component. A target that is neither a component nor an external is a resource.
   const resolveComponent = (id: string): string | undefined => {
@@ -337,6 +344,8 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
       for (const l of factsOut.get(member) ?? []) {
         const verb = verbFor(l.e, l.to);
         if (verb === undefined || l.to === d) continue;
+        // A browser program has no local disk and no database driver: a folded library's fs or DB facts are not its own.
+        if (role.get(d) === "spa" && (exts.get(l.to)?.category === "filesystem" || verb === "opens")) continue;
         if (!tests && l.e.sites.length > 0 && l.e.count <= DEV_EDGE_MAX && l.e.sites.every((s) => DEV_DIRS.test(s.file))) {
           devEdges.add(l.e.id);
           continue;
