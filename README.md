@@ -55,4 +55,4 @@ TypeScript and JavaScript, C and C++, Bazel (`BUILD`, `.bzl`), CMake, and System
 
 ## Demo
 
-A static demo of the web app, with captured data, is at https://arch-insight.vercel.app.
+The hosted app runs at https://system-insight.vercel.app.

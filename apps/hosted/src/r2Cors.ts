@@ -5,7 +5,7 @@ import { AwsV4Signer } from "aws4fetch";
 
 /** Origins that may read the storage: the production site, its preview deployments, and the local hosted-dev server. */
 export const CORS_ORIGINS = [
-  "https://arch-insight.vercel.app",
+  "https://system-insight.vercel.app",
   "https://*.vercel.app",
   "http://localhost:4330",
   "http://127.0.0.1:4330",

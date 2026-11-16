@@ -7,7 +7,7 @@ const creds = { accountId: "acc123", accessKeyId: "AKIDEXAMPLE", secretAccessKey
 describe("R2 bucket CORS", () => {
   it("lists the origins, GET and HEAD, the exposed headers and the max age", () => {
     const xml = corsXml();
-    for (const origin of ["https://arch-insight.vercel.app", "https://*.vercel.app", "http://localhost:4330", "http://127.0.0.1:4330"]) {
+    for (const origin of ["https://system-insight.vercel.app", "https://*.vercel.app", "http://localhost:4330", "http://127.0.0.1:4330"]) {
       expect(xml).toContain(`<AllowedOrigin>${origin}</AllowedOrigin>`);
     }
     expect(xml).toContain("<AllowedMethod>GET</AllowedMethod>");
