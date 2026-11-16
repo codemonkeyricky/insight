@@ -857,7 +857,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   };
 
   /**
-   * Opens the chart of a caller, from its row in a callers box: to the left of the row, with a beam from it. The other rows'
+   * Opens the chart of a caller, from its row in a callers box: to the left of the row when the box opens left, to the right
+   * when it opens right, with a beam from it. The other rows'
    * charts of the box close, as a call step's callees do (openExpansion). A caller already open above the box (a recursion) is
    * not opened again: its chart is revealed and its function selected. Its own Callers button continues the chain.
    */

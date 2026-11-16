@@ -2,7 +2,8 @@
 // header of an in-place chart that replaced such a card; from any other chart's header (one opened from a call step) it
 // opens right of the chart.
 // Its header is "Callers of <name>" with a close ×, and its body is one row per caller: the name, the file and line, the
-// kinds of its edges, and a ◂ at the row's left end that opens the caller's chart to the left of the row (see ZoomMap.openCallerChart). A caller
+// kinds of its edges, and a ◂ at the row's left end that opens the caller's chart to the left of the row when the box opens
+// left and to the right when it opens right (see ZoomMap.openCallerChart). A caller
 // already open above it (a recursion) shows ↺ instead: its ◂ selects that chart rather than opening it again. The rows are
 // fetched when the box opens; the box reports how many rows it shows, so the box grows to hold them. Every control is a
 // keyboard control too (Tab, then Enter or Space). A caller is a call, dispatch, spawn, or a reference that invokes the
@@ -219,7 +220,8 @@ const POSSIBLE_W = 8 * "possible".length + 10;
 
 /**
  * One caller row: a hit area that selects it, its name and file, its edge kinds, a muted "possible" tag for a candidate
- * caller, and at the start a ◂ that opens its chart to the left (or ↺ when it is already open above, which selects it).
+ * caller, and at the start a ◂ that opens its chart to the left when the box opens left (to the right when it opens right),
+ * or ↺ when it is already open above, which selects it.
  */
 function CallerLine({ row, index, rowW, chained, onOpen, onSelect }: { row: CallerRow; index: number; rowW: number; chained: boolean; onOpen: (row: CallerRow, index: number) => void; onSelect: (row: CallerRow) => void }) {
   const r = callerRowRect(index);

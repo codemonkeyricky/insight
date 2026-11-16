@@ -75,7 +75,8 @@ The Flow tab draws the execution canvas of the scope: program, threads, coroutin
   in-place chart that replaced such a card; on any other chart (one opened from a call step) it opens RIGHT of the
   chart. The box lists one row per caller
   (`mergeCallers` in `zoom/callers.ts` merges a call and a dispatch of one caller into one row, with its kind as a
-  badge). Each row's ▸ opens that caller's chart to the right of the row, with a beam, and that chart has its own
+  badge). Each row's ◂ opens that caller's chart to the left of the row when the box opens left, and to the right of
+  the row when it opens right (a box on a chart opened from a call step), with a beam, and that chart has its own
   Callers button, so the chain walks up. The box is keyed `callers:<fnRef>` (`kind: "callers"` in `zoom/expand.ts`),
   placed, reflowed and closed like a chart expansion; closing a box closes what hangs from it. The rows are fetched
   with `api.getRefs` when the box opens, and the box grows to hold up to 12 rows plus a "+N more" row. A chart has
