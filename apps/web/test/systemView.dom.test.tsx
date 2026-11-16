@@ -27,13 +27,13 @@ afterEach(() => {
   }
 });
 
-describe("Computing runtime", () => {
+describe("Computing line", () => {
   it("paints the message before the model is computed and the diagram appears", async () => {
     getSystem.mockResolvedValue(model());
     getTiers.mockResolvedValue(noUnits);
     render(<SystemView id="p" scope="" />);
     // The first render shows only the message; the model is requested on a later task.
-    expect(screen.getByRole("status").textContent).toBe("Computing runtime…");
+    expect(screen.getByRole("status").textContent).toBe("Computing tiers…");
     expect(document.querySelector(".sysv-svg")).toBeNull();
     expect(getSystem).not.toHaveBeenCalled();
     await waitFor(() => expect(document.querySelector(".sysv-svg")).not.toBeNull());

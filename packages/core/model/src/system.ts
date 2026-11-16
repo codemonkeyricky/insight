@@ -41,8 +41,9 @@ export interface SystemComponent {
   label: string;
   path: string;
   kind: "package" | "folder" | "file";
-  files: number;
-  functions: number;
+  /** Absent for a unit whose counts the model does not hold (the Tiers view's deployable units carry them when known). */
+  files?: number;
+  functions?: number;
   entry: boolean;
 }
 export interface SystemRoute {
@@ -80,8 +81,12 @@ export interface SystemEdge {
 /** Sites kept per edge. The count still covers every fact. */
 const SITE_CAP = 20;
 
-/** Directories whose package.json files describe fixtures, not packages of the project (same rule as the Arch tab). */
-const NOT_A_PACKAGE = /(^|\/)(node_modules|test|tests|fixtures|__fixtures__|samples)(\/|$)/;
+/**
+ * Folders that are not packages or deployable units of the project: tests, fixtures, samples, examples, builds, tool state.
+ * The same list as NOISE_PAGE_DIR in packages/frontend/typescript/src/index.ts (the frontend cannot import this package), so
+ * keep the two equal. The rule for package.json folders (the Arch tab's) and for deploy configs both use it.
+ */
+const NOT_A_PACKAGE = /(^|\/)(node_modules|dist|build|test|tests|__tests__|fixtures|__fixtures__|samples|examples|\.claude)(\/|$)/;
 
 const EMPTY_LABEL = "(scope)";
 
@@ -466,7 +471,9 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
     if (relative && path !== "") {
       const hit = matchRoute(path, method, routes);
       if (hit !== undefined) {
-        if (hit.component !== comp) for (const s of sources) addFact(s.from, targetOf(s.rt, hit.component), "requests", `${hit.method} ${hit.path}`, site, exact);
+        // A match that needed a glued :param stripped (review:param → review) is a guess about the request's literal, so inferred.
+        const hitExact = exact && !hit.stripped;
+        if (hit.route.component !== comp) for (const s of sources) addFact(s.from, targetOf(s.rt, hit.route.component), "requests", `${hit.route.method} ${hit.route.path}`, site, hitExact);
         continue;
       }
       const label = `${method ?? "*"} ${path}`;
@@ -950,7 +957,6 @@ export function nodePackageRoots(model: ProjectModel): string[] {
   return list;
 }
 
-/** The verb of an HTTP method: reads for GET and HEAD, writes for the rest that change state, calls when unknown. */
 /**
  * The external a store access (`effects.store.access`) stands for. Cloudflare KV and R2 take the ids classifyHost gives
  * their REST calls, so a Worker binding and a REST call to the same service share one external.
@@ -964,6 +970,7 @@ function storeAccessExternal(store: string): SystemExternal {
   return { id: `store:${store}`, label: store, category: "store" };
 }
 
+/** The verb of an HTTP method: reads for GET and HEAD, writes for the rest that change state, calls when unknown. */
 function methodVerb(method: string | undefined): SystemEdge["verb"] {
   if (method === "GET" || method === "HEAD") return "reads";
   if (method === "POST" || method === "PUT" || method === "PATCH" || method === "DELETE") return "writes";
@@ -972,49 +979,71 @@ function methodVerb(method: string | undefined): SystemEdge["verb"] {
 
 /**
  * The route a relative request is answered by. Same method (any when the request omits it; a route method of `*` or `ALL`
- * takes any). Segments match with `:param` as a wildcard, a trailing `*` takes the rest of the path (when the route has a
- * literal segment), and worker routes are on another origin, so they never answer a relative request. Ties: more literal
- * segments, then the exact method, then the lower id.
+ * takes any). Segments match with `:param` as a wildcard, a trailing `*` takes the rest of the path (at least one segment,
+ * and the route needs a literal segment before it), and worker routes are on another origin, so they never answer a relative
+ * request. Ties, in order: more literal segments, then the exact method, then a `:param` route over a trailing-`*` one, then
+ * the lower id. `stripped` is set when the match needed a glued `:param` removed from the request's segment.
  */
-function matchRoute(path: string, method: string | undefined, routes: SystemRoute[]): SystemRoute | undefined {
-  let req = segments(path).map(literalSegment);
-  if (!path.startsWith("/") && req.length > 1) req = req.slice(1);
-  let best: { route: SystemRoute; literal: number; exact: boolean } | undefined;
+function matchRoute(path: string, method: string | undefined, routes: SystemRoute[]): { route: SystemRoute; stripped: boolean } | undefined {
+  const raw = segments(path);
+  let req = raw.map(literalSegment);
+  let rawReq = raw;
+  if (!path.startsWith("/") && req.length > 1) {
+    req = req.slice(1);
+    rawReq = rawReq.slice(1);
+  }
+  let best: { route: SystemRoute; literal: number; exact: boolean; wildcard: boolean; stripped: boolean } | undefined;
   for (const route of routes) {
     if (route.path === "" || route.framework === "worker") continue;
     const anyMethod = route.method === "*" || route.method === "ALL";
     if (method !== undefined && !anyMethod && method !== route.method) continue;
-    const literal = matchSegments(segments(route.path), req);
-    if (literal === undefined) continue;
-    const exact = method !== undefined && route.method === method;
-    const better =
-      best === undefined ||
-      literal > best.literal ||
-      (literal === best.literal && exact !== best.exact && exact) ||
-      (literal === best.literal && exact === best.exact && cmp(route.id, best.route.id) < 0);
-    if (better) best = { route, literal, exact };
+    const want = segments(route.path);
+    const match = matchSegments(want, req, rawReq);
+    if (match === undefined) continue;
+    const cand = {
+      route,
+      literal: match.literal,
+      exact: method !== undefined && route.method === method,
+      wildcard: want[want.length - 1] === "*",
+      stripped: match.stripped,
+    };
+    if (best === undefined || beats(cand, best)) best = cand;
   }
-  return best?.route;
+  return best === undefined ? undefined : { route: best.route, stripped: best.stripped };
+}
+
+/** True when candidate a answers a request before b: more literal segments, the exact method, a `:param` route, then the lower id. */
+function beats(
+  a: { route: SystemRoute; literal: number; exact: boolean; wildcard: boolean },
+  b: { route: SystemRoute; literal: number; exact: boolean; wildcard: boolean },
+): boolean {
+  if (a.literal !== b.literal) return a.literal > b.literal;
+  if (a.exact !== b.exact) return a.exact;
+  if (a.wildcard !== b.wildcard) return !a.wildcard;
+  return cmp(a.route.id, b.route.id) < 0;
 }
 
 /**
- * How many literal segments a route matches against the request's segments, or undefined when it does not match. A trailing
- * `*` takes the rest of the request (zero or more segments) and needs a literal segment in the route.
+ * How many literal segments a route matches against the request's segments, and whether a glued `:param` was stripped to
+ * make a literal match, or undefined when it does not match. A trailing `*` takes at least one remaining request segment,
+ * and the route needs a literal segment.
  */
-function matchSegments(want: string[], req: string[]): number | undefined {
+function matchSegments(want: string[], req: string[], rawReq: string[]): { literal: number; stripped: boolean } | undefined {
   const trailing = want[want.length - 1] === "*";
   const fixed = trailing ? want.slice(0, -1) : want;
-  if (trailing ? req.length < fixed.length : req.length !== fixed.length) return undefined;
+  if (trailing ? req.length <= fixed.length : req.length !== fixed.length) return undefined;
   if (trailing && !fixed.some((w) => !w.startsWith(":"))) return undefined;
   let literal = 0;
+  let stripped = false;
   for (let i = 0; i < fixed.length; i++) {
     const w = fixed[i] as string;
     const r = req[i] as string;
     if (w.startsWith(":") || r.startsWith(":")) continue;
     if (w !== r) return undefined;
     literal++;
+    if (rawReq[i] !== r) stripped = true;
   }
-  return literal;
+  return { literal, stripped };
 }
 
 /** A request segment with a `:param` glued to its end is its literal: a query string was appended (`review${q}` → `review:param`). */

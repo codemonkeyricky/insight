@@ -25,7 +25,8 @@
   "inputs": [
     "tsconfig*.json",
     "jsconfig.json",
-    "**/wrangler.{toml,json,jsonc}"
+    "**/wrangler.{toml,json,jsonc}",
+    "**/index.html"
   ],
   "provides": [
     "calls",

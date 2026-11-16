@@ -296,3 +296,104 @@ describe("tierModel options and edge cases", () => {
     expect(tiers.reason).toBe("not enough deployable units at this scope (0 found, need 2)");
   });
 });
+
+/** A type-only import: the same edge, flagged typeOnly, as the frontend extractor writes it. */
+function typeImp(from: string, text: string) {
+  return fx.edge(from, { unresolved: { scheme: "module", text } }, "packaging", "packaging.import", {
+    span: fx.span(from, 0, 0, 0, 20),
+    attrs: { specifier: text, typeOnly: true, dynamic: false },
+  });
+}
+
+describe("tierModel classification", () => {
+  it("folds a UI library that imports vue into its caller: it is not drawn as a browser app", () => {
+    const UI = "packages/ui/src/button.ts";
+    const tiers = tiersOf({
+      nodes: [file("packages/ui/package.json"), file(UI), fn(UI, "Button"), effect(UI, "Button", 3, "effects.net.connect", net("fetch", { host: "api.github.com", path: "/x", method: "GET" }))],
+      edges: [imp(UI, "vue")],
+      findings: [],
+    });
+    expect(tiers.nodes).toEqual([]);
+    expect(tiers.hidden.libraries).toEqual(["packages/ui"]);
+  });
+
+  it("does not make a component a browser app for a type-only UI import", () => {
+    const tiers = tiersOf({
+      nodes: [file("packages/types/package.json"), file("packages/types/src/index.ts"), fn("packages/types/src/index.ts", "T")],
+      edges: [typeImp("packages/types/src/index.ts", "react-dom")],
+      findings: [],
+    });
+    expect(tiers.nodes.map((n) => n.id)).not.toContain("packages/types");
+  });
+
+  it("makes a server that imports react-dom/server a server, not a browser app", () => {
+    const SRVR = "server/src/app.ts";
+    const tiers = tiersOf({
+      nodes: [
+        file("server/package.json"),
+        file(SRVR),
+        fn(SRVR, "start"),
+        effect(SRVR, "start", 3, "effects.net.serve", { framework: "express", method: "GET", path: "/api/items", handler: "list" }),
+      ],
+      edges: [imp(SRVR, "react-dom/server")],
+      findings: [],
+    });
+    expect(tiers.nodes.find((n) => n.id === "server")).toMatchObject({ tier: "backend", role: "server", platform: "node" });
+  });
+
+  it("makes a component with server routes a server even when it imports React", () => {
+    const SRVR = "server/src/app.ts";
+    const tiers = tiersOf({
+      nodes: [
+        file("server/package.json"),
+        file(SRVR),
+        fn(SRVR, "start"),
+        effect(SRVR, "start", 3, "effects.net.serve", { framework: "express", method: "GET", path: "/api/items", handler: "list" }),
+      ],
+      edges: [imp(SRVR, "react-dom/client")],
+      findings: [],
+    });
+    expect(tiers.nodes.find((n) => n.id === "server")).toMatchObject({ tier: "backend", role: "server" });
+  });
+
+  it("keeps a browser app's own filesystem facts and drops the ones a folded library brings", () => {
+    const MAIN = "web/src/main.ts";
+    const LIB = "packages/lib/src/index.ts";
+    const tiers = tiersOf({
+      nodes: [
+        file("web/package.json"),
+        file("web/index.html"),
+        file(MAIN),
+        fn(MAIN, "main"),
+        effect(MAIN, "main", 3, "effects.os.call", { api: "fs.readFileSync", op: "fd", target: "data/own.json" }),
+        file("packages/lib/package.json"),
+        file(LIB),
+        fn(LIB, "read"),
+        effect(LIB, "read", 3, "effects.os.call", { api: "fs.readFileSync", op: "fd", target: "data/lib.json" }),
+      ],
+      edges: [call(`${MAIN}#main`, `${LIB}#read`, MAIN, 4)],
+      findings: [],
+    });
+    const disk = tiers.edges.filter((e) => e.from === "web" && e.to === "fs");
+    expect(disk).toHaveLength(1);
+    expect(disk[0]).toMatchObject({ verb: "opens", count: 1 });
+  });
+
+  it("gives the same classes whichever order two mutually calling client entries come in", () => {
+    const A = "a/src/main.ts";
+    const B = "b/src/main.ts";
+    const SRVR = "srv/src/routes.ts";
+    const parts = (order: "ab" | "ba"): IRNode[] => {
+      const a = [file("a/package.json"), file(A), fn(A, "main"), effect(A, "main", 3, "effects.net.connect", net("fetch", { relative: true, path: "/api/x", method: "GET" }))];
+      const b = [file("b/package.json"), file(B), fn(B, "main"), effect(B, "main", 3, "effects.net.connect", net("fetch", { relative: true, path: "/api/x", method: "GET" }))];
+      const srv = [file("srv/package.json"), file(SRVR), fn(SRVR, "list"), effect(SRVR, "list", 3, "effects.net.serve", { framework: "fastify", method: "GET", path: "/api/x", handler: "list" })];
+      return [...srv, ...(order === "ab" ? [...a, ...b] : [...b, ...a])];
+    };
+    const edges = [call(`${A}#main`, `${B}#main`, A, 4), call(`${B}#main`, `${A}#main`, B, 4)];
+    const ab = tiersOf({ nodes: parts("ab"), edges, findings: [] });
+    const ba = tiersOf({ nodes: parts("ba"), edges, findings: [] });
+    expect(nodeKey(ab)).toEqual(nodeKey(ba));
+    expect(edgeKey(ab)).toEqual(edgeKey(ba));
+    expect(ab.nodes.filter((n) => n.role === "client").map((n) => n.id)).toEqual(["a", "b"]);
+  });
+});

@@ -86,7 +86,7 @@ export function SystemView({ id, scope }: { id: string; scope: string }) {
   const key = `${id}\0${scope}\0${tests}\0${mode}`;
   useEffect(() => {
     let cancelled = false;
-    // The model is computed on a later task, so "Computing runtime…" paints before the work starts.
+    // The model is computed on a later task, so the "Computing…" line paints before the work starts.
     const timer = setTimeout(() => {
       const runtime = (reason?: string): Promise<Loaded> => api.getSystem(id, scope, tests).then((sys) => (reason === undefined ? { sys } : { sys, reason }));
       const load: Promise<Loaded> =
@@ -118,7 +118,7 @@ export function SystemView({ id, scope }: { id: string; scope: string }) {
         <SystemModeToggle mode={mode} onChange={pick} />
         {loaded?.reason !== undefined && <span className="muted small sysv-tiers-note">Tiers unavailable here ({loaded.reason}); showing Runtime.</span>}
       </div>
-      {done === null && <p className="muted" role="status">Computing runtime…</p>}
+      {done === null && <p className="muted" role="status">{mode === "tiers" ? "Computing tiers…" : "Computing runtime…"}</p>}
       {done !== null && loaded === undefined && <p className="error" role="alert">{done.error}</p>}
       {loaded !== undefined && (
         <SystemDiagram id={id} sys={loaded.sys} layoutOptions={loaded.layout} flat={loaded.layout !== undefined} tests={tests} onTests={setTests} stale={done?.key !== key} />

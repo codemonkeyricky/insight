@@ -805,8 +805,22 @@ export function matchExportRoute(node: ts.Node): ServeMatch[] {
   return [];
 }
 
-/** The method on a platform binding that reads, lists, writes or deletes, and the store op it is. */
-const STORE_OPS: Record<string, string> = { get: "read", getWithMetadata: "read", list: "list", put: "write", delete: "delete" };
+/**
+ * The method on a platform binding that reads, lists, writes or deletes, and the store op it is. D1: prepare reads (it
+ * compiles a statement; the statement's own run is not seen), exec and batch write (they run statements that may change
+ * rows), and dump reads (it exports the database).
+ */
+const STORE_OPS: Record<string, string> = {
+  get: "read",
+  getWithMetadata: "read",
+  list: "list",
+  put: "write",
+  delete: "delete",
+  prepare: "read",
+  exec: "write",
+  batch: "write",
+  dump: "read",
+};
 
 export interface StoreMatch {
   kind: "effects.store.access";
@@ -863,14 +877,17 @@ function propertyNamedFetch(fn: ts.Node): boolean {
 
 /** Property access names that touch a binding object, per file: X[…pathname] makes X a dispatch table. */
 const dispatchTablesOf = new WeakMap<ts.SourceFile, Set<string>>();
+/** A lookup key that reads the page's own location is the client's route, not the path of a request. */
+const LOCATION_READ = /\blocation\b/;
 
 function dispatchedNames(sf: ts.SourceFile): Set<string> {
   const cached = dispatchTablesOf.get(sf);
   if (cached !== undefined) return cached;
   const names = new Set<string>();
   const visit = (node: ts.Node): void => {
-    if (ts.isElementAccessExpression(node) && ts.isIdentifier(node.expression) && node.argumentExpression.getText(sf).endsWith("pathname")) {
-      names.add(node.expression.text);
+    if (ts.isElementAccessExpression(node) && ts.isIdentifier(node.expression)) {
+      const key = node.argumentExpression.getText(sf);
+      if (key.endsWith("pathname") && !LOCATION_READ.test(key)) names.add(node.expression.text);
     }
     ts.forEachChild(node, visit);
   };
@@ -879,12 +896,66 @@ function dispatchedNames(sf: ts.SourceFile): Set<string> {
   return names;
 }
 
+/** A parameter that takes a request: named req, request or Request, or typed as a Request (`Request`, `Web.Request`). */
+function isRequestParam(p: ts.ParameterDeclaration): boolean {
+  if (!ts.isIdentifier(p.name)) return false;
+  if (p.name.text === "req" || p.name.text === "request" || p.name.text === "Request") return true;
+  const t = p.type;
+  if (t === undefined || !ts.isTypeReferenceNode(t)) return false;
+  const name = ts.isIdentifier(t.typeName) ? t.typeName.text : t.typeName.right.text;
+  return name === "Request";
+}
+
+/** An object literal with a member named fetch: the shape of a request handler export (`export default { fetch(...) }`). */
+function hasFetchMember(expr: ts.Expression): boolean {
+  return (
+    ts.isObjectLiteralExpression(expr) &&
+    expr.properties.some((p) => (ts.isPropertyAssignment(p) || ts.isMethodDeclaration(p) || ts.isShorthandPropertyAssignment(p)) && ts.isIdentifier(p.name) && p.name.text === "fetch")
+  );
+}
+
+const serverSignalOf = new WeakMap<ts.SourceFile, boolean>();
+
 /**
- * A route table a file dispatches on by path: `const X = { "/api/a": handlerA, "/api/b": "b" }` with at least one key, every
- * key a string literal starting with "/", and the same file reading `X[<expr>.pathname]`. Each key is one route the file
- * serves, under the dispatch framework and any method. The value is the handler: its text, or a string value's content.
+ * Whether a file is server code, the rule a path table needs before it counts as a route table. The file has one of:
+ * an `export default` of an object with a fetch member; a function that takes a request (see isRequestParam); or
+ * `new URL(x.url)` where x is a parameter of some function in the file. Anything else (a page's client code) is not a
+ * server, so its path tables are not served routes. This is one file-level rule, not a flow analysis.
+ */
+function hasServerSignal(sf: ts.SourceFile): boolean {
+  const cached = serverSignalOf.get(sf);
+  if (cached !== undefined) return cached;
+  let found = false;
+  const paramNames = new Set<string>();
+  const urlBases = new Set<string>();
+  const visit = (node: ts.Node): void => {
+    if (ts.isFunctionLike(node) && "parameters" in node) {
+      for (const p of (node as ts.SignatureDeclaration).parameters) {
+        if (ts.isIdentifier(p.name)) paramNames.add(p.name.text);
+        if (isRequestParam(p)) found = true;
+      }
+    }
+    if (ts.isExportAssignment(node) && hasFetchMember(unwrapAll(node.expression))) found = true;
+    if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "URL") {
+      const arg = node.arguments?.[0];
+      if (arg !== undefined && ts.isPropertyAccessExpression(arg) && arg.name.text === "url" && ts.isIdentifier(arg.expression)) urlBases.add(arg.expression.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  if ([...urlBases].some((name) => paramNames.has(name))) found = true;
+  serverSignalOf.set(sf, found);
+  return found;
+}
+
+/**
+ * A route table a file dispatches on by path: `const X = { "/api/a": handlerA, "/api/b": "b" }` with at least two keys, every
+ * key a string literal starting with "/", the same file reading `X[<expr>.pathname]` (not the page's own location), and the
+ * file being server code (see hasServerSignal). Each key is one route the file serves, under the dispatch framework and any
+ * method. The value is the handler: its text, or a string value's content.
  */
 export function matchDispatchTable(stmt: ts.VariableStatement, sf: ts.SourceFile): ServeMatch[] {
+  if (!hasServerSignal(sf)) return [];
   const out: ServeMatch[] = [];
   const used = dispatchedNames(sf);
   for (const d of stmt.declarationList.declarations) {

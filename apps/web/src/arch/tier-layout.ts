@@ -24,9 +24,10 @@ const PLATFORM_TEXT: Record<NonNullable<TierNode["platform"]>, string> = {
 
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
 
-/** A component of the Tiers view: a deployable unit. Its file and function counts are not in the tier model, so they are zero. */
+/** A component of the Tiers view: a deployable unit, with its file and function counts when the model has them. */
 function componentOf(n: TierNode): SystemComponent {
-  return { id: n.id, label: n.label, path: n.path ?? n.id, kind: "package", files: 0, functions: 0, entry: n.tier === "frontend" };
+  const counts = n.files !== undefined && n.functions !== undefined ? { files: n.files, functions: n.functions } : {};
+  return { id: n.id, label: n.label, path: n.path ?? n.id, kind: "package", ...counts, entry: n.tier === "frontend" };
 }
 
 /** An outside system of the Tiers view: a store (Storage) or a service (External), with the category the layout columns use. */
@@ -60,10 +61,13 @@ function edgeOf(e: TierEdge): SystemEdge {
   };
 }
 
-/** The subtitle of a component card: its role, and its route count when it serves any. */
+/** The subtitle of a component card: its role, its route count when it serves any, and its file and function counts when known. */
 function subOf(n: TierNode): string {
-  const role = n.role !== undefined ? ROLE_TEXT[n.role] : "Unit";
-  return n.routes > 0 ? `${role} · ${plural(n.routes, "route")}` : role;
+  const parts = [n.role !== undefined ? ROLE_TEXT[n.role] : "Unit"];
+  if (n.routes > 0) parts.push(plural(n.routes, "route"));
+  if (n.files !== undefined) parts.push(plural(n.files, "file"));
+  if (n.functions !== undefined) parts.push(plural(n.functions, "function"));
+  return parts.join(" · ");
 }
 
 /**

@@ -23,7 +23,7 @@ id = "ab014675a88f4badbd9ec95c87112764"
 
 describe("parseWrangler", () => {
   it("reads the name, main and KV binding of the storage-worker config", () => {
-    expect(parseWrangler(STORAGE_TOML)).toEqual({
+    expect(parseWrangler(STORAGE_TOML, "wrangler.toml")).toEqual({
       name: "insight-storage",
       main: "index.js",
       kv: [{ binding: "INDEX", id: "ab014675a88f4badbd9ec95c87112764" }],
@@ -48,6 +48,7 @@ describe("parseWrangler", () => {
         "[[env.staging.kv_namespaces]]",
         'binding = "STAGING_ONLY"',
       ].join("\n"),
+      "wrangler.toml",
     );
     expect(info.name).toBe("app");
     expect(info.main).toBeUndefined();
@@ -67,6 +68,7 @@ describe("parseWrangler", () => {
         '  "d1_databases": [{ "binding": "DB", "database_name": "db" }]',
         "}",
       ].join("\n"),
+      "wrangler.jsonc",
     );
     expect(info).toEqual({
       name: "json-app",
@@ -75,6 +77,48 @@ describe("parseWrangler", () => {
       r2: [],
       d1: [{ binding: "DB", database: "db" }],
     });
+  });
+
+  it("reads a JSONC config that starts with a // comment, because its file is wrangler.jsonc", () => {
+    expect(parseWrangler('// deployed by hand\n{ "name": "jsonc-app", "kv_namespaces": [{ "binding": "K", "id": "1" }] }', "wrangler.jsonc")).toEqual({
+      name: "jsonc-app",
+      kv: [{ binding: "K", id: "1" }],
+      r2: [],
+      d1: [],
+    });
+  });
+
+  it("removes trailing commas outside strings only: a comma and bracket inside a value stay", () => {
+    expect(parseWrangler('{ "name": "a, }", "main": "x,]", "d1_databases": [{ "binding": "DB", }], }', "wrangler.json")).toEqual({
+      name: "a, }",
+      main: "x,]",
+      kv: [],
+      r2: [],
+      d1: [{ binding: "DB", database: undefined }],
+    });
+  });
+
+  it("reads bindings written as inline arrays, one line or several", () => {
+    const info = parseWrangler(
+      [
+        'name = "inline"',
+        'kv_namespaces = [ { binding = "INDEX", id = "x" } ]',
+        'r2_buckets = [{ binding = "FILES", bucket_name = "files" }]',
+        "d1_databases = [",
+        '  { binding = "DB", database_name = "db" },',
+        '  { binding = "LOG", database_name = "log" },',
+        "]",
+        "[vars]",
+        'kv_namespaces = [{ binding = "NOT_TOP" }]',
+      ].join("\n"),
+      "wrangler.toml",
+    );
+    expect(info.kv).toEqual([{ binding: "INDEX", id: "x" }]);
+    expect(info.r2).toEqual([{ binding: "FILES", bucket: "files" }]);
+    expect(info.d1).toEqual([
+      { binding: "DB", database: "db" },
+      { binding: "LOG", database: "log" },
+    ]);
   });
 
   it("matches only wrangler.toml, wrangler.json and wrangler.jsonc, at any depth", () => {
@@ -124,17 +168,51 @@ const FILES: Record<string, string> = {
   ].join("\n"),
   // The same call in a file no wrangler config deploys: not a platform store.
   "lib/store.js": "export function read(env) {\n  return env.INDEX.get('x');\n}\n",
-  // A route table dispatched by pathname: each key is a served route.
+  // A route table dispatched by pathname in a request handler: each key is a served route.
   "api/routes.ts": [
     'const PATHS: Record<string, string> = {',
     '  "/api/index": "index",',
     '  "/api/status": "status",',
     "};",
-    "export function route(url: URL) {",
+    "export function route(req: Request) {",
+    "  const url = new URL(req.url);",
     "  return PATHS[url.pathname];",
     "}",
     "",
   ].join("\n"),
+  // A path table dispatched by pathname, but in a file with no request handler: not a server.
+  "api/nohandler.ts": [
+    'const T: Record<string, string> = { "/api/a": "a", "/api/b": "b" };',
+    "export function pick(url: URL) {",
+    "  return T[url.pathname];",
+    "}",
+    "",
+  ].join("\n"),
+  // A client router: the table is read by the page's own location, so it serves nothing.
+  "web/router.ts": [
+    'const routes: Record<string, () => void> = { "/home": () => undefined, "/about": () => undefined };',
+    "export function navigate() {",
+    "  return routes[location.pathname]();",
+    "}",
+    "",
+  ].join("\n"),
+  // A Worker with an inline D1 binding: prepare reads, exec and batch write, dump reads.
+  "d1app/wrangler.toml": ['name = "d1-app"', 'main = "index.js"', 'd1_databases = [ { binding = "DB", database_name = "main-db" } ]', ""].join("\n"),
+  "d1app/index.js": [
+    "export default {",
+    "  async fetch(req, env) {",
+    "    await env.DB.prepare('select 1');",
+    "    await env.DB.exec('pragma');",
+    "    await env.DB.batch([]);",
+    "    await env.DB.dump();",
+    "    return new Response('ok');",
+    "  },",
+    "};",
+    "",
+  ].join("\n"),
+  // An example Worker: a wrangler config in examples/ is not a deployed component.
+  "examples/foo/wrangler.toml": ['name = "example"', 'main = "index.js"', ""].join("\n"),
+  "examples/foo/index.js": "export default {\n  async fetch(req, env) {\n    return env.INDEX.get('x');\n  },\n};\n",
   // Not a route table: a key is not a path.
   "api/mixed.ts": [
     'const MIXED = { "/api/a": "a", "b": "b" };',
@@ -232,6 +310,34 @@ describe("dispatch tables", () => {
 
   it("emits nothing for a path-keyed object no pathname lookup reads", () => {
     expect(ofKind("effects.net.serve", "api/unused.ts")).toEqual([]);
+  });
+
+  it("emits nothing for a path table dispatched by pathname in a file with no request handler", () => {
+    expect(ofKind("effects.net.serve", "api/nohandler.ts")).toEqual([]);
+  });
+
+  it("emits nothing for a client router that dispatches on location.pathname", () => {
+    expect(ofKind("effects.net.serve", "web/router.ts")).toEqual([]);
+  });
+});
+
+describe("D1 bindings and noise folders", () => {
+  it("maps D1 prepare, exec, batch and dump to read, write, write and read on the inline binding", () => {
+    const access = attrsOf(ofKind("effects.store.access", "d1app/index.js"));
+    expect(access).toEqual(
+      expect.arrayContaining([
+        { api: "env.DB.prepare", store: "cloudflare-d1", op: "read", binding: "DB" },
+        { api: "env.DB.exec", store: "cloudflare-d1", op: "write", binding: "DB" },
+        { api: "env.DB.batch", store: "cloudflare-d1", op: "write", binding: "DB" },
+        { api: "env.DB.dump", store: "cloudflare-d1", op: "read", binding: "DB" },
+      ]),
+    );
+    expect(access).toHaveLength(4);
+  });
+
+  it("does not deploy a Worker whose wrangler config sits in an examples folder", () => {
+    expect(attrsOf(ofKind("effects.net.serve", "examples/foo/index.js")).some((a) => a.platform === "cloudflare")).toBe(false);
+    expect(ofKind("effects.store.access", "examples/foo/index.js")).toEqual([]);
   });
 });
 

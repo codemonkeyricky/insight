@@ -4,7 +4,7 @@ import { tierEdgeText, tierSystem } from "../src/arch/tier-layout";
 import { COMPACT_NUDGES, layoutSystem, SYS_HEADER_H, SYS_PAD } from "../src/arch/system-layout";
 import type { TierEdge } from "@insight/model";
 import { readSystemMode, SYSTEM_MODE_KEY, writeSystemMode } from "../src/arch/system-mode";
-import { SystemModeToggle } from "../src/components/views/SystemView";
+import { SystemModeToggle, SystemView } from "../src/components/views/SystemView";
 import { API, DISK, FN, GH, SQLITE, WEB, tierEdges, tierFixture, tierNodes } from "./tierFixtures";
 
 const memStore = () => {
@@ -87,6 +87,23 @@ describe("tierSystem", () => {
         expect(inside).toBe(false);
       }
     }
+  });
+});
+
+describe("tier unit counts and the loading line", () => {
+  it("shows a unit's real file and function counts on its line, and leaves them out when the model has none", () => {
+    const withCounts = tierNodes.map((n) => (n.id === API ? { ...n, files: 4, functions: 9 } : n));
+    const { sys, layout } = tierSystem(tierFixture({ nodes: withCounts }));
+    expect(layout.subs?.get(API)).toBe("Server · 2 routes · 4 files · 9 functions");
+    expect(sys.components.find((c) => c.id === API)).toMatchObject({ files: 4, functions: 9 });
+    const bare = tierSystem(tierFixture());
+    expect(bare.layout.subs?.get(WEB)).toBe("Browser app");
+    expect(bare.sys.components.find((c) => c.id === WEB)?.files).toBeUndefined();
+    expect(bare.sys.components.find((c) => c.id === WEB)?.functions).toBeUndefined();
+  });
+
+  it("says Computing tiers while the Tiers view is computed, before the runtime", () => {
+    expect(renderToStaticMarkup(<SystemView id="p" scope="" />)).toContain("Computing tiers…");
   });
 });
 

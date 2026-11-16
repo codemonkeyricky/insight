@@ -8,8 +8,11 @@ import { WRANGLER_RE, parseWrangler, type WranglerInfo } from "./deploy.js";
 
 const SKIP_DIRS = new Set(["node_modules", ".git", ".insight", "dist"]);
 
-/** Folders whose pages are not an app's entry: tests, fixtures, examples, builds and tool state. */
-const NOISE_PAGE_DIR = /(^|\/)(node_modules|dist|build|test|tests|__tests__|fixtures|examples|\.claude)\//;
+/**
+ * Folders whose pages are not an app's entry: tests, fixtures, examples, builds and tool state. The same list as NOT_A_PACKAGE
+ * in packages/core/model/src/system.ts (the model's noise folders); the frontend cannot import the model, so keep them equal.
+ */
+const NOISE_PAGE_DIR = /(^|\/)(node_modules|dist|build|test|tests|__tests__|fixtures|__fixtures__|samples|examples|\.claude)\//;
 
 /** An index.html the project lists outside those folders. */
 const isEntryPage = (f: string): boolean => (f === "index.html" || f.endsWith("/index.html")) && !NOISE_PAGE_DIR.test(f);
@@ -66,7 +69,7 @@ export const frontend: Frontend = {
     const wranglers = new Map<string, WranglerInfo>();
     for (const f of ctx.listFiles()) {
       if (WRANGLER_RE.test(f) && !NOISE_PAGE_DIR.test(f)) {
-        wranglers.set(f.includes("/") ? f.slice(0, f.lastIndexOf("/")) : "", parseWrangler(await ctx.readFile(f)));
+        wranglers.set(f.includes("/") ? f.slice(0, f.lastIndexOf("/")) : "", parseWrangler(await ctx.readFile(f), f));
       }
     }
     const project = buildProject(ctx.root.path, rels, texts, html, manifests, packageJsons, wranglers);

@@ -327,7 +327,7 @@ export function layoutSystem(sys: SystemModel, opts: LayoutOptions = {}): SysLay
         w: SYS_CARD_W,
         h: SYS_COMP_H + chips.length * SYS_CHIP_H,
         title: cardTitle(c, base),
-        sub: opts.subs?.get(id) ?? `${plural(c.files, "file")} · ${plural(c.functions, "function")}`,
+        sub: opts.subs?.get(id) ?? [c.files !== undefined ? plural(c.files, "file") : undefined, c.functions !== undefined ? plural(c.functions, "function") : undefined].filter((s) => s !== undefined).join(" · "),
         chips,
         component: c,
       };

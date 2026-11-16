@@ -20,6 +20,9 @@ export interface TierNode {
   routes: number;
   /** The libraries folded into this deployable: every library its calls reach, sorted. */
   libraries: string[];
+  /** The file and function counts of the System component the unit is, when it is one. The card's line shows them. */
+  files?: number;
+  functions?: number;
   /** Human-readable facts behind the classification, e.g. "route framework=worker", "wrangler.toml". */
   signals: string[];
   external?: SystemExternal;
@@ -72,7 +75,10 @@ const CONFIG_FILE = /(^|\/)([^/]*\.config\.(c|m)?[jt]sx?|(vite|webpack|rollup|rs
 /** Distinct route labels a request edge shows before "+N". Other edges show every distinct label of their merged facts (or one). */
 const REQUEST_LABELS = 2;
 const OTHER_LABELS = 3;
+/** A UI framework's package. A UI import is only a signal: it makes a browser app only with a browser entry (see classification). */
 const UI_IMPORT = /^(react-dom|vue|svelte|preact|solid-js)(\/|$)/;
+/** A UI package's server subpath (react-dom/server, vue/server-renderer): rendering on the server, not a browser import. */
+const SERVER_SUBPATH = /\/server(-renderer)?(\/|$)/;
 const VERCEL_IMPORT = /^@vercel\//;
 const ROUTE_PREFIX = "route:";
 
@@ -138,12 +144,31 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
   const comps = new Map(sys.components.map((c) => [c.id, c] as const));
   const exts = new Map(sys.externals.map((x) => [x.id, x] as const));
   const files = new Set(model.files);
-  const byPathLength = sys.components.filter((c) => c.path !== "").sort((a, b) => b.path.length - a.path.length || cmp(a.id, b.id));
-
-  // The component that owns a file or a label path: the longest component path that is a prefix of it.
+  // The component that owns a file or a label path: the longest component path that is a prefix of it, on a "/" boundary.
+  // A map from each component path (the lowest id when two share one) is read at each "/" of the path, and memoized per path.
+  const compAtPath = new Map<string, string>();
+  for (const c of sys.components) {
+    if (c.path === "") continue;
+    const cur = compAtPath.get(c.path);
+    if (cur === undefined || cmp(c.id, cur) < 0) compAtPath.set(c.path, c.id);
+  }
+  const ownerMemo = new Map<string, string | undefined>();
   const ownerOfPath = (path: string | undefined): string | undefined => {
     if (path === undefined) return undefined;
-    return byPathLength.find((c) => path === c.path || path.startsWith(`${c.path}/`))?.id;
+    if (ownerMemo.has(path)) return ownerMemo.get(path);
+    let owner: string | undefined;
+    let cur: string | undefined = path;
+    while (cur !== undefined && cur !== "") {
+      const hit = compAtPath.get(cur);
+      if (hit !== undefined) {
+        owner = hit;
+        break;
+      }
+      const slash = cur.lastIndexOf("/");
+      cur = slash < 0 ? undefined : cur.slice(0, slash);
+    }
+    ownerMemo.set(path, owner);
+    return owner;
   };
 
   // Runtime facts: which slices run in a browser program, and which program runtime sits under which component.
@@ -198,7 +223,8 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
   // Facts the IR attaches to components: import specifiers, routes (with the wrangler name), listens, and env reads.
   const importsOf = new Map<string, Set<string>>();
   for (const edge of model.doc.edges) {
-    if (edge.kind !== "packaging.import") continue;
+    // A type-only import is not code the component runs: it does not make a browser app or a Vercel function.
+    if (edge.kind !== "packaging.import" || (edge.attrs as { typeOnly?: unknown }).typeOnly === true) continue;
     const text = edgeTargets(edge).unresolved?.text;
     const owner = ownerOfPath(model.fileOf(edge.from));
     if (text === undefined || owner === undefined) continue;
@@ -232,14 +258,18 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
     const owner = ownerOfPath(file);
     if (typeof name !== "string" || name === "" || owner === undefined || file === undefined || CONFIG_FILE.test(file)) continue;
     const byName = envLocsOf.get(owner) ?? new Map<string, EnvLoc[]>();
-    byName.set(name, [...(byName.get(name) ?? []), { file, fn: node.parent }]);
+    const locs = byName.get(name) ?? [];
+    locs.push({ file, fn: node.parent });
+    byName.set(name, locs);
     envLocsOf.set(owner, byName);
   }
   // The functions each function calls (one hop of the call graph), for the env reads near a fetch.
   const callees = new Map<string, string[]>();
   for (const e of model.doc.edges) {
     if (e.kind !== "calls.call") continue;
-    callees.set(e.from, [...(callees.get(e.from) ?? []), ...edgeTargets(e).nodes]);
+    const list = callees.get(e.from) ?? [];
+    list.push(...edgeTargets(e).nodes);
+    callees.set(e.from, list);
   }
 
   // Components shown: dev folders are dropped unless `tests`. A dev component counts as hidden.
@@ -253,7 +283,9 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
     shown.add(c.id);
   }
 
-  // Classification, by priority: spa, worker, function, server. A client is a program entry that serves nothing and calls a backend.
+  // Classification, by priority: spa (a browser entry: a browser program, or an index.html), worker, function, server. A UI
+  // import alone never makes a browser app: it is a signal that counts only with a browser entry, and a component with server
+  // routes or listens is a backend whatever it imports. A client is a program entry that serves nothing and calls a backend.
   const role = new Map<string, Role>();
   const platform = new Map<string, NonNullable<TierNode["platform"]>>();
   const signals = new Map<string, string[]>();
@@ -262,8 +294,9 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
     const rs = routesOf.get(c.id) ?? [];
     const imports = [...(importsOf.get(c.id) ?? [])].sort(cmp);
     const sig: string[] = [];
-    const ui = imports.filter((t) => UI_IMPORT.test(t));
-    if (browserComponents.has(c.id) || files.has(`${c.path}/index.html`) || ui.length > 0) {
+    const ui = imports.filter((t) => UI_IMPORT.test(t) && !SERVER_SUBPATH.test(t));
+    const browserEntry = browserComponents.has(c.id) || files.has(`${c.path}/index.html`);
+    if (browserEntry) {
       role.set(c.id, "spa");
       platform.set(c.id, "browser");
       if (browserComponents.has(c.id)) sig.push("browser program");
@@ -295,10 +328,13 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
     const r = role.get(id);
     return r === "server" || r === "function" || r === "worker";
   };
+  // Clients are decided on the roles of the first pass alone, so the order the components come in cannot change the result:
+  // two entries that call each other are both clients when both request a backend, whichever is visited first.
+  const firstPass = new Set(role.keys());
   for (const c of sys.components) {
     if (!shown.has(c.id) || role.has(c.id) || !c.entry) continue;
     if ((routesOf.get(c.id) ?? []).length > 0 || listens.has(c.id)) continue;
-    const calledByDeployable = links.some((l) => l.to === c.id && role.has(l.from) && !isImportOnly(l.e));
+    const calledByDeployable = links.some((l) => l.to === c.id && firstPass.has(l.from) && !isImportOnly(l.e));
     if (calledByDeployable) continue;
     const out = links.find((l) => l.from === c.id && (l.e.verb === "requests" || l.e.verb === "spawns") && backendRole(l.to));
     if (out === undefined) continue;
@@ -317,9 +353,13 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
     if (!shown.has(l.from)) continue;
     if (l.e.verb === "calls") {
       if (isImportOnly(l.e) || !shown.has(l.to)) continue;
-      callsOut.set(l.from, [...(callsOut.get(l.from) ?? []), l.to]);
+      const calls = callsOut.get(l.from) ?? [];
+      calls.push(l.to);
+      callsOut.set(l.from, calls);
     } else {
-      factsOut.set(l.from, [...(factsOut.get(l.from) ?? []), l]);
+      const facts = factsOut.get(l.from) ?? [];
+      facts.push(l);
+      factsOut.set(l.from, facts);
     }
   }
 
@@ -375,8 +415,8 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
       for (const l of factsOut.get(member) ?? []) {
         const verb = verbFor(l.e, l.to);
         if (verb === undefined || l.to === d) continue;
-        // A browser program has no local disk and no database driver: a folded library's fs or DB facts are not its own.
-        if (role.get(d) === "spa" && (exts.get(l.to)?.category === "filesystem" || verb === "opens")) continue;
+        // A browser program has no local disk and no database driver: a fact a folded library brings (not the unit's own) is dropped.
+        if (member !== d && role.get(d) === "spa" && (exts.get(l.to)?.category === "filesystem" || verb === "opens")) continue;
         if (!tests && l.e.sites.length > 0 && l.e.count <= DEV_EDGE_MAX && l.e.sites.every((s) => DEV_DIRS.test(s.file))) {
           devEdges.add(l.e.id);
           continue;
@@ -500,6 +540,7 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
       ...(plat !== undefined ? { platform: plat } : {}),
       component: d,
       ...(c !== undefined ? { path: c.path } : {}),
+      ...(c?.files !== undefined && c.functions !== undefined ? { files: c.files, functions: c.functions } : {}),
       routes: (routesOf.get(d) ?? []).length,
       libraries: reached.get(d) ?? [],
       signals: signals.get(d) ?? [],
