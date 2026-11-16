@@ -331,8 +331,9 @@ function sizeOf(n: StageNode, o: Ctx): Sized | undefined {
       draw(x, y, out);
       const sub = out.nodes.slice(from);
       for (const d of sub) if ((d.kind === "card" || d.kind === "frame" || d.kind === "diamond") && d.stage === undefined) d.stage = id;
-      // The cards this stage draws: a frame or diamond keeps them, so its hover can reveal the data links that touch any of them.
-      const members = [...new Set(sub.flatMap((d) => (d.kind === "card" && d.stage !== undefined ? [d.stage] : [])))];
+      // The stages this one draws: its own id and the ids of the cards, frames and diamonds inside it. A frame or diamond keeps them,
+      // so its hover can reveal the data links that touch any of them, links between non-card stages included.
+      const members = [...new Set(sub.flatMap((d) => ((d.kind === "card" || d.kind === "frame" || d.kind === "diamond") && d.stage !== undefined ? [d.stage] : [])))];
       for (const d of sub) if ((d.kind === "frame" || d.kind === "diamond") && d.stage === id) (d as { members?: string[] }).members = members;
     },
   };

@@ -64,7 +64,8 @@ export function StagesView({ id, scope, tests = false, onTests }: { id: string; 
       cancelled = true;
     };
   }, [id, scope, driver, tests]);
-  if (done === null) return <p className="muted small">Loading stages</p>;
+  // An error belongs to the driver it was raised for: a newly picked driver shows the loading line until its own answer comes.
+  if (done === null || (done.error !== undefined && done.key !== key)) return <p className="muted small">Loading stages</p>;
   if (done.error !== undefined) return <p className="error" role="alert">{done.error}</p>;
   const payload = done.payload;
   if (payload === undefined || payload.graph === undefined || payload.drivers.length === 0) return null;
@@ -334,15 +335,29 @@ function NodeShape({
         </g>
       );
     }
-    case "pill":
+    case "pill": {
+      // An exit pill that opens a call site is a button from the keyboard too: Enter or Space, like a card.
+      const clickable = n.site !== undefined;
       return (
-        <g className={`stg-pill ${n.how} stg-clickable`} onClick={() => onOpen(n.site)}>
+        <g
+          className={`stg-pill ${n.how} stg-clickable`}
+          role={clickable ? "button" : undefined}
+          tabIndex={clickable ? 0 : undefined}
+          onClick={() => onOpen(n.site)}
+          onKeyDown={(e) => {
+            if (clickable && (e.key === "Enter" || e.key === " ")) {
+              e.preventDefault();
+              onOpen(n.site);
+            }
+          }}
+        >
           <rect x={n.x} y={n.y} width={n.w} height={n.h} rx={n.h / 2} />
           <text x={n.x + n.w / 2} y={n.y + n.h / 2 + 4} textAnchor="middle">
             {n.text}
           </text>
         </g>
       );
+    }
     case "text":
       return (
         <text className={`stg-text ${n.tone}`} x={n.x} y={n.y}>

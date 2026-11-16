@@ -506,3 +506,38 @@ describe("stages layout: nested fanout geometry", () => {
     );
   });
 });
+
+describe("stages layout: a link between non-card stages (review r3)", () => {
+  it("reveals a link from a helper frame to a branch on hover of either: each keeps its own id in its members", () => {
+    // helper h1 (with one card inside) and a branch br1 are not neighbours, so their data edge is drawn as a link.
+    const g: StageGraph = {
+      driver: { id: "app/src/run.ts#run", name: "run", file: "app/src/run.ts" },
+      body: [
+        call("h1", "runOver", { body: [call("c4", "store")] }),
+        call("c0", "load"),
+        {
+          kind: "branch",
+          id: "br1",
+          condition: "ok",
+          site: site(3),
+          arms: [
+            { id: "br1a", label: "then", body: [call("c2", "pick")] },
+            { id: "br1b", label: "else", body: [] },
+          ],
+        } as StageNode,
+      ],
+      edges: [{ from: "h1", to: "br1", label: "data" }],
+      coverage: [],
+    };
+    const l = layoutStages(g, { data: true, showAll: true });
+    const link = l.links.find((k) => k.from === "h1" && k.to === "br1");
+    expect(link).toBeDefined();
+    const helper = frames(l.nodes).find((f) => f.tone === "helper");
+    const diamond = l.nodes.find((n): n is Extract<LayoutNode, { kind: "diamond" }> => n.kind === "diamond");
+    expect(helper?.members).toContain("h1");
+    expect(helper?.members).toContain("c4");
+    expect(helper?.members).toContain(link?.from);
+    expect(diamond?.members).toContain("br1");
+    expect(diamond?.members).toContain(link?.to);
+  });
+});

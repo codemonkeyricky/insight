@@ -789,3 +789,58 @@ describe("stage graph: callback slots on the driver's options (runIndex shape)",
   });
 });
 
+
+describe("stage graph: named property arrows and callback marks (review r3)", () => {
+  // const ast = parser.parse(text); store.save(ast). parser is a factory's returned literal `{ parse: (t) => … }`: its arrow is a named member.
+  const PARSE = `${F}#makeParser.λ3:10`;
+  const parseCall = (): IREdge => call(DRV, [PARSE], 2, 2, 20, { how: "interface", callee: "parser.parse", binds: "ast" });
+  const saveCall = (): IREdge => call(DRV, stageId("s4"), 3, 2, 14, { reads: ["ast"] });
+  const parseNode = (attrs: Record<string, unknown>): IRNode => fn(PARSE, "λ3:10", F, F, { params: ["t"], ...attrs });
+
+  it("keeps a named property arrow as a stage, with its ast edge into the next stage", () => {
+    const g = graphOf(docWithDriver({ params: [] }, { nodes: [parseNode({ anonymous: false })], edges: [parseCall(), saveCall()] }));
+    const parse = stageNamed(g.body, "parser.parse");
+    expect(parse).toBeDefined();
+    expect(g.edges).toEqual([{ from: parse?.id, to: idOf(g, "s4"), label: "ast" }]);
+  });
+
+  it("drops a candidate that is an anonymous callback", () => {
+    const g = graphOf(docWithDriver({ params: [] }, { nodes: [parseNode({ anonymous: true })], edges: [parseCall(), saveCall()] }));
+    expect(stageNamed(g.body, "parser.parse")).toBeUndefined();
+  });
+
+  it("drops a lambda with no anonymous attribute by its lambda id (an older frontend)", () => {
+    const g = graphOf(docWithDriver({ params: [] }, { nodes: [parseNode({})], edges: [parseCall(), saveCall()] }));
+    expect(stageNamed(g.body, "parser.parse")).toBeUndefined();
+  });
+
+  it("shows a throw outside any loop as an exit between the stages (a top-level guard)", () => {
+    // s1(); if (!k) throw; s2(); s3()
+    const nodes = [
+      flow("if:3:2", "flow.branch", [3, 2, 5, 3], { condition: "!k" }),
+      flow("arm:3:12", "flow.branch-arm", [3, 12, 5, 3], { label: "then" }),
+      flow("throw:3:14", "flow.throw", [3, 14, 3, 20], {}),
+    ];
+    const edges = [call(DRV, stageId("s1"), 2, 2, 6), call(DRV, stageId("s2"), 6, 2, 6), call(DRV, stageId("s3"), 7, 2, 6)];
+    const g = graphOf(docWithDriver({ params: [] }, { nodes, edges }));
+    expect(show(g.body)).toBe("s1 if{then=[exit:throw]} s2 s3");
+  });
+
+  it("keeps a loop inside a callback in the callback's scope, so a callback local reaches it", () => {
+    // items.forEach((it) => { const ast = s1(it); for (const n of ast) s2(n); }); s3()
+    const L = `${F}#run.λ4:17`;
+    const nodes = [
+      fn(L, "λ4:17", F, DRV, { anonymous: true, params: ["it"] }),
+      flow("loop:5:4", "flow.loop", [5, 4, 6, 5], { variant: "for-of", condition: "const n of ast", reads: ["ast"] }, L),
+    ];
+    const edges = [
+      call(L, stageId("s1"), 4, 16, 20, { binds: "ast", reads: ["it"] }),
+      call(L, stageId("s2"), 5, 24, 28, { reads: ["n"] }),
+      call(DRV, stageId("s3"), 8, 2, 6),
+    ];
+    const g = graphOf(docWithDriver({ params: ["items"] }, { nodes, edges }));
+    const loop = g.body.find((n) => n.kind === "loop");
+    expect(loop).toBeDefined();
+    expect(g.edges).toEqual([{ from: idOf(g, "s1"), to: loop?.id, label: "ast" }]);
+  });
+});

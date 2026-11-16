@@ -4,7 +4,9 @@
 // same output.
 //
 // Callbacks: a candidate call whose every target is an anonymous function is a callback slot (`opts.onProgress`), not a stage,
-// and is dropped. An anonymous function passed to a call (a lambda) is folded into the driver's statements, but its locals and
+// and is dropped. The frontend marks a function anonymous (`anonymous` attribute): a property arrow of a returned or stored object
+// is a named member, while a property of an options bag passed to a call is a slot. A model with no such attribute marks its
+// lambdas by their id. An anonymous function passed to a call (a lambda) is folded into the driver's statements, but its locals and
 // parameters are scoped to it: a read inside it resolves through its own declarations first, then outward.
 //
 // Exits: a return, break or continue counts as the driver's exit only inside a loop's branch arm, and only when it sits in the
@@ -58,7 +60,7 @@ export type StageNode =
       argSpread?: number; // index of the first spread argument (calls.call attrs.argSpread)
       lambdas?: NodeId[]; // the anonymous callbacks the call sits in, outermost first, between it and the driver (or helper)
     }
-  | { kind: "loop"; id: string; variant: string; condition?: string; reads?: string[]; site: Site; body: StageNode[] }
+  | { kind: "loop"; id: string; variant: string; condition?: string; reads?: string[]; lambdas?: NodeId[]; site: Site; body: StageNode[] }
   | {
       kind: "branch";
       id: string;
@@ -336,8 +338,14 @@ function nearestFnOf(model: ProjectModel, from: NodeId): NodeId | undefined {
   return undefined;
 }
 
-/** A callback: an anonymous function, whether the model marks it so or its id carries a lambda segment (`.λ221:21`). */
-const isCallbackFn = (model: ProjectModel, id: NodeId): boolean => model.functionById.get(id)?.anonymous === true || /[.#]λ\d/.test(id);
+/**
+ * A callback: an anonymous function. The frontend's `anonymous` attribute decides when it is present (on every lambda of a current
+ * frontend); a model without it (an older frontend) marks a callback by its lambda segment (`.λ221:21`).
+ */
+const isCallbackFn = (model: ProjectModel, id: NodeId): boolean => {
+  const attr = model.byId.get(id)?.attrs.anonymous;
+  return typeof attr === "boolean" ? attr : /[.#]λ\d/.test(id);
+};
 
 /** The anonymous callbacks between a node and the function being emitted, outermost first: the callbacks a call sits in. */
 function lambdasBetween(model: ProjectModel, from: NodeId, fnId: NodeId): NodeId[] {
@@ -356,8 +364,9 @@ function lambdasBetween(model: ProjectModel, from: NodeId, fnId: NodeId): NodeId
 }
 
 function exitNode(n: TNode, env: Env): StageNode | undefined {
-  if (!env.exitOk) return undefined;
   const ir = n.ir as IRNode;
+  // A throw is an exit wherever it sits (a top-level guard, a loop body); a return, break or continue only in a loop's branch arm.
+  if (!env.exitOk && ir.kind !== "flow.throw") return undefined;
   // A return, break or continue inside an inlined helper leaves that helper or its own loop, never the driver: no exit. A throw
   // still propagates out of the driver, so it stays.
   // A callback folded into the driver is a function of its own: a return, break or continue in it leaves the callback only.
@@ -374,6 +383,7 @@ function loopNode(n: TNode, env: Env): StageNode {
   const ir = n.ir as IRNode;
   const condition = str(attr(ir, "condition"));
   const reads = namesOf(attr(ir, "reads"));
+  const lambdas = lambdasBetween(env.ctx.model, ir.id, env.fnId);
   const headers = headerOf(n);
   const bodyNodes = n.children.filter((c) => !headers.includes(c));
   return {
@@ -382,6 +392,7 @@ function loopNode(n: TNode, env: Env): StageNode {
     variant: str(attr(ir, "variant")) ?? "loop",
     ...(condition !== undefined ? { condition } : {}),
     ...(reads !== undefined ? { reads } : {}),
+    ...(lambdas.length > 0 ? { lambdas } : {}),
     site: siteOf(ir, env),
     body: emitList(bodyNodes, { ...env, loops: env.loops + 1, exitOk: false, inSwitch: false }),
   };
@@ -737,6 +748,22 @@ interface Flat {
   arms: Array<{ branch: string; arm: number }>;
 }
 
+/** The scope and argument frames of a node, extended by the callbacks it sits in that are not yet in the scope. */
+function inScope(
+  scope: NodeId[],
+  args: Array<CallArgs | undefined>,
+  lams: NodeId[],
+): [NodeId[], Array<CallArgs | undefined>] {
+  let sc = scope;
+  let ar = args;
+  for (const l of lams) {
+    if (sc.includes(l)) continue;
+    sc = [...sc, l];
+    ar = [...ar, undefined];
+  }
+  return [sc, ar];
+}
+
 /** Stages in call order. Minor calls are hidden, so they and their bodies are not stages. */
 function flatten(
   nodes: StageNode[],
@@ -768,9 +795,7 @@ function flatten(
     if (n.kind === "call") {
       if (n.minor === true) continue;
       // The callbacks the call sits in are scope levels of their own, with no arguments mapped to their parameters.
-      const lams = n.lambdas ?? [];
-      const here = [...scope, ...lams];
-      const hereArgs = [...args, ...lams.map((): CallArgs | undefined => undefined)];
+      const [here, hereArgs] = inScope(scope, args, n.lambdas ?? []);
       const e = open(n, here, hereArgs);
       const call: CallArgs = {
         ...(n.reads !== undefined ? { reads: n.reads } : {}),
@@ -780,8 +805,10 @@ function flatten(
       if (n.body && n.fn !== undefined) flatten(n.body, [...here, n.fn], [...hereArgs, call], arms, out);
       e.end = out.length;
     } else if (n.kind === "loop") {
-      const e = open(n);
-      flatten(n.body, scope, args, arms, out);
+      // A loop in a callback reads the callback's locals, so it is in the callback's scope like the calls there.
+      const [here, hereArgs] = inScope(scope, args, n.lambdas ?? []);
+      const e = open(n, here, hereArgs);
+      flatten(n.body, here, hereArgs, arms, out);
       e.end = out.length;
     } else if (n.kind === "branch") {
       const e = open(n);
@@ -902,7 +929,7 @@ function dataEdges(model: ProjectModel, body: StageNode[], driverId: NodeId): { 
       const bound = displayLocal(f.bound);
       const read = displayLocal(f.read);
       const full = `${bound}→${read}`;
-      const label = f.bound === f.read ? read : full.length <= EDGE_LABEL_MAX ? full : read;
+      const label = bound === read ? read : full.length <= EDGE_LABEL_MAX ? full : read;
       const type = f.producer.bindsType !== undefined && f.producer.binds?.includes(f.bound) ? f.producer.bindsType : undefined;
       edges.push({ from: f.producer.id, to: c.id, label, ...(type !== undefined ? { type } : {}) });
     }

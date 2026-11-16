@@ -147,6 +147,29 @@ function namedByParent(node: ts.ArrowFunction | ts.FunctionExpression, literals:
 }
 
 /**
+ * Whether a lambda is a callback slot: a function a caller passes in, which the model drops when every candidate of a call is one.
+ * A function is a callback unless it is the initializer of a property of an object literal that is not a call argument: a property of
+ * a literal that is returned or stored (`return { parse: (t) => … }`) names a member, not a callback. A literal passed to a call is an
+ * options bag (`run({ onProgress: () => … })`), so its properties are callback slots.
+ */
+function isCallbackSlot(node: ts.Node): boolean {
+  const parent = node.parent;
+  if (!ts.isPropertyAssignment(parent) || parent.initializer !== node || !ts.isObjectLiteralExpression(parent.parent)) return true;
+  let up: ts.Node = parent.parent;
+  while (
+    ts.isParenthesizedExpression(up.parent) ||
+    ts.isAsExpression(up.parent) ||
+    ts.isSatisfiesExpression(up.parent) ||
+    ts.isNonNullExpression(up.parent) ||
+    ts.isTypeAssertionExpression(up.parent)
+  ) {
+    up = up.parent;
+  }
+  const call = up.parent;
+  return (ts.isCallExpression(call) || ts.isNewExpression(call)) && (call.arguments ?? []).some((a) => a === up);
+}
+
+/**
  * A named function with no identifier binding of its own: a property or method of an object literal, or a method, accessor
  * or property arrow of a class. A nested declaration or a function bound to a variable is reached by its own call or value
  * edge, so it gets no closure edge from its creator. A constructor is reached by `new`.
@@ -1579,9 +1602,12 @@ export function emitFile(project: Project, rel: string): IRBatch {
    * a class property arrow) is unwrapped to the function, so the attribute is on the function. Keys and values are local keys (see
    * `localKey`): a name the function declares more than once is `name@line`, so two loops' `f` are two entries.
    */
-  /** The function a declaration holds: a function-like node, or the arrow or function expression a const or class property holds. */
+  /**
+   * The function a declaration holds: a function-like node, or the arrow or function expression a const, a class property or a
+   * property of an object literal holds.
+   */
   const functionOf = (node: ts.Node): ts.SignatureDeclaration | undefined => {
-    if ((ts.isVariableDeclaration(node) || ts.isPropertyDeclaration(node)) && node.initializer !== undefined) {
+    if ((ts.isVariableDeclaration(node) || ts.isPropertyDeclaration(node) || ts.isPropertyAssignment(node)) && node.initializer !== undefined) {
       const init = unwrapAll(node.initializer);
       return ts.isArrowFunction(init) || ts.isFunctionExpression(init) ? init : undefined;
     }
@@ -1678,7 +1704,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
             qualifiedName: decl.qname,
             async: decl.entity.async,
             exported: decl.entity.exported,
-            ...(decl.entity.anonymous ? { anonymous: true } : {}),
+            ...(decl.entity.anonymous ? { anonymous: isCallbackSlot(node) } : {}),
             ...(decl.entity.module ? { module: true } : {}),
             ...(decl.entity.htmlEntry ? { htmlEntry: true } : {}),
             ...(decl.entity.nodeEntry ? { nodeEntry: true } : {}),
