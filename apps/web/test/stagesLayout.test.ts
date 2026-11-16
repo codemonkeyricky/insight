@@ -284,10 +284,11 @@ describe("stages layout: data edges", () => {
     const layout = layoutStages(dataGraph(), { data: true });
     expect(layout.links.map((l) => [l.from, l.to, l.text])).toEqual([["c0", "c4", "scan"]]);
     expect(layout.nodes.some((n) => n.kind === "data" && n.from === "c0" && n.to === "c4")).toBe(false);
-    // Headroom for the arc: the diagram is taller than the same one without links.
+    // No band is reserved for the link: the diagram is as tall as the same one without links, and the arc starts under the top edge.
     const flat = layoutStages(dataGraph(), { data: false });
-    expect(layout.height).toBeGreaterThan(flat.height);
+    expect(layout.height).toBe(flat.height);
     expect(layout.links[0]?.points[0]?.[1]).toBeGreaterThan(0);
+    expect(layout.links[0]?.y).toBe(0);
   });
 
   it("draws no data at all when data is off, and the layout is the same as without edges", () => {
@@ -306,7 +307,7 @@ describe("stages layout: data edges", () => {
 });
 
 describe("stages layout: link labels", () => {
-  it("keeps link labels clear of each other and of every card, even when several links share a span", () => {
+  it("keeps link labels clear of each other, and the first row clear of every card, even when several links share a span", () => {
     const g = dataGraph();
     const graph: StageGraph = {
       ...g,
@@ -320,9 +321,12 @@ describe("stages layout: link labels", () => {
       const li = labels[i];
       if (li === undefined) continue;
       expect(li.y).toBeGreaterThanOrEqual(0);
-      for (const s of solid) {
-        const sb = boxOf(s);
-        if (sb !== undefined) expect(boxesCross(li, sb), `label ${JSON.stringify(li)} vs ${JSON.stringify(sb)}`).toBe(false);
+      // The first row sits in the margin above the cards; a further row is drawn over them, as a hover label.
+      if (li.y === 0) {
+        for (const s of solid) {
+          const sb = boxOf(s);
+          if (sb !== undefined) expect(boxesCross(li, sb), `label ${JSON.stringify(li)} vs ${JSON.stringify(sb)}`).toBe(false);
+        }
       }
       for (let j = i + 1; j < labels.length; j++) {
         const lj = labels[j];

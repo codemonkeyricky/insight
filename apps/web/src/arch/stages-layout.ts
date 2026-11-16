@@ -58,12 +58,11 @@ const DATA_PAD = 6;
 const PILL_GAP = 9;
 /** A data pill's label is shown at most this many characters long. */
 const DATA_TEXT_MAX = 26;
-/** A link between two stages that are not neighbours arcs above them: its apex sits this far above their tops. */
-const ARC_RISE = 16;
-/** Each further row of link labels rises this far above the first. */
+/**
+ * Each row of link labels sits this far below the one above it. Links are drawn in the margin above the diagram, which is
+ * MARGIN tall, so no space is reserved for them: the first row fits there, and any further row overlays the top cards.
+ */
 const LINK_ROW = DATA_H + 4;
-/** Space reserved above the diagram when some link arcs over it. */
-export const ARC_HEADROOM = 2 * ARC_RISE + 8;
 const ARC_STEPS = 16;
 
 /** The text of an exit pill, by how the flow leaves. */
@@ -597,7 +596,7 @@ function boxesOf(nodes: LayoutNode[]): Map<string, Box> {
   return boxes;
 }
 
-/** A dashed arc from the top middle of one box to the top middle of another, rising `rise` px above the top of the diagram. */
+/** A dashed arc from the top middle of one box to the top middle of another, its apex `rise` px above the top of the diagram. */
 function arcBetween(a: Box, b: Box, top: number, rise: number): Point[] {
   const xa = a.x + a.w / 2;
   const ya = a.y;
@@ -614,12 +613,12 @@ function arcBetween(a: Box, b: Box, top: number, rise: number): Point[] {
   return pts;
 }
 
-/** One drawing of the body with `headroom` px left above it: the nodes and paths, and the pills it drew on connectors. */
-function drawPass(graph: StageGraph, opts: StageLayoutOptions, pills: Map<string, DataPill>, headroom: number) {
+/** One drawing of the body: the nodes and paths, and the pills it drew on connectors. */
+function drawPass(graph: StageGraph, opts: StageLayoutOptions, pills: Map<string, DataPill>) {
   const o: Ctx = { ...opts, pills, used: new Set() };
   const body = opts.rowW !== undefined ? wrapRows(graph.body, o, opts.rowW) : chain(graph.body, o);
   const out: Out = { nodes: [], paths: [], seq: 0 };
-  body.draw(MARGIN, MARGIN + headroom, out);
+  body.draw(MARGIN, MARGIN, out);
   return { body, out, used: o.used };
 }
 
@@ -651,22 +650,21 @@ function linkRows(linked: DataEdge[], boxes: Map<string, Box>): number[] {
 export function layoutStages(graph: StageGraph, opts: StageLayoutOptions = {}): StageLayout {
   const pills = new Map<string, DataPill>();
   if (opts.data === true) for (const e of graph.edges) pills.set(`${e.from}\0${e.to}`, pillOf(e));
-  let pass = drawPass(graph, opts, pills, 0);
-  const boxes0 = boxesOf(pass.out.nodes);
-  // The links are the edges that are not on a connector and have both stages drawn (a minor stage is hidden).
-  const linked = opts.data === true ? graph.edges.filter((e) => !pass.used.has(`${e.from}\0${e.to}`) && boxes0.has(e.from) && boxes0.has(e.to)) : [];
-  const rows = linkRows(linked, boxes0);
-  const headroom = linked.length > 0 ? ARC_HEADROOM + LINK_ROW * Math.max(0, ...rows) : 0;
-  if (headroom > 0) pass = drawPass(graph, opts, pills, headroom);
+  const pass = drawPass(graph, opts, pills);
   const boxes = boxesOf(pass.out.nodes);
-  // The top of the highest box, frames included: the link labels sit above it, clear of every card and frame.
+  // The links are the edges that are not on a connector and have both stages drawn (a minor stage is hidden).
+  const linked = opts.data === true ? graph.edges.filter((e) => !pass.used.has(`${e.from}\0${e.to}`) && boxes.has(e.from) && boxes.has(e.to)) : [];
+  const rows = linkRows(linked, boxes);
+  // The top of the highest box, frames included. The first row of labels sits in the margin above it, so it is clear of every card.
   const diagramTop = Math.min(...Array.from(boxes.values(), (b) => b.y));
   const links: LayoutDataLink[] = [];
   linked.forEach((e, i) => {
     const a = boxes.get(e.from);
     const b = boxes.get(e.to);
     if (a === undefined || b === undefined) return;
-    const rise = ARC_RISE + LINK_ROW * (rows[i] ?? 0);
+    const labelTop = LINK_ROW * (rows[i] ?? 0);
+    // The arc's apex sits on the label's top edge, so the label stays inside the layout.
+    const rise = Math.max(0, diagramTop - labelTop);
     const pill = pillOf(e);
     const midX = (a.x + a.w / 2 + b.x + b.w / 2) / 2;
     links.push({
@@ -677,13 +675,13 @@ export function layoutStages(graph: StageGraph, opts: StageLayoutOptions = {}): 
       text: pill.text,
       titleFull: pill.title,
       x: midX - pill.w / 2,
-      y: diagramTop - rise - DATA_H / 2,
+      y: labelTop,
       w: pill.w,
     });
   });
   return {
     width: Math.ceil(pass.body.w + 2 * MARGIN),
-    height: Math.ceil(pass.body.h + 2 * MARGIN + headroom),
+    height: Math.ceil(pass.body.h + 2 * MARGIN),
     nodes: pass.out.nodes,
     paths: pass.out.paths,
     links,
