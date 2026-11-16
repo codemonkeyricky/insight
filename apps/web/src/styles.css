@@ -1271,7 +1271,8 @@ button.add-submit:disabled { background: var(--faint); color: var(--graphite); b
 /* Data edges: a quiet pill on a connector, and a thin dashed arc for a link between stages that are not neighbours. */
 .stg-data rect { fill: var(--card-top); stroke: var(--hair); stroke-width: 1; }
 .stg-data text { fill: var(--muted); font: 10px var(--font-code); pointer-events: none; }
-.stg-data title { pointer-events: auto; }
+/* Labels and arcs never take the pointer: a label under the cursor would otherwise end the hover that drew it. */
+.stg-data, .stg-data rect, .stg-data text, .stg-link-g, .stg-link-g * { pointer-events: none; }
 .stg-link { fill: none; stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 3; opacity: 0.75; pointer-events: none; }
 .sysv-frame { cursor: pointer; outline: none; }
 .sysv-frame-body { fill: var(--sheet); stroke: var(--hair); stroke-width: 1; }

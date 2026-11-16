@@ -1,6 +1,7 @@
-import { useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useState } from "react";
 import type { StageGraph, StageDriver } from "@insight/model";
 import { api } from "../../api";
+import { basename } from "../../arch/pipeline-layout";
 import { DATA_H, LABEL_H, planStages, type LayoutChip, type LayoutDataLink, type LayoutNode, type LayoutPath, type Point } from "../../arch/stages-layout";
 import { fileTarget, useCodeTarget } from "../../codeTarget";
 import { hrefView } from "../../router";
@@ -8,7 +9,10 @@ import type { StagesPayload } from "../../model/payloads";
 import { usePanZoom } from "./usePanZoom";
 
 type Site = { file: string; line: number };
-/** The smallest scale Fit may settle on. The layout wraps before it gets this small, so this only bounds a very tall diagram. */
+/**
+ * The smallest scale Fit may settle on. Fit never goes below it: when one frame cannot wrap, so the diagram is still wider than the
+ * stage at this scale, it is left at this scale and panned, not shrunk further.
+ */
 const STAGE_MIN_K = 0.35;
 /** The stage is as tall as its diagram at the fitted scale, plus this room; at least STAGE_MIN_H px, at most 75% of the window. */
 const STAGE_PAD = 16;
@@ -33,24 +37,22 @@ function useElementWidth(el: HTMLElement | null): number {
 }
 type FrameNode = Extract<LayoutNode, { kind: "frame" }>;
 
-const base = (path: string): string => path.slice(path.lastIndexOf("/") + 1);
-
 /**
  * The Stages section of the Pipeline view: the call order of one pipeline driver as a static-analysis diagram. Loops, branches,
  * try/catch and exits are drawn as the code has them; a fanout card lists the components its candidates live in. The
  * payload is computed in the page from the project model (api.getStages). A card or a frame opens the Code pane at its call
  * line; a component chip opens that component's System scope.
  */
-export function StagesView({ id, scope }: { id: string; scope: string }) {
+export function StagesView({ id, scope, tests = false }: { id: string; scope: string; tests?: boolean }) {
   const [showAll, setShowAll] = useState(false);
   const [pick, setPick] = useState<{ scope: string; driver: string } | null>(null);
   // The picked driver is kept for the scope it was picked in; a new scope starts with its first driver.
   const driver = pick !== null && pick.scope === scope ? pick.driver : undefined;
-  const key = `${id}\0${scope}\0${driver ?? ""}`;
+  const key = `${id}\0${scope}\0${driver ?? ""}\0${tests ? 1 : 0}`;
   const [done, setDone] = useState<{ key: string; payload?: StagesPayload; error?: string } | null>(null);
   useEffect(() => {
     let cancelled = false;
-    api.getStages(id, scope, driver !== undefined ? { driver } : {}).then(
+    api.getStages(id, scope, { ...(driver !== undefined ? { driver } : {}), tests }).then(
       (payload) => {
         if (!cancelled) setDone({ key, payload });
       },
@@ -61,7 +63,7 @@ export function StagesView({ id, scope }: { id: string; scope: string }) {
     return () => {
       cancelled = true;
     };
-  }, [id, scope, driver, key]);
+  }, [id, scope, driver, tests]);
   if (done === null) return <p className="muted small">Loading stages</p>;
   if (done.error !== undefined) return <p className="error" role="alert">{done.error}</p>;
   const payload = done.payload;
@@ -99,6 +101,15 @@ export function StagesDiagram({
 }) {
   const [stageEl, setStageEl] = useState<HTMLDivElement | null>(null);
   const stageW = useElementWidth(stageEl);
+  // The window's height, kept current as it resizes: the stage's height follows it.
+  const [vh, setVh] = useState(() => (typeof window === "undefined" ? 900 : window.innerHeight));
+  useEffect(() => {
+    const onResize = () => setVh(window.innerHeight);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  // The arrowhead's id is unique to this diagram, so two diagrams on one page never share a marker.
+  const markerId = `stg-head-${useId().replace(/:/g, "")}`;
   // Data edges are on by default. Off, the diagram is the call order alone.
   const [showData, setShowData] = useState(true);
   // The stage under the pointer: its data links that leave or enter it are drawn.
@@ -109,7 +120,6 @@ export function StagesDiagram({
     [graph, showAll, showData, stageW],
   );
   const layout = plan.layout;
-  const vh = typeof window === "undefined" ? 900 : window.innerHeight;
   const stageH = Math.round(Math.min(Math.max(layout.height * plan.k + STAGE_PAD, STAGE_MIN_H), vh * STAGE_MAX_VH));
   const pz = usePanZoom(stageEl, { w: layout.width, h: layout.height }, { fitMinK: STAGE_MIN_K, maxK: 1, height: stageH });
   const { showCode } = useCodeTarget();
@@ -133,7 +143,7 @@ export function StagesDiagram({
           <select value={picked} onChange={(e) => onDriver(e.target.value)} aria-label="Pipeline driver">
             {drivers.map((d) => (
               <option key={d.id} value={d.id}>
-                {d.name} · {base(d.file)}
+                {d.name} · {basename(d.file)}
               </option>
             ))}
           </select>
@@ -174,7 +184,7 @@ export function StagesDiagram({
         >
           <svg className="sysv-svg" width="100%" height="100%" role="img" aria-label={`Stages of ${graph.driver.name}`}>
             <defs>
-              <marker id="stg-head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <marker id={markerId} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
                 <path className="stg-head" d="M0 0 L10 5 L0 10 z" />
               </marker>
             </defs>
@@ -183,13 +193,13 @@ export function StagesDiagram({
                 <FrameShape key={f.key} n={f} onOpen={open} />
               ))}
               {layout.paths.map((p) => (
-                <PathShape key={p.key} p={p} />
+                <PathShape key={p.key} p={p} marker={markerId} />
               ))}
               {others.map((n) => (
                 <NodeShape key={n.key} id={id} n={n} onOpen={open} onHover={setHover} />
               ))}
               {links.map((l) => (
-                <LinkShape key={l.key} l={l} />
+                <LinkShape key={l.key} l={l} marker={markerId} />
               ))}
             </g>
           </svg>
@@ -216,9 +226,9 @@ function FrameShape({ n, onOpen }: { n: FrameNode; onOpen: (site: Site | undefin
   );
 }
 
-function PathShape({ p }: { p: LayoutPath }) {
+function PathShape({ p, marker }: { p: LayoutPath; marker: string }) {
   const points = p.points.map((pt: Point) => pt.join(",")).join(" ");
-  return <polyline className={`stg-line ${p.tone}`} points={points} markerEnd={p.arrow ? "url(#stg-head)" : undefined} />;
+  return <polyline className={`stg-line ${p.tone}`} points={points} markerEnd={p.arrow ? `url(#${marker})` : undefined} />;
 }
 
 function NodeShape({
@@ -309,11 +319,11 @@ function DataPill({ x, y, w, text, title }: { x: number; y: number; w: number; t
 }
 
 /** A data edge between stages that are not neighbours: a dashed arc with its label, drawn while one of its stages is under the pointer. */
-function LinkShape({ l }: { l: LayoutDataLink }) {
+function LinkShape({ l, marker }: { l: LayoutDataLink; marker: string }) {
   const points = l.points.map((pt: Point) => pt.join(",")).join(" ");
   return (
     <g className="stg-link-g">
-      <polyline className="stg-link" points={points} markerEnd="url(#stg-head)" />
+      <polyline className="stg-link" points={points} markerEnd={`url(#${marker})`} />
       <DataPill x={l.x} y={l.y} w={l.w} text={l.text} title={l.titleFull} />
     </g>
   );
