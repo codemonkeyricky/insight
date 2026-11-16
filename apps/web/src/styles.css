@@ -562,7 +562,7 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 .zm-callers-btn:focus, .zm-caller-hit:focus, .zm-caller-chev:focus, .zm-expansion-close:focus { outline: none; }
 .zm-caller-possible { fill: var(--muted); font: 400 10px var(--font-ui); user-select: none; -webkit-user-select: none; pointer-events: none; }
 .zm-caller-chev.is-chained text { fill: var(--muted); }
-/* The callers box's rows: a name over a muted file line, the edge kinds at the right, and a ▸ at the row's end. */
+/* The callers box's rows: a name over a muted file line, the edge kinds at the right, and a ◂ at the row's left end. */
 .zm-caller-hit { fill: transparent; }
 .zm-caller-row:hover .zm-caller-hit { fill: var(--row-hover); }
 .zm-caller-row .zm-caller-hit { cursor: pointer; }

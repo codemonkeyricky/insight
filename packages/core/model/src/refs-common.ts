@@ -4,6 +4,27 @@ import type { RefRow } from "./refs.js";
 import type { ScopeView } from "./view.js";
 
 /**
+ * The `how` values of a reference that invoke the referenced function, so the reference is a caller in effect: a
+ * construction (`new`), a JSX render (`jsx`) or an event handler registration (`handler`). Any other reference passes the
+ * function around as a value. Shared by the caller chain, the reference rows and the callers box.
+ */
+export const INVOKING_HOWS: ReadonlySet<string> = new Set(["new", "jsx", "handler"]);
+
+/**
+ * The `how` one relation contributes to a (caller, kind, label) group's single `how`, shared by the callers box and the
+ * reference rows so the two label the same caller the same way. An invoking how (INVOKING_HOWS) wins over a
+ * non-invoking one; when both are invoking or both are not, the alphabetically smaller wins, so the result does not
+ * depend on the order the relations are visited in.
+ */
+export function preferHow(cur: string | undefined, next: string | undefined): string | undefined {
+  if (next === undefined) return cur;
+  if (cur === undefined) return next;
+  const curInvoking = INVOKING_HOWS.has(cur);
+  if (curInvoking !== INVOKING_HOWS.has(next)) return curInvoking ? cur : next;
+  return next < cur ? next : cur;
+}
+
+/**
  * The function (or file) a relation's caller folds into, shared by the "Called by" list and the caller chain so the two
  * cannot drift. A spawn is not a function: its caller is the function (or file) that starts the thread, labelled with the
  * API. Any other relation folds an anonymous caller into its nearest named parent.
