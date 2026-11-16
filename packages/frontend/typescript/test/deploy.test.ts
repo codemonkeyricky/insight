@@ -119,6 +119,12 @@ describe("parseWrangler", () => {
     });
   });
 
+  it("declares nothing for a JSON config that is not an object: null, an array, or a number", () => {
+    for (const text of ["null", "[]", "5"]) {
+      expect(parseWrangler(text, "wrangler.json")).toEqual({ kv: [], r2: [], d1: [] });
+    }
+  });
+
   it("reads bindings written as inline arrays, one line or several", () => {
     const info = parseWrangler(
       [

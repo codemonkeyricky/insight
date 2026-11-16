@@ -512,3 +512,116 @@ describe("tierModel import facts without attrs", () => {
     expect(tiers.nodes.find((n) => n.id === "web")).toMatchObject({ role: "spa", signals: ["index.html", "imports react-dom/client"] });
   });
 });
+
+/**
+ * The System model of `doc`, with a browser program rooted at `roots` ("file#fn") as the exec model gives one: a runtime of
+ * kind browser, and a slice in each component that owns a root.
+ */
+function tiersWithBrowserProgram(doc: IRDocument, roots: string[]): TierModel {
+  const m = buildProjectModel(doc);
+  const sys = systemModel(m, "", {});
+  const ownerOf = (path: string) =>
+    sys.components
+      .filter((c) => c.path !== "" && path.startsWith(`${c.path}/`))
+      .sort((a, b) => b.path.length - a.path.length)[0]?.id;
+  const owners = [...new Set(roots.map((r) => ownerOf(r.split("#")[0])).filter((o): o is string => o !== undefined))];
+  const runtime = { id: "entry:browser", kind: "program" as const, label: "index.html", programKind: "browser" as const, roots };
+  const slices = owners.map((component) => ({ id: `entry:browser|${component}`, runtime: "entry:browser", component, functions: 1, root: true }));
+  return tierModel(m, { ...sys, runtimes: [...(sys.runtimes ?? []), runtime], slices: [...(sys.slices ?? []), ...slices] }, {});
+}
+
+describe("tierModel static folders and config files", () => {
+  it("keeps a server whose public folder holds a browser program a server, not a spa", () => {
+    const SRVI = "srv/src/index.js";
+    const tiers = tiersWithBrowserProgram(
+      {
+        nodes: [
+          file("srv/package.json"),
+          file("srv/public/index.html"),
+          file("srv/public/app.js"),
+          fn("srv/public/app.js", "main"),
+          file(SRVI),
+          fn(SRVI, "start"),
+          effect(SRVI, "start", 3, "effects.net.serve", { framework: "express", method: "GET", path: "/api/things", handler: "things" }),
+          effect(SRVI, "start", 4, "effects.net.listen", { port: 3000 }),
+        ],
+        edges: [imp("srv/public/app.js", "react-dom/client")],
+        findings: [],
+      },
+      ["srv/public/app.js#main"],
+    );
+    expect(tiers.nodes.find((n) => n.id === "srv")).toMatchObject({ tier: "backend", role: "server", platform: "node" });
+  });
+
+  it("keeps a browser program under src a spa even beside a real server", () => {
+    const SRVI = "srv2/src/index.js";
+    const tiers = tiersWithBrowserProgram(
+      {
+        nodes: [
+          file("srv2/package.json"),
+          file("srv2/src/client.ts"),
+          fn("srv2/src/client.ts", "main"),
+          file(SRVI),
+          fn(SRVI, "start"),
+          effect(SRVI, "start", 3, "effects.net.serve", { framework: "express", method: "GET", path: "/api/things", handler: "things" }),
+          effect(SRVI, "start", 4, "effects.net.listen", { port: 3000 }),
+        ],
+        edges: [],
+        findings: [],
+      },
+      ["srv2/src/client.ts#main"],
+    );
+    expect(tiers.nodes.find((n) => n.id === "srv2")).toMatchObject({ tier: "frontend", role: "spa", platform: "browser" });
+  });
+
+  it("makes a component with no server and a browser program in its public folder a spa", () => {
+    const tiers = tiersWithBrowserProgram(
+      {
+        nodes: [file("site/package.json"), file("site/public/index.html"), file("site/public/app.js"), fn("site/public/app.js", "main")],
+        edges: [],
+        findings: [],
+      },
+      ["site/public/app.js#main"],
+    );
+    expect(tiers.nodes.find((n) => n.id === "site")).toMatchObject({ tier: "frontend", role: "spa", platform: "browser" });
+  });
+
+  it("does not make a CRA app a server for a listen in its vite config file", () => {
+    const APP = "cra/src/index.js";
+    const CFG = "cra/vite.config.js";
+    const tiers = tiersOf({
+      nodes: [
+        file("cra/package.json"),
+        file("cra/public/index.html"),
+        file(APP),
+        fn(APP, "start"),
+        file(CFG),
+        fn(CFG, "config"),
+        effect(CFG, "config", 3, "effects.net.listen", { port: 4556 }),
+      ],
+      edges: [imp(APP, "react-dom/client")],
+      findings: [],
+    });
+    expect(tiers.nodes.find((n) => n.id === "cra")).toMatchObject({ tier: "frontend", role: "spa", platform: "browser" });
+    expect(tiers.nodes.find((n) => n.id === "cra")?.signals).not.toContain("listens");
+  });
+
+  it("does not make a CRA app a server for a server route in its setupProxy file", () => {
+    const APP = "cra/src/index.js";
+    const CFG = "cra/src/setupProxy.js";
+    const tiers = tiersOf({
+      nodes: [
+        file("cra/package.json"),
+        file("cra/public/index.html"),
+        file(APP),
+        fn(APP, "start"),
+        file(CFG),
+        fn(CFG, "proxy"),
+        effect(CFG, "proxy", 3, "effects.net.serve", { framework: "express", method: "GET", path: "/api/items", handler: "items" }),
+      ],
+      edges: [imp(APP, "react-dom/client")],
+      findings: [],
+    });
+    expect(tiers.nodes.find((n) => n.id === "cra")).toMatchObject({ tier: "frontend", role: "spa", platform: "browser" });
+  });
+});

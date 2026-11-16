@@ -112,14 +112,16 @@ export function SystemView({ id, scope }: { id: string; scope: string }) {
     };
   }, [id, scope, tests, mode, key]);
   const loaded = done?.loaded;
+  // An error belongs to the load it came from: after a mode switch the previous mode's error is not shown until the new load settles.
+  const error = done?.key === key ? done.error : undefined;
   return (
     <div className="sysv-tab">
       <div className="sysv-modebar">
         <SystemModeToggle mode={mode} onChange={pick} />
         {loaded?.reason !== undefined && <span className="muted small sysv-tiers-note">Tiers unavailable here ({loaded.reason}); showing Runtime.</span>}
       </div>
-      {done === null && <p className="muted" role="status">{mode === "tiers" ? "Computing tiers…" : "Computing runtime…"}</p>}
-      {done !== null && loaded === undefined && <p className="error" role="alert">{done.error}</p>}
+      {loaded === undefined && error === undefined && <p className="muted" role="status">{mode === "tiers" ? "Computing tiers…" : "Computing runtime…"}</p>}
+      {loaded === undefined && error !== undefined && <p className="error" role="alert">{error}</p>}
       {loaded !== undefined && (
         <SystemDiagram id={id} sys={loaded.sys} layoutOptions={loaded.layout} flat={loaded.layout !== undefined} apiEvidenceOnly={loaded.layout !== undefined} tests={tests} onTests={setTests} stale={done?.key !== key} />
       )}

@@ -224,12 +224,15 @@ function dropTrailingCommas(text: string): string {
 /** The wrangler fields this reads from a JSON or JSONC config. A file that does not parse declares nothing. */
 function parseJson(text: string): WranglerInfo {
   const info = EMPTY();
-  let doc: Record<string, unknown>;
+  let parsed: unknown;
   try {
-    doc = JSON.parse(stripJsonc(text)) as Record<string, unknown>;
+    parsed = JSON.parse(stripJsonc(text));
   } catch {
     return info;
   }
+  // A config that is not an object (null, an array, a number) declares nothing: its fields are not read.
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return info;
+  const doc = parsed as Record<string, unknown>;
   const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
   const entries = (v: unknown): Record<string, unknown>[] =>
     Array.isArray(v) ? v.filter((e): e is Record<string, unknown> => typeof e === "object" && e !== null) : [];

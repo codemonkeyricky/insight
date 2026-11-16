@@ -7,7 +7,7 @@ import type { SysBox } from "../src/arch/system-layout";
 import type { SystemModel, SystemSlice } from "@insight/model";
 import { SLICE_LIMIT } from "../src/arch/system-frames";
 import { PA, TW, CO, A, B, C, runtimes, model, slice } from "./systemFixtures";
-import { tierFixture } from "./tierFixtures";
+import { tierEdges, tierFixture } from "./tierFixtures";
 import { SYSTEM_MODE_KEY } from "../src/arch/system-mode";
 
 const { getSystem, getTiers } = vi.hoisted(() => ({ getSystem: vi.fn(), getTiers: vi.fn() }));
@@ -85,6 +85,49 @@ describe("System tab modes", () => {
     expect(getSystem).toHaveBeenCalledTimes(1);
     expect(screen.getByText(/Tiers unavailable here/).textContent).toContain("not enough deployable units");
     expect(document.querySelector(".sysv-col")?.textContent).not.toBe("Frontend");
+  });
+});
+
+/** Opens the evidence panel of the edge whose label contains `text`, by its hit path. */
+function pickEdgeLabelled(text: string) {
+  const g = document.querySelector<SVGGElement>(`g[data-edge][aria-label*="${text}"]`);
+  expect(g).not.toBeNull();
+  fireEvent.click(g!.querySelector(".sysv-hit")!);
+}
+
+describe("edge evidence table", () => {
+  it("shows the Syscall and Level columns for a Runtime edge", async () => {
+    window.localStorage.setItem(SYSTEM_MODE_KEY, "runtime");
+    getSystem.mockResolvedValue(model());
+    render(<SystemView id="p" scope="" />);
+    await waitFor(() => expect(document.querySelector('g[data-edge][aria-label*="openat"]')).not.toBeNull());
+    pickEdgeLabelled("openat");
+    expect([...document.querySelectorAll(".sysv-evidence th")].map((th) => th.textContent)).toEqual(["API", "Syscall", "Level", "Count"]);
+  });
+
+  it("hides the Syscall and Level columns for a Tiers edge", async () => {
+    getTiers.mockResolvedValue(tierFixture({ edges: [{ ...tierEdges[0], apis: [{ api: "fetch", count: 1 }] }, ...tierEdges.slice(1)] }));
+    render(<SystemView id="p" scope="" />);
+    await waitFor(() => expect(document.querySelector('g[data-edge][aria-label*="GET /api/items"]')).not.toBeNull());
+    pickEdgeLabelled("GET /api/items");
+    expect([...document.querySelectorAll(".sysv-evidence th")].map((th) => th.textContent)).toEqual(["API", "Count"]);
+  });
+});
+
+describe("mode switch after a failed load", () => {
+  it("clears the old error, and shows the loading line until the new load resolves", async () => {
+    const user = userEvent.setup();
+    getTiers.mockResolvedValueOnce(tierFixture());
+    getSystem.mockRejectedValue(new Error("runtime down"));
+    render(<SystemView id="p" scope="" />);
+    await waitFor(() => expect(document.querySelector(".sysv-svg")).not.toBeNull());
+    await user.click(screen.getByRole("button", { name: "Runtime" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("runtime down"));
+    // The Tiers load never settles here: the error from Runtime must not stay on screen.
+    getTiers.mockReturnValue(new Promise(() => {}));
+    await user.click(screen.getByRole("button", { name: "Tiers" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe("Computing tiers…");
   });
 });
 

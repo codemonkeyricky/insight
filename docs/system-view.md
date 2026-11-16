@@ -368,8 +368,10 @@ Classification signals, in priority order (each node lists its signals in the ca
   with a browser entry, and their `/server` subpaths (`react-dom/server`) are not browser imports at all. A type-only
   import does not count. A backend or library that a browser calls into is not a frontend.
 - Server evidence beats a page. A component that owns a server (a route that is not `export` or `dispatch`, or a `listens`
-  edge) is never a `spa` for the `index.html` it serves, so an Express or Fastify app with a static `public/index.html` is
-  a server.
+  edge, each outside a build or tool config file such as `vite.config.js` or `setupProxy.js`) is never a `spa` for the
+  `index.html` it serves. A browser program whose roots all lie in its static folder (`public/`, `static/` or `www/`) does
+  not make a server a `spa` either. A browser program rooted anywhere else still does. So an Express or Fastify app with a
+  static `public/index.html` and `public/app.js` is a server.
 - `worker`: a route with framework `worker`. The platform is `cloudflare` when a `wrangler.toml` (or `.json`/`.jsonc`)
   sits at the component root.
 - `function`: a route with framework `export` or `dispatch`, and no server of its own (no `listens`, no other route). The
@@ -410,8 +412,11 @@ Limits:
 
 - Library folding over-attributes: a backend that uses a shared library inherits that library's stores as inferred edges
   (drawn dotted, with `via`). The Runtime view shows which code caused them.
-- A deployable is classified by the first matching signal. A server that serves a static page (`public/index.html`) is a
-  server: server evidence beats a page.
+- A deployable is classified by the first matching signal. Server evidence outside config files beats page signals and
+  browser programs rooted in its static folder: an Express app with a static `public/index.html` and `public/app.js` is a
+  server, not a `spa`.
+- Worker store bindings are detected only in the Worker entry file (the wrangler `main`, or `index.js` or `src/index.*`).
+- A D1 `prepare` with non-literal SQL counts as a read.
 
 Self-check: `node scripts/check-tiers.mjs` (after `pnpm -r build`). It indexes the committed tree (`git archive HEAD`) into a
 temp folder, prints the Tiers tables for the root scope, and compares them with the expected Insight topology. It prints

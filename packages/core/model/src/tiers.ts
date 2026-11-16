@@ -77,8 +77,8 @@ const ROLE_RANK: Record<string, number> = { spa: 0, client: 1, server: 2, functi
 /** Words that name no service: an env name or a Worker name made of only these says nothing about which Worker it means. */
 const STOP_WORDS = new Set(["vite", "base", "url", "api", "public", "root", "origin", "host", "endpoint", "app"]);
 const WRANGLER_FILES = ["wrangler.toml", "wrangler.json", "wrangler.jsonc"];
-/** Build and tool config files: an env read there belongs to the build, not the app (vite.config.ts reads INSIGHT_API at build time). */
-const CONFIG_FILE = /(^|\/)([^/]*\.config\.(c|m)?[jt]sx?|(vite|webpack|rollup|rspack|esbuild|tsup|babel|postcss|tailwind|jest|vitest|playwright|karma|next|nuxt|astro|svelte)\.[^/]*)$/;
+/** Build and tool config files, and a CRA dev proxy (setupProxy.js): an env read, a listen or a route there belongs to the build or dev tooling, not the app (vite.config.ts reads INSIGHT_API at build time). */
+const CONFIG_FILE = /(^|\/)([^/]*\.config\.(c|m)?[jt]sx?|(vite|webpack|rollup|rspack|esbuild|tsup|babel|postcss|tailwind|jest|vitest|playwright|karma|next|nuxt|astro|svelte|setupProxy)\.[^/]*)$/;
 /** Distinct route labels a request edge shows before "+N". Other edges show every distinct label of their merged facts (or one). */
 const REQUEST_LABELS = 2;
 const OTHER_LABELS = 3;
@@ -90,6 +90,12 @@ const VERCEL_IMPORT = /^@vercel\//;
 /** The page a browser app's folder holds: the project's own (Vite), or the public and src folders of CRA and webpack apps. */
 const BROWSER_PAGES = ["index.html", "public/index.html", "src/index.html"] as const;
 const ROUTE_PREFIX = "route:";
+/** A server component's static folders: the pages and assets it serves itself. */
+const STATIC_DIRS = ["public", "static", "www"];
+const inStaticFolder = (file: string, compPath: string): boolean => {
+  const prefix = compPath === "" ? "" : `${compPath}/`;
+  return STATIC_DIRS.some((d) => file.startsWith(`${prefix}${d}/`));
+};
 
 type Role = NonNullable<TierNode["role"]>;
 type Verb = TierEdge["verb"];
@@ -203,15 +209,6 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
     }
     return false;
   };
-  // A browser program's own components: the ones that own a file its runtime runs (the roots are "file#fn"). A slice of a
-  // browser runtime in a component the browser only calls into (a backend, a library) does not make that component a frontend.
-  const browserComponents = new Set<string>();
-  for (const s of sys.slices ?? []) {
-    if (!isBrowserRuntime(s.runtime)) continue;
-    const roots = runtimeById.get(s.runtime)?.roots ?? [];
-    if (roots.some((root) => ownerOfPath(root.split("#")[0]) === s.component)) browserComponents.add(s.component);
-  }
-
   // Collapse runtimes and slices to their component. A target that is neither a component nor an external is a resource.
   const resolveComponent = (id: string): string | undefined => {
     if (comps.has(id)) return id;
@@ -260,7 +257,25 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
     if (typeof attrs.name === "string" && attrs.name !== "" && !workerName.has(r.component)) workerName.set(r.component, attrs.name);
     if (attrs.platform === "cloudflare") workerPlatform.add(r.component);
   }
-  const listens = new Set(links.filter((l) => l.e.verb === "listens").map((l) => l.from));
+  // A site set that is the app's own: no sites (unknown), or one site outside a build or tool config file.
+  const appSite = (sites: Site[]): boolean => sites.length === 0 || sites.some((s) => !CONFIG_FILE.test(s.file));
+  const listens = new Set(links.filter((l) => l.e.verb === "listens" && appSite(l.e.sites)).map((l) => l.from));
+  // A component that listens, or has a server route that is not an exported or dispatched handler, is a server of its own.
+  // A listen or route in a config file does not count.
+  const ownsServer = (id: string, rs: SystemRoute[]): boolean =>
+    listens.has(id) || rs.some((r) => r.framework !== "export" && r.framework !== "dispatch" && appSite([r.site]));
+  // A browser program's own components: the ones that own a file its runtime runs (the roots are "file#fn"). A slice of a
+  // browser runtime in a component the browser only calls into (a backend, a library) does not make that component a frontend.
+  // A root in the component's static folder (public, static, www) is a page the component serves itself: it makes a frontend
+  // only for a component that owns no server. Any other root makes one.
+  const browserComponents = new Set<string>();
+  for (const s of sys.slices ?? []) {
+    if (!isBrowserRuntime(s.runtime)) continue;
+    const roots = (runtimeById.get(s.runtime)?.roots ?? []).map((root) => root.split("#")[0] ?? root).filter((file) => ownerOfPath(file) === s.component);
+    if (roots.length === 0) continue;
+    const served = roots.every((file) => inStaticFolder(file, comps.get(s.component)?.path ?? ""));
+    if (!served || !ownsServer(s.component, routesOf.get(s.component) ?? [])) browserComponents.add(s.component);
+  }
   // Env reads by owner: each name with the places it is read (its file and its function). A build or tool config file's reads
   // are not the app's own, so they are dropped.
   const envLocsOf = new Map<string, Map<string, EnvLoc[]>>();
@@ -302,9 +317,6 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
   const role = new Map<string, Role>();
   const platform = new Map<string, NonNullable<TierNode["platform"]>>();
   const signals = new Map<string, string[]>();
-  // A component that listens, or has a server route that is not an exported or dispatched handler, is a server of its own.
-  const ownsServer = (id: string, rs: SystemRoute[]): boolean =>
-    listens.has(id) || rs.some((r) => r.framework !== "export" && r.framework !== "dispatch");
   for (const c of sys.components) {
     if (!shown.has(c.id)) continue;
     const rs = routesOf.get(c.id) ?? [];
