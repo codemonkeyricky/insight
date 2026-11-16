@@ -325,6 +325,57 @@ function calleeOf(project: Project, call: SyntaxNode): FnDecl | undefined {
   return cands.length === 1 ? cands[0] : undefined;
 }
 
+/** Whether an identifier or qualified name is a use of a name, not a declaration, a name in a using, or a label. */
+function isUse(n: SyntaxNode): boolean {
+  const p = n.parent;
+  if (!p) return false;
+  // A declared name: the declarator field of any declaration, or a wrapped declarator without a field name.
+  if (isField(p, "declarator", n)) return false;
+  if (p.type.endsWith("declarator") && !isField(p, "value", n)) return false;
+  if (isField(p, "name", n)) return false;
+  return !["using_declaration", "alias_declaration", "namespace_alias_definition", "template_argument_list", "type_descriptor"].includes(p.type);
+}
+
+/**
+ * Whether a use at `n` names a local variable or a parameter, not a project variable (`data.variable`), a member, a
+ * namespace name or a called function. Walking outward, the first scope that declares the name before the use makes it
+ * local; a function-static is a project variable, so it does not. A class or namespace boundary stops the search.
+ */
+function isLocalUse(index: DataIndex, rel: string, n: SyntaxNode, name: string): boolean {
+  if (n.type !== "identifier") return false;
+  const callee = n.parent;
+  // A function that is called is not a value the condition reads; a member name is not a local.
+  if (callee?.type === "call_expression" && isField(callee, "function", n)) return false;
+  if (callee?.type === "field_expression" && isField(callee, "field", n)) return false;
+  if (!isUse(n)) return false;
+  for (let p: SyntaxNode | null = n.parent; p; p = p.parent) {
+    if (FUNCTION_TYPES.has(p.type) && index.byFn.get(`${rel}|${nodeKey(p)}`)?.get(name) !== undefined) return false;
+    if (declaresIn(p, name, n.startIndex)) return true;
+    if (p.type === "translation_unit" || p.type === "namespace_definition" || p.type === "class_specifier" || p.type === "struct_specifier") break;
+  }
+  return false;
+}
+
+/**
+ * The distinct local variable names an expression reads, in first-seen order. Locals are parameters and variables declared
+ * in scope; globals, data.variable targets, members and called function names are excluded.
+ */
+export function localReads(project: Project, rel: string, node: SyntaxNode | null | undefined): string[] {
+  if (!node) return [];
+  const index = indexOf(project);
+  const out = new Set<string>();
+  const visit = (n: SyntaxNode): void => {
+    if (n.type === "qualified_identifier") return;
+    if (n.type === "identifier") {
+      if (isLocalUse(index, rel, n, n.text)) out.add(n.text);
+      return;
+    }
+    for (const c of n.namedChildren) visit(c);
+  };
+  visit(node);
+  return [...out];
+}
+
 export function emitData(project: Project, rel: string, provenance: Provenance): DataOutput {
   const unit = project.units.get(rel);
   if (!unit) return { nodes: [], edges: [] };
@@ -395,17 +446,6 @@ export function emitData(project: Project, rel: string, provenance: Provenance):
       }
       return undefined;
     }
-  };
-
-  /** Whether an identifier or qualified name is a use of a name, not a declaration, a name in a using, or a label. */
-  const isUse = (n: SyntaxNode): boolean => {
-    const p = n.parent;
-    if (!p) return false;
-    // A declared name: the declarator field of any declaration, or a wrapped declarator without a field name.
-    if (isField(p, "declarator", n)) return false;
-    if (p.type.endsWith("declarator") && !isField(p, "value", n)) return false;
-    if (isField(p, "name", n)) return false;
-    return !["using_declaration", "alias_declaration", "namespace_alias_definition", "template_argument_list", "type_descriptor"].includes(p.type);
   };
 
   /** The variable a name refers to at this point, or undefined when it is not a project variable. */

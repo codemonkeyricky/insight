@@ -17,7 +17,7 @@ import {
   type FnDecl,
   type Project,
 } from "./project.js";
-import { emitData } from "./data.js";
+import { emitData, localReads } from "./data.js";
 import { analyze, atomOf, caseGroups, decompose, enumerator, holderRef, shadowNames, stateIndexOf, testId, writeOf, type Atom, type Holder, type RefCtx, type WriteInfo } from "./state.js";
 import {
   CONDVAR_OP,
@@ -278,6 +278,38 @@ function targetOf(targets: FnDecl[]): NodeId | { candidates: [NodeId, ...NodeId[
   return rest.length === 0 ? first : { candidates: [first, ...rest] };
 }
 
+const sameNode = (a: SyntaxNode | null | undefined, b: SyntaxNode): boolean => a !== null && a !== undefined && nodeKey(a) === nodeKey(b);
+
+/** The names a declarator declares: a plain identifier, or the identifiers of a structured binding. */
+function declaredNamesOf(declarator: SyntaxNode | null): string[] {
+  if (!declarator) return [];
+  if (declarator.type === "identifier") return [declarator.text];
+  if (declarator.type === "structured_binding_declarator") return declarator.namedChildren.filter((c) => c.type === "identifier").map((c) => c.text);
+  const inner = declarator.childForFieldName("declarator");
+  return inner ? declaredNamesOf(inner) : [];
+}
+
+/**
+ * The local a call's result is bound or assigned to: `cfg` for `auto cfg = f()` or `cfg = f()`, the names of a structured
+ * binding. `co_await` and parentheses are transparent. A call anywhere else binds no local.
+ */
+function callBinds(call: SyntaxNode): string | string[] | undefined {
+  let value = call;
+  let p: SyntaxNode | null = value.parent;
+  while (p !== null && (p.type === "parenthesized_expression" || p.type === "co_await_expression")) {
+    value = p;
+    p = p.parent;
+  }
+  let names: string[] = [];
+  if (p?.type === "init_declarator" && sameNode(p.childForFieldName("value"), value)) names = declaredNamesOf(p.childForFieldName("declarator"));
+  else if (p?.type === "assignment_expression" && sameNode(p.childForFieldName("right"), value)) {
+    const left = p.childForFieldName("left");
+    if (left?.type === "identifier") names = [left.text];
+  }
+  if (names.length === 0) return undefined;
+  return names.length === 1 ? names[0] : names;
+}
+
 /** True when a call is the operand of a co_await, possibly in parentheses. */
 function awaitedBy(call: SyntaxNode): boolean {
   let p: SyntaxNode | null = call.parent;
@@ -319,6 +351,12 @@ export function emitUnit(project: Project, rel: string): IRBatch {
       span: spanOf(rel, n),
       provenance: prov,
     });
+
+  /** The `reads` attribute for a condition or range: the locals it names, omitted when it names none. */
+  const readsAttr = (n: SyntaxNode | null | undefined): { reads?: string[] } => {
+    const reads = localReads(project, rel, n);
+    return reads.length > 0 ? { reads } : {};
+  };
 
   const markCoroutine = (n: SyntaxNode, fn: FnDecl | undefined) => {
     if (!fn || coroutines.has(fn.id)) return;
@@ -480,6 +518,8 @@ export function emitUnit(project: Project, rel: string): IRBatch {
     const callee = stripTemplates(normName(fnNode.text)).replace(/^::/, "");
     const args = argsOf(call);
     const cls = classAt(project, rel, call);
+    // The local the call's result goes into, if any: `cfg ← loadConfig()`.
+    const binds = callBinds(call);
 
     const spawnCall = SPAWN_CALLS.get(callee);
     if (spawnCall) {
@@ -522,7 +562,7 @@ export function emitUnit(project: Project, rel: string): IRBatch {
         const to = targetOf(resolved.targets);
         const span = spanOf(rel, fnNode);
         const provenance: Provenance = { frontend: FRONTEND_ID, confidence: resolved.confidence };
-        edge({ from: fn.id, to, facet: "calls", kind: "calls.call", attrs: { callee: callee.slice(0, 200) }, span, provenance });
+        edge({ from: fn.id, to, facet: "calls", kind: "calls.call", attrs: { callee: callee.slice(0, 200), ...(binds !== undefined ? { binds } : {}) }, span, provenance });
         // Calling a coroutine creates one. Awaited, the caller waits on it; otherwise the caller starts it and goes on.
         if (resolved.targets.every((t) => project.coroutines.has(t.id))) {
           edge({
@@ -935,11 +975,11 @@ export function emitUnit(project: Project, rel: string): IRBatch {
         break;
       }
       case "if_statement":
-        flow(n, "if", "flow.branch", container, { condition: (n.childForFieldName("condition")?.text ?? "").slice(0, 200) });
+        flow(n, "if", "flow.branch", container, { condition: (n.childForFieldName("condition")?.text ?? "").slice(0, 200), ...readsAttr(n.childForFieldName("condition")) });
         handleIf(n, container);
         break;
       case "conditional_expression":
-        flow(n, "cond", "flow.branch", container, { condition: (n.childForFieldName("condition")?.text ?? "").slice(0, 200) });
+        flow(n, "cond", "flow.branch", container, { condition: (n.childForFieldName("condition")?.text ?? "").slice(0, 200), ...readsAttr(n.childForFieldName("condition")) });
         break;
       case "switch_statement": {
         const body = n.childForFieldName("body");
@@ -949,16 +989,17 @@ export function emitUnit(project: Project, rel: string): IRBatch {
         break;
       }
       case "for_statement":
-        flow(n, "loop", "flow.loop", container, { variant: "for" });
+        flow(n, "loop", "flow.loop", container, { variant: "for", ...readsAttr(n.childForFieldName("condition")) });
         break;
       case "for_range_loop":
-        flow(n, "loop", "flow.loop", container, { variant: "for-of" });
+        // The range is what the loop reads; the loop variable is declared, not read.
+        flow(n, "loop", "flow.loop", container, { variant: "for-of", ...readsAttr(n.childForFieldName("right")) });
         break;
       case "while_statement":
-        flow(n, "loop", "flow.loop", container, { variant: "while" });
+        flow(n, "loop", "flow.loop", container, { variant: "while", ...readsAttr(n.childForFieldName("condition")) });
         break;
       case "do_statement":
-        flow(n, "loop", "flow.loop", container, { variant: "do" });
+        flow(n, "loop", "flow.loop", container, { variant: "do", ...readsAttr(n.childForFieldName("condition")) });
         break;
       case "try_statement":
         flow(n, "try", "flow.try", container, { hasFinally: false });
