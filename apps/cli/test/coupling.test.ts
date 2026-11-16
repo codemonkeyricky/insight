@@ -26,6 +26,10 @@ function writeProject(dir: string): void {
     join(dir, "apps/app/src/main.ts"),
     `import { local } from "../../../libs/util/src/u.js";\nexport function run(flag: boolean): number {\n  if (flag) {\n    return local();\n  }\n  return 0;\n}\n`,
   );
+  // A file whose top-level code makes a flow: its id is the file path, and it also has a named function. This is the
+  // selector shape that used to match the top-level flow id and miss the file's functions.
+  mkdirSync(join(dir, "native"), { recursive: true });
+  writeFileSync(join(dir, "native/top.cc"), `#include <fstream>\nint g() { return 1; }\nstd::ifstream in("/dev/null");\n`);
 }
 
 /** Runs the CLI in-process, capturing stdout and stderr. */
@@ -80,6 +84,8 @@ describe("insight coupling", () => {
       "apps/app/src/main.ts#run",
       "libs/util/src/u.ts#fetchIt",
       "libs/util/src/u.ts#local",
+      "native/top.cc",
+      "native/top.cc#g",
     ]);
     const run0 = report.functions[0]!;
     expect(run0.cross).toEqual([{ label: "local()", target: "libs/util/src/u.ts#local", file: "libs/util/src/u.ts", line: 4 }]);
@@ -97,6 +103,20 @@ describe("insight coupling", () => {
     const id = await run(["coupling", "libs/util/src/u.ts#local", "--path", PROJECT, "--json"]);
     expect(id.code).toBe(0);
     expect((JSON.parse(id.out) as CouplingReport).functions.map((f) => f.name)).toEqual(["local"]);
+
+    const name = await run(["coupling", "local", "--path", PROJECT, "--json"]);
+    expect(name.code).toBe(0);
+    expect((JSON.parse(name.out) as CouplingReport).functions.map((f) => f.id)).toEqual(["libs/util/src/u.ts#local"]);
+  });
+
+  it("returns the top-level flow and every function of a file whose top-level flow id is the path", async () => {
+    const result = await run(["coupling", "native/top.cc", "--path", PROJECT, "--json"]);
+    expect(result.code).toBe(0);
+    expect(result.err).toBe("");
+    const report = JSON.parse(result.out) as CouplingReport;
+    expect(report.functions.map((f) => f.id)).toEqual(["native/top.cc", "native/top.cc#g"]);
+    // Exactly the file scope's set, so the CLI and the HTTP route agree.
+    expect(report).toEqual(builderReport(PROJECT, { scope: "native/top.cc" }));
   });
 
   it("prints a text report grouped by class by default", async () => {
@@ -115,6 +135,19 @@ describe("insight coupling", () => {
     expect(result.code).toBe(1);
     expect(result.out).toBe("");
     expect(result.err).toMatch(/no such function, file or scope: apps\/nope/);
+  });
+
+  it("refuses an absolute selector or one with .. before reading a snapshot", async () => {
+    const bare = join(SCRATCH, "bare-syntax");
+    writeProject(bare);
+    const outside = await run(["coupling", "../outside", "--path", bare, "--json"]);
+    expect(outside.code).toBe(1);
+    expect(outside.out).toBe("");
+    expect(outside.err).toMatch(/scope must not leave the project/);
+    const absolute = await run(["coupling", "/apps", "--path", bare, "--json"]);
+    expect(absolute.code).toBe(1);
+    expect(absolute.out).toBe("");
+    expect(absolute.err).toMatch(/scope must be relative to the project/);
   });
 
   it("exits nonzero without a snapshot instead of indexing", async () => {

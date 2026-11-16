@@ -115,4 +115,19 @@ describe("GET /api/projects/:id/coupling", () => {
     expect(outside.statusCode).toBe(400);
     expect(outside.json().error).toMatch(/must not leave/);
   });
+
+  it("rejects an out-of-project or absolute scope even when fn= is present", async () => {
+    for (const scope of ["../outside", "/apps"]) {
+      const bare = await get(`?scope=${encodeURIComponent(scope)}`);
+      expect(bare.statusCode).toBe(400);
+      const withFn = await get(`?scope=${encodeURIComponent(scope)}&fn=${encodeURIComponent(RUN_ID)}`);
+      expect(withFn.statusCode).toBe(400);
+    }
+    const absolute = await get("?scope=%2Fapps");
+    expect(absolute.statusCode).toBe(400);
+    expect(absolute.json().error).toMatch(/must be relative to the project/);
+    const outside = await get("?scope=..%2Foutside");
+    expect(outside.statusCode).toBe(400);
+    expect(outside.json().error).toMatch(/must not leave the project/);
+  });
 });

@@ -106,4 +106,46 @@ describe("GET /api/coupling on the hosted Function", () => {
     );
     expect(post.status).toBe(405);
   });
+
+  it("rejects an out-of-project or absolute scope even when fn= is present", async () => {
+    for (const scope of ["../outside", "/apps"]) {
+      const bare = await handleCoupling(get(`repo=acme/widget&sha=${SHA}&scope=${encodeURIComponent(scope)}`), { storage });
+      expect(bare.status).toBe(400);
+      expect(((await bare.json()) as { error: { code: string } }).error.code).toBe("bad_request");
+      const withFn = await handleCoupling(
+        get(`repo=acme/widget&sha=${SHA}&scope=${encodeURIComponent(scope)}&fn=${encodeURIComponent("apps/app/src/main.ts#run")}`),
+        { storage },
+      );
+      expect(withFn.status).toBe(400);
+    }
+    const absolute = await handleCoupling(get(`repo=acme/widget&sha=${SHA}&scope=%2Fapps`), { storage });
+    expect(((await absolute.json()) as { error: { message: string } }).error.message).toMatch(/must be relative to the project/);
+    const outside = await handleCoupling(get(`repo=acme/widget&sha=${SHA}&scope=..%2Foutside`), { storage });
+    expect(((await outside.json()) as { error: { message: string } }).error.message).toMatch(/must not leave the project/);
+  });
+
+  it("serves a repeated repo+sha from its cached index without downloading the graph again", async () => {
+    const sha = "ab".repeat(20);
+    const key = `gh/acme/widget/${sha}/graph.json`;
+    await storage.put(key, JSON.stringify({ ...graph, snapshot: sha }), { contentType: "application/json", cacheControl: "no-store" });
+    let reads = 0;
+    const counted: Storage = {
+      kind: storage.kind,
+      put: (k, body, opts) => storage.put(k, body, opts),
+      get: (k) => storage.get(k),
+      async getJson<T>(k: string) {
+        reads += 1;
+        return storage.getJson<T>(k);
+      },
+    };
+    const first = await handleCoupling(get(`repo=acme/widget&sha=${sha}`), { storage: counted });
+    expect(first.status).toBe(200);
+    expect(reads).toBe(1);
+    const second = await handleCoupling(get(`repo=acme/widget&sha=${sha}&scope=apps%2Fapp%2Fsrc%2Fmain.ts`), { storage: counted });
+    expect(second.status).toBe(200);
+    expect(((await second.json()) as { functions: { id: string }[] }).functions.map((f) => f.id)).toEqual([
+      "apps/app/src/main.ts#run",
+    ]);
+    expect(reads).toBe(1);
+  });
 });

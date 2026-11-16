@@ -1,9 +1,17 @@
 // GET /api/coupling?repo=owner/repo&sha=<40 hex>[&scope=<file|folder>][&fn=<function id>][&visibility=private]:
 // the coupling footprint of an indexed project, in the same JSON the local server's /api/projects/:id/coupling answers
-// and the CLI's `insight coupling --json` prints. The index's graph.json holds the full IR (the export writes it), so the
-// index is built here per request and kept for a few commits. A private run needs a signed-in user who can read the repo,
-// like GET /api/status.
-import { couplingIndex, couplingReport, type CouplingReport } from "@insight/flow";
+// and the CLI's `insight coupling --json` prints. The index's graph.json holds the full IR (the export writes it). The
+// built index, and the file list a scope is checked against, are cached per repo+sha+visibility, so a repeat request
+// never downloads or parses the graph again. A private run needs a signed-in user who can read the repo, like
+// GET /api/status.
+import {
+  couplingIndex,
+  couplingReport,
+  normalizeScopeInput,
+  ScopeInputError,
+  type CouplingIndex,
+  type CouplingReport,
+} from "@insight/flow";
 import { errorResponse, json, withCookies } from "./http.js";
 import { parseRepoInput } from "./github.js";
 import { repoStoragePrefix, type Visibility } from "./private.js";
@@ -17,26 +25,40 @@ interface Graph {
   edges: Parameters<typeof couplingIndex>[1];
 }
 
-/** The coupling indexes kept per Function instance. Each one is a whole project, so the bound is small. */
-const CACHE_LIMIT = 4;
-const cache = new Map<string, ReturnType<typeof couplingIndex>>();
-
-function indexOf(key: string, graph: Graph): ReturnType<typeof couplingIndex> {
-  const hit = cache.get(key);
-  if (hit) return hit;
-  const index = couplingIndex(graph.nodes, graph.edges);
-  cache.set(key, index);
-  if (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value as string);
-  return index;
+/** What a cached commit keeps: its coupling index and the indexed files a scope is checked against. */
+interface CachedIndex {
+  index: CouplingIndex;
+  files: ReadonlySet<string>;
 }
 
-/** The scope path normalized as the server's scope routes do it: no empty or `.` segments; `""` is the project. */
-function normalizeScope(scope: string): string {
-  return scope
-    .replace(/\\/g, "/")
-    .split("/")
-    .filter((part) => part !== "" && part !== ".")
-    .join("/");
+/**
+ * The indexes kept per Function instance, keyed by the storage key (repo, sha and visibility). Each one is a whole
+ * project's footprints, so the bound is small: the last two commits served, evicted in insertion order. On the 2 GB
+ * Function that leaves ample headroom for a request's own graph parse when it misses.
+ */
+const CACHE_LIMIT = 2;
+const cache = new Map<string, CachedIndex>();
+
+/** The indexed files of a graph: what names a file or folder scope. */
+function filesOf(graph: Graph): Set<string> {
+  const files = new Set<string>();
+  for (const n of graph.nodes) if (n.kind === "structure.file") files.add(String(n.attrs.path ?? n.id));
+  return files;
+}
+
+function cachedIndex(key: string, graph: Graph): CachedIndex {
+  const hit = cache.get(key);
+  if (hit) return hit;
+  const built: CachedIndex = { index: couplingIndex(graph.nodes, graph.edges), files: filesOf(graph) };
+  cache.set(key, built);
+  if (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value as string);
+  return built;
+}
+
+/** True when an indexed file is the scope or lies under it. */
+function knownScope(files: ReadonlySet<string>, scope: string): boolean {
+  for (const file of files) if (file === scope || file.startsWith(`${scope}/`)) return true;
+  return false;
 }
 
 export interface CouplingDeps {
@@ -65,11 +87,14 @@ export async function handleCoupling(request: Request, deps: CouplingDeps): Prom
   }
   const visibility: Visibility = visibilityParam === "private" ? "private" : "public";
   const fn = url.searchParams.get("fn") ?? undefined;
-  const rawScope = url.searchParams.get("scope") ?? "";
-  if (rawScope.replace(/\\/g, "/").split("/").includes("..")) {
-    return errorResponse(400, "bad_request", "scope must not leave the project");
+  // Normalize the scope before anything else, even when fn= is given: the local server rejects the same paths.
+  let scope: string;
+  try {
+    scope = normalizeScopeInput(url.searchParams.get("scope") ?? "");
+  } catch (err) {
+    if (err instanceof ScopeInputError) return errorResponse(400, "bad_request", err.message);
+    throw err;
   }
-  const scope = normalizeScope(rawScope);
   const key = `${repoStoragePrefix(parsed.owner, parsed.repo, sha, visibility)}graph.json`;
 
   let setCookie: string | undefined;
@@ -80,28 +105,26 @@ export async function handleCoupling(request: Request, deps: CouplingDeps): Prom
     setCookie = session.setCookie;
   }
 
-  const graph = await deps.storage.getJson<Graph>(key);
-  if (graph === undefined) {
-    const answer = errorResponse(404, "not_found", "no index for this commit");
-    return setCookie === undefined ? answer : withCookies(answer, setCookie);
+  let cached = cache.get(key);
+  if (cached === undefined) {
+    const graph = await deps.storage.getJson<Graph>(key);
+    if (graph === undefined) {
+      const answer = errorResponse(404, "not_found", "no index for this commit");
+      return setCookie === undefined ? answer : withCookies(answer, setCookie);
+    }
+    cached = cachedIndex(key, graph);
   }
 
-  const index = indexOf(key, graph);
   let report: CouplingReport;
   if (fn !== undefined) {
-    if (!index.functions.has(fn)) return answerWithCookies(errorResponse(404, "not_found", `no function ${fn}`), setCookie);
-    report = couplingReport(index, { ids: [fn] });
+    if (!cached.index.functions.has(fn)) return answerWithCookies(errorResponse(404, "not_found", `no function ${fn}`), setCookie);
+    report = couplingReport(cached.index, { ids: [fn] });
   } else if (scope !== "") {
     // A file or folder is a scope only when an indexed file names it or lies under it, as the local server decides it.
-    const known = graph.nodes.some((n) => {
-      if (n.kind !== "structure.file") return false;
-      const path = String(n.attrs.path ?? n.id);
-      return path === scope || path.startsWith(`${scope}/`);
-    });
-    if (!known) return answerWithCookies(errorResponse(404, "not_found", "no such scope"), setCookie);
-    report = couplingReport(index, { scope });
+    if (!knownScope(cached.files, scope)) return answerWithCookies(errorResponse(404, "not_found", "no such scope"), setCookie);
+    report = couplingReport(cached.index, { scope });
   } else {
-    report = couplingReport(index);
+    report = couplingReport(cached.index);
   }
   const answer = json(200, report);
   return setCookie === undefined ? answer : withCookies(answer, setCookie);
