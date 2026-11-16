@@ -284,6 +284,14 @@ a.flow-node { cursor: pointer; }
 /* A control row kept because its condition reads a local carrying an external value (`ctl`). */
 .flow-node.cp-ctl .flow-text { font-weight: 600; }
 .flow-node.cp-ctl .st { stroke: var(--accent-text); stroke-dasharray: 3 2.5; }
+/* A state write of a variable another thread also writes with no lock held in common: `⚠ unguarded shared state`. */
+.flow-node.cp-unguarded .flow-text { fill: var(--warn-text); font-weight: 700; }
+.flow-node.cp-unguarded .st { stroke: var(--warn-text); }
+.flow-warn { fill: var(--warn-text); font-weight: 700; }
+/* The same badge on a thread's frame or card. */
+.zm-warn { fill: var(--warn-text); font-weight: 700; }
+.zm-frame.zm-unguarded .zm-frame-head { stroke: var(--warn-text); stroke-width: 1.5; }
+.zm-box.zm-unguarded .zm-box-body { stroke: var(--warn-text); stroke-width: 1.5; }
 .flow-fold .flow-text { fill: var(--muted); font-size: 11px; font-style: italic; }
 .flow-fold .flow-chev { fill: var(--muted); }
 .flow-fold .st { stroke: var(--muted); stroke-dasharray: 3 2.5; }
