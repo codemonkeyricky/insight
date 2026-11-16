@@ -299,8 +299,13 @@ function flat(items: readonly Item[]): string[] {
   return items.flatMap((i): string[] => {
     // An open fold's header is not a row of the original chart.
     if (i.t === "step" && i.open === true) return [];
-    // The hoisted suffix (` ⇢ fs.write`) is the coupling view's, not the original row's: compare the label before it.
-    if (i.t === "step") return [`step:${i.role}:${i.label.split(" ⇢ ")[0]}:${JSON.stringify(i.span ?? null)}`];
+    // The hoisted suffix (` ⇢ fs.write`) and the binds prefix (`cfg ← `) are the coupling view's, not the original row's:
+    // compare the label before and after them.
+    if (i.t === "step") {
+      const label = i.label.split(" ⇢ ")[0] ?? i.label;
+      const plain = label.includes(" ← ") ? label.slice(label.indexOf(" ← ") + 3) : label;
+      return [`step:${i.role}:${plain}:${JSON.stringify(i.span ?? null)}`];
+    }
     if (i.t === "term") return [`term:${i.role}:${JSON.stringify(i.span ?? null)}`];
     if (i.t === "fork") return [`fork:${i.role}:${JSON.stringify(i.span ?? null)}`, ...i.arms.flatMap((a) => [`arm:${a.label}`, ...flat(a.body)])];
     return [`loop:${JSON.stringify(i.span ?? null)}`, ...flat(i.body)];
@@ -316,6 +321,111 @@ describe("coupling pass with no package metadata", () => {
     const rows = kept(items);
     expect(rows[0]).toMatchObject({ t: "step", role: "call", coupling: "cross" });
     expect(info.footprint.modules).toEqual(["lib"]);
+  });
+});
+
+// Phase 4a: a local that carries an external value keeps the control flow that depends on it. Real TypeScript frontend
+// output, so the `binds` and `reads` attributes come from the extractor, not from hand-built items.
+describe("locals that carry external values (phase 4)", () => {
+  const CROSS_FILES: Record<string, string> = {
+    "package.json": JSON.stringify({ name: "root", private: true }),
+    "pkgs/a/package.json": JSON.stringify({ name: "a" }),
+    "pkgs/b/package.json": JSON.stringify({ name: "b" }),
+    "pkgs/b/src/config.ts": `export function loadConfig(): { debug: boolean } {
+  return { debug: true };
+}
+`,
+    "pkgs/a/src/use.ts": `import { loadConfig } from "../../b/src/config.js";
+function localLog(): void {}
+export function run(): void {
+  const cfg = loadConfig();
+  if (cfg.debug) {
+    localLog();
+  }
+}
+`,
+  };
+
+  const LOCAL_FILES: Record<string, string> = {
+    "package.json": JSON.stringify({ name: "root", private: true }),
+    "pkgs/a/package.json": JSON.stringify({ name: "a" }),
+    "pkgs/a/src/use.ts": `function loadConfig(): { debug: boolean } {
+  return { debug: true };
+}
+function localLog(): void {}
+export function run(): void {
+  const cfg = loadConfig();
+  if (cfg.debug) {
+    localLog();
+  }
+}
+`,
+  };
+
+  const ASSIGN_FILES: Record<string, string> = {
+    "package.json": JSON.stringify({ name: "root", private: true }),
+    "pkgs/a/package.json": JSON.stringify({ name: "a" }),
+    "pkgs/b/package.json": JSON.stringify({ name: "b" }),
+    "pkgs/b/src/config.ts": `export function loadConfig(): { debug: boolean; x: boolean } {
+  return { debug: true, x: true };
+}
+`,
+    "pkgs/a/src/use.ts": `import { loadConfig } from "../../b/src/config.js";
+function localLog(): void {}
+export function run(): void {
+  const cfg = loadConfig();
+  const c2 = cfg;
+  if (c2.x) {
+    localLog();
+  }
+}
+`,
+  };
+
+  let cross: Awaited<ReturnType<typeof couplingOf>>;
+  let local: Awaited<ReturnType<typeof couplingOf>>;
+  let assign: Awaited<ReturnType<typeof couplingOf>>;
+  beforeAll(async () => {
+    cross = await couplingOf(CROSS_FILES);
+    local = await couplingOf(LOCAL_FILES);
+    assign = await couplingOf(ASSIGN_FILES);
+  });
+
+  it("keeps a branch on a local a cross call binds, shows ⇠ cfg, and labels the call cfg ← loadConfig()", () => {
+    const id = fid("pkgs/a/src/use.ts", "run");
+    const f = cross.facts.get(id);
+    if (!f) throw new Error(`no function ${id}`);
+    const { items } = couplingChart(id, f.items, cross.modules, cross.footprints);
+    const call = items.find((i): i is Step => i.t === "step" && i.role === "call");
+    if (!call) throw new Error("expected the cross call row");
+    expect(call).toMatchObject({ coupling: "cross" });
+    expect(call.label).toBe("cfg ← loadConfig()");
+    const fork = items.find((i) => i.t === "fork");
+    if (fork?.t !== "fork") throw new Error("expected the tainted branch to stay");
+    expect(fork).toMatchObject({ role: "branch", coupling: "ctl" });
+    expect(fork.label).toBe("cfg.debug ⇠ cfg");
+    // The branch body is all local, so it still folds into one ⋯ n local row.
+    const trueArm = fork.arms.find((a) => a.kind === "true");
+    expect(trueArm?.body.every((i) => i.t === "step" && i.foldId !== undefined)).toBe(true);
+  });
+
+  it("drops the branch when the same-module callee has no coupling, so the local is not tainted", () => {
+    const id = fid("pkgs/a/src/use.ts", "run");
+    const f = local.facts.get(id);
+    if (!f) throw new Error(`no function ${id}`);
+    const { items } = couplingChart(id, f.items, local.modules, local.footprints);
+    expect(items.some((i) => i.t === "fork")).toBe(false);
+    expect(isFoldOnly(items)).toBe(true);
+  });
+
+  it("does not follow a plain local assignment (direct binds only), so that branch folds", () => {
+    const id = fid("pkgs/a/src/use.ts", "run");
+    const f = assign.facts.get(id);
+    if (!f) throw new Error(`no function ${id}`);
+    const { items } = couplingChart(id, f.items, assign.modules, assign.footprints);
+    // The cross call is still kept and bound; `const c2 = cfg` emits no call bind, so c2 is not tainted.
+    expect(items.find((i): i is Step => i.t === "step" && i.role === "call")?.label).toBe("cfg ← loadConfig()");
+    expect(items.some((i) => i.t === "fork")).toBe(false);
   });
 });
 
