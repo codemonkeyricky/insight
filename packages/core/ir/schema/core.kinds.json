@@ -398,6 +398,33 @@
     }
   },
   {
+    "kind": "data.variable",
+    "facet": "data",
+    "on": "node",
+    "description": "A module-level variable, a global written through globalThis, window or self, or a class static field. Parent is the file, or the class for a static.",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/data.json#/$defs/DataVariable"
+    }
+  },
+  {
+    "kind": "data.read",
+    "facet": "data",
+    "on": "edge",
+    "description": "A function (or the file, for module-level code) reads a data.variable.",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/data.json#/$defs/DataAccess"
+    }
+  },
+  {
+    "kind": "data.write",
+    "facet": "data",
+    "on": "edge",
+    "description": "A function (or the file, for module-level code) writes a data.variable. attrs.how is assign, update, mutate or address.",
+    "attrs": {
+      "$ref": "https://insight.dev/ir/facets/data.json#/$defs/DataAccess"
+    }
+  },
+  {
     "kind": "effects.fs.read",
     "facet": "effects",
     "on": "node",

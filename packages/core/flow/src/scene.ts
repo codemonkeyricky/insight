@@ -51,25 +51,61 @@ export interface SceneNode {
   external?: boolean;
   /** The tooltip of a frame's header or a box, when it is not the note: a program's entry file path. */
   title?: string;
+  /**
+   * A thread whose code writes shared state another thread also writes with no lock held in common at every write
+   * (`⚠ unguarded shared state`): the variable names. The map draws the badge on the thread's box.
+   */
+  unguarded?: string[];
 }
 
 /**
- * How an edge relates its two ends. `sync` joins two threads through a lock or channel they both use: `how` is `lock`
- * or `channel`.
+ * How an edge relates its two ends. `sync` joins two threads through the locks, channels, condition variables,
+ * semaphores or atomics they both use: `resources` names them and `how` is the first one's kind.
  */
 export type SceneEdgeKind = "call" | "spawn" | "dispatch" | "sync";
+
+/** A resource a sync edge names: its identity in the IR and its kind. */
+export interface SceneSyncResource {
+  name: string;
+  kind: "lock" | "channel" | "condvar" | "semaphore" | "atomic";
+}
 
 /** An edge between two scene nodes, at any depth. The engine draws it between the boxes that stand for its ends. */
 export interface SceneEdge {
   from: string;
   to: string;
   kind: SceneEdgeKind;
-  /** Calls or sites the edge stands for. */
+  /** Calls or sites the edge stands for. For a sync edge, one per resource pair it merges. */
   count: number;
-  /** For a spawn or dispatch: the `how` of the IR edge (thread, process, async, await, start, callback, ...). */
+  /**
+   * For a spawn or dispatch: the `how` of the IR edge (thread, process, async, await, start, callback, ...). For a sync
+   * edge: the kind of its first resource.
+   */
   how?: string;
   /** Set when the edge is one of several possible targets of one site. */
   candidate?: boolean;
+  /** For a sync edge: every resource the two ends share, deduped by name and kind, in the order they were added. */
+  resources?: SceneSyncResource[];
+  /** For a sync edge: true when it runs from sender to receiver (a channel); false for two peers (a lock or the like). */
+  directed?: boolean;
+}
+
+/**
+ * The map key of a sync edge: a directed edge keeps its direction; an undirected one keys its two ends in code-unit
+ * order, so the same pair of boxes made either way is one edge.
+ */
+export function syncEdgeKey(from: string, to: string, directed: boolean): string {
+  if (directed) return `${from}\u0000${to}\u0000directed`;
+  const [a, b] = from < to ? [from, to] : [to, from];
+  return `${a}\u0000${b}\u0000undirected`;
+}
+
+/** Adds each resource of `more` to `into` that it does not hold yet, by name and kind. Returns `into`. */
+export function addSyncResources(into: SceneSyncResource[], more: readonly SceneSyncResource[]): SceneSyncResource[] {
+  for (const r of more) {
+    if (!into.some((x) => x.name === r.name && x.kind === r.kind)) into.push({ name: r.name, kind: r.kind });
+  }
+  return into;
 }
 
 export interface Scene {

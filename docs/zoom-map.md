@@ -70,10 +70,13 @@ The Flow tab draws the execution canvas of the scope: program, threads, coroutin
 - A focus carries its scope: `execFocus(scope, nodeId)` in `apps/web/src/zoom/execMap.ts`. A node id is unique only
   within one scope's scene. `MapSource.focusOf` turns a clicked node id into a focus.
 - Callers: a `◂ callers` button (`zm-callers-btn`, `components/zoom/CallersControl.tsx`) sits in a chart box's header
-  (left of its ×), in a nested frame's header (left of its ▾), and on a roots-only function card (top-right, when the
-  card has no chart open). It opens a callers box to the right of its source: a box listing one row per caller
+  (left of its ×), in a nested frame's header (left of its ▾), and at the top-left of a roots-only function card (when
+  the card has no chart open). The callers box opens LEFT of a roots-only function card, and LEFT from the header of an
+  in-place chart that replaced such a card; on any other chart (one opened from a call step) it opens RIGHT of the
+  chart. The box lists one row per caller
   (`mergeCallers` in `zoom/callers.ts` merges a call and a dispatch of one caller into one row, with its kind as a
-  badge). Each row's ▸ opens that caller's chart to the right of the row, with a beam, and that chart has its own
+  badge). Each row's ◂ opens that caller's chart to the left of the row when the box opens left, and to the right of
+  the row when it opens right (a box on a chart opened from a call step), with a beam, and that chart has its own
   Callers button, so the chain walks up. The box is keyed `callers:<fnRef>` (`kind: "callers"` in `zoom/expand.ts`),
   placed, reflowed and closed like a chart expansion; closing a box closes what hangs from it. The rows are fetched
   with `api.getRefs` when the box opens, and the box grows to hold up to 12 rows plus a "+N more" row. A chart has
@@ -97,6 +100,48 @@ the URL and the Explorer.
 
 The work came in three milestones. M1 was the spike that checked the stack. M2 was the scene model. M3 is the
 renderer described below.
+
+## Agent queries
+
+An agent that does not read the chart asks for the same footprint as JSON. `couplingReport` in
+`packages/core/flow/src/coupling-report.ts` builds one report; the CLI, the local server and the hosted Function all
+return it unchanged, so their bytes match.
+
+- CLI: `insight coupling <fn|file|scope> [--path <dir>] [--state <dir>] [--json]`. The selector is a function id or
+  name, a file path, or a folder prefix; `.` is the whole project. A selector that names an indexed file is a file
+  scope, even when the file's top-level flow id is the file path, so the report holds the top-level flow and every
+  function in the file (the same set `?scope=<path>` returns). `--path` is the project folder (default the current
+  directory) and `--state` reads the state folder (default `<path>/.insight`). It reads an existing snapshot and never
+  indexes: without one it prints `no snapshot …; index the project first: insight index <path>` and exits 1. An
+  absolute selector or one with a `..` segment is refused before the snapshot is read. `--json` prints exactly the
+  route's body; the default is a text report grouped by class.
+- HTTP: `GET /api/projects/:id/coupling?scope=<file|folder>[&snapshot=<id>]`, or `&fn=<function id>` for one function
+  (`fn` takes precedence over a valid `scope`). `scope` is normalized and checked as the other scope routes check
+  `path`: a path that leaves the project is a 400, one that names no indexed file is a 404, and a project with no
+  snapshot is a 404. Hosted: `GET /api/coupling?repo=<owner/repo>&sha=<40 hex>[&scope=…][&fn=…]`, with
+  `&visibility=private` for a private index, answered by `apps/hosted/src/coupling.ts` through the same Function as
+  `/api/status`.
+
+  The CLI and both HTTP routes share one normalizer, `normalizeScopeInput` in
+  `packages/core/flow/src/scope-input.ts`: a leading `/` is refused rather than stripped, and a `..` segment is refused,
+  even when `fn=` is present. So `?scope=/apps` and `?scope=../outside` are both 400 locally and hosted. A report is
+  capped at 200 functions and 100 entries per class bucket; when the cap cuts anything the JSON carries
+  `"truncated": true`, so a short report is never mistaken for a complete one.
+
+```json
+{ "functions": [ {
+  "id": "apps/app/src/main.ts#run", "name": "run", "file": "apps/app/src/main.ts", "module": "apps/app",
+  "summary": "⇄ 1 module",
+  "cross":  [ { "label": "local()", "target": "libs/util/src/u.ts#local", "file": "libs/util/src/u.ts", "line": 4 } ],
+  "io": [], "state": [], "conc": [], "escape": []
+} ] }
+```
+
+Every function of the scope is listed, including ones with `"summary": "no coupling"`. `cross` rows name the callee and
+`state` rows the variable; those two carry the target's declaration `file` and 1-based `line` when the IR has a span.
+`io`, `conc` and `escape` rows carry only a `label`, because the footprint records no site for them. `◆ ` in a label
+marks module-private state. Functions are sorted by id and each class by target, label, file and line, so the output is
+stable across runs and record order. There is no IR change: the report is built from `CouplingFootprint` rows.
 
 ## Milestones
 

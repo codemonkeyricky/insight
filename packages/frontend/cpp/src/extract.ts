@@ -17,6 +17,7 @@ import {
   type FnDecl,
   type Project,
 } from "./project.js";
+import { emitData, localReads } from "./data.js";
 import { analyze, atomOf, caseGroups, decompose, enumerator, holderRef, shadowNames, stateIndexOf, testId, writeOf, type Atom, type Holder, type RefCtx, type WriteInfo } from "./state.js";
 import {
   CONDVAR_OP,
@@ -277,6 +278,43 @@ function targetOf(targets: FnDecl[]): NodeId | { candidates: [NodeId, ...NodeId[
   return rest.length === 0 ? first : { candidates: [first, ...rest] };
 }
 
+const sameNode = (a: SyntaxNode | null | undefined, b: SyntaxNode): boolean => a !== null && a !== undefined && nodeKey(a) === nodeKey(b);
+
+/** The names a declarator declares: a plain identifier, or the identifiers of a structured binding. */
+function declaredNamesOf(declarator: SyntaxNode | null): string[] {
+  if (!declarator) return [];
+  if (declarator.type === "identifier") return [declarator.text];
+  if (declarator.type === "structured_binding_declarator") return declarator.namedChildren.filter((c) => c.type === "identifier").map((c) => c.text);
+  // `auto& cfg`, `const auto& cfg` and `auto&& cfg` wrap the name in a reference_declarator; pointer and parenthesized
+  // declarators wrap it too, and an init_declarator holds its declared name in `declarator`. Reference and parenthesized
+  // wrappers have no named field in tree-sitter-cpp, so the inner declarator is the named child. Unwrap them all.
+  const inner =
+    declarator.childForFieldName("declarator") ??
+    declarator.namedChildren.find((c) => c.type === "identifier" || c.type === "structured_binding_declarator" || c.type.endsWith("_declarator"));
+  return inner ? declaredNamesOf(inner) : [];
+}
+
+/**
+ * The local a call's result is bound or assigned to: `cfg` for `auto cfg = f()` or `cfg = f()`, the names of a structured
+ * binding. `co_await` and parentheses are transparent. A call anywhere else binds no local.
+ */
+function callBinds(call: SyntaxNode): string | string[] | undefined {
+  let value = call;
+  let p: SyntaxNode | null = value.parent;
+  while (p !== null && (p.type === "parenthesized_expression" || p.type === "co_await_expression")) {
+    value = p;
+    p = p.parent;
+  }
+  let names: string[] = [];
+  if (p?.type === "init_declarator" && sameNode(p.childForFieldName("value"), value)) names = declaredNamesOf(p.childForFieldName("declarator"));
+  else if (p?.type === "assignment_expression" && sameNode(p.childForFieldName("right"), value)) {
+    const left = p.childForFieldName("left");
+    if (left?.type === "identifier") names = [left.text];
+  }
+  if (names.length === 0) return undefined;
+  return names.length === 1 ? names[0] : names;
+}
+
 /** True when a call is the operand of a co_await, possibly in parentheses. */
 function awaitedBy(call: SyntaxNode): boolean {
   let p: SyntaxNode | null = call.parent;
@@ -299,6 +337,8 @@ export function emitUnit(project: Project, rel: string): IRBatch {
   const exitTests = new Set<string>();
   const emittedTests = new Set<string>();
   const armIds = new Map<string, string>();
+  // A scoped lock guard variable (`std::unique_lock lk(m)`) to the lock it holds, per function: `lk.unlock()` gives up m.
+  const guardMutex = new Map<string, string>();
   const shadowCache = new Map<string, Set<string>>();
   const records: IRRecord[] = [];
   const deps = new Set<string>(project.macroDeps.get(rel) ?? []);
@@ -316,6 +356,12 @@ export function emitUnit(project: Project, rel: string): IRBatch {
       span: spanOf(rel, n),
       provenance: prov,
     });
+
+  /** The `reads` attribute for a condition or range: the locals it names, omitted when it names none. */
+  const readsAttr = (n: SyntaxNode | null | undefined): { reads?: string[] } => {
+    const reads = localReads(project, rel, n);
+    return reads.length > 0 ? { reads } : {};
+  };
 
   const markCoroutine = (n: SyntaxNode, fn: FnDecl | undefined) => {
     if (!fn || coroutines.has(fn.id)) return;
@@ -430,7 +476,10 @@ export function emitUnit(project: Project, rel: string): IRBatch {
       emitNode(call, container, "sync", "sync.condvar", "cv", attrs, prov);
       return;
     }
-    if (isAtomicMethod(v.type, method)) emitNode(call, container, "sync", "sync.atomic-op", "atomic", { op: "op", api }, prov);
+    if (isAtomicMethod(v.type, method)) {
+      // Named by the resolved variable, as condvars and semaphores are: Class::member, a qualified global, or <dynamic> for a local.
+      emitNode(call, container, "sync", "sync.atomic-op", "atomic", { op: "op", api, lock: v.channel }, prov);
+    }
   };
 
   /** The POSIX semaphore and condition variable calls. A name that is not a plain name is <dynamic>. */
@@ -474,6 +523,8 @@ export function emitUnit(project: Project, rel: string): IRBatch {
     const callee = stripTemplates(normName(fnNode.text)).replace(/^::/, "");
     const args = argsOf(call);
     const cls = classAt(project, rel, call);
+    // The local the call's result goes into, if any: `cfg ← loadConfig()`.
+    const binds = callBinds(call);
 
     const spawnCall = SPAWN_CALLS.get(callee);
     if (spawnCall) {
@@ -487,14 +538,16 @@ export function emitUnit(project: Project, rel: string): IRBatch {
       if (args.length === 0) {
         const method = fnNode.childForFieldName("field")?.text;
         const recv = fnNode.childForFieldName("argument")?.text;
-        if (recv !== undefined && (method === "lock" || method === "unlock")) {
-          const lock = lockIdentity(recv, cls, project.members);
+        if (recv !== undefined && (method === "lock" || method === "try_lock" || method === "unlock")) {
+          // A guard variable (`lk` in `std::unique_lock lk(m)`) names the mutex it holds, not itself.
+          const lock = guardMutex.get(`${fn?.id ?? ""}|${recv}`) ?? lockIdentity(recv, cls, project.members);
+          const acquire = method !== "unlock";
           node({
             id: ids.take(`${rel}@${method}:${call.startPosition.row}:${call.startPosition.column}`),
             facet: "sync",
-            kind: method === "lock" ? "sync.lock-acquire" : "sync.lock-release",
+            kind: acquire ? "sync.lock-acquire" : "sync.lock-release",
             parent: container,
-            attrs: method === "lock" ? { lock, mode: "exclusive", api: "lock" } : { lock, api: "unlock" },
+            attrs: acquire ? { lock, mode: "exclusive", api: "lock" } : { lock, api: "unlock" },
             span: spanOf(rel, call),
             provenance: syncProv,
           });
@@ -514,7 +567,7 @@ export function emitUnit(project: Project, rel: string): IRBatch {
         const to = targetOf(resolved.targets);
         const span = spanOf(rel, fnNode);
         const provenance: Provenance = { frontend: FRONTEND_ID, confidence: resolved.confidence };
-        edge({ from: fn.id, to, facet: "calls", kind: "calls.call", attrs: { callee: callee.slice(0, 200) }, span, provenance });
+        edge({ from: fn.id, to, facet: "calls", kind: "calls.call", attrs: { callee: callee.slice(0, 200), ...(binds !== undefined ? { binds } : {}) }, span, provenance });
         // Calling a coroutine creates one. Awaited, the caller waits on it; otherwise the caller starts it and goes on.
         if (resolved.targets.every((t) => project.coroutines.has(t.id))) {
           edge({
@@ -538,7 +591,7 @@ export function emitUnit(project: Project, rel: string): IRBatch {
     const v = resolveVar(project, ref.name, n, classAt(project, rel, n), ref.viaThis);
     if (v?.type !== "std::atomic") return;
     const op = n.childForFieldName("operator")?.text === "--" ? "operator--" : "operator++";
-    emitNode(n, container, "sync", "sync.atomic-op", "atomic", { op: "op", api: `std::atomic::${op}` }, prov);
+    emitNode(n, container, "sync", "sync.atomic-op", "atomic", { op: "op", api: `std::atomic::${op}`, lock: v.channel }, prov);
   };
 
   const handleDeclaration = (decl: SyntaxNode, container: NodeId, fn: FnDecl | undefined) => {
@@ -584,13 +637,27 @@ export function emitUnit(project: Project, rel: string): IRBatch {
     // An out-of-line definition (void Store::put) has no class in its scope; its name carries it.
     const cls = scopeOf(decl).cls ?? fn?.cls;
     const locks = declArgs(decl).filter((p) => !NO_LOCK_ARGS.has(norm(p.text)));
+    const guardName = declarator.childForFieldName("declarator")?.text;
+    const firstLock = locks[0];
+    if (guardName !== undefined && firstLock !== undefined) guardMutex.set(`${fn?.id ?? ""}|${guardName}`, lockIdentity(firstLock.text, cls, project.members));
+    // A guard built with defer_lock or try_to_lock takes its lock later, with lk.lock() or lk.try_lock(); one built with
+    // adopt_lock takes a lock already held. None of them acquires at construction, but each still releases at scope end.
+    const acquiresAtDecl = !declArgs(decl).some((p) => NO_LOCK_ARGS.has(norm(p.text)));
+    // The last explicit lock or unlock call on the guard in its block: an unlock with nothing after it leaves no release.
+    const lastGuardOp = (text: string, guard: string): string | undefined => {
+      let last: string | undefined;
+      if (!/^\w+$/.test(guard)) return undefined;
+      for (const m of text.matchAll(new RegExp(`\\b${guard}\\s*\\.\\s*(lock|try_lock|unlock)\\s*\\(`, "g"))) last = m[1];
+      return last;
+    };
+    const explicitlyUnlocked = guardName !== undefined && lastGuardOp(block?.text ?? "", guardName) === "unlock";
     locks.forEach((arg, i) => {
       const lock = lockIdentity(arg.text, cls, project.members);
       // A shared_mutex taken by any guard is a read-write lock: shared for shared_lock, exclusive otherwise. It is
       // emitted as sync.rwlock-acquire alone, which extends sync.lock-acquire, so each guard is one acquire node.
       const ref = refOf(arg);
       const mutexType = ref ? resolveVar(project, ref.name, decl, cls, ref.viaThis)?.type : undefined;
-      if (mutexType === "std::shared_mutex") {
+      if (acquiresAtDecl && mutexType === "std::shared_mutex") {
         node({
           id: ids.take(`${rel}@rwlock:${decl.startPosition.row}:${decl.startPosition.column}:${i}`),
           facet: "sync",
@@ -600,7 +667,7 @@ export function emitUnit(project: Project, rel: string): IRBatch {
           span: spanOf(rel, decl),
           provenance: syncProv,
         });
-      } else {
+      } else if (acquiresAtDecl) {
         node({
           id: ids.take(`${rel}@guard:${decl.startPosition.row}:${decl.startPosition.column}:${i}`),
           facet: "sync",
@@ -611,7 +678,7 @@ export function emitUnit(project: Project, rel: string): IRBatch {
           provenance: syncProv,
         });
       }
-      if (block) {
+      if (block && !explicitlyUnlocked) {
         node({
           id: ids.take(`${rel}@release:${block.endPosition.row}:${block.endPosition.column}:${i}`),
           facet: "sync",
@@ -913,11 +980,11 @@ export function emitUnit(project: Project, rel: string): IRBatch {
         break;
       }
       case "if_statement":
-        flow(n, "if", "flow.branch", container, { condition: (n.childForFieldName("condition")?.text ?? "").slice(0, 200) });
+        flow(n, "if", "flow.branch", container, { condition: (n.childForFieldName("condition")?.text ?? "").slice(0, 200), ...readsAttr(n.childForFieldName("condition")) });
         handleIf(n, container);
         break;
       case "conditional_expression":
-        flow(n, "cond", "flow.branch", container, { condition: (n.childForFieldName("condition")?.text ?? "").slice(0, 200) });
+        flow(n, "cond", "flow.branch", container, { condition: (n.childForFieldName("condition")?.text ?? "").slice(0, 200), ...readsAttr(n.childForFieldName("condition")) });
         break;
       case "switch_statement": {
         const body = n.childForFieldName("body");
@@ -927,16 +994,17 @@ export function emitUnit(project: Project, rel: string): IRBatch {
         break;
       }
       case "for_statement":
-        flow(n, "loop", "flow.loop", container, { variant: "for" });
+        flow(n, "loop", "flow.loop", container, { variant: "for", ...readsAttr(n.childForFieldName("condition")) });
         break;
       case "for_range_loop":
-        flow(n, "loop", "flow.loop", container, { variant: "for-of" });
+        // The range is what the loop reads; the loop variable is declared, not read.
+        flow(n, "loop", "flow.loop", container, { variant: "for-of", ...readsAttr(n.childForFieldName("right")) });
         break;
       case "while_statement":
-        flow(n, "loop", "flow.loop", container, { variant: "while" });
+        flow(n, "loop", "flow.loop", container, { variant: "while", ...readsAttr(n.childForFieldName("condition")) });
         break;
       case "do_statement":
-        flow(n, "loop", "flow.loop", container, { variant: "do" });
+        flow(n, "loop", "flow.loop", container, { variant: "do", ...readsAttr(n.childForFieldName("condition")) });
         break;
       case "try_statement":
         flow(n, "try", "flow.try", container, { hasFinally: false });
@@ -968,6 +1036,18 @@ export function emitUnit(project: Project, rel: string): IRBatch {
   };
 
   visit(unit.root, rel, undefined);
+
+  // Variables and their reads and writes need the whole project's declaration index, built before any file is emitted.
+  const data = emitData(project, rel, prov);
+  for (const n of data.nodes) node(n);
+  for (const e of data.edges) edge(e);
+  // The file that declares a variable this file reads or writes is a dependency: a move or rename of the declaration re-extracts it.
+  for (const e of data.edges) {
+    if (typeof e.to !== "string") continue;
+    const hash = e.to.indexOf("#");
+    const declaring = hash > 0 ? e.to.slice(0, hash) : "";
+    if (declaring !== "" && declaring !== rel && !declaring.startsWith("<")) deps.add(declaring);
+  }
 
   if (unit.errors.length > 0) {
     const first = unit.errors[0] as SyntaxNode;

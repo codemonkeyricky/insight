@@ -16,6 +16,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@insight/flow": "workspace:*",
     "@insight/indexer": "workspace:*",
     "@insight/ir": "workspace:*"
   }

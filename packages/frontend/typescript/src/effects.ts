@@ -16,6 +16,8 @@ interface CatalogEntry {
   op?: string;
   /** Copied into the attrs as syscall: set only for a thin 1:1 wrapper of a kernel call. */
   syscall?: string;
+  /** The argument names the resource when it is an identifier or a property access; otherwise it is <dynamic>. */
+  shared?: boolean;
 }
 
 const catalog = JSON.parse(readFileSync(new URL("../data/effects.json", import.meta.url), "utf8")) as {
@@ -60,6 +62,15 @@ export interface EffectMatch {
 }
 
 const DYNAMIC = "<dynamic>";
+
+/**
+ * The text of an argument that names a shared object: a plain identifier or a property access, or <dynamic>. TS atomics and
+ * condvars are named by source text (a heuristic), so same-named locals in unrelated modules may pair.
+ */
+function sharedArgValue(call: ts.CallExpression, index: number): string {
+  const arg = call.arguments[index];
+  return arg !== undefined && (ts.isIdentifier(arg) || ts.isPropertyAccessExpression(arg)) ? arg.getText() : DYNAMIC;
+}
 
 function argValue(call: ts.CallExpression, index: number, absent?: string): string {
   if (index < 0) return DYNAMIC;
@@ -108,7 +119,7 @@ export function matchCall(call: ts.CallExpression, imports: Map<string, ImportBi
     if (!arg || !ts.isStringLiteralLike(arg) || !arg.text.startsWith(entry.prefix)) return undefined;
   }
   const attrs: Record<string, unknown> = { api: entry.api };
-  if (entry.attr) attrs[entry.attr] = argValue(call, index, entry.default);
+  if (entry.attr) attrs[entry.attr] = entry.shared ? sharedArgValue(call, index) : argValue(call, index, entry.default);
   if (entry.op) attrs.op = entry.op;
   if (entry.syscall) attrs.syscall = entry.syscall;
   return { kind: entry.kind, attrs };

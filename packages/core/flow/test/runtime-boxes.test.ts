@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ExecFunctionRef, ExecModel, ExecModelStats, ExecThread } from "../src/exec-model.js";
-import { buildExecScene, execThreadId } from "../src/exec-scene.js";
+import { buildExecScene, execFnId, execThreadId } from "../src/exec-scene.js";
 import { gridRootsLayout } from "../src/roots-grid.js";
 import { hasRuntimeContext, runtimeOpen, runtimeRootsLayout, runtimeRootsScene, UNTHREADED_ID } from "../src/runtime-boxes.js";
 import { execRootsOnly, flattenRoots } from "../src/scene-filter.js";
@@ -24,6 +24,9 @@ const ZERO_STATS: ExecModelStats = {
   functionsCoroutineOnly: 0,
   functionsUnthreaded: 0,
   functionsListed: 0,
+  condvars: 0,
+  semaphores: 0,
+  atomics: 0,
 };
 
 const fn = (id: string, line = 1, extra: Partial<ExecFunctionRef> = {}): ExecFunctionRef => ({
@@ -215,6 +218,20 @@ describe("footprints", () => {
     expect(c.w).toBe(frame(plain, first as string).w);
   });
 
+  it("shifts a card right by the left room and keeps the room left of it inside the frame", () => {
+    const m = twoThreads();
+    const s = runtimeRootsScene(buildExecScene(m), m) as Scene;
+    const open = runtimeOpen(s);
+    const [first, ...rest] = cardsIn(s, execThreadId("main"));
+    const plain = placeSceneLayout(s, runtimeRootsLayout(s), open);
+    const withLeft = placeSceneLayout(s, runtimeRootsLayout(s, new Map([[first as string, { left: 300, w: 0, h: 100 }]])), open);
+    const r = (p: typeof plain, id: string) => p.rects.get(id) as { x: number; y: number; w: number; h: number };
+    expect(r(withLeft, first as string).x - r(plain, first as string).x).toBe(300);
+    const c = r(withLeft, first as string);
+    const beside = { x: c.x - 300, y: c.y, w: 300, h: 100 };
+    for (const other of rest) expect(overlap(beside, r(withLeft, other))).toBe(false);
+  });
+
   it("keeps the room clear in the flat grid too", () => {
     const flat = flattenRoots(execRootsOnly(buildExecScene(twoThreads()), twoThreads()), twoThreads());
     const kids = [...(flat.nodes.get(flat.root)?.children ?? [])];
@@ -293,5 +310,24 @@ describe("execDefaultOpen: the unthreaded group", () => {
     const m = twoThreads();
     const s = runtimeRootsScene(buildExecScene(m), m) as Scene;
     expect(execDefaultOpen(s).has(UNTHREADED_ID)).toBe(true);
+  });
+});
+
+describe("flattenRoots: a sync edge into a root's second placement", () => {
+  it("keeps the edge and points it at the box drawn for that root", () => {
+    const m = twoThreads();
+    const cut = execRootsOnly(buildExecScene(m), m);
+    const source = execFnId(execThreadId("main"), "main");
+    const second = execFnId(execThreadId("t2"), "h");
+    expect(cut.nodes.has(source)).toBe(true);
+    expect(cut.nodes.has(second)).toBe(true);
+    const edge = { from: source, to: second, kind: "sync", count: 1, directed: true } as unknown as Scene["edges"][number];
+    const flat = flattenRoots({ ...cut, edges: [...cut.edges, edge] }, m);
+    const sync = flat.edges.filter((e) => e.kind === "sync");
+    expect(sync).toHaveLength(1);
+    const hBox = [...flat.nodes.values()].find((n) => n.kind === "function" && n.ref === "h");
+    expect(hBox).toBeDefined();
+    expect(sync[0]?.to).toBe(hBox?.id);
+    expect(flat.nodes.has(sync[0]?.to ?? "")).toBe(true);
   });
 });

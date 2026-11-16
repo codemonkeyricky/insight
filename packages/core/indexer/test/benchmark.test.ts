@@ -103,7 +103,7 @@ describe("google/benchmark sample, static mode", () => {
   it("has records for every facet the frontends provide", () => {
     expect(records.length).toBeGreaterThan(0);
     expect(new Set(summary.coverage.map((c) => c.facet))).toEqual(
-      new Set(["calls", "concurrency", "effects", "flow", "packaging", "state", "structure", "sync"]),
+      new Set(["calls", "concurrency", "data", "effects", "flow", "packaging", "state", "structure", "sync"]),
     );
   });
 });

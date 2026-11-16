@@ -40,6 +40,7 @@ Facets are optional and declared. A frontend lists the facets it fills, and a le
 | `sync` | Coordination: locks, semaphores, atomics, condition variables |
 | `effects` | Contact with the outside world: fs, net, process, env, clock |
 | `state` | Explicit finite state: holders whose type is a finite set of values, the writes that set them, and the tests that compare them |
+| `data` | Module-level data: variables, globals and class statics, and the reads and writes of them |
 | `x-*` | Open namespace for plugin facets |
 
 ## Kinds
@@ -67,10 +68,10 @@ Base kinds shipped by the core:
 | `structure.type` | structure | node | – |  |
 | `structure.function` | structure | node | – | A function, method or constructor. `attrs.anonymous` marks a function expression, arrow function or lambda with no declaration of its own (named `λ<line>:<col>`); its parent is the enclosing function, or the file at module level. A function-valued property of an object literal bound to a name (a variable, a class property or `export default`) is named `<binding>.<prop>`, as a class member is `Class.member`, and is not anonymous; a literal passed inline keeps its lambdas. |
 | `flow.block` | flow | node | – | A labelled region: the try, catch or finally part of a try, or a loop body. |
-| `flow.branch` | flow | node | – | if / else, or any two-way choice. |
+| `flow.branch` | flow | node | – | if / else, or any two-way choice. `attrs.condition` is the condition as written. Optional `attrs.reads` lists the distinct **local** variable names the condition reads (parameters and variables declared inside a function), in first-seen order: `if (cfg.debug && n > 0)` gives `["cfg", "n"]`. Locals only: module variables (`data.variable` targets), globals, imported bindings, member names and called function names are excluded. |
 | `flow.branch-arm` | flow | node | – | One arm of a branch or switch: then, else, a case or the default. |
 | `flow.switch` | flow | node | `flow.branch` |  |
-| `flow.loop` | flow | node | – |  |
+| `flow.loop` | flow | node | – | `attrs.variant` is `for`, `for-of`, `for-in`, `while` or `do`; optional `attrs.condition` is the condition as written. Optional `attrs.reads` lists the distinct local names the condition or range reads, like `flow.branch` reads: `for (const x of items)` reads `["items"]` (the loop variable is declared, not read), and `while (it != end)` reads `["it", "end"]`. Locals only, as for `flow.branch`. |
 | `flow.try` | flow | node | – |  |
 | `flow.throw` | flow | node | – | Raises an exception. |
 | `flow.return` | flow | node | – | Leaves the enclosing function. |
@@ -78,7 +79,7 @@ Base kinds shipped by the core:
 | `packaging.build-target` | packaging | node | – |  |
 | `packaging.import` | packaging | edge | – |  |
 | `packaging.export` | packaging | edge | – |  |
-| `packaging.re-export` | packaging | edge | `packaging.export` |  |
+| `packaging.re-export` | packaging | edge | `packaging.export` | Attrs `names` and `as`. `names` lists the original names the file re-exports (`deepSrc` for `export { deepSrc as midAlias } from`), or `["*"]` for `export *`. `as` gives the exported name of each, by position, and is absent for `export *`. A downstream name maps back through `as` to the `names` entry it came from. |
 | `packaging.include` | packaging | edge | – |  |
 | `packaging.dep-edge` | packaging | edge | – | A build-level dependency between targets or packages. |
 | `packaging.target-contains` | packaging | edge | – | A build target contains a file. |
@@ -86,7 +87,7 @@ Base kinds shipped by the core:
 | `calls.call-site` | calls | node | – |  |
 | `calls.dynamic-dispatch` | calls | node | – |  |
 | `calls.callback-registration` | calls | node | – |  |
-| `calls.call` | calls | edge | – | Caller function to callee function. A call through an interface member, or an abstract class member, has no body to call, so its `to` is `{"candidates": [...]}` with the implementations (`attrs.how` is `interface`, provenance `heuristic`). The candidates are every indexed class that implements the interface, directly, through an extended interface, or through a base class, and that declares the member or inherits it from its nearest base class; or, for an abstract member, every indexed concrete subclass of the abstract class and what it inherits or overrides. A receiver typed by an interface is matched against that interface's implementers, not the interface that declares the member. A set is sorted by id and holds at most 32 targets; `attrs.truncated` is `true` when the set was cut. A set always has at least one target, even when there is one implementation. Not covered: structural matches (a class that fits an interface without `implements`), classes in files outside the index, class expressions, and a new implementer in another file, which reaches a call site only when that call site's file is extracted again. Optional `attrs.knownState` maps a holder id to the values it is known to hold at the call site, `attrs.knownStale` lists the holders whose value there may be out of date, and `attrs.knownEntry` lists the holders whose known set at the call is exactly the caller's own entry set (no write or test of the holder, and no await, on any path from the caller's entry to the call, and no join with a non-entry set). |
+| `calls.call` | calls | edge | – | Caller function to callee function. A call through an interface member, or an abstract class member, has no body to call, so its `to` is `{"candidates": [...]}` with the implementations (`attrs.how` is `interface`, provenance `heuristic`). The candidates are every indexed class that implements the interface, directly, through an extended interface, or through a base class, and that declares the member or inherits it from its nearest base class; or, for an abstract member, every indexed concrete subclass of the abstract class and what it inherits or overrides. A receiver typed by an interface is matched against that interface's implementers, not the interface that declares the member. A set is sorted by id and holds at most 32 targets; `attrs.truncated` is `true` when the set was cut. A set always has at least one target, even when there is one implementation. Not covered: structural matches (a class that fits an interface without `implements`), classes in files outside the index, class expressions, and a new implementer in another file, which reaches a call site only when that call site's file is extracted again. Optional `attrs.knownState` maps a holder id to the values it is known to hold at the call site, `attrs.knownStale` lists the holders whose value there may be out of date, and `attrs.knownEntry` lists the holders whose known set at the call is exactly the caller's own entry set (no write or test of the holder, and no await, on any path from the caller's entry to the call, and no join with a non-entry set). Optional `attrs.binds` is the local the call's result is bound or assigned to: `const cfg = loadConfig()` and `cfg = loadConfig()` give `"cfg"`, and a destructuring gives an array (`const {a, b} = f()` → `["a", "b"]`). It is a string for one name and an array for several. `await`, parentheses, `as`, `!` and `satisfies` are transparent (`const r = await fetchX()` → `"r"`); a call used anywhere else (an argument, a member, a return) has no `binds`. |
 | `calls.reference` | calls | edge | – | Caller to a function it refers to without calling it. `attrs.how` is `new`, `jsx`, `value`, `closure` or `handler`. Caller is the enclosing function, or the file for module-level code. `closure` runs from a function to an anonymous function created inside it, so the creator still reaches what the closure calls. `handler` runs from the code that installs a project function as an event or message handler, such as `worker.onmessage = fn` or `addEventListener("message", fn)`, to that function. |
 | `calls.contains-call` | calls | edge | – |  |
 | `concurrency.spawn-thread` | concurrency | node | – | `attrs.target` names the function run; `attrs.api` (optional) is the exact API that spawns it. |
@@ -107,6 +108,9 @@ Base kinds shipped by the core:
 | `state.holder` | state | node | – | A field, variable or useState slot whose declared type is a finite set of values (enum or literal union). |
 | `state.write` | state | node | – | One site that sets a holder: an assignment, an object-literal property, an initializer, or a call to a setter helper. `from` is the set of values the holder is known to have just before. `fromEntry: true` (only when `from` is absent) says the known set at the write is exactly the enclosing function's entry set, so a consumer may fill it from the callers; a write without `from` and without `fromEntry` is unknown for another reason (dynamic write, join with an unknown side, loop widening, stale after an await). |
 | `state.test` | state | node | – | One comparison of a holder against literal values (`===`, `!==`, `==`, `!=`, or a switch case group), with the branch arms where it holds or doesn't. |
+| `data.variable` | data | node | – | A module-level `let`, `var` or `const`, a global written through `globalThis`, `window` or `self`, or a class `static` field. Parent is the file, or the class for a static. Required attrs are `name`, `qualifiedName`, `storage`, `exported` and `mutable`; see below. |
+| `data.read` | data | edge | – | A function (or the file, for module-level code) reads a `data.variable`. |
+| `data.write` | data | edge | – | A function (or the file, for module-level code) writes a `data.variable`. `attrs.how` is `assign` (`=`), `update` (`++`, `--`, `+=` and the other compound assignments), `mutate` (a mutating method such as `set` or `push`, or a property or element assignment through the variable; heuristic provenance) or `address`. |
 | `effects.fs.read` | effects | node | – | Optional `attrs.syscall`, see below. |
 | `effects.fs.write` | effects | node | – | Optional `attrs.syscall`, see below. |
 | `effects.net.connect` | effects | node | – | Optional `attrs.syscall`, see below. |
@@ -143,6 +147,17 @@ Other attributes added with the System tab, all from the same schema files:
 | `sync.rwlock-acquire` | `mode` | yes | `shared` or `exclusive`. |
 | | `lock` | yes | The mutex name the lock is taken on. |
 
+### data.variable attributes
+
+| Kind | Attribute | Required | Notes |
+| --- | --- | --- | --- |
+| `data.variable` | `name`, `qualifiedName` | yes | `qualifiedName` is `Class.name` for a static, `globalThis.name` (or `window`, `self`) for a global, and `name` otherwise. |
+| | `storage` | yes | `global`, `module`, `file-static`, `function-static`, `class-static` or `extern-decl`. |
+| | `exported`, `mutable` | yes | `exported` is true when the variable is visible outside its file. `mutable` is true for a `let` or `var`, for a class static that is not `readonly`, and for every global. A `const` is mutable only when its initializer can hold state: a literal, a `new` expression or a call result. A frozen (`Object.freeze(…)`) or `as const` literal is not. |
+| | `constBound` | no | `true` on a `const` whose initializer is a mutable container (`mutable` is true). The flow layer counts it as state only when some function writes it, through a property, an element, a mutating call or a destructuring target. |
+| | Global id and parent | – | A global's id is `<global>#global:<name>`, with no file part and no parent. Each file that writes the global emits the same node. Its `qualifiedName` is always `globalThis.<name>` (whatever head the write used), and its span is the first write in the lexicographically first writing file. A read of a global is recorded only when some project file writes it, and each reader depends on every writer, so a removed writer drops the read. Incrementally, when a new writer of a global or variable is added, existing readers get the edge only after a full re-index: the edge is missing until then, never dangling, the same as for calls. |
+| | `type` | no | The declared type, when known. |
+
 ### Which frontend emits each kind
 
 The fact rules that turn these kinds into System-view edges are in `docs/system-view.md`, under "Fact rules". This table says only which frontend emits each kind today.
@@ -162,6 +177,7 @@ The fact rules that turn these kinds into System-view edges are in `docs/system-
 | `sync.lock-acquire`, `sync.lock-release`, `sync.rwlock-acquire` | catalog (`lock-acquire`); `navigator.locks` | `src/extract.ts` |
 | `sync.semaphore` | not emitted | `src/extract.ts` |
 | `sync.condvar`, `sync.atomic-op` | catalog | `src/extract.ts` |
+| `data.variable`, `data.read`, `data.write` | `src/data.ts` | `src/data.ts` |
 | `state.holder` | state | node | – | A field, variable or useState slot whose declared type is a finite set of values (enum or literal union). |
 | `state.write` | state | node | – | One site that sets a holder: an assignment, an object-literal property, an initializer, or a call to a setter helper. `from` is the set of values the holder is known to have just before. `fromEntry: true` (only when `from` is absent) says the known set at the write is exactly the enclosing function's entry set, so a consumer may fill it from the callers; a write without `from` and without `fromEntry` is unknown for another reason (dynamic write, join with an unknown side, loop widening, stale after an await). |
 | `state.test` | state | node | – | One comparison of a holder against literal values (`===`, `!==`, `==`, `!=`, or a switch case group), with the branch arms where it holds or doesn't. |

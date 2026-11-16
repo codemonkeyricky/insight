@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://insight.dev/ir/facets/data.json",
+  "title": "DataFacet",
+  "description": "Module-level data: variables, globals and statics, and the reads and writes of them.",
+  "$defs": {
+    "DataVariable": {
+      "type": "object",
+      "required": ["name", "qualifiedName", "storage", "exported", "mutable"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "qualifiedName": { "type": "string", "minLength": 1 },
+        "storage": { "enum": ["global", "module", "file-static", "function-static", "class-static", "extern-decl"] },
+        "exported": { "type": "boolean" },
+        "mutable": { "type": "boolean" },
+        "type": { "type": "string" }
+      }
+    },
+    "DataAccess": {
+      "type": "object",
+      "properties": {
+        "how": { "enum": ["assign", "update", "mutate", "address"] }
+      }
+    }
+  }
+}

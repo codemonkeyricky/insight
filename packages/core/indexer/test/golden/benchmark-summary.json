@@ -38,6 +38,17 @@
       "edges": 3
     },
     {
+      "facet": "data",
+      "providers": [
+        "frontend-cpp"
+      ],
+      "filesScanned": 121,
+      "filesWithRecords": 48,
+      "filesWithErrors": 0,
+      "nodes": 141,
+      "edges": 370
+    },
+    {
       "facet": "effects",
       "providers": [
         "frontend-cpp"
@@ -141,6 +152,11 @@
       "findings": 15
     },
     {
+      "id": "lens-ir-schema",
+      "status": "unavailable",
+      "findings": 0
+    },
+    {
       "id": "lens-lock-order",
       "status": "ok",
       "findings": 0
@@ -170,6 +186,9 @@
     "concurrency.spawn-process": 1,
     "concurrency.spawn-thread": 5,
     "concurrency.spawns": 3,
+    "data.read": 319,
+    "data.variable": 141,
+    "data.write": 51,
     "effects.clock.read": 12,
     "effects.env.read": 7,
     "effects.fs.read": 8,

@@ -321,7 +321,20 @@ describe("scene queries", () => {
     ]);
   });
 
-  it("keeps lock and channel sync edges apart, with their how, and sums the same how", () => {
+  it("merges a lock edge and a condvar edge between the same two boxes into one edge that names both resources", () => {
+    const merged: Scene = {
+      ...exec,
+      edges: [
+        { from: "f1", to: "g1", kind: "sync", how: "lock", count: 1, resources: [{ name: "a", kind: "lock" }] },
+        { from: "f2", to: "g2", kind: "sync", how: "condvar", count: 1, resources: [{ name: "cv", kind: "condvar" }] },
+      ],
+    };
+    expect(sceneEdges(merged, new Set())).toEqual([
+      { from: "T1", to: "T2", kind: "sync", how: "lock", count: 2, candidate: false, resources: [{ name: "a", kind: "lock" }, { name: "cv", kind: "condvar" }] },
+    ]);
+  });
+
+  it("merges every sync edge between two boxes into one edge, keeping the first how and summing the counts", () => {
     const syncScene: Scene = {
       ...exec,
       edges: [
@@ -330,10 +343,7 @@ describe("scene queries", () => {
         { from: "f1", to: "g2", kind: "sync", how: "channel", count: 1 },
       ],
     };
-    expect(sceneEdges(syncScene, new Set())).toEqual([
-      { from: "T1", to: "T2", kind: "sync", how: "lock", count: 2, candidate: false },
-      { from: "T1", to: "T2", kind: "sync", how: "channel", count: 1, candidate: false },
-    ]);
+    expect(sceneEdges(syncScene, new Set())).toEqual([{ from: "T1", to: "T2", kind: "sync", how: "lock", count: 3, candidate: false }]);
   });
 
   it("lands each edge in the container of its ends' deepest common ancestor", () => {

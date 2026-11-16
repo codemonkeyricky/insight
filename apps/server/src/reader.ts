@@ -22,10 +22,14 @@ import {
 import {
   buildFileFlow,
   couplingIndex,
+  couplingReport,
   execModel,
+  normalizeScopeInput,
+  ScopeInputError,
   summarizeFlows,
   summarizeScope,
   type CouplingIndex,
+  type CouplingReport,
   type ExecModel,
   type FileFlow,
   type FileFlowSummary,
@@ -352,6 +356,37 @@ export function fileFlow(paths: ProjectPaths, snapshot: string, file: string): F
 export function flowSummary(paths: ProjectPaths, snapshot: string): FileFlowSummary[] {
   const snap = loadSnapshot(paths, snapshot);
   return summarizeFlows(snap.nodes.values(), snap.edges);
+}
+
+/**
+ * The coupling report of one snapshot (see `couplingReport` in @insight/flow): every function of `scope` (the project, a
+ * folder or a file), or exactly the function `fn` when given. It reuses the snapshot's cached coupling index and the same
+ * scope check the other scope routes use: a path that leaves the project (or starts with `/`) is a 400, and one that
+ * names no indexed file is a 404. An `fn` that is not a function of the snapshot is a 404 too.
+ *
+ * The scope is normalized and checked even when `fn` is given, so this route and the hosted Function reject the same
+ * paths; `fn` still takes precedence over a valid `scope`.
+ */
+export function couplingReportOf(paths: ProjectPaths, snapshot: string, opts: { scope?: string; fn?: string } = {}): CouplingReport {
+  let scope: string | undefined;
+  if (opts.scope !== undefined) {
+    try {
+      scope = normalizeScopeInput(opts.scope);
+    } catch (err) {
+      if (err instanceof ScopeInputError) throw new ProjectError(400, err.message);
+      throw err;
+    }
+  }
+  const index = couplingFor(paths, snapshot);
+  if (opts.fn !== undefined) {
+    if (!index.functions.has(opts.fn)) throw new ProjectError(404, `no function ${opts.fn}`);
+    return couplingReport(index, { ids: [opts.fn] });
+  }
+  if (scope !== undefined) {
+    if (!scopeKindOf(loadSnapshot(paths, snapshot), scope)) throw new ProjectError(404, "no such scope");
+    return couplingReport(index, { scope });
+  }
+  return couplingReport(index);
 }
 
 /**

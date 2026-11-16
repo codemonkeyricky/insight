@@ -7,6 +7,7 @@ import { importBindings, matchCall, matchEnvRead, matchExportRoute, matchFetch, 
 import { channelIndex, matchChannelRecv, matchChannelSend } from "./channels.js";
 import { scriptKind } from "./digest.js";
 import { emitState } from "./state.js";
+import { emitData } from "./data.js";
 import { dispatchFor, MAX_DISPATCH_TARGETS, propName, registryFor } from "./dispatch.js";
 import { workspaceManifestPaths, workspacePackages, workspaceProgramEntries, workspaceSource, type ProgramEntry, type WorkspacePackage } from "./packages.js";
 
@@ -1332,7 +1333,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
     return found.to !== undefined && found.confidence !== undefined ? { to: found.to, confidence: found.confidence } : undefined;
   };
 
-  const emitModule = (from: string, spec: string, specNode: ts.Node, typeOnly: boolean, dynamic: boolean, kind: "packaging.import" | "packaging.re-export") => {
+  const emitModule = (from: string, spec: string, specNode: ts.Node, typeOnly: boolean, dynamic: boolean, kind: "packaging.import" | "packaging.re-export", names?: readonly string[], aliases?: readonly string[]) => {
     const target = project.resolveModule(spec, sf.fileName);
     let to: NodeId | UnresolvedRef;
     if (target !== undefined && project.rels.has(target)) {
@@ -1346,8 +1347,96 @@ export function emitFile(project: Project, rel: string): IRBatch {
     }
     // A bare specifier may name a workspace package, whose package.json decides its source. Any manifest change re-extracts.
     if (!spec.startsWith(".") && !spec.startsWith("/")) for (const m of project.manifestRels) dependOn(m);
-    const attrs: Record<string, unknown> = kind === "packaging.import" ? { specifier: spec, typeOnly, dynamic } : { specifier: spec };
+    // A re-export records the names it passes on: the exported-from side of `export { a as b } from` (`a`), `["*"]` for `export *`.
+    // `as` gives the exported name of each, by position (`b`), so a downstream name maps back to the name it came from.
+    const attrs: Record<string, unknown> = kind === "packaging.import" ? { specifier: spec, typeOnly, dynamic } : { specifier: spec, names: [...(names ?? ["*"])] };
+    if (kind === "packaging.re-export" && aliases !== undefined && aliases[0] !== "*") attrs.as = [...aliases];
     pushEdge({ from, to, facet: "packaging", kind, attrs, span: spanOf(rel, sf, specNode), provenance: PROV });
+  };
+
+  /**
+   * The local a call's result is bound or assigned to: `cfg` for `const cfg = f()` or `cfg = f()`, and the names of a
+   * destructuring. `await`, parentheses, `as`, `!` and `satisfies` are transparent. A call anywhere else (an argument,
+   * a member, a return) binds no local.
+   */
+  const callBinds = (call: ts.CallExpression): string | string[] | undefined => {
+    const namesOf = (name: ts.BindingName): string[] => {
+      if (ts.isIdentifier(name)) return [name.text];
+      const out: string[] = [];
+      for (const el of name.elements) {
+        if (ts.isOmittedExpression(el)) continue;
+        out.push(...namesOf(el.name));
+      }
+      return out;
+    };
+    let value: ts.Expression = call;
+    let p: ts.Node | undefined = value.parent;
+    while (
+      p !== undefined &&
+      (ts.isAwaitExpression(p) || ts.isParenthesizedExpression(p) || ts.isAsExpression(p) ||
+        ts.isNonNullExpression(p) || ts.isTypeAssertionExpression(p) || ts.isSatisfiesExpression(p))
+    ) {
+      value = p as ts.Expression;
+      p = p.parent;
+    }
+    let names: string[] | undefined;
+    if (ts.isVariableDeclaration(p) && p.initializer === value) names = namesOf(p.name);
+    else if (ts.isBinaryExpression(p) && p.operatorToken.kind === ts.SyntaxKind.EqualsToken && p.right === value && ts.isIdentifier(p.left)) names = [p.left.text];
+    if (names === undefined || names.length === 0) return undefined;
+    return names.length === 1 ? names[0] : names;
+  };
+
+  /**
+   * The distinct local variable names an expression reads. Locals are parameters and variables declared inside a function;
+   * a module-level variable (a `data.variable`), an imported binding or a global is not one. Member names, declaration
+   * names and called function names are not reads.
+   */
+  const localReads = (expr: ts.Node): string[] => {
+    const out = new Set<string>();
+    const isLocalDecl = (d: ts.Declaration): boolean => {
+      for (let p: ts.Node | undefined = d.parent; p !== undefined; p = p.parent) {
+        if (ts.isSourceFile(p)) return false;
+        if (ts.isFunctionLike(p)) return true;
+      }
+      return false;
+    };
+    const isName = (n: ts.Identifier, p: ts.Node): boolean =>
+      (ts.isPropertyAccessExpression(p) && p.name === n) ||
+      (ts.isPropertyAssignment(p) && p.name === n) ||
+      (ts.isVariableDeclaration(p) && p.name === n) ||
+      (ts.isBindingElement(p) && p.name === n) ||
+      (ts.isParameter(p) && p.name === n) ||
+      (ts.isFunctionDeclaration(p) && p.name === n) ||
+      (ts.isClassDeclaration(p) && p.name === n) ||
+      (ts.isInterfaceDeclaration(p) && p.name === n) ||
+      (ts.isTypeAliasDeclaration(p) && p.name === n) ||
+      (ts.isMethodDeclaration(p) && p.name === n) ||
+      (ts.isPropertyDeclaration(p) && p.name === n) ||
+      (ts.isGetAccessorDeclaration(p) && p.name === n) ||
+      (ts.isSetAccessorDeclaration(p) && p.name === n) ||
+      (ts.isEnumDeclaration(p) && p.name === n) ||
+      (ts.isEnumMember(p) && p.name === n) ||
+      (ts.isLabeledStatement(p) && p.label === n) ||
+      (ts.isBreakOrContinueStatement(p) && p.label === n) ||
+      (ts.isCallExpression(p) && p.expression === n) ||
+      (ts.isNewExpression(p) && p.expression === n);
+    const visitName = (n: ts.Node): void => {
+      if (ts.isIdentifier(n)) {
+        if (isName(n, n.parent)) return;
+        const decls = project.checker.getSymbolAtLocation(n)?.declarations;
+        if (decls?.some(isLocalDecl) === true) out.add(n.text);
+        return;
+      }
+      ts.forEachChild(n, visitName);
+    };
+    visitName(expr);
+    return [...out];
+  };
+
+  /** The `reads` attribute for a condition, omitted when it names no local. */
+  const readsAttr = (expr: ts.Node | undefined): { reads?: string[] } => {
+    const reads = expr === undefined ? [] : localReads(expr);
+    return reads.length > 0 ? { reads } : {};
   };
 
   const visit = (node: ts.Node, container: string, fn: string): void => {
@@ -1565,6 +1654,8 @@ export function emitFile(project: Project, rel: string): IRBatch {
 
     const emitCall = (call: ts.CallExpression) => {
       const callee = call.expression;
+      // The local the call's result goes into, if any: `cfg ← loadConfig()`.
+      const binds = callBinds(call);
       const sym = project.checker.getSymbolAtLocation(nameOf(callee));
       const target = declOf(project, sym);
       // A call through a fixed registry runs whichever of its functions the key picks, so every one is a candidate. The registry
@@ -1581,7 +1672,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
           to: callTarget.id,
           facet: "calls",
           kind: "calls.call",
-          attrs: { callee: callee.getText(sf).slice(0, 200), callEnd: pos(sf, call.getEnd()) },
+          attrs: { callee: callee.getText(sf).slice(0, 200), callEnd: pos(sf, call.getEnd()), ...(binds !== undefined ? { binds } : {}) },
           span: spanOf(rel, sf, callee),
           provenance: PROV,
         };
@@ -1597,7 +1688,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
           to: { candidates: [first, ...rest] },
           facet: "calls",
           kind: "calls.call",
-          attrs: { callee: callee.getText(sf).slice(0, 200), how: "registry", callEnd: pos(sf, call.getEnd()), ...(truncated ? { truncated: true } : {}) },
+          attrs: { callee: callee.getText(sf).slice(0, 200), how: "registry", callEnd: pos(sf, call.getEnd()), ...(binds !== undefined ? { binds } : {}), ...(truncated ? { truncated: true } : {}) },
           span: spanOf(rel, sf, callee),
           provenance: { frontend: FRONTEND_ID, confidence: "heuristic" },
         });
@@ -1614,7 +1705,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
             to: { candidates: [first, ...rest] },
             facet: "calls",
             kind: "calls.call",
-            attrs: { callee: callee.getText(sf).slice(0, 200), how: "interface", callEnd: pos(sf, call.getEnd()), ...(truncated ? { truncated: true } : {}) },
+            attrs: { callee: callee.getText(sf).slice(0, 200), how: "interface", callEnd: pos(sf, call.getEnd()), ...(binds !== undefined ? { binds } : {}), ...(truncated ? { truncated: true } : {}) },
             span: spanOf(rel, sf, callee),
             provenance: { frontend: FRONTEND_ID, confidence: "heuristic" },
           });
@@ -1721,7 +1812,8 @@ export function emitFile(project: Project, rel: string): IRBatch {
           facet: effect.kind.slice(0, effect.kind.indexOf(".")),
           kind: effect.kind,
           parent: owner,
-          attrs: effect.attrs,
+          // A bound result (`const cfg = readConfigSync()`) carries where it goes, as a calls.call row does.
+          attrs: { ...effect.attrs, ...(binds !== undefined ? { binds } : {}) },
           span: spanOf(rel, sf, call),
           provenance: PROV,
         });
@@ -1760,11 +1852,11 @@ export function emitFile(project: Project, rel: string): IRBatch {
     const block = (label: string, at: ts.Node) => flow("block", "flow.block", { label }, at);
 
     if (ts.isIfStatement(node)) {
-      flow("if", "flow.branch", { condition: node.expression.getText(sf).slice(0, 200) });
+      flow("if", "flow.branch", { condition: node.expression.getText(sf).slice(0, 200), ...readsAttr(node.expression) });
       arm("then", node.thenStatement);
       if (node.elseStatement) arm("else", node.elseStatement);
     } else if (ts.isConditionalExpression(node)) {
-      flow("cond", "flow.branch", { condition: node.condition.getText(sf).slice(0, 200) });
+      flow("cond", "flow.branch", { condition: node.condition.getText(sf).slice(0, 200), ...readsAttr(node.condition) });
       arm("then", node.whenTrue);
       arm("else", node.whenFalse);
     } else if (ts.isSwitchStatement(node)) {
@@ -1773,19 +1865,20 @@ export function emitFile(project: Project, rel: string): IRBatch {
         arm(ts.isDefaultClause(clause) ? "default" : `case ${clause.expression.getText(sf).slice(0, 60)}`, clause);
       }
     } else if (ts.isForStatement(node)) {
-      flow("loop", "flow.loop", { variant: "for", condition: node.condition?.getText(sf).slice(0, 200) ?? "" });
+      flow("loop", "flow.loop", { variant: "for", condition: node.condition?.getText(sf).slice(0, 200) ?? "", ...readsAttr(node.condition) });
       block("body", node.statement);
     } else if (ts.isForOfStatement(node)) {
-      flow("loop", "flow.loop", { variant: "for-of", condition: `${node.initializer.getText(sf)} of ${node.expression.getText(sf)}`.slice(0, 200) });
+      // The iterable is what the loop reads; the loop variable is declared, not read.
+      flow("loop", "flow.loop", { variant: "for-of", condition: `${node.initializer.getText(sf)} of ${node.expression.getText(sf)}`.slice(0, 200), ...readsAttr(node.expression) });
       block("body", node.statement);
     } else if (ts.isForInStatement(node)) {
-      flow("loop", "flow.loop", { variant: "for-in", condition: `${node.initializer.getText(sf)} in ${node.expression.getText(sf)}`.slice(0, 200) });
+      flow("loop", "flow.loop", { variant: "for-in", condition: `${node.initializer.getText(sf)} in ${node.expression.getText(sf)}`.slice(0, 200), ...readsAttr(node.expression) });
       block("body", node.statement);
     } else if (ts.isWhileStatement(node)) {
-      flow("loop", "flow.loop", { variant: "while", condition: node.expression.getText(sf).slice(0, 200) });
+      flow("loop", "flow.loop", { variant: "while", condition: node.expression.getText(sf).slice(0, 200), ...readsAttr(node.expression) });
       block("body", node.statement);
     } else if (ts.isDoStatement(node)) {
-      flow("loop", "flow.loop", { variant: "do", condition: node.expression.getText(sf).slice(0, 200) });
+      flow("loop", "flow.loop", { variant: "do", condition: node.expression.getText(sf).slice(0, 200), ...readsAttr(node.expression) });
       block("body", node.statement);
     } else if (ts.isTryStatement(node)) {
       flow("try", "flow.try", { hasFinally: node.finallyBlock !== undefined });
@@ -1867,7 +1960,11 @@ export function emitFile(project: Project, rel: string): IRBatch {
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
       emitModule(rel, node.moduleSpecifier.text, node.moduleSpecifier, node.importClause?.isTypeOnly ?? false, false, "packaging.import");
     } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
-      emitModule(rel, node.moduleSpecifier.text, node.moduleSpecifier, false, false, "packaging.re-export");
+      const clause = node.exportClause;
+      const elements = clause && ts.isNamedExports(clause) ? clause.elements : undefined;
+      const names = elements ? elements.map((e) => (e.propertyName ?? e.name).text) : ["*"];
+      const aliases = elements ? elements.map((e) => e.name.text) : ["*"];
+      emitModule(rel, node.moduleSpecifier.text, node.moduleSpecifier, false, false, "packaging.re-export", names, aliases);
     } else if (ts.isCallExpression(node)) {
       if (node.expression.kind === ts.SyntaxKind.ImportKeyword && node.arguments[0] && ts.isStringLiteralLike(node.arguments[0])) {
         emitModule(rel, node.arguments[0].text, node.arguments[0], false, true, "packaging.import");
@@ -1930,6 +2027,18 @@ export function emitFile(project: Project, rel: string): IRBatch {
       const edge = callEdges.get(call);
       if (edge) edge.attrs = { ...edge.attrs, ...attrs };
     }
+    const data = emitData({
+      project,
+      rel,
+      sf,
+      moduleId,
+      spanOf: (n) => spanOf(rel, sf, n),
+      spanIn: (file, n) => spanOf(file, project.sourceFor(file) ?? sf, n),
+      provenance: PROV,
+      dependOn,
+    });
+    for (const n of data.nodes) push(n);
+    for (const e of data.edges) pushEdge(e);
   }
 
   for (const d of project.program.getSyntacticDiagnostics(sf)) {

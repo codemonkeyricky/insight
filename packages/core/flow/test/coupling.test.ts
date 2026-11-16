@@ -123,11 +123,7 @@ export function go(): number {
 `,
 };
 
-interface Indexed {
-  modules: ModuleMap;
-  facts: Map<string, FunctionFacts>;
-  footprints: Map<string, CouplingFootprint>;
-}
+type Indexed = ReturnType<typeof couplingFacts>;
 
 async function load(files: Record<string, string>): Promise<Indexed & { nodes: IRNode[]; edges: IREdge[] }> {
   const { nodes, edges } = await indexFixture(files);
@@ -303,8 +299,13 @@ function flat(items: readonly Item[]): string[] {
   return items.flatMap((i): string[] => {
     // An open fold's header is not a row of the original chart.
     if (i.t === "step" && i.open === true) return [];
-    // The hoisted suffix (` ⇢ fs.write`) is the coupling view's, not the original row's: compare the label before it.
-    if (i.t === "step") return [`step:${i.role}:${i.label.split(" ⇢ ")[0]}:${JSON.stringify(i.span ?? null)}`];
+    // The hoisted suffix (` ⇢ fs.write`) and the binds prefix (`cfg ← `) are the coupling view's, not the original row's:
+    // compare the label before and after them.
+    if (i.t === "step") {
+      const label = i.label.split(" ⇢ ")[0] ?? i.label;
+      const plain = label.includes(" ← ") ? label.slice(label.indexOf(" ← ") + 3) : label;
+      return [`step:${i.role}:${plain}:${JSON.stringify(i.span ?? null)}`];
+    }
     if (i.t === "term") return [`term:${i.role}:${JSON.stringify(i.span ?? null)}`];
     if (i.t === "fork") return [`fork:${i.role}:${JSON.stringify(i.span ?? null)}`, ...i.arms.flatMap((a) => [`arm:${a.label}`, ...flat(a.body)])];
     return [`loop:${JSON.stringify(i.span ?? null)}`, ...flat(i.body)];
@@ -320,6 +321,183 @@ describe("coupling pass with no package metadata", () => {
     const rows = kept(items);
     expect(rows[0]).toMatchObject({ t: "step", role: "call", coupling: "cross" });
     expect(info.footprint.modules).toEqual(["lib"]);
+  });
+});
+
+// Phase 4a: a local that carries an external value keeps the control flow that depends on it. Real TypeScript frontend
+// output, so the `binds` and `reads` attributes come from the extractor, not from hand-built items.
+describe("locals that carry external values (phase 4)", () => {
+  const CROSS_FILES: Record<string, string> = {
+    "package.json": JSON.stringify({ name: "root", private: true }),
+    "pkgs/a/package.json": JSON.stringify({ name: "a" }),
+    "pkgs/b/package.json": JSON.stringify({ name: "b" }),
+    "pkgs/b/src/config.ts": `export function loadConfig(): { debug: boolean } {
+  return { debug: true };
+}
+`,
+    "pkgs/a/src/use.ts": `import { loadConfig } from "../../b/src/config.js";
+function localLog(): void {}
+export function run(): void {
+  const cfg = loadConfig();
+  if (cfg.debug) {
+    localLog();
+  }
+}
+`,
+  };
+
+  const LOCAL_FILES: Record<string, string> = {
+    "package.json": JSON.stringify({ name: "root", private: true }),
+    "pkgs/a/package.json": JSON.stringify({ name: "a" }),
+    "pkgs/a/src/use.ts": `function loadConfig(): { debug: boolean } {
+  return { debug: true };
+}
+function localLog(): void {}
+export function run(): void {
+  const cfg = loadConfig();
+  if (cfg.debug) {
+    localLog();
+  }
+}
+`,
+  };
+
+  const ASSIGN_FILES: Record<string, string> = {
+    "package.json": JSON.stringify({ name: "root", private: true }),
+    "pkgs/a/package.json": JSON.stringify({ name: "a" }),
+    "pkgs/b/package.json": JSON.stringify({ name: "b" }),
+    "pkgs/b/src/config.ts": `export function loadConfig(): { debug: boolean; x: boolean } {
+  return { debug: true, x: true };
+}
+`,
+    "pkgs/a/src/use.ts": `import { loadConfig } from "../../b/src/config.js";
+function localLog(): void {}
+export function run(): void {
+  const cfg = loadConfig();
+  const c2 = cfg;
+  if (c2.x) {
+    localLog();
+  }
+}
+`,
+  };
+
+  // A same-module wrapper: the local call itself is not cross, but the wrapper's footprint hoists the cross call inside it.
+  const WRAPPER_FILES: Record<string, string> = {
+    "package.json": JSON.stringify({ name: "root", private: true }),
+    "pkgs/a/package.json": JSON.stringify({ name: "a" }),
+    "pkgs/b/package.json": JSON.stringify({ name: "b" }),
+    "pkgs/b/src/config.ts": `export function loadConfig(): { debug: boolean } {
+  return { debug: true };
+}
+`,
+    "pkgs/a/src/use.ts": `import { loadConfig } from "../../b/src/config.js";
+function wrapper(): { debug: boolean } {
+  return loadConfig();
+}
+function localLog(): void {}
+export function run(): void {
+  const cfg = wrapper();
+  if (cfg.debug) {
+    localLog();
+  }
+}
+`,
+  };
+
+  // A builtin io effect: no project function resolves, but the effect row carries the local its result is bound to.
+  const IO_FILES: Record<string, string> = {
+    "package.json": JSON.stringify({ name: "root", private: true }),
+    "src/use.ts": `import { readFileSync } from "node:fs";
+function localLog(): void {}
+export function run(): void {
+  const text = readFileSync("x", "utf8");
+  if (text.length > 0) {
+    localLog();
+  }
+}
+`,
+  };
+
+  let cross: Awaited<ReturnType<typeof couplingOf>>;
+  let local: Awaited<ReturnType<typeof couplingOf>>;
+  let assign: Awaited<ReturnType<typeof couplingOf>>;
+  let wrapper: Awaited<ReturnType<typeof couplingOf>>;
+  let io: Awaited<ReturnType<typeof couplingOf>>;
+  beforeAll(async () => {
+    cross = await couplingOf(CROSS_FILES);
+    local = await couplingOf(LOCAL_FILES);
+    assign = await couplingOf(ASSIGN_FILES);
+    wrapper = await couplingOf(WRAPPER_FILES);
+    io = await couplingOf(IO_FILES);
+  });
+
+  it("keeps a branch on a local a cross call binds, shows ⇠ cfg, and labels the call cfg ← loadConfig()", () => {
+    const id = fid("pkgs/a/src/use.ts", "run");
+    const f = cross.facts.get(id);
+    if (!f) throw new Error(`no function ${id}`);
+    const { items } = couplingChart(id, f.items, cross.modules, cross.footprints);
+    const call = items.find((i): i is Step => i.t === "step" && i.role === "call");
+    if (!call) throw new Error("expected the cross call row");
+    expect(call).toMatchObject({ coupling: "cross" });
+    expect(call.label).toBe("cfg ← loadConfig()");
+    const fork = items.find((i) => i.t === "fork");
+    if (fork?.t !== "fork") throw new Error("expected the tainted branch to stay");
+    expect(fork).toMatchObject({ role: "branch", coupling: "ctl" });
+    expect(fork.label).toBe("cfg.debug ⇠ cfg");
+    // The branch body is all local, so it still folds into one ⋯ n local row.
+    const trueArm = fork.arms.find((a) => a.kind === "true");
+    expect(trueArm?.body.every((i) => i.t === "step" && i.foldId !== undefined)).toBe(true);
+    // The laid-out decision head carries the class too, so the view draws it in `cp-ctl`.
+    const chart = layoutFunction({ id, name: f.name, async: f.async, ...(f.span ? { span: f.span } : {}), items });
+    expect(chart.nodes.find((n) => n.shape === "decision")).toMatchObject({ coupling: "ctl" });
+  });
+
+  it("taints a local bound by a same-module wrapper whose footprint hoists a cross call", () => {
+    const id = fid("pkgs/a/src/use.ts", "run");
+    const f = wrapper.facts.get(id);
+    if (!f) throw new Error(`no function ${id}`);
+    const { items } = couplingChart(id, f.items, wrapper.modules, wrapper.footprints);
+    const call = items.find((i): i is Step => i.t === "step" && i.role === "call");
+    if (!call) throw new Error("expected the wrapper call row");
+    expect(call).toMatchObject({ coupling: "cross" });
+    expect(call.label.startsWith("cfg ← wrapper()")).toBe(true);
+    const fork = items.find((i) => i.t === "fork");
+    if (fork?.t !== "fork") throw new Error("expected the tainted branch to stay");
+    expect(fork).toMatchObject({ role: "branch", coupling: "ctl" });
+    expect(fork.label).toBe("cfg.debug ⇠ cfg");
+  });
+
+  it("taints a local bound by a builtin io effect", () => {
+    const id = fid("src/use.ts", "run");
+    const f = io.facts.get(id);
+    if (!f) throw new Error(`no function ${id}`);
+    const { items } = couplingChart(id, f.items, io.modules, io.footprints);
+    const effect = items.find((i): i is Step => i.t === "step" && i.role === "effect");
+    expect(effect).toMatchObject({ coupling: "io", binds: "text" });
+    const fork = items.find((i) => i.t === "fork");
+    if (fork?.t !== "fork") throw new Error("expected the io-tainted branch to stay");
+    expect(fork).toMatchObject({ role: "branch", coupling: "ctl" });
+    expect(fork.label).toBe("text.length > 0 ⇠ text");
+  });
+
+  it("drops the branch when the same-module callee has no coupling, so the local is not tainted", () => {
+    const id = fid("pkgs/a/src/use.ts", "run");
+    const f = local.facts.get(id);
+    if (!f) throw new Error(`no function ${id}`);
+    const { items } = couplingChart(id, f.items, local.modules, local.footprints);
+    expect(items.some((i) => i.t === "fork")).toBe(false);
+    expect(isFoldOnly(items)).toBe(true);
+  });
+
+  it("does not follow a plain local assignment (direct binds only), so that branch folds", () => {
+    const id = fid("pkgs/a/src/use.ts", "run");
+    const f = assign.facts.get(id);
+    if (!f) throw new Error(`no function ${id}`);
+    const { items } = couplingChart(id, f.items, assign.modules, assign.footprints);
+    // The cross call is still kept and bound; `const c2 = cfg` emits no call bind, so c2 is not tainted.
+    expect(items.find((i): i is Step => i.t === "step" && i.role === "call")?.label).toBe("cfg ← loadConfig()");
+    expect(items.some((i) => i.t === "fork")).toBe(false);
   });
 });
 
@@ -465,5 +643,267 @@ ${Array.from({ length: 55 }, (_, k) => `  f${k}();`).join("\n")}
     expect(fp.modules).toEqual(["pkgs/b"]);
     expect(footprintSummary(fp)).toContain("throws ↑");
     expect(footprintSummary(fp)).toContain("⇄ 1 module");
+  });
+});
+
+// Review fixes on the coupling pass: module-private state off the surface, capped hoisting, project-wide globals, and the
+// surface of package entries (`src/index.*`, and what they re-export).
+const surfaceChart = (ix: Indexed & { surface: Set<string> }, id: string) => {
+  const f = ix.facts.get(id);
+  if (!f) throw new Error(`no function ${id}`);
+  return couplingChart(id, f.items, ix.modules, ix.footprints, ix.surface);
+};
+const allSteps = (items: readonly Item[], out: Item[] = []): Item[] => {
+  for (const i of items) {
+    out.push(i);
+    if (i.t === "fork") for (const a of i.arms) allSteps(a.body, out);
+    else if (i.t === "loop") allSteps(i.body, out);
+  }
+  return out;
+};
+const kptRows = (items: readonly Item[]) => allSteps(items).filter((i): i is Step => i.t === "step" && i.foldId === undefined);
+
+describe("module-private state off the surface", () => {
+  const HIDDEN_FILES: Record<string, string> = {
+    "package.json": JSON.stringify({ name: "root", private: true }),
+    "pkgs/a/package.json": JSON.stringify({ name: "a" }),
+    "pkgs/b/package.json": JSON.stringify({ name: "b" }),
+    // bump writes a file-static; inner is off the surface and calls bump; front is on it, called from pkgs/b
+    "pkgs/a/src/hidden.ts": `let hits = 0;
+function bump(): void {
+  hits++;
+}
+function inner(): void {
+  bump();
+}
+export function front(): void {
+  bump();
+}
+`,
+    "pkgs/b/src/use.ts": `import { front } from "../../a/src/hidden.js";
+export function go(): void {
+  front();
+}
+`,
+  };
+  let ix: Awaited<ReturnType<typeof load>>;
+  beforeAll(async () => {
+    ix = await load(HIDDEN_FILES);
+  });
+
+  it("a function off the surface that calls a helper writing a file-static is fully folded", () => {
+    expect(ix.surface.has("pkgs/a/src/hidden.ts#inner")).toBe(false);
+    const { items } = surfaceChart(ix, "pkgs/a/src/hidden.ts#inner");
+    expect(kptRows(items)).toEqual([]);
+    expect(items.every((i) => i.t === "step" && i.foldId !== undefined)).toBe(true);
+  });
+
+  it("a surface function calling the same helper shows the hidden state as ◆ on its call row", () => {
+    expect(ix.surface.has("pkgs/a/src/hidden.ts#front")).toBe(true);
+    const { items } = surfaceChart(ix, "pkgs/a/src/hidden.ts#front");
+    const call = kptRows(items).find((r) => r.role === "call");
+    expect(call).toMatchObject({ coupling: "state" });
+    expect(call?.hoisted).toContain("◆");
+  });
+});
+
+describe("hoisting past the footprint cap", () => {
+  const CAP_FILES: Record<string, string> = {
+    "package.json": JSON.stringify({ name: "root", private: true }),
+    "pkgs/a/package.json": JSON.stringify({ name: "a" }),
+    "pkgs/b/package.json": JSON.stringify({ name: "b" }),
+    "pkgs/b/src/many.ts": Array.from({ length: 55 }, (_, k) => `export function f${k}(): number {\n  return ${k};\n}\n`).join(""),
+    // wide calls 55 functions of pkgs/b, then writes a file-static: the write is past the 50-entry cap
+    "pkgs/a/src/big.ts": `import { ${Array.from({ length: 55 }, (_, k) => `f${k}`).join(", ")} } from "../../b/src/many.js";
+let tail = 0;
+export function wide(): void {
+${Array.from({ length: 55 }, (_, k) => `  f${k}();`).join("\n")}
+  tail++;
+}
+export function caller(): void {
+  wide();
+}
+`,
+    "pkgs/b/src/use.ts": `import { caller } from "../../a/src/big.js";
+export function go(): void {
+  caller();
+}
+`,
+  };
+  let ix: Awaited<ReturnType<typeof load>>;
+  beforeAll(async () => {
+    ix = await load(CAP_FILES);
+  });
+
+  it("the callee keeps at most 50 entries, and its only state entry is past the cap", () => {
+    const fp = ix.footprints.get("pkgs/a/src/big.ts#wide");
+    expect(fp?.entries.length).toBeLessThanOrEqual(50);
+    expect(fp?.entries.some((e) => e.cls === "state")).toBe(false);
+    expect(fp?.state).toEqual({ writes: 1, reads: 0, hidden: true });
+  });
+
+  it("a surface caller of that callee still shows ◆ on its call row", () => {
+    expect(ix.surface.has("pkgs/a/src/big.ts#caller")).toBe(true);
+    const { items } = surfaceChart(ix, "pkgs/a/src/big.ts#caller");
+    const call = kptRows(items).find((r) => r.role === "call");
+    expect(call?.hoisted).toContain("◆");
+  });
+});
+
+describe("TypeScript globals are project-wide", () => {
+  const GLOBAL_FILES: Record<string, string> = {
+    "package.json": JSON.stringify({ name: "root", private: true }),
+    "pkgs/a/package.json": JSON.stringify({ name: "a" }),
+    "pkgs/b/package.json": JSON.stringify({ name: "b" }),
+    "pkgs/a/src/g1.ts": `export function setA(): void {
+  globalThis.gx = 1;
+}
+export function readA(): number {
+  return globalThis.gx;
+}
+`,
+    "pkgs/b/src/g2.ts": `export function setB(): void {
+  (globalThis as Record<string, number>).gx = 2;
+}
+`,
+  };
+  let ix: Awaited<ReturnType<typeof load>>;
+  beforeAll(async () => {
+    ix = await load(GLOBAL_FILES);
+  });
+
+  it("a global written from two modules is one variable with no owning module, and lists the other writer", () => {
+    const id = "<global>#global:gx";
+    const sv = ix.state.get(id);
+    expect(sv).toMatchObject({ module: undefined, writers: ["pkgs/a", "pkgs/b"], mutable: true });
+    const { items } = surfaceChart(ix, "pkgs/a/src/g1.ts#setA");
+    const row = kptRows(items).find((r) => r.role === "state");
+    expect(row).toMatchObject({ coupling: "state", global: true, write: true });
+    expect(row?.title).toContain("written from pkgs/b");
+  });
+
+  it("a read of the global in its own module is kept as a global row", () => {
+    const { items } = surfaceChart(ix, "pkgs/a/src/g1.ts#readA");
+    expect(kptRows(items).find((r) => r.role === "state")).toMatchObject({ global: true });
+  });
+});
+
+describe("package entries and what they re-export", () => {
+  const ENTRY_FILES: Record<string, string> = {
+    "package.json": JSON.stringify({ name: "root", private: true }),
+    "pkgs/a/package.json": JSON.stringify({ name: "a" }),
+    // src/index.ts is the entry; it re-exports api.ts, which re-exports leaf.ts through mid.ts
+    "pkgs/a/src/index.ts": `export * from "./api.js";
+export function entryOwn(): number {
+  return 1;
+}
+`,
+    "pkgs/a/src/api.ts": `export * from "./mid.js";
+export function apiFn(): number {
+  return 2;
+}
+`,
+    "pkgs/a/src/mid.ts": `export * from "./leaf.js";
+`,
+    "pkgs/a/src/leaf.ts": `export function deepFn(): number {
+  return 3;
+}
+`,
+    // not re-exported by any entry: an exported function here is not part of the surface
+    "pkgs/a/src/deep/hidden.ts": `export function plainExport(): number {
+  return 4;
+}
+`,
+  };
+  let ix: Awaited<ReturnType<typeof load>>;
+  beforeAll(async () => {
+    ix = await load(ENTRY_FILES);
+  });
+
+  it("an exported function of a src/index.* entry is on the surface", () => {
+    expect(ix.surface.has("pkgs/a/src/index.ts#entryOwn")).toBe(true);
+  });
+
+  it("functions re-exported from an entry, through re-export chains, are on the surface", () => {
+    expect(ix.surface.has("pkgs/a/src/api.ts#apiFn")).toBe(true);
+    expect(ix.surface.has("pkgs/a/src/leaf.ts#deepFn")).toBe(true);
+  });
+
+  it("an exported function that no entry re-exports is not on the surface", () => {
+    expect(ix.surface.has("pkgs/a/src/deep/hidden.ts#plainExport")).toBe(false);
+  });
+});
+
+
+describe("named re-exports from a package entry", () => {
+  const NAMED_FILES: Record<string, string> = {
+    "package.json": JSON.stringify({ name: "root", private: true }),
+    "pkgs/c/package.json": JSON.stringify({ name: "c" }),
+    // the entry names one function of impl.ts; impl.ts also exports internal(), which the entry does not re-export
+    "pkgs/c/src/index.ts": `export { pub } from "./impl.js";
+`,
+    "pkgs/c/src/impl.ts": `export function pub(): number {
+  return internal() + 1;
+}
+export function internal(): number {
+  return 2;
+}
+`,
+  };
+  let ix: Awaited<ReturnType<typeof load>>;
+  beforeAll(async () => {
+    ix = await load(NAMED_FILES);
+  });
+
+  it("a named re-export puts the named function on the surface", () => {
+    expect(ix.surface.has("pkgs/c/src/impl.ts#pub")).toBe(true);
+  });
+
+  it("an export of the same file that the entry does not name is not on the surface", () => {
+    expect(ix.surface.has("pkgs/c/src/impl.ts#internal")).toBe(false);
+  });
+});
+
+describe("a rename in the middle of a re-export chain", () => {
+  // The entry re-exports midAlias; mid2 re-exports deepSrc under that name. deepSrc is the function the chain reaches.
+  const CHAIN_FILES: Record<string, string> = {
+    "package.json": JSON.stringify({ name: "root", private: true }),
+    "pkgs/d/package.json": JSON.stringify({ name: "d" }),
+    "pkgs/d/src/index.ts": `export { midAlias } from "./mid2.js";
+export { pub as published } from "./impl.js";
+`,
+    "pkgs/d/src/mid2.ts": `export { deepSrc as midAlias } from "./deep2.js";
+`,
+    "pkgs/d/src/deep2.ts": `export function deepSrc(): number {
+  return 1;
+}
+export function deep2Other(): number {
+  return 2;
+}
+`,
+    "pkgs/d/src/impl.ts": `export function pub(): number {
+  return 3;
+}
+export function internal(): number {
+  return 4;
+}
+`,
+  };
+  let ix: Awaited<ReturnType<typeof load>>;
+  beforeAll(async () => {
+    ix = await load(CHAIN_FILES);
+  });
+
+  it("the source name behind a renamed re-export is on the surface, through the chain", () => {
+    expect(ix.surface.has("pkgs/d/src/deep2.ts#deepSrc")).toBe(true);
+  });
+
+  it("a function the chain does not name stays off the surface", () => {
+    expect(ix.surface.has("pkgs/d/src/deep2.ts#deep2Other")).toBe(false);
+  });
+
+  it("an entry's own export-as rename still puts the source name on the surface (no regression)", () => {
+    expect(ix.surface.has("pkgs/d/src/impl.ts#pub")).toBe(true);
+    expect(ix.surface.has("pkgs/d/src/impl.ts#internal")).toBe(false);
   });
 });

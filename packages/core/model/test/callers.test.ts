@@ -356,5 +356,26 @@ describe("callerGraph: a nested function called directly", () => {
     expect(refs.calls.filter((r) => r.id === fid("visit"))).toHaveLength(1);
   });
 });
+describe("callerGraph: one how per caller, shared with the reference rows", () => {
+  const ref = (how: string, line: number) => fx.edge(fid("K"), fid("T"), "calls", "calls.reference", { attrs: { how }, span: fx.span(F, line, 0, line, 5) });
+  const howOf = (m: ProjectModel, how: "edge" | "row") =>
+    how === "edge" ? callerGraph(scopeView(m, ""), fid("T")).edges.find((e) => e.from === fid("K") && e.to === fid("T"))?.how : refsOf(scopeView(m, ""), fid("T")).calledBy[0]?.how;
+
+  it("an invoking how wins over an alphabetically smaller non-invoking one, in the chain and the box alike", () => {
+    // K both creates a closure of T and renders it: the box must not say closure while the row says jsx.
+    const m = modelOf(["K", "T"], [ref("closure", 1), ref("jsx", 2)]);
+    expect(howOf(m, "edge")).toBe("jsx");
+    expect(howOf(m, "row")).toBe("jsx");
+    expect(howOf(m, "edge")).toBe(howOf(m, "row"));
+  });
+
+  it("keeps the alphabetically smallest when both hows are non-invoking, in either order", () => {
+    for (const hows of [["value", "closure"], ["closure", "value"]]) {
+      const m = modelOf(["K", "T"], hows.map((h, i) => ref(h, i + 1)));
+      expect(howOf(m, "edge")).toBe("closure");
+      expect(howOf(m, "row")).toBe("closure");
+    }
+  });
+});
 
 type CallerGraphOut = ReturnType<typeof callerGraph>;

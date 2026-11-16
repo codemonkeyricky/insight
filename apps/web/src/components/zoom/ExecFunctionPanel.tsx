@@ -3,12 +3,13 @@
 // chart itself is drawn in the function's expansion beside the map (Expansion.tsx). The stats come from the flow store; the rest
 // from the map's build and the scope's index.
 import { useEffect, useMemo, useState } from "react";
-import type { FunctionFlow } from "@insight/flow";
+
+import { resourcesOf, type ExecModel, type ExecResource, type FunctionFlow } from "@insight/flow";
 import { hrefFile, hrefView } from "../../router";
-import { execCallLists, execTrail, PLAIN_FLOW_WORD, type ExecIndex } from "../../zoom/execMap";
+import { execCallLists, execPlacementFor, execRunsOn, execTrail, PLAIN_FLOW_WORD, type ExecIndex } from "../../zoom/execMap";
 import type { ZoomStore } from "../../zoom/scene";
 import type { MapSelected } from "../../zoom/source";
-import { CallLists, ExecTrail, type ListBase } from "./ExecLists";
+import { CallLists, ExecTrail, FnLink, type ListBase } from "./ExecLists";
 import { FunctionDetail } from "./FunctionDetail";
 
 interface Props {
@@ -22,6 +23,8 @@ interface Props {
   store: ZoomStore;
   /** The scope's index: its scene, functions and calls. The trail and the call lists are read from it. */
   index: ExecIndex;
+  /** The scope's execution model: the resources (locks, channels) each function uses. */
+  model: ExecModel;
   /** The focused function's scene node. */
   nodeId: string;
   selected: MapSelected;
@@ -75,6 +78,8 @@ export function CouplingSection({ base, info }: { base: ListBase; info: Coupling
                 ) : (
                   e.label
                 )}
+                {cls === "state" && e.hidden === true && <span className="muted small"> ◆ hidden</span>}
+                {cls === "state" && e.global === true && <span className="muted small"> global</span>}
                 {e.module !== undefined && e.module !== "" && <span className="muted small"> {e.module}</span>}
               </li>
             ))}
@@ -85,7 +90,57 @@ export function CouplingSection({ base, info }: { base: ListBase; info: Coupling
   );
 }
 
-export function ExecFunctionPanel({ id, scope, roots, store, index, nodeId, selected, onOpen }: Props) {
+const KIND_WORD: Record<ExecResource["kind"], string> = { lock: "Lock", channel: "Channel", condvar: "Condvar", semaphore: "Semaphore", atomic: "Atomic" };
+
+/**
+ * The resources the function uses (resourcesOf): one line per resource, its kind and name, then the other functions that
+ * touch it with their operations and threads. Each other function links to its placement, as the call lists do.
+ */
+export function SharedResources({ base, model, index, fnId }: { base: ListBase; model: ExecModel; index: ExecIndex; fnId: string }) {
+  const rows = resourcesOf(model, fnId);
+  if (rows.length === 0) return null;
+  return (
+    <section className="exec-resources" aria-label="Shared resources">
+      <h3>Shared resources</h3>
+      <ul>
+        {rows.map((r) => {
+          // Each other function once, with the operations it performs on the resource, in site order.
+          const byFn = new Map<string, string[]>();
+          for (const s of r.sites) if (s.fn !== fnId) byFn.set(s.fn, [...new Set([...(byFn.get(s.fn) ?? []), s.op])]);
+          return (
+            <li key={r.id}>
+              <span className="small">{KIND_WORD[r.kind]}</span> <span className="mono">{r.name}</span>
+              {byFn.size === 0 ? (
+                <span className="muted small"> used only here</span>
+              ) : (
+                <span className="muted small">
+                  {" "}
+                  with{" "}
+                  {[...byFn].map(([other, ops], i) => {
+                    const name = index.fns.get(other)?.name ?? other;
+                    const thread = execRunsOn(index, index.scene, other);
+                    return (
+                      <span key={other}>
+                        {i > 0 && ", "}
+                        <FnLink base={base} fn={other} nodeId={execPlacementFor(index, other)}>
+                          {name}
+                        </FnLink>{" "}
+                        ({ops.join("/")}
+                        {thread !== undefined ? ` on ${thread}` : ""})
+                      </span>
+                    );
+                  })}
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+export function ExecFunctionPanel({ id, scope, roots, store, index, model, nodeId, selected, onOpen }: Props) {
   const ref = selected.ref;
   const [chart, setChart] = useState<ChartState>();
   useEffect(() => {
@@ -152,6 +207,7 @@ export function ExecFunctionPanel({ id, scope, roots, store, index, nodeId, sele
       )}
       {fn !== undefined && <FunctionDetail id={id} fn={fn} scope={scope} />}
       {fn?.coupling !== undefined && <CouplingSection base={base} info={fn.coupling} />}
+      <SharedResources base={base} model={model} index={index} fnId={ref} />
       <CallLists base={base} lists={lists} />
     </section>
   );

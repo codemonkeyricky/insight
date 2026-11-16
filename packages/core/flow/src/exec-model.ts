@@ -2,8 +2,9 @@ import type { IREdge, IRNode } from "@insight/ir";
 import { edgeTargets } from "@insight/sdk";
 import { insideScope } from "./scope-map.js";
 import { isNoisePath } from "./scope.js";
-import { factsForFile } from "./build.js";
+import { factsForFile, type StateIndex } from "./build.js";
 import { layoutFunction } from "./layout.js";
+import { stateWriteSites, unguardedFromSites, type StateWriteSite } from "./state-writes.js";
 
 /**
  * The execution model of one scope: the threads its code starts, the functions each thread runs, and the
@@ -124,6 +125,11 @@ export interface ExecThread {
   reach: number;
   /** Those functions, sorted by id. Shorter than `reach` only when the model is truncated. */
   reached: string[];
+  /**
+   * The mutable variables this thread writes that another thread also writes with no lock held in common at every write
+   * (`⚠ unguarded shared state`), as names, sorted. Absent when it writes none. The check is project-wide.
+   */
+  unguardedWrites?: string[];
   coroutines: ExecCoroutine[];
   /**
    * The functions this thread reaches only through its coroutines, sorted by id: `reached` without the functions the
@@ -204,9 +210,9 @@ export interface ExecProgram {
  * A resource is listed when one of its sites lies in a listed function.
  */
 export interface ExecResource {
-  /** `lock:<identity>` or `channel:<identity>`. */
+  /** `<kind>:<identity>`, e.g. `lock:m` or `channel:jobs`. */
   id: string;
-  kind: "lock" | "channel";
+  kind: "lock" | "channel" | "condvar" | "semaphore" | "atomic";
   /** The identity the IR gives the lock or channel. */
   name: string;
   /** The threads that run a function with a site, in thread order. Empty when only unthreaded functions use it. */
@@ -219,8 +225,11 @@ export interface ExecResource {
 export interface ExecResourceSite {
   /** The function that performs the operation. */
   fn: string;
-  /** `acquire` for a lock, `send` or `recv` for a channel. */
-  op: "acquire" | "send" | "recv";
+  /**
+   * `acquire` or `release` for a lock, `send` or `recv` for a channel, and for a condvar, semaphore or atomic the
+   * operation the IR gives (`wait`, `notify`, `acquire`, `release` or `op`).
+   */
+  op: "acquire" | "release" | "send" | "recv" | "wait" | "notify" | "op";
   file: string;
   /** 1-based line. 0 when the node has no span. */
   line: number;
@@ -244,6 +253,12 @@ export interface ExecModelStats {
   locks: number;
   /** The channel resources the model lists. */
   channels: number;
+  /** The condition-variable resources the model lists. */
+  condvars: number;
+  /** The semaphore resources the model lists. */
+  semaphores: number;
+  /** The atomic resources the model lists. */
+  atomics: number;
   /** Functions whose file lies in the scope. */
   functionsInScope: number;
   /** Of those, the ones some thread runs, coroutines included. */
@@ -353,16 +368,71 @@ const SPAWN_KINDS: ReadonlySet<string> = new Set(["concurrency.spawn-thread", "c
 const DISPATCH_HOWS: readonly ExecDispatchHow[] = ["await", "start", "callback", "timer", "microtask", "message"];
 const SPAWN_HOWS: readonly ExecSpawnHow[] = ["thread", "process", "async"];
 
-/** The sync and channel nodes that are resource sites: the node kind, what it does, and the attribute naming the resource. */
-const RESOURCE_SITES: Readonly<Record<string, { kind: ExecResource["kind"]; op: ExecResourceSite["op"]; attr: string }>> = {
+/** A resource site before its function and span are known: the resource it touches and what it does there. */
+interface SitePart {
+  kind: ExecResource["kind"];
+  name: string;
+  op: ExecResourceSite["op"];
+  api?: string;
+}
+
+/** The nodes whose kind alone names the resource and the operation: the lock and channel sites. */
+const FIXED_SITES: Readonly<Record<string, { kind: "lock" | "channel"; op: ExecResourceSite["op"]; attr: string }>> = {
   "sync.lock-acquire": { kind: "lock", op: "acquire", attr: "lock" },
   "sync.rwlock-acquire": { kind: "lock", op: "acquire", attr: "lock" },
+  "sync.lock-release": { kind: "lock", op: "release", attr: "lock" },
   // The C++ frontend's RAII guards (lock_guard, unique_lock, scoped_lock, shared_lock). The kind extends
   // sync.lock-acquire in frontend-cpp's kinds.json, but the model reads raw kinds with no registry, so it is named here.
   "x-cpp.scoped-lock": { kind: "lock", op: "acquire", attr: "lock" },
   "concurrency.channel-send": { kind: "channel", op: "send", attr: "channel" },
   "concurrency.channel-recv": { kind: "channel", op: "recv", attr: "channel" },
 };
+
+/** The operations a condvar, semaphore or atomic node may name in its `op` attribute. */
+const SYNC_OPS: readonly ExecResourceSite["op"][] = ["acquire", "release", "wait", "notify", "op"];
+
+/** The sync node kinds whose operation carries its own resource: a condition variable, a semaphore or an atomic. */
+const OP_SITES: ReadonlySet<string> = new Set(["sync.condvar", "sync.semaphore", "sync.atomic-op"]);
+
+/**
+ * The resources one IR node touches. A lock or channel names its resource in one attribute. A condvar or semaphore is
+ * named by `name`, else `api`; one with a `lock` attribute also operates on that lock. An atomic is named by `lock`
+ * alone: with none it is `<dynamic>`, listed but never paired, since an unnamed atomic shares nothing it can prove.
+ * A node with no resource identity gives nothing.
+ */
+function sitePartsOf(n: IRNode): SitePart[] {
+  const api = strAttr(n.attrs, "api");
+  const withApi = (p: Omit<SitePart, "api">): SitePart => (api !== undefined ? { ...p, api } : p);
+  const fixed = FIXED_SITES[n.kind];
+  if (fixed !== undefined) {
+    const name = strAttr(n.attrs, fixed.attr);
+    return name === undefined || name === "" ? [] : [withApi({ kind: fixed.kind, name, op: fixed.op })];
+  }
+  if (!OP_SITES.has(n.kind)) return [];
+  const op = pick(strAttr(n.attrs, "op"), SYNC_OPS);
+  if (op === undefined) return [];
+  if (n.kind === "sync.atomic-op") {
+    const name = nonEmpty(strAttr(n.attrs, "lock")) ?? DYNAMIC_NAME;
+    return [withApi({ kind: "atomic", name, op })];
+  }
+  const name = nonEmpty(strAttr(n.attrs, "name")) ?? nonEmpty(api);
+  if (name === undefined) return [];
+  const parts: SitePart[] = [withApi({ kind: n.kind === "sync.condvar" ? "condvar" : "semaphore", name, op })];
+  const lock = nonEmpty(strAttr(n.attrs, "lock"));
+  if (lock !== undefined) parts.push(withApi({ kind: "lock", name: lock, op }));
+  return parts;
+}
+
+/** The name of a resource the IR could not resolve. Scene edges never pair it, as for an unresolved channel. */
+const DYNAMIC_NAME = "<dynamic>";
+
+const nonEmpty = (s: string | undefined): string | undefined => (s === undefined || s === "" ? undefined : s);
+
+/** The resources a function has a site in: every lock, channel, condvar, semaphore and atomic it operates on there. */
+export function resourcesOf(model: ExecModel, fnId: string): ExecResource[] {
+  // An unresolved (`<dynamic>`) resource is not one shared thing: all such sites share the name, so none is listed as shared.
+  return (model.resources ?? []).filter((r) => r.name !== DYNAMIC_NAME && r.sites.some((s) => s.fn === fnId));
+}
 
 /** The last path segment of a file: the name a module entry's card shows, with its "top level" tag beside it. */
 const basenameOf = (file: string): string => file.slice(file.lastIndexOf("/") + 1);
@@ -475,6 +545,13 @@ export interface ExecPlans {
   readonly scriptFiles: ReadonlySet<string>;
   readonly importedFiles: ReadonlySet<string>;
   readonly sites: readonly SiteRecord[];
+  /** Every write of a mutable variable, with the locks held there. See stateWriteSites. */
+  readonly writes: readonly StateWriteSite[];
+  /**
+   * The threads of the whole project, by the function each reaches. Built lazily and independent of any scope, so the
+   * unguarded badge is the same in a file view as at the project root.
+   */
+  readonly projectThreadOf: () => ReadonlyMap<string, readonly string[]>;
   readonly bodyOf: (id: string, roots: readonly string[], script: string | undefined) => PlanBody;
   readonly chartOf: (file: string, id: string) => [number, number] | undefined;
 }
@@ -487,7 +564,21 @@ const PLANS_CACHE = new WeakMap<object, WeakMap<object, Map<string, ExecPlans>>>
  * same `nodes` and `edges` arrays give the same object, so a second scope on one model costs only its own view. The cache
  * is keyed by array identity, so an array that is mutated after a call must be copied first.
  */
-export function execPlans(nodes: readonly IRNode[], edges: readonly IREdge[], opts: { lambdas?: boolean } = {}): ExecPlans {
+export interface ExecPlansOptions {
+  lambdas?: boolean;
+  /**
+   * The project's state index, when the caller already built it. Without it, `stateWriteSites` builds one to classify
+   * the write sites.
+   */
+  state?: StateIndex;
+  /**
+   * The write sites, when the caller already collected them from built charts. Without it, every file chart is laid out
+   * again to find them.
+   */
+  writes?: readonly StateWriteSite[];
+}
+
+export function execPlans(nodes: readonly IRNode[], edges: readonly IREdge[], opts: ExecPlansOptions = {}): ExecPlans {
   const fold = opts.lambdas !== true;
   let byEdges = PLANS_CACHE.get(nodes);
   if (byEdges === undefined) {
@@ -502,13 +593,13 @@ export function execPlans(nodes: readonly IRNode[], edges: readonly IREdge[], op
   const key = fold ? "fold" : "lambdas";
   let plans = byFold.get(key);
   if (plans === undefined) {
-    plans = buildPlans(nodes, edges, fold);
+    plans = buildPlans(nodes, edges, fold, opts);
     byFold.set(key, plans);
   }
   return plans;
 }
 
-function buildPlans(nodes: readonly IRNode[], edges: readonly IREdge[], fold: boolean): ExecPlans {
+function buildPlans(nodes: readonly IRNode[], edges: readonly IREdge[], fold: boolean, opts: ExecPlansOptions = {}): ExecPlans {
   // The parent of each anonymous function, so a lambda folds to its owner: a function, or the file for module-level code.
   const lambdaParent = new Map<string, string>();
   if (fold) {
@@ -836,28 +927,24 @@ function buildPlans(nodes: readonly IRNode[], edges: readonly IREdge[], fold: bo
   // Spawn nodes, sorted by id. Whether a spawn lies in the scope is the caller's question.
   const spawnNodes = nodes.filter((n) => SPAWN_KINDS.has(n.kind)).sort((a, b) => byText(a.id, b.id));
 
-  // Lock and channel sites: an acquire, send or receive whose parent is a function. Module-level code (a file parent) runs
-  // on no thread, so it is not a site, and the caller also requires the function to be listed.
+  // Resource sites: a lock, channel, condvar, semaphore or atomic operation whose parent is a function. Module-level code
+  // (a file parent) runs on no thread, so it is not a site, and the caller also requires the function to be listed.
   const sites: SiteRecord[] = [];
   for (const n of nodes) {
-    const spec = RESOURCE_SITES[n.kind];
-    if (spec === undefined) continue;
+    const parts = sitePartsOf(n);
+    if (parts.length === 0) continue;
     const fn = n.parent === undefined ? undefined : foldId(n.parent);
     if (fn === undefined || !fns.has(fn)) continue;
-    const name = strAttr(n.attrs, spec.attr);
-    if (name === undefined || name === "") continue;
-    const api = strAttr(n.attrs, "api");
-    sites.push({
-      id: `${spec.kind}:${name}`,
-      kind: spec.kind,
-      name,
-      fn,
-      op: spec.op,
-      file: n.span?.file ?? "",
-      line: n.span ? n.span.start[0] + 1 : 0,
-      ...(api !== undefined ? { api } : {}),
-    });
+    const file = n.span?.file ?? "";
+    const line = n.span ? n.span.start[0] + 1 : 0;
+    for (const p of parts) {
+      sites.push({ id: `${p.kind}:${p.name}`, kind: p.kind, name: p.name, fn, op: p.op, file, line, ...(p.api !== undefined ? { api: p.api } : {}) });
+    }
   }
+
+  // The state writes, with the locks held at each, for the unguarded shared state check. Empty for a project with no data facet.
+  // A caller that already built the charts (the coupling index) passes the sites, so no file chart is laid out twice.
+  const writes = opts.writes ?? stateWriteSites(nodes, edges, opts.state);
 
   // Chart sizes by file, computed on first use: the chart layout is cheap, but only files with a listed function need it.
   const chartSizes = new Map<string, Map<string, [number, number]>>();
@@ -872,6 +959,73 @@ function buildPlans(nodes: readonly IRNode[], edges: readonly IREdge[], fold: bo
       chartSizes.set(file, sizes);
     }
     return sizes.get(id);
+  };
+
+  /**
+   * Every thread of the whole project, with the functions it reaches. Unlike a scope's plans, this is independent of the
+   * view: the main thread starts from every unreferenced function, not only the in-scope ones, and every spawn counts.
+   * The unguarded check reads it so a file view badges the same threads the project root does. Built on first use so an
+   * execution model that never asks pays nothing.
+   */
+  let projectThreads: Map<string, string[]> | undefined;
+  const projectThreadOf = (): ReadonlyMap<string, readonly string[]> => {
+    if (projectThreads !== undefined) return projectThreads;
+    const out = new Map<string, string[]>();
+    const note = (id: string, roots: readonly string[], script?: string): void => {
+      if (roots.length === 0) return;
+      for (const f of bodyOf(id, roots, script).reach) {
+        const list = out.get(f);
+        if (list) list.push(id);
+        else out.set(f, [id]);
+      }
+    };
+    if (!entryMode) {
+      // Project-wide references: a function any project code calls is not a main root.
+      const referencedProject = new Set<string>();
+      for (const { e, from, ids } of keyed) {
+        if (e.kind !== "calls.call" && e.kind !== "calls.reference" && e.kind !== "concurrency.dispatches" && e.kind !== "concurrency.spawns") continue;
+        for (const to of ids) if (to !== from) referencedProject.add(to);
+      }
+      const programMains = new Set(programRecords.flatMap((r) => (r.prog.main !== undefined ? [r.prog.main] : [])));
+      const fallbackEntryModules = [...fns.values()]
+        .filter(
+          (f) =>
+            f.module &&
+            f.file !== undefined &&
+            !f.file.endsWith(".d.ts") &&
+            !scriptFiles.has(f.file) &&
+            (f.htmlEntry || !importedFiles.has(f.file)),
+        )
+        .map((f) => f.id);
+      const roots = [
+        ...[...fns.values()]
+          .filter((f) => !f.anonymous && !f.module && !referencedProject.has(f.id) && !programMains.has(f.id))
+          .map((f) => f.id),
+        ...fallbackEntryModules,
+      ].sort(byText);
+      note("main", roots);
+    }
+    for (const r of programRecords) {
+      note(`main:${r.prog.id}`, r.prog.main !== undefined ? [r.prog.main] : (r.prog.entries ?? []));
+    }
+    for (const n of spawnNodes) {
+      const s = spawnsOf.get(n.id);
+      const targets = s ? [...s.targets].sort(byText) : [];
+      // A target that is not a function is a script file: its top-level code runs the thread, so its callees are roots.
+      const roots = new Set<string>();
+      let script: string | undefined;
+      for (const t of targets) {
+        if (fns.has(t)) {
+          roots.add(t);
+          continue;
+        }
+        script = t;
+        for (const c of callsOf(t)) roots.add(c);
+      }
+      note(n.id, [...roots].sort(byText), script);
+    }
+    projectThreads = out;
+    return out;
   };
 
   return {
@@ -890,6 +1044,8 @@ function buildPlans(nodes: readonly IRNode[], edges: readonly IREdge[], fold: bo
     scriptFiles,
     importedFiles,
     sites,
+    writes,
+    projectThreadOf,
     bodyOf,
     chartOf,
   };
@@ -1103,6 +1259,32 @@ function execModelOf(P: ExecPlans, scope: string, opts: ExecModelOptions): ExecM
     return true;
   };
 
+  // Unguarded shared state, over the whole project: the variables two or more of its threads write with no lock held in
+  // common at every write. Thread membership is each plan's full reach, not the scope's cut. Empty without the data facet.
+  const unguardedVars = (() => {
+    if (P.writes.length === 0) return [];
+    // Project-wide membership, not this scope's cut: a function shown in a file view still counts on the thread that a
+    // spawn outside the file starts, so its badge matches the project root's.
+    const threadOf = P.projectThreadOf();
+    const threadsOfFn = (fn: string): readonly string[] => {
+      let cur = P.foldId(fn);
+      for (let hops = 0; hops <= P.fns.size; hops++) {
+        const hit = threadOf.get(cur);
+        if (hit !== undefined) return hit;
+        const up = P.fns.get(cur)?.parent;
+        if (up === undefined) break;
+        cur = up;
+      }
+      return threadOf.get(`${fn}#(module)`) ?? [];
+    };
+    return [...unguardedFromSites(P.writes, threadsOfFn).variables.values()];
+  })();
+  const unguardedWritesOf = (threadId: string): string[] =>
+    unguardedVars
+      .filter((v) => v.threads.includes(threadId))
+      .map((v) => v.name)
+      .sort(byText);
+
   // The scope's view of each shown thread. Membership and grounding are the whole project's (the plans above); what is
   // listed is only the in-scope functions the thread runs. Its roots are its in-scope roots, plus the in-scope functions
   // it runs that only out-of-scope code starts, so no out-of-scope function is a card or counted in a frame.
@@ -1125,6 +1307,7 @@ function execModelOf(P: ExecPlans, scope: string, opts: ExecModelOptions): ExecM
     }
     // A main thread is grounded when a root is a program's main, a function named `main`, or a module entry; a spawn always is.
     const grounded = p.kind !== "main" || p.roots.some((r) => programMains.has(r) || fns.get(r)?.name === "main" || fns.get(r)?.module === true);
+    const unguardedWrites = unguardedWritesOf(p.id);
     return {
       id: p.id,
       kind: p.kind,
@@ -1133,6 +1316,7 @@ function execModelOf(P: ExecPlans, scope: string, opts: ExecModelOptions): ExecM
       roots,
       reach: reachIn.length,
       reached,
+      ...(unguardedWrites.length > 0 ? { unguardedWrites } : {}),
       coroutines,
       coroutineOnly,
     };
@@ -1222,6 +1406,9 @@ function execModelOf(P: ExecPlans, scope: string, opts: ExecModelOptions): ExecM
       dispatches: dispatches.length,
       locks: resources.filter((r) => r.kind === "lock").length,
       channels: resources.filter((r) => r.kind === "channel").length,
+      condvars: resources.filter((r) => r.kind === "condvar").length,
+      semaphores: resources.filter((r) => r.kind === "semaphore").length,
+      atomics: resources.filter((r) => r.kind === "atomic").length,
       functionsInScope,
       functionsThreaded,
       functionsCoroutineOnly,

@@ -11,7 +11,7 @@ import { CALLOUT_INSET, detailLetter, type CalloutGeometry, type Expansion } fro
 import { displayName } from "../../zoom/names";
 import { fitLabel, labelChars } from "../../zoom/lod";
 import { FlowChart, type FlowNodeCallers } from "../FlowChart";
-import { CALLERS_BTN_H, CALLERS_BTN_W, CallersButton, callersChipW } from "./CallersControl";
+import { CALLERS_BTN_H, CallersButton, callersChipW } from "./CallersControl";
 import { keyActivates } from "./keys";
 
 interface Props {
@@ -41,6 +41,8 @@ interface Props {
   callersOpenOf?: (node: FlowNode) => boolean;
   /** Whether the chart's edges march and pulse (the Flow motion choice; see FlowChart). */
   motion?: boolean;
+  /** The threads the function runs on, for the tooltip: "Main thread, Worker". Absent when not known. */
+  runsOn?: string;
 }
 
 /** The ends of a callout: its geometry in world units before the side shift, and the x each edge moves with (see ZoomMap's writeShift). */
@@ -75,33 +77,34 @@ export function CalloutShape({ ends, closing = false, reduced = false }: { ends:
   );
 }
 
-export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClick, onNodeOpen, onSelect, onClose, onCallers, callersOpen = false, onNodeCallers, callersOpenOf, motion = true }: Props) {
+export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClick, onNodeOpen, onSelect, onClose, onCallers, callersOpen = false, onNodeCallers, callersOpenOf, motion = true, runsOn }: Props) {
   const { chart, x, y, w, h } = expansion;
   // The title is the function's display name; the tooltip and the accessible name keep the full name. The detail's letter
   // stays in the accessible name only.
   const runtime = expansion.runtime;
   // A box on another thread or in another process names its runtime first: "Worker · print.worker", then the function.
   const own = displayName(chart.name, chart.id);
-  // The header's Callers button takes the room left of the close × (CHART_HEAD square), so the name is fitted to what is left.
+  // The header's Callers button sits at the left, before the name; the name is fitted to the room between it and the close × (CHART_HEAD square).
   const chipW = onCallers !== undefined ? callersChipW(k) : 0;
-  const headRoom = onCallers !== undefined ? CHART_HEAD + 4 + (chipW > 0 ? chipW + 8 : 0) : 0;
+  // The name starts 14 in (after the chip and a 6 gap) and ends before the close × (CHART_HEAD square, 4 clear).
+  const headRoom = 14 + (chipW > 0 ? chipW + 6 : 0) + CHART_HEAD + 4;
   const label = fitLabel(runtime === undefined ? own : runtime.label.endsWith(own) ? runtime.label : `${runtime.label} · ${own}`, labelChars((w - headRoom) * k));
   return (
     <g className={`zm-expansion${runtime !== undefined ? " is-runtime" : ""}`} role="group" aria-label={`Detail ${detailLetter(expansion.index)}: ${chart.name}`}>
-      <title>{chart.coupling !== undefined ? `${chart.name}\n${chart.coupling.summary}` : chart.name}</title>
+      <title>{[chart.name, chart.coupling?.summary, runsOn !== undefined ? `runs on ${runsOn}` : undefined].filter((x) => x !== undefined).join("\n")}</title>
       <rect x={x} y={y} width={w} height={h} rx={14} className="zm-expansion-body" />
       <rect x={x} y={y + CALLOUT_INSET} width={3} height={Math.max(0, h - 2 * CALLOUT_INSET)} rx={1.5} className="zm-expansion-accent" />
       <g className="zm-expansion-title" onClick={onSelect}>
         <rect x={x} y={y} width={w} height={CHART_HEAD} rx={14} className="zm-expansion-head" />
         <line x1={x + 12} x2={x + w - 12} y1={y + CHART_HEAD} y2={y + CHART_HEAD} className="zm-expansion-rule" />
         {label !== null && (
-          <text x={x + 14} y={y + CHART_HEAD / 2} dominantBaseline="central" className="zm-label">
+          <text x={x + 14 + (chipW > 0 ? chipW + 6 : 0)} y={y + CHART_HEAD / 2} dominantBaseline="central" className="zm-label">
             <tspan className={runtime !== undefined ? "zm-expansion-runtime" : "zm-card-glyph"}>{runtime !== undefined ? (runtime.kind === "process" ? "▣" : "⑂") : "ƒ"}</tspan>{" "}{label}
           </text>
         )}
       </g>
       {onCallers !== undefined && (
-        <CallersButton x={x + w - CHART_HEAD - 4 - CALLERS_BTN_W} y={y + (CHART_HEAD - CALLERS_BTN_H) / 2} name={chart.name} open={callersOpen} onClick={onCallers} k={k} />
+        <CallersButton x={x + 14} y={y + (CHART_HEAD - CALLERS_BTN_H) / 2} name={chart.name} open={callersOpen} onClick={onCallers} k={k} />
       )}
       <g
         className="zm-expansion-close"

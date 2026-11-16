@@ -6,7 +6,7 @@ import { hrefFile, hrefView } from "../router";
 import { backEdgeFlags, prefersReducedMotion, useOnScreen, usePageVisible } from "../zoom/flowMotion";
 import { runFlowToken, useTokenSlot } from "../zoom/flowToken";
 import { popDelay } from "../zoom/pop";
-import { CALLERS_BTN_H, CALLERS_BTN_W, CallersButton, callersChipW } from "./zoom/CallersControl";
+import { CALLERS_BTN_H, CallersButton, callersChipW } from "./zoom/CallersControl";
 
 /** The width of one character of a step's label, in chart units: the label's 12 px code font. */
 const NEST_CHAR_W = 7.3;
@@ -166,7 +166,7 @@ function NestFrame({ node, onNodeClick, onNodeOpen, onCallers, callersOpen, k, s
   const lane = laneOf((node.lane ?? 0) + 1);
   const lc = laneOf(node.lane);
   const [cx, cy] = station(node);
-  // With a Callers button in the header, the label is cut to the room left of it (the full name stays in the tooltip).
+  // With a Callers button in the header (at its left, before the name), the label is cut to the room after it (the full name stays in the tooltip).
   const chipW = onCallers !== undefined && node.target !== undefined ? callersChipW(k) : 0;
   const callers = chipW > 0;
   const room = x + w - CHEV_INSET - CHEV_HIT - 4 - chipW - 6 - labelAt(node);
@@ -187,14 +187,15 @@ function NestFrame({ node, onNodeClick, onNodeOpen, onCallers, callersOpen, k, s
       >
         <rect x={x} y={y} width={w} height={NEST_HEAD} rx={10} className="flow-nest-hit" />
         <CallStation cx={cx} cy={cy} />
-        <text x={labelAt(node)} y={cy} dominantBaseline="central" className="flow-text flow-nest-label">
+        <text x={labelAt(node) + (callers ? chipW + 6 : 0)} y={cy} dominantBaseline="central" className="flow-text flow-nest-label">
           {node.tag !== undefined && <tspan className="flow-kw">{node.tag} </tspan>}
           {label}
         </text>
         <Chevron node={node} x={x + w - CHEV_INSET - CHEV_HIT / 2} y={y} fold onNodeOpen={onNodeOpen} />
         {onCallers !== undefined && node.target !== undefined && (
-          // Left of the fold mark: the callers of the callee this frame nests.
-          <CallersButton x={x + w - CHEV_INSET - CHEV_HIT - 4 - CALLERS_BTN_W} y={y + (NEST_HEAD - CALLERS_BTN_H) / 2} name={node.label} open={callersOpen} onClick={() => onCallers(node)} k={k} />
+          // Left of the name: the callers of the callee this frame nests. Its box opens left when the chart replaced its
+          // card in place, and right when the chart opened from a call step (see expand.ts's opensLeft).
+          <CallersButton x={labelAt(node)} y={y + (NEST_HEAD - CALLERS_BTN_H) / 2} name={node.label} open={callersOpen} onClick={() => onCallers(node)} k={k} />
         )}
       </g>
     </g>
@@ -255,7 +256,7 @@ function Station({ node, cx, cy, resolved }: { node: FlowNode; cx: number; cy: n
     );
   }
   if (role === "call") return <CallStation cx={cx} cy={cy} open={resolved || node.target === undefined} />;
-  if (role === "effect") return <rect className="st effect" x={cx - 3.5} y={cy - 3.5} width={7} height={7} rx={1.5} />;
+  if (role === "effect" || role === "sync" || role === "state") return <rect className="st effect" x={cx - 3.5} y={cy - 3.5} width={7} height={7} rx={1.5} />;
   if (shape === "label") return <path className="st tick" d={`M${cx - 4} ${cy}H${cx + 4}`} />;
   return <circle className="st step" cx={cx} cy={cy} r={3.5} />;
 }
@@ -299,19 +300,21 @@ function Node({ id, node, fnId, scope, width, onNodeClick, onNodeOpen, selected,
   if (node.foldId !== undefined) return <FoldRow node={node} width={width} onNodeClick={onNodeClick} onNodeOpen={onNodeOpen} selected={selected} delay={delay} />;
   const { shape } = node;
   const [cx, cy] = station(node);
-  const target = node.target;
+  // A state row's target is its variable, not a function: it is not a call into the scope.
+  const target = node.role === "state" ? undefined : node.target;
   const outside = target !== undefined && outsideScope(target, scope);
   const inside = (target !== undefined && !outside && target !== fnId) || shape === "fork";
   const kw = keywordOf(node);
   const body = (
     <>
-      <title>{outside && target !== undefined ? outsideText(target) : (node.title ?? node.label)}</title>
+      <title>{`${outside && target !== undefined ? outsideText(target) : (node.title ?? node.label)}${node.unguarded ? " · ⚠ unguarded shared state" : ""}`}</title>
       <rect x={4} y={node.y} width={Math.max(0, width - 8)} height={ROW_H} rx={7} className="flow-hit" />
       <Station node={node} cx={cx} cy={cy} resolved={!outside} />
       <text x={labelAt(node)} y={cy} dominantBaseline="central" className="flow-text">
         {node.tag !== undefined && <tspan className="flow-kw">{node.tag} </tspan>}
         {kw !== undefined && <tspan className="flow-kw">{kw} </tspan>}
         {node.label}
+        {node.unguarded && <tspan className="flow-warn">{" ⚠"}</tspan>}
         {outside && <tspan className="flow-mark">{" ↗"}</tspan>}
       </text>
       {inside && <Chevron node={node} x={width - 4 - CHEV_INSET - CHEV_HIT / 2} y={node.y} fold={shape === "fork"} onNodeOpen={onNodeOpen} />}
@@ -319,7 +322,8 @@ function Node({ id, node, fnId, scope, width, onNodeClick, onNodeOpen, selected,
   );
   const cp = couplingClassOf(node);
   // The write-to-disk rows of the coupling view are drawn stronger than the other IO rows (see styles.css).
-  const cpCls = cp === undefined ? "" : ` cp-${cp}${cp === "io" && node.label.startsWith("fs.write") ? " cp-io-write" : ""}`;
+  // A write to a variable, and a global variable, are drawn stronger than the other state rows (see styles.css).
+  const cpCls = cp === undefined ? "" : ` cp-${cp}${cp === "io" && node.label.startsWith("fs.write") ? " cp-io-write" : ""}${cp === "state" && node.write ? " cp-state-write" : ""}${cp === "state" && node.global ? " cp-global" : ""}${cp === "state" && node.unguarded ? " cp-unguarded" : ""}`;
   const cls = `flow-node ${shape} role-${node.role} c${laneOf(node.lane)}${outside ? " unresolved" : ""}${inside ? " resolves" : ""}${selected ? " selected" : ""}${cpCls}`;
   const style = delayStyle(delay);
   // A call into this scope opens the callee's chart; every other step with a span opens its source line.

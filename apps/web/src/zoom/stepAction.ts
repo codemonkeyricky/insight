@@ -3,6 +3,15 @@
 import type { FlowNode } from "@insight/flow";
 import type { StepRuntime } from "../flowTargets";
 
+/**
+ * The callee a row opens: its target, unless the row is a state row (a read or write of a variable calls nothing) or the
+ * target is the row's own function. Undefined when the row has no callee.
+ */
+export function stepCallee(node: Pick<FlowNode, "role" | "target">, owner: string | undefined): string | undefined {
+  if (node.role === "state" || node.target === undefined || node.target === owner) return undefined;
+  return node.target;
+}
+
 export type StepGesture = "click" | "open";
 export type StepActionKind = "select" | "inline" | "fold" | "fork" | "lambda" | "unfold" | "none";
 

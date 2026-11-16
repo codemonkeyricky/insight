@@ -68,4 +68,9 @@ describe("outsideSteps", () => {
   it("lists nothing when the scope holds every callee", () => {
     expect(outsideSteps(fn([step("1", "src/a.ts#a")]), "")).toEqual([]);
   });
+
+  it("lists no outside call for a state row, whose target is a variable of another folder", () => {
+    const state: FlowNode = { ...step("1", "lib/c.ts#var:counter"), role: "state" };
+    expect(outsideSteps(fn([state, step("2", "lib/c.ts#c")]), "src/a.ts").map((s) => s.target)).toEqual(["lib/c.ts#c"]);
+  });
 });

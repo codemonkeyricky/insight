@@ -210,7 +210,7 @@ interface Item extends Size {
   /** Starts a new row even when the row has room: the group sits under the threads and processes. */
   breakBefore?: boolean;
   /** The room kept clear beside the box for its expansions (see Footprint). The box itself keeps its size. */
-  room?: Size;
+  room?: Size & { left?: number };
 }
 
 /** Packs boxes in rows of at most `wrap` wide, top-left aligned, with CARD_GAP between them both ways. */
@@ -221,14 +221,15 @@ function pack(items: readonly Item[], wrap: number): { w: number; h: number; slo
   let rowH = 0;
   let width = 0;
   for (const it of items) {
-    const outerW = it.w + (it.room?.w ?? 0);
+    const left = it.room?.left ?? 0;
+    const outerW = left + it.w + (it.room?.w ?? 0);
     const outerH = Math.max(it.h, it.room?.h ?? 0);
     if (x > 0 && (it.breakBefore === true || x + outerW > wrap)) {
       y += rowH + CARD_GAP;
       x = 0;
       rowH = 0;
     }
-    slots.push({ id: it.id, x, y, w: it.w, h: it.h });
+    slots.push({ id: it.id, x: x + left, y, w: it.w, h: it.h });
     x += outerW + CARD_GAP;
     rowH = Math.max(rowH, outerH);
     width = Math.max(width, x - CARD_GAP);

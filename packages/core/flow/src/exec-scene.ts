@@ -6,8 +6,8 @@
 // A function is drawn once per place it runs: a helper two threads call has a box in each thread, and the call edges
 // of one thread stay inside that thread. Pure and deterministic: the scene depends only on the model's content, not
 // on the order of its call pairs.
-import type { ExecCoroutine, ExecFunctionRef, ExecModel, ExecProgram, ExecResourceSite, ExecSpawn, ExecThread } from "./exec-model.js";
-import type { Scene, SceneEdge, SceneEdgeKind, SceneLevel, SceneNode } from "./scene.js";
+import type { ExecCoroutine, ExecFunctionRef, ExecModel, ExecProgram, ExecResource, ExecResourceSite, ExecSpawn, ExecThread } from "./exec-model.js";
+import { addSyncResources, syncEdgeKey, type Scene, type SceneEdge, type SceneEdgeKind, type SceneLevel, type SceneNode } from "./scene.js";
 import { LAYERED, ZOOM_SIZE } from "./zoom-layout.js";
 import { programHeaderNames } from "./names.js";
 
@@ -15,6 +15,8 @@ import { programHeaderNames } from "./names.js";
 export const EXEC_PROJECT_ROOT = "project";
 /** Most sync edges one lock or channel adds. The rest are skipped, in the order the pairs are made. */
 export const MAX_SYNC_EDGES_PER_RESOURCE = 50;
+/** The name the IR gives a channel whose identity it could not resolve. Such a channel is listed but never paired. */
+const DYNAMIC_CHANNEL = "<dynamic>";
 /** The synthetic process that holds the grounded main threads no program owns. */
 export const MAIN_PROCESS_ID = "prog:main";
 
@@ -94,6 +96,37 @@ function externalLabel(s: ExecSpawn): string {
   const cmd = s.command !== undefined && s.command !== "" && s.command !== DYNAMIC_ARG ? s.command : undefined;
   if (s.script !== undefined && s.script !== "" && (s.api === "child_process.fork" || cmd === "node")) return `node ${basename(s.script)}`;
   return cmd ?? "dynamic command";
+}
+
+/**
+ * The name a thread shows: the function it runs, else its script's base name without the extension, else the API that
+ * starts it. Shared by the scene's thread boxes and the peers named on a chart's sync rows, so both agree.
+ */
+export function threadNameOf(t: ExecThread, fns: ReadonlyMap<string, ExecFunctionRef>): string {
+  const first = t.roots[0];
+  const f = first !== undefined ? fns.get(first) : undefined;
+  if (f !== undefined) return f.name;
+  // A frame header names what runs, not a file: a script's base name without its extension.
+  if (t.spawn?.script !== undefined && t.spawn.script !== "") return basename(t.spawn.script).replace(/\.[^.]+$/, "");
+  // No target is known: name the spawn by its API, so the box says what starts the thread.
+  const s = t.spawn;
+  if (s === undefined) return "unresolved";
+  const api = s.api !== undefined && s.api !== "" ? (s.api.split(".").pop() ?? s.api) : undefined;
+  return api ?? "unresolved";
+}
+
+/**
+ * The label a thread has in the scene and on the rows that name its peers: "Main thread" for the main thread or a process,
+ * "Worker" for a thread that runs a script (its file names it), else the kind and the name (threadNameOf).
+ */
+export function threadLabelOf(t: ExecThread, fns: ReadonlyMap<string, ExecFunctionRef>): string {
+  if (t.kind === "main" || t.kind === "process") return "Main thread";
+  const script = t.spawn?.script;
+  // A browser Worker runs its file's module entry, so its file is the module root's file.
+  const moduleFile = t.roots.map((r) => fns.get(r)).find((f) => f?.module === true)?.file;
+  const workerFile = script !== undefined && script !== "" ? script : t.spawn?.api === "Worker" ? moduleFile : undefined;
+  if (workerFile !== undefined && workerFile !== "") return "Worker";
+  return `${KIND_LABEL[t.kind] ?? t.kind} · ${threadNameOf(t, fns)}`;
 }
 
 /** The placements of one function in one thread (or the project, for plain code flow). */
@@ -232,17 +265,7 @@ export function buildExecScene(model: ExecModel): Scene {
     return addProcess(execProgramId(p.id), named, "", parts.join(" "), title);
   };
 
-  const threadName = (t: ExecThread): string => {
-    const first = t.roots[0];
-    if (first !== undefined && fns.has(first)) return nameOf(first);
-    // A frame header names what runs, not a file: a script's base name without its extension.
-    if (t.spawn?.script !== undefined && t.spawn.script !== "") return basename(t.spawn.script).replace(/\.[^.]+$/, "");
-    // No target is known: name the spawn by its API, so the box says what starts the thread.
-    const s = t.spawn;
-    if (s === undefined) return "unresolved";
-    const api = s.api !== undefined && s.api !== "" ? (s.api.split(".").pop() ?? s.api) : undefined;
-    return api ?? "unresolved";
-  };
+  const threadName = (t: ExecThread): string => threadNameOf(t, fns);
 
   // The process box a grounded thread's box sits in, made when first asked. Undefined when the box sits on the project.
   // A spawned thread sits in its spawner's process, so this recurses up the spawns; the memo ends a cycle of them.
@@ -345,8 +368,7 @@ export function buildExecScene(model: ExecModel): Scene {
   const edges = new Map<string, SceneEdge>();
   const addEdge = (from: string, to: string, kind: SceneEdgeKind, how?: string, candidate?: boolean): void => {
     if (from === to) return;
-    // A lock and a channel that join the same two placements stay two edges: the same pair with another `how` is a new key.
-    const k = `${from}\u0000${to}\u0000${kind}\u0000${kind === "sync" ? (how ?? "") : ""}`;
+    const k = `${from}\u0000${to}\u0000${kind}`;
     const e = edges.get(k);
     if (e !== undefined) {
       e.count += 1;
@@ -420,8 +442,10 @@ export function buildExecScene(model: ExecModel): Scene {
     if (fromRoot !== undefined && nodes.has(execThreadId(t.id))) addEdge(fromRoot, execThreadId(t.id), "spawn", spawn.how, spawn.candidates);
   }
 
-  // Sync edges, one per resource and thread pair. The site is the first one of the right op that a thread runs; a
-  // placement is the thread's own when the function has one there, else its first.
+  // Sync edges, one per resource pair of threads. The site is the first one of the right op that a thread runs; a
+  // placement is the thread's own when the function has one there, else its first. Resources that join the same two
+  // placements merge into one edge that names them all. A channel edge runs from sender to receiver; the others are
+  // undirected, and a directed and an undirected edge on one pair stay two edges.
   const threadKeys = model.threads.map((t) => execThreadId(t.id));
   const firstSite = (sites: readonly ExecResourceSite[], ops: readonly string[], threadKey: string): string | undefined => {
     for (const s of sites) {
@@ -431,10 +455,24 @@ export function buildExecScene(model: ExecModel): Scene {
     }
     return undefined;
   };
+  const addSync = (from: string, to: string, r: ExecResource, directed: boolean): void => {
+    if (from === to) return;
+    const k = syncEdgeKey(from, to, directed);
+    const part = { name: r.name, kind: r.kind };
+    const e = edges.get(k);
+    if (e === undefined) {
+      edges.set(k, { from, to, kind: "sync", count: 1, how: r.kind, directed, resources: [part] });
+      return;
+    }
+    e.count += 1;
+    e.resources = addSyncResources(e.resources ?? [], [part]);
+  };
   for (const r of model.resources ?? []) {
+    // A resource whose name the IR could not resolve is one resource for every such site: listed, but never paired.
+    if (r.name === DYNAMIC_CHANNEL) continue;
     const pairs: [string, string][] = [];
-    if (r.kind === "lock") {
-      const at = threadKeys.map((k) => firstSite(r.sites, ["acquire"], k));
+    if (r.kind === "lock" || r.kind === "condvar" || r.kind === "semaphore" || r.kind === "atomic") {
+      const at = threadKeys.map((k) => firstSite(r.sites, r.kind === "lock" ? ["acquire"] : ["wait", "notify", "acquire", "release", "op"], k));
       for (let i = 0; i < at.length; i++) {
         const a = at[i];
         if (a === undefined) continue;
@@ -443,20 +481,21 @@ export function buildExecScene(model: ExecModel): Scene {
           if (b !== undefined) pairs.push([a, b]);
         }
       }
-    } else {
-      // Each thread that sends to a channel reaches each other thread that receives from it.
-      const sendAt = threadKeys.map((k) => firstSite(r.sites, ["send"], k));
-      const recvAt = threadKeys.map((k) => firstSite(r.sites, ["recv"], k));
-      for (let i = 0; i < sendAt.length; i++) {
-        const a = sendAt[i];
-        if (a === undefined) continue;
-        for (let j = 0; j < recvAt.length; j++) {
-          const b = recvAt[j];
-          if (b !== undefined && i !== j) pairs.push([a, b]);
-        }
+      for (const [a, b] of pairs.slice(0, MAX_SYNC_EDGES_PER_RESOURCE)) addSync(a, b, r, false);
+      continue;
+    }
+    // Each thread that sends to a channel reaches each other thread that receives from it.
+    const sendAt = threadKeys.map((k) => firstSite(r.sites, ["send"], k));
+    const recvAt = threadKeys.map((k) => firstSite(r.sites, ["recv"], k));
+    for (let i = 0; i < sendAt.length; i++) {
+      const a = sendAt[i];
+      if (a === undefined) continue;
+      for (let j = 0; j < recvAt.length; j++) {
+        const b = recvAt[j];
+        if (b !== undefined && i !== j) pairs.push([a, b]);
       }
     }
-    for (const [a, b] of pairs.slice(0, MAX_SYNC_EDGES_PER_RESOURCE)) addEdge(a, b, "sync", r.kind);
+    for (const [a, b] of pairs.slice(0, MAX_SYNC_EDGES_PER_RESOURCE)) addSync(a, b, r, true);
   }
 
   const edgeList = [...edges.values()].sort(
@@ -477,21 +516,9 @@ export function buildExecScene(model: ExecModel): Scene {
   return { root: rootId, nodes, edges: edgeList, levels: EXEC_LEVELS };
 
   function threadNode(t: ExecThread, id: string, parent: string): SceneNode {
-    const script = t.spawn?.script;
     // A process that runs an external command has no function of its own: it is a leaf named by what it runs.
     const external = t.kind === "process" && t.reach === 0 && t.spawn?.status === "unresolved";
-    // A thread that runs a script file is a worker: named by its file, the way a worker is named in the IR. A browser Worker
-    // runs its file's module entry, so its file is the module root's file.
-    const moduleFile = t.roots.map((r) => fns.get(r)).find((f) => f?.module === true)?.file;
-    const workerFile = script !== undefined && script !== "" ? script : t.spawn?.api === "Worker" ? moduleFile : undefined;
-    const label =
-      external && t.spawn !== undefined
-        ? externalLabel(t.spawn)
-        : t.kind === "main" || t.kind === "process"
-          ? "Main thread"
-          : workerFile !== undefined && workerFile !== ""
-            ? "Worker"
-            : `${KIND_LABEL[t.kind] ?? t.kind} · ${threadName(t)}`;
+    const label = external && t.spawn !== undefined ? externalLabel(t.spawn) : threadLabelOf(t, fns);
     const node: SceneNode = {
       id,
       kind: "thread",
@@ -500,6 +527,7 @@ export function buildExecScene(model: ExecModel): Scene {
       children: [],
       detail: plural(t.reach, "function"),
       ...(external ? { external: true } : {}),
+      ...(t.unguardedWrites !== undefined && t.unguardedWrites.length > 0 ? { unguarded: [...t.unguardedWrites] } : {}),
     };
     const s = t.spawn;
     if (s !== undefined) {

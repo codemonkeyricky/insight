@@ -132,7 +132,7 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
               // The code pane shows code. A function's exec panel goes there; a file's or folder's summary stays in the centre.
               const view = exec.viewOf(build);
               if (view === undefined || slot === null || build.selected === undefined) return null;
-              const panel = { id, scope: build.path, roots, store, index: view.index, nodeId: build.nodeId, onOpen: openNode };
+              const panel = { id, scope: build.path, roots, store, index: view.index, model: view.model, nodeId: build.nodeId, onOpen: openNode };
               return createPortal(<ExecFunctionPanel {...panel} selected={build.selected} />, slot);
             }}
           />

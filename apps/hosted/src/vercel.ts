@@ -1,10 +1,12 @@
 // The Vercel Function entry: one function serves every hosted route. POST /api/index starts an index job (the job runs in
 // waitUntil, so the response returns at once with 202 and the function runs until the job finishes or the watchdog fires),
-// GET /api/status reads a run's status, GET /api/health reports the storage kind, /api/auth/* is the GitHub sign-in, and
+// GET /api/status reads a run's status, GET /api/coupling reads an indexed project's coupling footprint (the same JSON
+// the local server answers), GET /api/health reports the storage kind, /api/auth/* is the GitHub sign-in, and
 // /api/private/* reads private indexes. The route comes from the `route` query parameter (set by the rewrites in config.json)
 // or, failing that, from the path.
 import { waitUntil } from "@vercel/functions";
 import { handleCallback, handleLogin, handleLogout, handleMe } from "./auth.js";
+import { handleCoupling } from "./coupling.js";
 import { buildDeps, storageFromEnv } from "./env.js";
 import { handleHealth, handleIndex, handleStatus } from "./indexer.js";
 import { handleGrant, handleLatest, handleRepos, handleSource } from "./private.js";
@@ -13,6 +15,7 @@ import type { FetchLike } from "./storage.js";
 export type Route =
   | "index"
   | "status"
+  | "coupling"
   | "health"
   | "auth-login"
   | "auth-callback"
@@ -26,6 +29,7 @@ export type Route =
 const ROUTE_NAMES: readonly Route[] = [
   "index",
   "status",
+  "coupling",
   "health",
   "auth-login",
   "auth-callback",
@@ -39,6 +43,7 @@ const ROUTE_NAMES: readonly Route[] = [
 const PATHS: Record<string, Route> = {
   "/api/index": "index",
   "/api/status": "status",
+  "/api/coupling": "coupling",
   "/api/health": "health",
   "/api/auth/login": "auth-login",
   "/api/auth/callback": "auth-callback",
@@ -69,6 +74,8 @@ export async function handleRequest(request: Request): Promise<Response> {
         return await handleIndex(request, buildDeps(env, { waitUntil }));
       case "status":
         return await handleStatus(request, { storage: storageFromEnv(env), env, fetch: fetchFn });
+      case "coupling":
+        return await handleCoupling(request, { storage: storageFromEnv(env), env, fetch: fetchFn });
       case "health":
         return handleHealth({ storage: storageFromEnv(env) });
       case "auth-login":

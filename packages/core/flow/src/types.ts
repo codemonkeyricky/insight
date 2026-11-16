@@ -15,6 +15,8 @@ export type FlowRole =
   | "await"
   | "spawn"
   | "effect"
+  | "sync"
+  | "state"
   | "branch"
   | "switch"
   | "loop"
@@ -27,8 +29,8 @@ export type FlowRole =
   | "continue";
 
 /**
- * What a chart row is for the coupling view: a local row, or the boundary it crosses. `state` and `ctl` are reserved for
- * phases 3 and 4 of the coupling view: no row takes them yet.
+ * What a chart row is for the coupling view: a local row, or the boundary it crosses. `ctl` is a branch or loop kept
+ * because its condition reads a local that carries an external value (the phase-4 taint pass), even when its body is local.
  */
 export type CouplingClass = "local" | "cross" | "io" | "state" | "conc" | "escape" | "ctl";
 
@@ -48,6 +50,8 @@ export interface FlowNode {
   target?: string;
   /** The step is a handler the code installs (`onmessage = …`): it opens its target, even a folded lambda. */
   handler?: true;
+  /** A lock or channel row: the resource it names, as the model names it (peers are matched by this, not by the label). */
+  resource?: { kind: "lock" | "channel"; name: string };
   /** The row's coupling class (coupling view only). */
   coupling?: CouplingClass;
   /** What a local call hoists from its callee, or `may throw` for a cross call (coupling view only). */
@@ -58,6 +62,14 @@ export interface FlowNode {
   fold?: number;
   /** An open fold's header row (`▾ n local`): folding it back closes the fold. */
   open?: boolean;
+  /** A state row (coupling view only): the variable is written, not only read. */
+  write?: true;
+  /** A state row (coupling view only): module-private state the function reaches from its module's surface. */
+  hidden?: true;
+  /** A state row (coupling view only): global state, visible from every module. */
+  global?: true;
+  /** A state write (coupling view only): the variable is also written from another thread with no lock held in common. */
+  unguarded?: true;
   /** Absolute lane of the node's station (line map layout). */
   lane?: number;
   /** Absolute x where the label text starts. */

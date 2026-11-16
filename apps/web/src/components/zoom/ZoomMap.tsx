@@ -33,7 +33,7 @@ import { FarCards, type FarCard } from "./FarCards";
 import { zoneCells, zoneLetter, zoneLines } from "../../zoom/zones";
 import { offMapSelected } from "../../zoom/offMap";
 import type { ZoomStore } from "../../zoom/scene";
-import { stepAction, type StepContext } from "../../zoom/stepAction";
+import { stepAction, stepCallee, type StepContext } from "../../zoom/stepAction";
 import { CalloutShape, ExpansionShape, type CalloutEnds } from "./Expansion";
 
 /** The camera's scale range: from the whole project down to a single line of a chart. */
@@ -62,6 +62,18 @@ const NARROW_STAGE_PX = 520;
 const SHEET_ROOM_MARGIN = 16;
 /** A function tile at least this tall on screen (px) shows its name in the mid tier. */
 const TILE_LABEL_PX = 16;
+
+/**
+ * Annotates a chart (MapSource.annotateChart: its messages, its resource peers). An annotation that throws leaves the chart
+ * as it is, so the chart still shows.
+ */
+function annotateOrKeep(chart: FunctionFlow, annotate: () => FunctionFlow): FunctionFlow {
+  try {
+    return annotate();
+  } catch {
+    return chart;
+  }
+}
 
 /**
  * The room the status pill takes at the bottom of a desktop stage: its measured height (or the fallback) and a gap. Nothing
@@ -146,6 +158,17 @@ function writeShift(root: SVGGElement, sh: ShiftState) {
     if (dx === 0) el.removeAttribute("transform");
     else el.setAttribute("transform", `translate(${dx} 0)`);
   }
+  // A frame that spans a pivot (it holds the card a box opens beside) widens by the shift of its right edge less the shift of
+  // its left, so what slid right stays inside it. Its body, header and right-aligned count follow.
+  for (const el of root.querySelectorAll<SVGElement>("g[data-sw]")) {
+    const x = Number(el.getAttribute("data-sx"));
+    const w = Number(el.getAttribute("data-sw"));
+    const dw = displayShift(sh, x + w) - displayShift(sh, x);
+    if (dw === 0 && el.getAttribute("data-dw") === "0") continue;
+    el.setAttribute("data-dw", String(dw));
+    for (const r of el.querySelectorAll<SVGRectElement>("rect.zm-frame-body, rect.zm-frame-head")) r.setAttribute("width", String(w + dw));
+    for (const t of el.querySelectorAll<SVGTextElement>("text[data-cx]")) t.setAttribute("x", String(Number(t.getAttribute("data-cx")) + dw));
+  }
   for (const el of root.querySelectorAll<SVGPathElement>("path[data-sd]")) {
     const nums = (el.getAttribute("data-sd") ?? "").match(/-?\d+(?:\.\d+)?/g)?.map(Number);
     if (nums === undefined || nums.length !== 8) continue;
@@ -167,7 +190,10 @@ function writeShift(root: SVGGElement, sh: ShiftState) {
 function endsOf(e: Expansion, list: readonly Expansion[]): CalloutEnds | undefined {
   const c = calloutOf(e, list);
   if (c === undefined) return undefined;
-  return { ...c, s1: e.anchor.kind === "box" ? e.anchor.rect.x : e.pivot, s2: e.pivot };
+  // The anchor's edge shifts with the anchor: a card by its own x, a step by its parent expansion's pivot.
+  const anchorId = e.anchor.kind === "step" ? e.anchor.fnId : undefined;
+  const s1 = e.anchor.kind === "box" ? e.anchor.rect.x : (list.find((p) => p.fnId === anchorId)?.pivot ?? e.pivot);
+  return { ...c, s1, s2: e.pivot };
 }
 
 /** What the map has selected, for the page's source panel: the function, its build, and the construct picked in its chart. */
@@ -401,7 +427,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
       }
     }
     const gone = expRef.current.filter((e) => !list.some((x) => x.fnId === e.fnId));
-    // A control of a box that closes (its ×, a row, a ▸, or a control of a box chained from it) unmounts with the box, and
+    // A control of a box that closes (its ×, a row, a ◂, or a control of a box chained from it) unmounts with the box, and
     // the focus would fall to the page, where the map's keys no longer reach. Whether the focus is in the map is noted now,
     // before the box goes; the stage takes it back after the commit (see refocusIfLost).
     if (gone.length > 0 && focusInMap()) refocusRef.current = true;
@@ -634,12 +660,19 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   /** The view an expansion is placed on: the visible world, except on a slotted build, where the layout keeps the room. */
   const placeView = (b: MapBuild) => (b.slotted ? undefined : visibleWorld(cameraRef.current, sizeOf()));
 
-  /** A function's chart, or undefined when it has none to draw (no chart source, no such function, too large, empty). */
+  /**
+   * A function's chart, or undefined when it has none to draw (no chart source, no such function, too large, empty). The
+   * build on the map annotates it (MapSource.annotateChart), so its sync rows name their peers.
+   */
   const loadChart = async (fnId: string): Promise<FunctionFlow | undefined> => {
     if (charts === undefined) return undefined;
     try {
       const f = await loadFunctionChart(charts.store, fnId);
-      return f === undefined || f.tooLarge || f.nodes.length === 0 ? undefined : f;
+      if (f === undefined || f.tooLarge || f.nodes.length === 0) return undefined;
+      const b = buildRef.current;
+      const annotate = source.annotateChart;
+      if (b === undefined || annotate === undefined) return f;
+      return annotateOrKeep(f, () => annotate(b, fnId, f));
     } catch {
       return undefined;
     }
@@ -843,7 +876,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   };
 
   /**
-   * Opens the chart of a caller, from its row in a callers box: to the right of the row, with a beam from it. The other rows'
+   * Opens the chart of a caller, from its row in a callers box: to the left of the row when the box opens left, to the right
+   * when it opens right, with a beam from it. The other rows'
    * charts of the box close, as a call step's callees do (openExpansion). A caller already open above the box (a recursion) is
    * not opened again: its chart is revealed and its function selected. Its own Callers button continues the chain.
    */
@@ -916,7 +950,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   /** The facts stepAction decides on, for a row of the expansion of `fnId`. */
   const stepContext = (fnId: string, node: FlowNode): StepContext => {
     const b = buildRef.current;
-    const callee = node.target !== undefined && node.target !== ownerOf(expRef.current.find((e) => e.fnId === fnId), node.id) ? node.target : undefined;
+    const callee = stepCallee(node, ownerOf(expRef.current.find((e) => e.fnId === fnId), node.id));
     return { hasCallee: callee !== undefined, isLambda: callee !== undefined && isLambdaCall(b, fnId, callee), runtime: stepRuntime(node) };
   };
 
@@ -974,8 +1008,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     // The loaded chart carries the coupling (the summary the box shows) and the message targets; the unfolded chart is laid
     // out again from the coupling chart's items, with the message targets applied to it.
     const flow = await loadChart(fnId);
-    const source = flow?.coupling?.chart;
-    if (flow === undefined || source === undefined) return;
+    const chartSource = flow?.coupling?.chart;
+    if (flow === undefined || chartSource === undefined) return;
     // Receivers are read only when the function posts messages: a chart with no post step needs no references request.
     if (flow.nodes.some(isPostStep)) await charts?.store.loadMessages(fnId);
     if (!loadsRef.current.isLatest(fnId, token)) return;
@@ -983,7 +1017,14 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     const cur = buildRef.current;
     if (cur === undefined || !expRef.current.some((x) => x.fnId === fnId)) return;
     const store = charts?.store;
-    setExp(toggleFold(placeAll(cur, expRef.current), fnId, foldId, source, placeView(cur), flow.coupling, (chart) => store?.messagesOf(fnId, chart) ?? chart));
+    // The unfolded chart gets the same annotations as a loaded one: its messages, then its resource peers.
+    const finish = (chart: FunctionFlow): FunctionFlow => {
+      const withMessages = store?.messagesOf(fnId, chart) ?? chart;
+      const annotate = source.annotateChart;
+      if (annotate === undefined) return withMessages;
+      return annotateOrKeep(withMessages, () => annotate(cur, fnId, withMessages));
+    };
+    setExp(toggleFold(placeAll(cur, expRef.current), fnId, foldId, chartSource, placeView(cur), flow.coupling, finish));
   };
 
   /**
@@ -1600,7 +1641,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
                 data-sd={e.d}
                 className={edgeClass(e)}
                 style={{ strokeWidth: edgeWidth(e) }}
-                markerEnd={`url(#${arrowId})`}
+                // A sync edge between two peers (a lock, say) has no direction, so it has no arrowhead; a channel's runs sender to receiver.
+                markerEnd={e.kind === "sync" && e.directed !== true ? undefined : `url(#${arrowId})`}
               >
                 <title>{edgeTitle(e)}</title>
               </path>
@@ -1689,6 +1731,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
                         }}
                         callersOpenOf={(n) => n.target !== undefined && callersAt(expansions, n.target, { kind: "step", fnId: e.fnId, stepId: n.id })}
                         motion={motion}
+                        runsOn={view !== undefined ? source.runsOn?.(view, e.fnId) : undefined}
                       />
                     )}
                   </g>
@@ -1814,19 +1857,21 @@ export function FrameShape({
   const { rect } = item;
   const head = ZOOM_SIZE.head;
   const text = headerLabels(node?.label ?? nameOfId(item.id), node?.detail, rect.w * k);
+  const unguarded = node?.unguarded !== undefined && node.unguarded.length > 0;
   return (
-    <g className={`zm-frame${node ? ` zm-${node.kind}` : ""} ${lineClass(line)}`} data-sx={rect.x} data-fid={item.id}>
-      <title>{node?.title || (node ? (node.detail ? `${node.label} (${node.detail})` : node.label) : item.id)}</title>
+    <g className={`zm-frame${node ? ` zm-${node.kind}` : ""} ${lineClass(line)}${unguarded ? " zm-unguarded" : ""}`} data-sx={rect.x} data-sw={rect.w} data-fid={item.id}>
+      <title>{`${node?.title || (node ? (node.detail ? `${node.label} (${node.detail})` : node.label) : item.id)}${unguarded ? ` · ⚠ unguarded shared state: ${node?.unguarded?.join(", ")}` : ""}`}</title>
       <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={16} className="zm-frame-body" />
       <g className="zm-hit" onClick={() => onOpen(item.id)}>
         <rect x={rect.x} y={rect.y} width={rect.w} height={head} rx={16} className="zm-frame-head" />
         {text.label !== null && (
           <text x={rect.x + 12} y={rect.y + head / 2} dominantBaseline="central" className="zm-label">
             <tspan className="zm-frame-dot">●</tspan>{" "}{text.label}
+            {unguarded && <tspan className="zm-warn">{" ⚠"}</tspan>}
           </text>
         )}
         {text.detail !== null && (
-          <text x={rect.x + rect.w - 12} y={rect.y + head / 2} dominantBaseline="central" textAnchor="end" className="zm-count">
+          <text x={rect.x + rect.w - 12} data-cx={rect.x + rect.w - 12} y={rect.y + head / 2} dominantBaseline="central" textAnchor="end" className="zm-count">
             {text.detail}
           </text>
         )}
@@ -1866,13 +1911,16 @@ export function BoxShape({
   card?: boolean;
   /** The card's place in reading order, which sets its pop-in delay (see zoom/pop.ts). */
   rank?: number;
-  /** Opens or closes the callers box of the card's function: a Callers button at its top-right. Absent, no button. */
+  /** Opens or closes the callers box of the card's function: a Callers button at its top-left. Absent, no button. */
   onCallers?: () => void;
   callersOpen?: boolean;
 }) {
   const { rect } = item;
   // The function's display name on the map (the full name stays in the tooltip).
   const shown = displayName(node.label, node.ref);
+  // A thread box carries a badge when its code writes unguarded shared state (see scene.ts).
+  const unguarded = node.unguarded !== undefined && node.unguarded.length > 0;
+  const unguardedTitle = unguarded ? ` · ⚠ unguarded shared state: ${node.unguarded?.join(", ")}` : "";
   // The mid tier's name is 10-13 px on screen (the zoom's inverse scales it): its characters are measured at that size.
   const fontPx = small ? Math.min(13, Math.max(10, Math.round(rect.h * k * 0.42))) : 0;
   const label = bare ? null : small ? fitLabel(shown, labelChars(rect.w * k, fontPx * 0.6, 10)) : fitLabel(shown, labelChars(rect.w * k));
@@ -1904,41 +1952,43 @@ export function BoxShape({
   if (card && !small && !bare) {
     // A card: its name alone, centred vertically, fitted to the card's width on screen.
     // Two characters of the budget go to the leading function glyph (ƒ), so the name stays inside the card.
-    // A card tall enough for it takes a Callers button at its top-right, and its name keeps clear of the button. The name
+    // A card tall enough for it takes a Callers button at its left, and its name keeps clear of the button. The name
     // comes first: when it would not fit whole beside the full button, the button is compact (the ◂ alone).
     const showCallers = onCallers !== undefined && rect.h >= CALLERS_BTN_H + 12 && k >= GLYPH_K;
     // The name's font is 13 px on screen until 11 world units grow past it (above about 1.2×), and a character takes about
     // 0.6 of the font: the fit follows the font as it grows with the zoom.
     const charPx = Math.max(8, 6.8 * k);
+    // The name starts 12 units in (after the chip, when there is one) and keeps 12 clear of the card's right edge.
     const nameIn = (room: number) => fitLabel(shown, Math.max(1, labelChars((rect.w - room) * k, charPx, 20) - 2));
-    const fullName = nameIn(showCallers ? CALLERS_BTN_W + 12 : 0);
+    const fullName = nameIn(showCallers ? CALLERS_BTN_W + 26 : 0);
     const compactCallers = showCallers && (fullName !== shown || k < FULL_K);
-    const name = compactCallers ? nameIn(CALLERS_COMPACT_W + 12) : fullName;
+    const name = compactCallers ? nameIn(CALLERS_COMPACT_W + 26) : fullName;
     return (
-      <g className={`zm-box zm-${node.kind} zm-card ${lineClass(line)}${holdsChart ? " zm-has-chart" : ""}${chartOpen ? " expanded" : ""}`} data-sx={rect.x} data-fid={item.id} onClick={() => onOpen(item.id)}>
-        <title>{node.detail !== undefined ? `${node.label} (${node.detail})` : node.title || node.label}</title>
+      <g className={`zm-box zm-${node.kind} zm-card ${lineClass(line)}${holdsChart ? " zm-has-chart" : ""}${chartOpen ? " expanded" : ""}${unguarded ? " zm-unguarded" : ""}`} data-sx={rect.x} data-fid={item.id} onClick={() => onOpen(item.id)}>
+        <title>{`${node.detail !== undefined ? `${node.label} (${node.detail})` : node.title || node.label}${unguardedTitle}`}</title>
         {/* The pop-in sits on this inner group: the outer one carries the slide transform (writeShift and the FLIP). */}
         <g className="zm-pop" style={{ ["--d" as string]: `${popDelay(rank)}ms` }}>
           <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={12} className="zm-box-body" />
           {name !== null && (
-            <text x={rect.x + 12} y={rect.y + rect.h / 2} dominantBaseline="central" className="zm-label">
+            <text x={rect.x + 12 + (showCallers ? (compactCallers ? CALLERS_COMPACT_W : CALLERS_BTN_W) - 4 + 6 : 0)} y={rect.y + rect.h / 2} dominantBaseline="central" className="zm-label">
               <tspan className="zm-card-glyph">ƒ</tspan>{" "}{name}
+              {unguarded && <tspan className="zm-warn">{" ⚠"}</tspan>}
             </text>
           )}
         </g>
         {showCallers && (
-          <CallersButton x={rect.x + rect.w - CALLERS_BTN_W - 8} y={rect.y + 6} name={shown} open={callersOpen} onClick={onCallers} k={k} compact={compactCallers} />
+          <CallersButton x={rect.x + 8} y={rect.y + 6} name={shown} open={callersOpen} onClick={onCallers} k={k} compact={compactCallers} />
         )}
       </g>
     );
   }
   return (
     <g
-      className={`zm-box zm-${node.kind} ${lineClass(line)}${holdsChart ? " zm-has-chart" : ""}${chartOpen ? " expanded" : ""}${bare ? " zm-tile" : ""}`}
+      className={`zm-box zm-${node.kind} ${lineClass(line)}${holdsChart ? " zm-has-chart" : ""}${chartOpen ? " expanded" : ""}${bare ? " zm-tile" : ""}${unguarded ? " zm-unguarded" : ""}`}
       data-sx={rect.x}
       onClick={() => onOpen(item.id)}
     >
-      <title>{node.title || node.label}</title>
+      <title>{`${node.title || node.label}${unguardedTitle}`}</title>
       <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={10} className="zm-box-body" />
       {label !== null && (
         <text
@@ -1949,6 +1999,7 @@ export function BoxShape({
           style={small ? { fontSize: `calc(${fontPx}px * var(--zinv, 1))` } : undefined}
         >
           {label}
+          {unguarded && <tspan className="zm-warn">{" ⚠"}</tspan>}
         </text>
       )}
     </g>

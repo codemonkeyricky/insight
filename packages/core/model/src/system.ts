@@ -599,10 +599,14 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
 
   // Locks and channels the exec model lists, with each site's operation. One resource per program that uses it.
   for (const r of plan.exec.resources) {
+    // Condvars and semaphores are read from the IR below, so the exec model's copies would count twice. Atomics are not shown in this view.
+    if (r.kind === "condvar" || r.kind === "semaphore" || r.kind === "atomic") continue;
     const kind = r.kind === "lock" ? "lock" : "queue";
     const source = r.kind === "lock" ? "sync" : "channel";
     for (const site of r.sites) {
       if (!inside(site.file)) continue;
+      // Only a lock's acquire is a verb here. A release, or a condvar wait or notify that names a lock, adds no fact.
+      if (r.kind === "lock" && site.op !== "acquire") continue;
       const comp = compOf.get(site.file)?.id as string;
       const verb: SystemEdge["verb"] = site.op === "acquire" ? "locks" : site.op === "send" ? "enqueues" : "dequeues";
       const at: Site = { file: site.file, line: site.line, fn: site.fn };
@@ -620,7 +624,7 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
     }
   }
 
-  // Semaphores and condvars are read from the IR: the exec model does not list them.
+  // Semaphores and condvars are read from the IR nodes, keyed by their name, their API, or per site when unnamed.
   for (const node of model.doc.nodes) {
     if (node.kind !== "sync.semaphore" && node.kind !== "sync.condvar") continue;
     const file = model.fileOf(node.id);
@@ -632,8 +636,8 @@ function buildSystem(model: ProjectModel, scope: string, tests: boolean): System
     const api = typeof attrs.api === "string" ? attrs.api : "";
     const given = typeof attrs.name === "string" ? attrs.name : typeof attrs.lock === "string" ? attrs.lock : "";
     const kind = node.kind === "sync.semaphore" ? "semaphore" : "condvar";
-    // A wait with no name takes its API's name (Atomics.wait has none, so it is "Atomics"). With no API either it has
-    // nothing shared to key it by, so it is <dynamic> and keyed per site, like the other unnamed sites.
+    // A wait with no name or lock takes its API's name: every Atomics.* wait is keyed "Atomics", since they share one object.
+    // With no API it has nothing shared to key it by, so it is <dynamic> and keyed per site, like the other unnamed sites.
     const named = given !== "" ? given : api.startsWith("Atomics.") ? "Atomics" : api !== "" ? api : "<dynamic>";
     const dyn = named === "<dynamic>";
     const name = dyn ? `<dynamic>@${file}:${node.span?.start.join(":") ?? node.id}` : named;
