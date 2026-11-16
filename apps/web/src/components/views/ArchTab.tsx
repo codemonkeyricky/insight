@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ARCH_MODES, ARCH_MODE_LABELS, readArchMode, writeArchMode, type ArchMode } from "../../arch/mode";
 import { ArchView } from "./ArchView";
 import { PipelineView } from "./PipelineView";
+import { StagesView } from "./StagesView";
 
 /** The views of the Arch tab, as a segmented control. */
 export function ArchModeToggle({ mode, onChange }: { mode: ArchMode; onChange: (m: ArchMode) => void }) {
@@ -31,10 +32,17 @@ export function ArchTab({ id, scope, initial, onSystemActive }: { id: string; sc
     setMode(m);
     writeArchMode(m);
   };
+  // The Show tests setting is shared by the Stages and Pipeline views, so both draw the same test folders or neither does.
+  const [tests, setTests] = useState(false);
   return (
     <div className="arch-tab">
       <ArchModeToggle mode={mode} onChange={pick} />
-      {mode === "pipeline" && <PipelineView id={id} scope={scope} />}
+      {mode === "pipeline" && (
+        <>
+          <StagesView id={id} scope={scope} tests={tests} onTests={setTests} />
+          <PipelineView id={id} scope={scope} tests={tests} onTests={setTests} />
+        </>
+      )}
       {mode === "packages" && <ArchView id={id} scope={scope} />}
     </div>
   );

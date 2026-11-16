@@ -12,7 +12,7 @@ export interface PipelineSystem {
 }
 
 /** The last path segment of a component's path: "packages/indexer" → "indexer". */
-const basename = (path: string): string => path.slice(path.lastIndexOf("/") + 1);
+export const basename = (path: string): string => path.slice(path.lastIndexOf("/") + 1);
 /** The last two path segments: "packages/core/ir" → "core/ir". */
 const shortPath = (path: string): string => path.split("/").slice(-2).join("/");
 

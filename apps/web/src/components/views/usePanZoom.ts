@@ -50,11 +50,24 @@ interface Drag {
 
 /**
  * Pan and zoom for a stage element, as the System view has them: the wheel zooms around the pointer, a drag pans, the + and −
- * buttons zoom around the centre, Fit refits the content, and Expand fills the window (Esc leaves). The stage's height is the
+ * buttons zoom around the centre, Fit refits the content (never below `fitMinK`, so text stays readable), and Expand fills the window
+ * (Esc leaves). The stage's height is the
  * room the window leaves, at least 60% of the window, or the whole window while expanded. `moved()` tells a drag from a click:
  * it is true from the drag's first 3 px until the next press.
  */
-export function usePanZoom(stageEl: HTMLDivElement | null, content: { w: number; h: number }) {
+export interface PanZoomOpts {
+  /** The smallest scale a fit settles on (default FIT.fitMinK). */
+  fitMinK?: number;
+  /** The largest scale a fit settles on (default FIT.maxK). */
+  maxK?: number;
+  /** The stage's height in px, when the caller sizes the stage itself. Fit then uses it, and the stage does not set its own height. */
+  height?: number;
+}
+
+export function usePanZoom(stageEl: HTMLDivElement | null, content: { w: number; h: number }, opts: PanZoomOpts = {}) {
+  const fitMinK = opts.fitMinK ?? FIT.fitMinK;
+  const maxK = opts.maxK ?? FIT.maxK;
+  const height = opts.height;
   const [cam, setCam] = useState<Camera>({ k: 1, x: 0, y: 0 });
   const [expanded, setExpanded] = useState(false);
   /** The stage's height in px when not expanded; null while expanded, so the window sets it. */
@@ -63,20 +76,26 @@ export function usePanZoom(stageEl: HTMLDivElement | null, content: { w: number;
   const movedRef = useRef(false);
 
   const fit = useCallback(() => {
+    const fo: FitOpts = { ...FIT, fitMinK, maxK };
     const vh = typeof window === "undefined" ? 900 : window.innerHeight;
     if (expanded) {
       const vw = typeof window === "undefined" ? 1440 : window.innerWidth;
       setStageH(null);
-      setCam(fitBox(content.w, content.h, vw, vh, FIT));
+      setCam(fitBox(content.w, content.h, vw, vh, fo));
       return;
     }
     const w = stageEl?.clientWidth ?? 900;
+    if (height !== undefined) {
+      setStageH(null);
+      setCam(fitBox(content.w, content.h, w, height, fo));
+      return;
+    }
     // As tall as the window leaves room for below the stage's top edge, and at least 60% of the window.
     const room = stageEl ? vh - stageEl.getBoundingClientRect().top - BOTTOM_ROOM : 0;
     const h = Math.max(420, vh * 0.6, room);
     setStageH(h);
-    setCam(fitBox(content.w, content.h, w, h, FIT));
-  }, [stageEl, expanded, content.w, content.h]);
+    setCam(fitBox(content.w, content.h, w, h, fo));
+  }, [stageEl, expanded, content.w, content.h, fitMinK, maxK, height]);
 
   // Fits when the content changes (a new layout), when the stage first mounts, and when it expands or collapses.
   useLayoutEffect(() => {

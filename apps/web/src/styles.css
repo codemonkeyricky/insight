@@ -1232,6 +1232,51 @@ button.add-submit:disabled { background: var(--faint); color: var(--graphite); b
 .sysv-verb.v-produces { color: var(--accent-text); font-weight: 600; }
 .sysv-open { padding: 4px 14px; }
 /* Grounded frames: process > thread > coroutine, the in-process strips, the kernel band and its chips. */
+/* Stages: the call order of a pipeline driver (StagesView). The diagram reuses the System view's bar, zoom and stage classes. */
+.stg { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.stg-title { font-weight: 600; }
+.stg-pick { display: inline-flex; align-items: center; gap: 6px; }
+.stg-pick select { max-width: min(260px, 100%); }
+.stg-notes { margin: 0; overflow-wrap: anywhere; }
+.stg-clickable { cursor: pointer; outline: none; }
+.stg-frame .stg-frame-body { fill: var(--faint); stroke: var(--hair); stroke-width: 1; }
+.stg-frame.helper .stg-frame-body { stroke-dasharray: 5 4; }
+.stg-frame.try .stg-frame-body { stroke: var(--muted); }
+.stg-frame-bar { fill: var(--chip-solid); stroke: var(--hair); stroke-width: 1; }
+.stg-frame.loop .stg-frame-bar { fill: var(--sheet); }
+.stg-frame-label { fill: var(--fg); font: 600 12px var(--font-code); pointer-events: none; }
+.stg-frame .stg-clickable:hover .stg-frame-bar, .stg-frame .stg-clickable:focus-visible .stg-frame-bar { stroke: var(--accent); }
+.stg-line { fill: none; stroke: var(--muted); stroke-width: 1.3; }
+.stg-line.return { stroke: var(--accent); stroke-width: 1.1; }
+.stg-line.catch { stroke: var(--warn-text); stroke-dasharray: 4 3; }
+.stg-head { fill: var(--muted); }
+.stg-card .stg-box { fill: var(--card-top); stroke: var(--hair); stroke-width: 1; filter: drop-shadow(0 1px 3px var(--shadow)); }
+.stg-card:hover .stg-box, .stg-card:focus-visible .stg-box { stroke: var(--accent); stroke-width: 2; }
+.stg-card.fanout .stg-box { stroke: var(--accent); }
+.stg-card.minor .stg-box { stroke-dasharray: 2 3; opacity: 0.7; }
+.stg-card.ambiguous .stg-box { stroke: var(--muted); stroke-dasharray: 5 4; }
+.stg-card.repeat .stg-box { fill: var(--faint); }
+.stg-name { fill: var(--fg); font: 600 13px var(--font-ui); pointer-events: none; }
+.stg-sub { fill: var(--muted); font: 11px var(--font-code); pointer-events: none; }
+.stg-chip { cursor: pointer; }
+.stg-chip rect { fill: var(--faint); stroke: var(--hair); stroke-width: 1; }
+.stg-chip text { fill: var(--fg); font: 11px var(--font-code); pointer-events: none; }
+.stg-chip:hover rect, .stg-chip:focus-visible rect { stroke: var(--accent); }
+.stg-diamond { fill: var(--chip-solid); stroke: var(--accent); stroke-width: 1.2; }
+.stg-pill rect { fill: var(--chip-solid); stroke: var(--hair); stroke-width: 1; }
+.stg-pill.throw rect { stroke: var(--red-text); }
+.stg-pill text { fill: var(--fg); font: 600 11px var(--font-ui); pointer-events: none; }
+.stg-text { font: 11px var(--font-ui); pointer-events: none; }
+.stg-text.cond { fill: var(--fg); font: 600 12px var(--font-code); }
+.stg-text.lane { fill: var(--muted); font: 600 11px var(--font-ui); }
+.stg-text.catch { fill: var(--warn-text); font: 600 11px var(--font-ui); }
+.stg-text.muted { fill: var(--muted); }
+/* Data edges: a quiet pill on a connector, and a thin dashed arc for a link between stages that are not neighbours. */
+.stg-data rect { fill: var(--card-top); stroke: var(--hair); stroke-width: 1; }
+.stg-data text { fill: var(--muted); font: 10px var(--font-code); pointer-events: none; }
+/* Labels and arcs never take the pointer: a label under the cursor would otherwise end the hover that drew it. */
+.stg-data, .stg-data rect, .stg-data text, .stg-link-g, .stg-link-g * { pointer-events: none; }
+.stg-link { fill: none; stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 3; opacity: 0.75; pointer-events: none; }
 .sysv-frame { cursor: pointer; outline: none; }
 .sysv-frame-body { fill: var(--sheet); stroke: var(--hair); stroke-width: 1; }
 .sysv-frame.process > .sysv-frame-body { fill: var(--box); }

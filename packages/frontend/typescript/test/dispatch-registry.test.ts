@@ -53,7 +53,7 @@ describe("registry dispatch", () => {
       "src/gates.ts#separate.parse",
       "src/parsers.ts#byExit",
     ]);
-    expect(run?.attrs).toEqual({ callee: "def.parse", how: "interface", callEnd: [20, 25] });
+    expect(run?.attrs).toEqual({ callee: "def.parse", how: "interface", callEnd: [20, 25], reads: ["def"] });
     expect(run?.provenance.confidence).toBe("heuristic");
   });
 
@@ -61,31 +61,31 @@ describe("registry dispatch", () => {
     const { edges } = await extract();
     const keyed = callFrom(edges, "src/tasks.ts#dispatch", "impl[name]");
     expect(candidatesOf(keyed as IREdge)).toEqual(["src/tasks.ts#impl.alpha", "src/tasks.ts#impl.beta"]);
-    expect(keyed?.attrs).toEqual({ callee: "impl[name]", how: "registry", callEnd: [12, 22] });
+    expect(keyed?.attrs).toEqual({ callee: "impl[name]", how: "registry", callEnd: [12, 22], reads: ["name", "x"], argReads: [["x"]] });
     const bound = callFrom(edges, "src/tasks.ts#viaConst", "run");
     expect(candidatesOf(bound as IREdge)).toEqual(["src/tasks.ts#impl.alpha", "src/tasks.ts#impl.beta"]);
-    expect(bound?.attrs).toEqual({ callee: "run", how: "registry", callEnd: [18, 15] });
+    expect(bound?.attrs).toEqual({ callee: "run", how: "registry", callEnd: [18, 15], reads: ["x"], argReads: [["x"]] });
   });
 
   it("makes a member call through a keyed lookup into an untyped table a registry edge to that member of each literal", async () => {
     const { edges } = await extract();
     const member = callFrom(edges, "src/untyped.ts#runKey", "T[k].parse");
     expect(candidatesOf(member as IREdge)).toEqual(["src/untyped.ts#T.json.parse", "src/untyped.ts#T.text.parse"]);
-    expect(member?.attrs).toEqual({ callee: "T[k].parse", how: "registry", callEnd: [14, 24] });
+    expect(member?.attrs).toEqual({ callee: "T[k].parse", how: "registry", callEnd: [14, 24], reads: ["k", "log"], argReads: [["log"]] });
   });
 
   it("makes a member call in a loop over Object.values of an untyped table a registry edge to each literal's member", async () => {
     const { edges } = await extract();
     const loop = callFrom(edges, "src/untyped.ts#runAll", "t.parse");
     expect(candidatesOf(loop as IREdge)).toEqual(["src/untyped.ts#T.json.parse", "src/untyped.ts#T.text.parse"]);
-    expect(loop?.attrs).toEqual({ callee: "t.parse", how: "registry", callEnd: [20, 53] });
+    expect(loop?.attrs).toEqual({ callee: "t.parse", how: "registry", callEnd: [20, 53], reads: ["t", "log"], argReads: [["log"]] });
   });
 
   it("dispatches a call through a receiver typed by a named object type alias like an interface", async () => {
     const { edges } = await extract();
     const use = callFrom(edges, "src/alias.ts#use", "h.handle");
     expect(candidatesOf(use as IREdge)).toEqual(["src/alias.ts#doubler.handle"]);
-    expect(use?.attrs).toEqual({ callee: "h.handle", how: "interface", callEnd: [8, 20] });
+    expect(use?.attrs).toEqual({ callee: "h.handle", how: "interface", callEnd: [8, 20], reads: ["h"] });
   });
 });
 
@@ -103,7 +103,7 @@ describe("registry dispatch never replaces a direct call", () => {
     expect(direct(callFrom(edges, "src/direct.ts#literalDirect", 'ops["alpha"]'))).toEqual({ to: "src/direct.ts#ops.alpha", confidence: "exact", how: undefined });
     expect(direct(callFrom(edges, "src/direct.ts#literalBound", "r"))).toEqual({ to: "src/direct.ts#ops.beta", confidence: "exact", how: undefined });
     expect(direct(callFrom(edges, "src/direct.ts#firstFn", "FNS[0]"))).toEqual({ to: "src/direct.ts#one", confidence: "exact", how: undefined });
-    expect(callFrom(edges, "src/direct.ts#firstFn", "FNS[0]")?.attrs).toEqual({ callee: "FNS[0]", callEnd: [59, 18] });
+    expect(callFrom(edges, "src/direct.ts#firstFn", "FNS[0]")?.attrs).toEqual({ callee: "FNS[0]", callEnd: [59, 18], reads: ["x"], argReads: [["x"]] });
   });
 
   it("keeps a direct call when every key of the table holds the same object", async () => {

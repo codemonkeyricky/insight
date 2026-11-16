@@ -7,10 +7,10 @@ import { PipelineSequences } from "./PipelineSequences";
 
 /**
  * The Pipeline view of the explorer scope: the processing stages of its extension points, drawn with the System view's diagram.
- * The model is computed in the page from the project model (api.getPipeline), like the System view's.
+ * The model is computed in the page from the project model (api.getPipeline), like the System view's. The Show tests setting is
+ * owned by the parent (ArchTab), which it shares with the Stages view.
  */
-export function PipelineView({ id, scope }: { id: string; scope: string }) {
-  const [tests, setTests] = useState(false);
+export function PipelineView({ id, scope, tests, onTests }: { id: string; scope: string; tests: boolean; onTests: (on: boolean) => void }) {
   const [done, setDone] = useState<{ key: string; pipeline?: PipelineModel; error?: string } | null>(null);
   const key = `${id}\0${scope}\0${tests}`;
   useEffect(() => {
@@ -29,7 +29,7 @@ export function PipelineView({ id, scope }: { id: string; scope: string }) {
   }, [id, scope, tests, key]);
   if (done === null) return <p className="muted">Loading</p>;
   if (done.pipeline === undefined) return <p className="error" role="alert">{done.error}</p>;
-  return <PipelineDiagram id={id} pipeline={done.pipeline} tests={tests} onTests={setTests} stale={done.key !== key} />;
+  return <PipelineDiagram id={id} pipeline={done.pipeline} tests={tests} onTests={onTests} stale={done.key !== key} />;
 }
 
 /** The diagram of one Pipeline model: its System-shaped layout with the column titles, and the Pipeline side panel. */

@@ -150,6 +150,29 @@ function namedByParent(node: ts.ArrowFunction | ts.FunctionExpression, literals:
 }
 
 /**
+ * Whether a lambda is a callback slot: a function a caller passes in, which the model drops when every candidate of a call is one.
+ * A function is a callback unless it is the initializer of a property of an object literal that is not a call argument: a property of
+ * a literal that is returned or stored (`return { parse: (t) => … }`) names a member, not a callback. A literal passed to a call is an
+ * options bag (`run({ onProgress: () => … })`), so its properties are callback slots.
+ */
+function isCallbackSlot(node: ts.Node): boolean {
+  const parent = node.parent;
+  if (!ts.isPropertyAssignment(parent) || parent.initializer !== node || !ts.isObjectLiteralExpression(parent.parent)) return true;
+  let up: ts.Node = parent.parent;
+  while (
+    ts.isParenthesizedExpression(up.parent) ||
+    ts.isAsExpression(up.parent) ||
+    ts.isSatisfiesExpression(up.parent) ||
+    ts.isNonNullExpression(up.parent) ||
+    ts.isTypeAssertionExpression(up.parent)
+  ) {
+    up = up.parent;
+  }
+  const call = up.parent;
+  return (ts.isCallExpression(call) || ts.isNewExpression(call)) && (call.arguments ?? []).some((a) => a === up);
+}
+
+/**
  * A named function with no identifier binding of its own: a property or method of an object literal, or a method, accessor
  * or property arrow of a class. A nested declaration or a function bound to a variable is reached by its own call or value
  * edge, so it gets no closure edge from its creator. A constructor is reached by `new`.
@@ -1400,16 +1423,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
    * destructuring. `await`, parentheses, `as`, `!` and `satisfies` are transparent. A call anywhere else (an argument,
    * a member, a return) binds no local.
    */
-  const callBinds = (call: ts.CallExpression): string | string[] | undefined => {
-    const namesOf = (name: ts.BindingName): string[] => {
-      if (ts.isIdentifier(name)) return [name.text];
-      const out: string[] = [];
-      for (const el of name.elements) {
-        if (ts.isOmittedExpression(el)) continue;
-        out.push(...namesOf(el.name));
-      }
-      return out;
-    };
+  const callBindIdents = (call: ts.CallExpression): ts.Identifier[] | undefined => {
     let value: ts.Expression = call;
     let p: ts.Node | undefined = value.parent;
     while (
@@ -1420,11 +1434,84 @@ export function emitFile(project: Project, rel: string): IRBatch {
       value = p as ts.Expression;
       p = p.parent;
     }
-    let names: string[] | undefined;
-    if (ts.isVariableDeclaration(p) && p.initializer === value) names = namesOf(p.name);
-    else if (ts.isBinaryExpression(p) && p.operatorToken.kind === ts.SyntaxKind.EqualsToken && p.right === value && ts.isIdentifier(p.left)) names = [p.left.text];
-    if (names === undefined || names.length === 0) return undefined;
-    return names.length === 1 ? names[0] : names;
+    let ids: ts.Identifier[] | undefined;
+    if (ts.isVariableDeclaration(p) && p.initializer === value) ids = bindingIdents(p.name);
+    else if (ts.isBinaryExpression(p) && p.operatorToken.kind === ts.SyntaxKind.EqualsToken && p.right === value && ts.isIdentifier(p.left)) ids = [p.left];
+    if (ids === undefined || ids.length === 0) return undefined;
+    return ids;
+  };
+
+  /** The `binds` attribute of a call: one name as a string, several (a destructuring) as an array. */
+  const callBinds = (call: ts.CallExpression): string | string[] | undefined => {
+    const ids = callBindIdents(call);
+    if (ids === undefined) return undefined;
+    return ids.length === 1 ? localKey(ids[0]!) : ids.map((i) => localKey(i));
+  };
+
+  /** The identifiers a binding pattern declares, in source order: `a` for `a`, `a` and `b` for `{ a, b }`. */
+  const bindingIdents = (name: ts.BindingName): ts.Identifier[] => {
+    if (ts.isIdentifier(name)) return [name];
+    return name.elements.flatMap((el) => (ts.isOmittedExpression(el) ? [] : bindingIdents(el.name)));
+  };
+
+  /** The function a declaration sits in: its nearest function-like ancestor. */
+  const enclosingFunction = (d: ts.Node): ts.Node | undefined => {
+    for (let p: ts.Node | undefined = d.parent; p !== undefined; p = p.parent) if (ts.isFunctionLike(p)) return p;
+    return undefined;
+  };
+  /**
+   * The function a local's name is counted in: an anonymous function (an arrow or a function expression) counts in the function it
+   * sits in, so a callback's parameter or variable collides with the enclosing function's locals of the same name.
+   */
+  const namingRoot = (fn: ts.Node): ts.Node => {
+    let cur = fn;
+    while ((ts.isArrowFunction(cur) || ts.isFunctionExpression(cur)) && enclosingFunction(cur) !== undefined) cur = enclosingFunction(cur)!;
+    return cur;
+  };
+  const localsCache = new WeakMap<ts.Node, Map<string, ts.Identifier[]>>();
+  /**
+   * The identifiers a function declares, by name: its parameters and its variables, and those of the anonymous functions nested in it.
+   * Named nested functions are not descended into.
+   */
+  const localsOf = (fn: ts.Node): Map<string, ts.Identifier[]> => {
+    const hit = localsCache.get(fn);
+    if (hit !== undefined) return hit;
+    const byName = new Map<string, ts.Identifier[]>();
+    const walk = (n: ts.Node): void => {
+      if (n !== fn && ts.isFunctionLike(n) && !(ts.isArrowFunction(n) || ts.isFunctionExpression(n))) return;
+      if (ts.isVariableDeclaration(n) || ts.isParameter(n)) {
+        for (const id of bindingIdents(n.name)) {
+          const list = byName.get(id.text);
+          if (list) list.push(id);
+          else byName.set(id.text, [id]);
+        }
+      }
+      ts.forEachChild(n, walk);
+    };
+    walk(fn);
+    localsCache.set(fn, byName);
+    return byName;
+  };
+  /**
+   * The key a local is emitted under, resolved through the checker so every use of one local gives one key. A name its function
+   * declares once is the bare name. A name declared more than once in one function (shadowing, or the same name in sibling
+   * blocks or loops) is `name@line`: the 1-based line of the declared identifier, with `:col` (1-based) added when two of those
+   * declarations share a line. The model strips the suffix for display.
+   */
+  const localKey = (id: ts.Identifier): string => {
+    const sym = project.checker.getSymbolAtLocation(id);
+    const decl = sym?.valueDeclaration ?? sym?.declarations?.[0];
+    if (decl === undefined || !(ts.isVariableDeclaration(decl) || ts.isBindingElement(decl) || ts.isParameter(decl))) return id.text;
+    const fn = enclosingFunction(decl);
+    if (fn === undefined) return id.text;
+    const same = localsOf(namingRoot(fn)).get(id.text) ?? [];
+    if (same.length < 2) return id.text;
+    const declId = same.find((d) => project.checker.getSymbolAtLocation(d) === sym);
+    if (declId === undefined) return id.text;
+    const posOf = (i: ts.Identifier) => i.getSourceFile().getLineAndCharacterOfPosition(i.getStart(i.getSourceFile()));
+    const at = posOf(declId);
+    const shared = same.some((d) => d !== declId && posOf(d).line === at.line);
+    return shared ? `${id.text}@${at.line + 1}:${at.character + 1}` : `${id.text}@${at.line + 1}`;
   };
 
   /**
@@ -1432,7 +1519,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
    * a module-level variable (a `data.variable`), an imported binding or a global is not one. Member names, declaration
    * names and called function names are not reads.
    */
-  const localReads = (expr: ts.Node): string[] => {
+  const localReads = (expr: ts.Node, skipFunctions = false): string[] => {
     const out = new Set<string>();
     const isLocalDecl = (d: ts.Declaration): boolean => {
       for (let p: ts.Node | undefined = d.parent; p !== undefined; p = p.parent) {
@@ -1462,10 +1549,12 @@ export function emitFile(project: Project, rel: string): IRBatch {
       (ts.isCallExpression(p) && p.expression === n) ||
       (ts.isNewExpression(p) && p.expression === n);
     const visitName = (n: ts.Node): void => {
+      // A function written inside the expression is its own function, with its own locals: its reads are not this expression's.
+      if (skipFunctions && ts.isFunctionLike(n)) return;
       if (ts.isIdentifier(n)) {
         if (isName(n, n.parent)) return;
         const decls = project.checker.getSymbolAtLocation(n)?.declarations;
-        if (decls?.some(isLocalDecl) === true) out.add(n.text);
+        if (decls?.some(isLocalDecl) === true) out.add(localKey(n));
         return;
       }
       ts.forEachChild(n, visitName);
@@ -1478,6 +1567,152 @@ export function emitFile(project: Project, rel: string): IRBatch {
   const readsAttr = (expr: ts.Node | undefined): { reads?: string[] } => {
     const reads = expr === undefined ? [] : localReads(expr);
     return reads.length > 0 ? { reads } : {};
+  };
+
+  /**
+   * The `reads` attribute of a call: the locals its receiver and its arguments read, in first-seen order. A function written as
+   * an argument (an arrow or a function expression) is its own function and is not descended into. The callee's name is not a read.
+   */
+  const callReadsAttr = (call: ts.CallExpression): { reads?: string[] } => {
+    const callee = call.expression;
+    const parts: ts.Node[] = [];
+    if (ts.isPropertyAccessExpression(callee)) parts.push(callee.expression);
+    else if (ts.isElementAccessExpression(callee)) parts.push(callee);
+    parts.push(...call.arguments);
+    const reads = [...new Set(parts.flatMap((p) => localReads(p, true)))];
+    return reads.length > 0 ? { reads } : {};
+  };
+
+  /**
+   * The `argReads` attribute of a call: the distinct locals each positional argument reads, one list per argument, keyed as `reads`
+   * are. `argSpread` is the index of the first spread argument; that argument's reads map to every parameter from there on. Omitted
+   * when no argument reads a local.
+   */
+  const argReadsAttr = (call: ts.CallExpression): { argReads?: string[][]; argSpread?: number } => {
+    const argReads = call.arguments.map((a) => [...new Set(localReads(a, true))]);
+    if (!argReads.some((r) => r.length > 0)) return {};
+    const spread = call.arguments.findIndex((a) => ts.isSpreadElement(a));
+    return { argReads, ...(spread >= 0 ? { argSpread: spread } : {}) };
+  };
+
+  /**
+   * The checker's type text of a bound local, for `calls.call` `bindsType`: one line, at most 60 characters (the last one an
+   * ellipsis). Undefined for an any, unknown or error type, which says nothing.
+   */
+  const boundTypeText = (id: ts.Identifier): string | undefined => {
+    const type = project.checker.getTypeAtLocation(id);
+    if ((type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) !== 0) return undefined;
+    const text = project.checker.typeToString(type).replace(/\s+/g, " ").trim();
+    if (text === "" || text === "any" || text === "unknown" || text === "error") return undefined;
+    return text.length > 60 ? `${text.slice(0, 59)}…` : text;
+  };
+
+  const ASSIGN_OPERATORS = new Set<ts.SyntaxKind>([
+    ts.SyntaxKind.EqualsToken, ts.SyntaxKind.PlusEqualsToken, ts.SyntaxKind.MinusEqualsToken, ts.SyntaxKind.AsteriskEqualsToken,
+    ts.SyntaxKind.AsteriskAsteriskEqualsToken, ts.SyntaxKind.SlashEqualsToken, ts.SyntaxKind.PercentEqualsToken,
+    ts.SyntaxKind.LessThanLessThanEqualsToken, ts.SyntaxKind.GreaterThanGreaterThanEqualsToken,
+    ts.SyntaxKind.GreaterThanGreaterThanGreaterThanEqualsToken, ts.SyntaxKind.AmpersandEqualsToken, ts.SyntaxKind.BarEqualsToken,
+    ts.SyntaxKind.CaretEqualsToken, ts.SyntaxKind.AmpersandAmpersandEqualsToken, ts.SyntaxKind.BarBarEqualsToken,
+    ts.SyntaxKind.QuestionQuestionEqualsToken,
+  ]);
+
+  /** The identifiers an assignment writes to: `a` for `a = …`, each element of an array or object pattern on the left. */
+  const assignTargets = (e: ts.Expression): ts.Identifier[] => {
+    if (ts.isIdentifier(e)) return [e];
+    if (ts.isParenthesizedExpression(e)) return assignTargets(e.expression);
+    if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.EqualsToken) return assignTargets(e.left);
+    if (ts.isArrayLiteralExpression(e)) return e.elements.flatMap((el) => assignTargets(el));
+    if (ts.isSpreadElement(e)) return assignTargets(e.expression);
+    if (ts.isObjectLiteralExpression(e)) {
+      return e.properties.flatMap((p) => {
+        if (ts.isShorthandPropertyAssignment(p)) return [p.name];
+        if (ts.isPropertyAssignment(p)) return assignTargets(p.initializer);
+        if (ts.isSpreadAssignment(p)) return assignTargets(p.expression);
+        return [];
+      });
+    }
+    return [];
+  };
+
+  /**
+   * The `derives` attribute of a function: each local variable its body declares, mapped to the distinct locals its initializer and
+   * every assignment to it (`=` or compound) in this function read. A destructuring target gets the whole right side's reads.
+   * Parameters have no entry, and nested functions and classes are not descended into. A loop variable (`for (const x of xs)`,
+   * `for (x in o)`, destructured or not) takes the reads of its iterable. A local that reads no local is omitted. Always present on a
+   * function, `{}` when none remain: the key says the data-flow facts were emitted. The declaration holding a function (a const arrow,
+   * a class property arrow) is unwrapped to the function, so the attribute is on the function. Keys and values are local keys (see
+   * `localKey`): a name the function declares more than once is `name@line`, so two loops' `f` are two entries.
+   */
+  /**
+   * The function a declaration holds: a function-like node, or the arrow or function expression a const, a class property or a
+   * property of an object literal holds.
+   */
+  const functionOf = (node: ts.Node): ts.SignatureDeclaration | undefined => {
+    if ((ts.isVariableDeclaration(node) || ts.isPropertyDeclaration(node) || ts.isPropertyAssignment(node)) && node.initializer !== undefined) {
+      const init = unwrapAll(node.initializer);
+      return ts.isArrowFunction(init) || ts.isFunctionExpression(init) ? init : undefined;
+    }
+    return ts.isFunctionLike(node) ? node : undefined;
+  };
+
+  /**
+   * The `params` attribute: the parameter names in order, each name a destructured parameter binds included. Always present on a
+   * function, `[]` when none: a model without it was emitted by a frontend that predates the attribute.
+   */
+  const paramsAttr = (node: ts.Node): { params: string[] } => {
+    const names = (functionOf(node)?.parameters ?? []).flatMap((p) => bindingIdents(p.name));
+    return { params: names.map((id) => localKey(id)) };
+  };
+
+  const derivesAttr = (node: ts.Node): { derives: Record<string, string[]> } => {
+    const body = (functionOf(node) as { body?: ts.Node } | undefined)?.body;
+    if (body === undefined) return { derives: {} };
+    const entries = new Map<ts.Symbol, { name: string; reads: Set<string> }>();
+    const assigns: Array<{ targets: ts.Identifier[]; value: ts.Expression }> = [];
+    /** A declared local: its entry is created once, and each read it gets is added. */
+    const declare = (id: ts.Identifier, reads: Iterable<string>): void => {
+      const sym = project.checker.getSymbolAtLocation(id);
+      if (sym === undefined) return;
+      let e = entries.get(sym);
+      if (e === undefined) {
+        e = { name: localKey(id), reads: new Set() };
+        entries.set(sym, e);
+      }
+      for (const r of reads) e.reads.add(r);
+    };
+    const walk = (n: ts.Node): void => {
+      if (ts.isFunctionLike(n) || ts.isClassLike(n)) return;
+      if (ts.isVariableDeclaration(n)) {
+        const reads = n.initializer !== undefined ? localReads(n.initializer, true) : [];
+        for (const id of bindingIdents(n.name)) declare(id, reads);
+      } else if (ts.isForOfStatement(n) || ts.isForInStatement(n)) {
+        // A loop variable takes the reads of the iterable it walks: a declared one here, or an assigned one (an expression) below.
+        const reads = localReads(n.expression, true);
+        if (ts.isVariableDeclarationList(n.initializer)) {
+          for (const d of n.initializer.declarations) for (const id of bindingIdents(d.name)) declare(id, reads);
+        } else {
+          assigns.push({ targets: assignTargets(n.initializer), value: n.expression });
+        }
+      } else if (ts.isBinaryExpression(n) && ASSIGN_OPERATORS.has(n.operatorToken.kind)) {
+        assigns.push({ targets: assignTargets(n.left), value: n.right });
+      }
+      ts.forEachChild(n, walk);
+    };
+    walk(body);
+    for (const a of assigns) {
+      const reads = localReads(a.value, true);
+      for (const id of a.targets) {
+        const sym = project.checker.getSymbolAtLocation(id);
+        const e = sym === undefined ? undefined : entries.get(sym);
+        if (e !== undefined) for (const r of reads) e.reads.add(r);
+      }
+    }
+    const derives: Record<string, string[]> = {};
+    for (const e of entries.values()) {
+      if (e.reads.size === 0) continue;
+      derives[e.name] = [...new Set([...(derives[e.name] ?? []), ...e.reads])];
+    }
+    return { derives };
   };
 
   const visit = (node: ts.Node, container: string, fn: string): void => {
@@ -1510,12 +1745,14 @@ export function emitFile(project: Project, rel: string): IRBatch {
             qualifiedName: decl.qname,
             async: decl.entity.async,
             exported: decl.entity.exported,
-            ...(decl.entity.anonymous ? { anonymous: true } : {}),
+            ...(decl.entity.anonymous ? { anonymous: true, callbackSlot: isCallbackSlot(node) } : {}),
             ...(decl.entity.module ? { module: true } : {}),
             ...(decl.entity.htmlEntry ? { htmlEntry: true } : {}),
             ...(decl.entity.nodeEntry ? { nodeEntry: true } : {}),
             ...(decl.entity.packageEntry ? { packageEntry: true } : {}),
             ...(decl.entity.programEntry !== undefined ? { programEntry: decl.entity.programEntry } : {}),
+            ...derivesAttr(node),
+            ...paramsAttr(node),
           },
           span,
           provenance: PROV,
@@ -1697,6 +1934,10 @@ export function emitFile(project: Project, rel: string): IRBatch {
       const callee = call.expression;
       // The local the call's result goes into, if any: `cfg ← loadConfig()`.
       const binds = callBinds(call);
+      // The call's data facts: the locals its receiver and arguments read, and the type of the one local its result is bound to.
+      const bindIds = callBindIdents(call);
+      const bindsType = bindIds?.length === 1 ? boundTypeText(bindIds[0]!) : undefined;
+      const dataAttrs = { ...callReadsAttr(call), ...argReadsAttr(call), ...(bindsType !== undefined ? { bindsType } : {}) };
       const sym = project.checker.getSymbolAtLocation(nameOf(callee));
       const target = declOf(project, sym);
       // A call through a fixed registry runs whichever of its functions the key picks, so every one is a candidate. The registry
@@ -1713,7 +1954,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
           to: callTarget.id,
           facet: "calls",
           kind: "calls.call",
-          attrs: { callee: callee.getText(sf).slice(0, 200), callEnd: pos(sf, call.getEnd()), ...(binds !== undefined ? { binds } : {}) },
+          attrs: { callee: callee.getText(sf).slice(0, 200), callEnd: pos(sf, call.getEnd()), ...(binds !== undefined ? { binds } : {}), ...dataAttrs },
           span: spanOf(rel, sf, callee),
           provenance: PROV,
         };
@@ -1729,7 +1970,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
           to: { candidates: [first, ...rest] },
           facet: "calls",
           kind: "calls.call",
-          attrs: { callee: callee.getText(sf).slice(0, 200), how: "registry", callEnd: pos(sf, call.getEnd()), ...(binds !== undefined ? { binds } : {}), ...(truncated ? { truncated: true } : {}) },
+          attrs: { callee: callee.getText(sf).slice(0, 200), how: "registry", callEnd: pos(sf, call.getEnd()), ...(binds !== undefined ? { binds } : {}), ...dataAttrs, ...(truncated ? { truncated: true } : {}) },
           span: spanOf(rel, sf, callee),
           provenance: { frontend: FRONTEND_ID, confidence: "heuristic" },
         });
@@ -1746,7 +1987,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
             to: { candidates: [first, ...rest] },
             facet: "calls",
             kind: "calls.call",
-            attrs: { callee: callee.getText(sf).slice(0, 200), how: "interface", callEnd: pos(sf, call.getEnd()), ...(binds !== undefined ? { binds } : {}), ...(truncated ? { truncated: true } : {}) },
+            attrs: { callee: callee.getText(sf).slice(0, 200), how: "interface", callEnd: pos(sf, call.getEnd()), ...(binds !== undefined ? { binds } : {}), ...dataAttrs, ...(truncated ? { truncated: true } : {}) },
             span: spanOf(rel, sf, callee),
             provenance: { frontend: FRONTEND_ID, confidence: "heuristic" },
           });
