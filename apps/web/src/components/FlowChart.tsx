@@ -306,13 +306,14 @@ function Node({ id, node, fnId, scope, width, onNodeClick, onNodeOpen, selected,
   const kw = keywordOf(node);
   const body = (
     <>
-      <title>{outside && target !== undefined ? outsideText(target) : (node.title ?? node.label)}</title>
+      <title>{`${outside && target !== undefined ? outsideText(target) : (node.title ?? node.label)}${node.unguarded ? " · ⚠ unguarded shared state" : ""}`}</title>
       <rect x={4} y={node.y} width={Math.max(0, width - 8)} height={ROW_H} rx={7} className="flow-hit" />
       <Station node={node} cx={cx} cy={cy} resolved={!outside} />
       <text x={labelAt(node)} y={cy} dominantBaseline="central" className="flow-text">
         {node.tag !== undefined && <tspan className="flow-kw">{node.tag} </tspan>}
         {kw !== undefined && <tspan className="flow-kw">{kw} </tspan>}
         {node.label}
+        {node.unguarded && <tspan className="flow-warn">{" ⚠"}</tspan>}
         {outside && <tspan className="flow-mark">{" ↗"}</tspan>}
       </text>
       {inside && <Chevron node={node} x={width - 4 - CHEV_INSET - CHEV_HIT / 2} y={node.y} fold={shape === "fork"} onNodeOpen={onNodeOpen} />}
@@ -321,7 +322,7 @@ function Node({ id, node, fnId, scope, width, onNodeClick, onNodeOpen, selected,
   const cp = couplingClassOf(node);
   // The write-to-disk rows of the coupling view are drawn stronger than the other IO rows (see styles.css).
   // A write to a variable, and a global variable, are drawn stronger than the other state rows (see styles.css).
-  const cpCls = cp === undefined ? "" : ` cp-${cp}${cp === "io" && node.label.startsWith("fs.write") ? " cp-io-write" : ""}${cp === "state" && node.write ? " cp-state-write" : ""}${cp === "state" && node.global ? " cp-global" : ""}`;
+  const cpCls = cp === undefined ? "" : ` cp-${cp}${cp === "io" && node.label.startsWith("fs.write") ? " cp-io-write" : ""}${cp === "state" && node.write ? " cp-state-write" : ""}${cp === "state" && node.global ? " cp-global" : ""}${cp === "state" && node.unguarded ? " cp-unguarded" : ""}`;
   const cls = `flow-node ${shape} role-${node.role} c${laneOf(node.lane)}${outside ? " unresolved" : ""}${inside ? " resolves" : ""}${selected ? " selected" : ""}${cpCls}`;
   const style = delayStyle(delay);
   // A call into this scope opens the callee's chart; every other step with a span opens its source line.

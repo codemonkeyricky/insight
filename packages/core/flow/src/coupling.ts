@@ -54,6 +54,8 @@ interface Ctx {
   onSurface: boolean;
   /** Branches and loops kept because their condition reads a tainted local, with the reads that are tainted. */
   taint?: ReadonlyMap<Item, string[]>;
+  /** The variables written from two or more threads with no common lock at every write. */
+  unguarded?: ReadonlySet<string>;
 }
 
 /** How a state row classifies: whether it is kept, and its flags. */
@@ -129,9 +131,12 @@ function bindNames(item: StepItem): string[] {
  * call whose hoisted footprint has IO or state. This is the taint source of phase 4.
  */
 function carriesExternal(item: StepItem, caught: boolean, ctx: Ctx): boolean {
+  // An effect row (a builtin io call: `readFileSync`, `fetch`) is external by itself, even with no resolved target.
+  if (item.role === "effect") return true;
   const targets = targetsOf(item);
   if (targets.some((t) => isCross(t, ctx.M, ctx.modules))) return true;
-  return effective(targets, caught, ctx).some((e) => e.cls === "io" || e.cls === "state");
+  // A same-module callee hoists its own footprint: a cross call inside it reaches outside just as directly.
+  return effective(targets, caught, ctx).some((e) => e.cls === "cross" || e.cls === "io" || e.cls === "state");
 }
 
 /**
@@ -151,7 +156,7 @@ function taintedControlsOf(items: readonly Item[], caught: boolean, ctx: Ctx): M
     for (const item of list) {
       switch (item.t) {
         case "step":
-          if ((item.role === "call" || item.role === "await") && item.binds !== undefined && carriesExternal(item, caughtHere, ctx)) {
+          if ((item.role === "call" || item.role === "await" || item.role === "effect") && item.binds !== undefined && carriesExternal(item, caughtHere, ctx)) {
             for (const name of bindNames(item)) tainted.add(name);
           }
           break;
@@ -276,6 +281,8 @@ function keepItem(item: Item, caught: boolean, ctx: Ctx, st: { next: number }): 
           ...(cls.write ? { write: true as const } : {}),
           ...(cls.hidden ? { hidden: true as const } : {}),
           ...(cls.global ? { global: true as const } : {}),
+          // `unguarded` describes a write. A read row of the same variable is not stamped, though the thread box still is.
+          ...(cls.write && ctx.unguarded?.has(item.state.variable) ? { unguarded: true as const } : {}),
         };
       }
       const info = stepInfo(item, caught, ctx);
@@ -568,10 +575,11 @@ export function couplingChart(
   modules: ModuleMap,
   footprints: ReadonlyMap<string, CouplingFootprint>,
   surface?: ReadonlySet<string>,
+  unguarded?: ReadonlySet<string>,
 ): { items: Item[]; info: CouplingInfo } {
   const M = modules.moduleOf(fnId);
   const fp = footprints.get(fnId) ?? { entries: [], modules: [], escape: false, state: { writes: 0, reads: 0, hidden: false } };
-  const ctx: Ctx = { M, modules, footprints, onSurface: surface === undefined || surface.has(fnId) };
+  const ctx: Ctx = { M, modules, footprints, onSurface: surface === undefined || surface.has(fnId), ...(unguarded !== undefined ? { unguarded } : {}) };
   ctx.taint = taintedControlsOf(items, false, ctx);
   const out = prune(items, false, ctx, { next: 0 });
   return { items: out, info: { module: M ?? ".", footprint: fp, summary: footprintSummary(fp) } };

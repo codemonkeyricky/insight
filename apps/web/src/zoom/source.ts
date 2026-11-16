@@ -31,6 +31,11 @@ export interface MapNode {
    * caption says so.
    */
   external?: boolean;
+  /**
+   * A thread that writes shared state another thread also writes with no lock held in common at every write
+   * (`⚠ unguarded shared state`): the variable names, for the box's badge and tooltip.
+   */
+  unguarded?: string[];
 }
 
 /**

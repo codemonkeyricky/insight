@@ -1794,7 +1794,8 @@ export function emitFile(project: Project, rel: string): IRBatch {
           facet: effect.kind.slice(0, effect.kind.indexOf(".")),
           kind: effect.kind,
           parent: owner,
-          attrs: effect.attrs,
+          // A bound result (`const cfg = readConfigSync()`) carries where it goes, as a calls.call row does.
+          attrs: { ...effect.attrs, ...(binds !== undefined ? { binds } : {}) },
           span: spanOf(rel, sf, call),
           provenance: PROV,
         });

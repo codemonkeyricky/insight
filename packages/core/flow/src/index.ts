@@ -3,6 +3,8 @@ import { factsForFile, type StateIndex } from "./build.js";
 import { couplingChart, couplingFacts, type CouplingFootprint } from "./coupling.js";
 import { layoutFunction, measure } from "./layout.js";
 import { moduleMap, type ModuleMap } from "./modules.js";
+import type { UnguardedState } from "./state-writes.js";
+import { unguardedStateFromFacts } from "./unguarded.js";
 import type { FileFlow } from "./types.js";
 
 export * from "./types.js";
@@ -23,6 +25,8 @@ export * from "./coupling.js";
 export * from "./coupling-report.js";
 export * from "./scope-input.js";
 export * from "./resource-peers.js";
+export * from "./state-writes.js";
+export * from "./unguarded.js";
 
 /** A function of the snapshot as a coupling report names it: its id, display name, and declaration site. */
 export interface CouplingFunction {
@@ -45,6 +49,11 @@ export interface CouplingIndex {
   state: StateIndex;
   /** Every function by id, with the name, file and line a report shows (see `couplingReport`). */
   functions: ReadonlyMap<string, CouplingFunction>;
+  /**
+   * The mutable variables written from two or more threads with no lock held in common at every write, and the threads that
+   * write them. Built from the same charts as the footprints, so the project execution model is the only extra pass.
+   */
+  unguarded: UnguardedState;
 }
 
 /** The coupling index of a project's IR records. */
@@ -63,7 +72,7 @@ export function couplingIndex(nodes: readonly IRNode[], edges: readonly IREdge[]
       ...(f.span !== undefined ? { line: f.span.start[0] + 1 } : {}),
     });
   }
-  return { modules, footprints, surface, state, functions };
+  return { modules, footprints, surface, state, functions, unguarded: unguardedStateFromFacts(facts.values(), nodes, edges, state) };
 }
 
 /**
@@ -84,7 +93,7 @@ export function buildFileFlow(file: string, nodes: Iterable<IRNode>, edges: Iter
     functions: facts.map((f) => {
       const flow = layoutFunction(f);
       if (coupling === undefined || flow.tooLarge) return flow;
-      const pruned = couplingChart(f.id, f.items, coupling.modules, coupling.footprints, coupling.surface);
+      const pruned = couplingChart(f.id, f.items, coupling.modules, coupling.footprints, coupling.surface, new Set(coupling.unguarded.variables.keys()));
       const chart = layoutFunction({ id: f.id, name: f.name, async: f.async, ...(f.span ? { span: f.span } : {}), items: pruned.items });
       return { ...flow, coupling: { ...pruned.info, chart, rows: { all: flow.nodes.length, coupling: chart.nodes.length } } };
     }),

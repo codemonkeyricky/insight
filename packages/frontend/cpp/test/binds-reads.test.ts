@@ -16,6 +16,9 @@ void localLog() {}
 void run(Config cfg, int n, int count) {
   auto loaded = loadConfig();
   loaded = loadConfig();
+  auto& ref = loadConfig();
+  const auto& cref = loadConfig();
+  auto&& rref = loadConfig();
   if (cfg.debug && n > 0) {
     localLog();
   }
@@ -50,8 +53,18 @@ describe("frontend-cpp binds and reads", () => {
   it("binds an auto call result and a later assignment", async () => {
     const { edges } = await extractAll();
     const calls = edges.filter((e) => e.kind === "calls.call" && e.attrs?.callee === "loadConfig");
-    expect(calls).toHaveLength(2);
-    expect(calls.map((e) => e.attrs?.binds)).toEqual(["loaded", "loaded"]);
+    expect(calls).toHaveLength(5);
+    expect(calls.map((e) => e.attrs?.binds)).toEqual(["loaded", "loaded", "ref", "cref", "rref"]);
+  });
+
+  it("binds through reference, const-reference and rvalue-reference declarators", async () => {
+    const { edges } = await extractAll();
+    const calls = edges.filter((e) => e.kind === "calls.call" && e.attrs?.callee === "loadConfig");
+    const byBinds = new Map(calls.map((e) => [e.attrs?.binds, e]));
+    // `auto&`, `const auto&` and `auto&&` all wrap the identifier in a reference_declarator.
+    expect(byBinds.get("ref")).toBeDefined();
+    expect(byBinds.get("cref")).toBeDefined();
+    expect(byBinds.get("rref")).toBeDefined();
   });
 
   it("reads the locals of an if condition, excluding the member name", async () => {
