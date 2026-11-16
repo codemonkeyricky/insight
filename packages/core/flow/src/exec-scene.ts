@@ -26,7 +26,7 @@ export const MAIN_PROCESS_ID = "prog:main";
 /** The note on each function drawn as plain code flow, with no runtime box around it. */
 export const NO_RUNTIME_NOTE = "Plain call with no runtime context. Zoom out to see where it runs.";
 /** The root's note when no thread is grounded in the scope. */
-export const NO_RUNTIME_ROOT_NOTE = "Code flow, no runtime context found in this scope.";
+const NO_RUNTIME_ROOT_NOTE = "Code flow, no runtime context found in this scope.";
 
 /** Every node kind of the execution scene, with its level. */
 export const EXEC_LEVELS: Record<string, SceneLevel> = {

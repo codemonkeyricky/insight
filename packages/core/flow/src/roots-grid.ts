@@ -1,6 +1,6 @@
-// The roots-only map's layout: each root function is a uniform card, and the cards wrap in a grid, top-left aligned. The
-// grid leaves room the map's own controls take (the title chip and the key plan at the bottom right, the Show button at the
-// top left, the roots switch at the bottom left), so no card sits under them at the default fit. Pure, so it is unit tested.
+// The flat grid's layout (unrooted.ts): each card is a uniform box, and the cards wrap in a grid, top-left aligned. The grid
+// leaves room the map's own controls take (the title chip and the key plan at the bottom right, the Show button at the top
+// left), so no card sits under them at the default fit. Pure, so it is unit tested.
 import type { Scene, SceneLayout } from "./scene.js";
 import type { ContainerLayout, Size, Slot } from "./zoom-layout.js";
 
@@ -36,7 +36,7 @@ export function cardWidth(label: string): number {
 export type Footprint = ReadonlyMap<string, Size & { left?: number }>;
 
 /**
- * The roots-only layout of a flat scene: the root's children are the cards, wrapped in rows of at most CARD_WRAP_W, in
+ * The flat grid's layout: the root's children are the cards, wrapped in rows of at most CARD_WRAP_W, in
  * the order the scene lists them. The root's container is the grid plus the padding above. A card's slot is its own box;
  * the room in `footprint` is kept clear beside it, so the next card starts past it. Deterministic.
  */

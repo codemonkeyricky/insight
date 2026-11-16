@@ -2,9 +2,10 @@
 // are drawn; the System tab shows those. A card is an in-scope function that no other in-scope function calls, references,
 // dispatches or spawns. A cycle that nothing outside enters gets one card (its lowest id), so every function the scope draws
 // is reached from some card. A module entry (a file's top-level code) is a card only when that code calls, dispatches or
-// spawns something. Pure: the scene and the model are read, never changed.
+// spawns something, in scope or out. Sync edges join the cards that reach their sites (see unrootedReach). Pure: the scene
+// and the model are read, never changed.
 import type { ExecModel } from "./exec-model.js";
-import { flattenRoots, keepScene } from "./scene-filter.js";
+import { flattenRoots, keepScene, rewireEdges } from "./scene-filter.js";
 import type { Scene, SceneEdge, SceneNode } from "./scene.js";
 
 /** A grid with more cards than this shows its first MORE_KEEP and one "+N more" card, unless it is expanded. */
@@ -16,13 +17,19 @@ export const MORE_SUFFIX = "#more";
 /** The suffix a file's module entry id carries: `<file>#(module)`. */
 const MODULE_SUFFIX = "#(module)";
 
-/**
- * The cards of a scope: the in-scope functions the full scene draws (`drawn`, by function id) that no other such function
- * calls, references, dispatches or spawns, plus one function per cycle no outside function enters. A spawn's targets are the
- * roots of the spawned thread; its owner is the spawner. A file-level owner or dispatch source stands for the file's module
- * entry. Sorted by id.
- */
-export function unrootedFunctions(model: ExecModel, drawn: ReadonlySet<string>): string[] {
+/** The caller-to-callee graph over the candidates (in-scope functions the scene draws), and the cards it gives. */
+interface CardGraph {
+  /** Caller to callees, among the candidates. A spawn's owner points at the roots it starts; a file stands for its module entry. */
+  out: Map<string, Set<string>>;
+  /** Callee to callers, among the candidates: the reverse of `out`. */
+  into: Map<string, Set<string>>;
+  /** The candidates, sorted by id. */
+  ids: string[];
+  /** The cards, sorted by id. */
+  cards: string[];
+}
+
+function cardGraph(model: ExecModel, drawn: ReadonlySet<string>): CardGraph {
   const byId = new Map(model.functions.map((f) => [f.id, f] as const));
   const ids = new Set<string>();
   for (const f of model.functions) if (f.inScope && drawn.has(f.id)) ids.add(f.id);
@@ -35,14 +42,16 @@ export function unrootedFunctions(model: ExecModel, drawn: ReadonlySet<string>):
 
   // The caller-to-callee edges between the candidates, and the spawners.
   const out = new Map<string, Set<string>>();
-  const incoming = new Set<string>();
+  const into = new Map<string, Set<string>>();
   const spawners = new Set<string>();
   const link = (from: string | undefined, to: string | undefined): void => {
     if (from === undefined || to === undefined || from === to) return;
     let s = out.get(from);
     if (s === undefined) out.set(from, (s = new Set()));
     s.add(to);
-    incoming.add(to);
+    let r = into.get(to);
+    if (r === undefined) into.set(to, (r = new Set()));
+    r.add(from);
   };
   for (const [i, j] of model.calls) link(fnOf(model.functions[i]?.id ?? ""), fnOf(model.functions[j]?.id ?? ""));
   for (const d of model.dispatches) for (const t of d.targets) link(fnOf(d.from), fnOf(t));
@@ -54,43 +63,15 @@ export function unrootedFunctions(model: ExecModel, drawn: ReadonlySet<string>):
     for (const r of t.roots) link(owner, fnOf(r));
   }
 
-  // Tarjan's strongly connected components over the candidates, in id order.
-  const order = new Map<string, number>();
-  const low = new Map<string, number>();
-  const onStack = new Set<string>();
-  const stack: string[] = [];
-  const comp = new Map<string, number>();
-  const members: string[][] = [];
-  const visit = (v: string): void => {
-    const at = order.size;
-    order.set(v, at);
-    low.set(v, at);
-    stack.push(v);
-    onStack.add(v);
-    for (const w of out.get(v) ?? []) {
-      if (!order.has(w)) {
-        visit(w);
-        low.set(v, Math.min(low.get(v) ?? at, low.get(w) ?? at));
-      } else if (onStack.has(w)) {
-        low.set(v, Math.min(low.get(v) ?? at, order.get(w) ?? at));
-      }
-    }
-    if (low.get(v) !== order.get(v)) return;
-    const group: string[] = [];
-    for (;;) {
-      const w = stack.pop() ?? v;
-      onStack.delete(w);
-      comp.set(w, members.length);
-      group.push(w);
-      if (w === v) break;
-    }
-    members.push(group);
-  };
   const sorted = [...ids].sort();
-  for (const v of sorted) if (!order.has(v)) visit(v);
+  const groups = components(sorted, out);
+  const comp = new Map<string, number>();
+  groups.forEach((group, c) => {
+    for (const v of group) comp.set(v, c);
+  });
 
   // A component entered from outside it, by some other component's edge, is reached from that caller.
-  const entered = members.map(() => false);
+  const entered = groups.map(() => false);
   for (const [from, tos] of out) {
     for (const to of tos) {
       const c = comp.get(to);
@@ -99,34 +80,208 @@ export function unrootedFunctions(model: ExecModel, drawn: ReadonlySet<string>):
   }
 
   const cards = new Set<string>();
-  for (const id of sorted) if (!incoming.has(id)) cards.add(id);
-  members.forEach((group, c) => {
+  for (const id of sorted) if (!into.has(id)) cards.add(id);
+  groups.forEach((group, c) => {
     if (group.length > 1 && entered[c] !== true) cards.add([...group].sort()[0] ?? "");
   });
-  // A module entry that calls, dispatches or spawns nothing in scope is a file's declarations, not a card.
+  // A module entry that calls, dispatches or spawns nothing is a file's declarations, not a card.
   for (const id of [...cards]) {
     const f = byId.get(id);
-    if (f?.module === true && (out.get(id)?.size ?? 0) === 0 && !spawners.has(id)) cards.delete(id);
+    const acts = f?.callsOut === true || (out.get(id)?.size ?? 0) > 0;
+    if (f?.module === true && !acts && !spawners.has(id)) cards.delete(id);
   }
-  return [...cards].sort();
+  return { out, into, ids: sorted, cards: [...cards].sort() };
+}
+
+/**
+ * The strongly connected components of the graph over `ids`, by Tarjan's algorithm. Iterative: each open node keeps its own
+ * stack frame, so a long call chain cannot overflow the JavaScript stack.
+ */
+function components(ids: readonly string[], out: ReadonlyMap<string, ReadonlySet<string>>): string[][] {
+  const index = new Map<string, number>();
+  const low = new Map<string, number>();
+  const onStack = new Set<string>();
+  const stack: string[] = [];
+  const groups: string[][] = [];
+  for (const root of ids) {
+    if (index.has(root)) continue;
+    const frames: { v: string; next: string[]; at: number }[] = [];
+    const open = (v: string): void => {
+      index.set(v, index.size);
+      low.set(v, index.get(v) ?? 0);
+      stack.push(v);
+      onStack.add(v);
+      frames.push({ v, next: [...(out.get(v) ?? [])], at: 0 });
+    };
+    open(root);
+    while (frames.length > 0) {
+      const top = frames[frames.length - 1];
+      if (top === undefined) break;
+      if (top.at < top.next.length) {
+        const w = top.next[top.at] ?? "";
+        top.at += 1;
+        if (!index.has(w)) open(w);
+        else if (onStack.has(w)) low.set(top.v, Math.min(low.get(top.v) ?? 0, index.get(w) ?? 0));
+        continue;
+      }
+      frames.pop();
+      const parent = frames[frames.length - 1];
+      if (parent !== undefined) low.set(parent.v, Math.min(low.get(parent.v) ?? 0, low.get(top.v) ?? 0));
+      if (low.get(top.v) !== index.get(top.v)) continue;
+      const group: string[] = [];
+      for (;;) {
+        const w = stack.pop() ?? top.v;
+        onStack.delete(w);
+        group.push(w);
+        if (w === top.v) break;
+      }
+      groups.push(group);
+    }
+  }
+  return groups;
+}
+
+/**
+ * The cards of a scope: the in-scope functions the full scene draws (`drawn`, by function id) that no other such function
+ * calls, references, dispatches or spawns, plus one function per cycle no outside function enters. A spawn's targets are the
+ * roots of the spawned thread; its owner is the spawner. A file-level owner or dispatch source stands for the file's module
+ * entry. Sorted by id.
+ */
+export function unrootedFunctions(model: ExecModel, drawn: ReadonlySet<string>): string[] {
+  return cardGraph(model, drawn).cards;
+}
+
+/** Which cards reach which functions, over the graph unrootedFunctions reads. See unrootedReach. */
+export interface UnrootedReach {
+  /** The cards, sorted by id: the same as unrootedFunctions. */
+  readonly cards: readonly string[];
+  /** The functions a card reaches, itself included, sorted by id: its callees, the roots it spawns, and so on, down. */
+  reachOf(card: string): string[];
+  /**
+   * The card a function is drawn under: the card whose reach holds it, nearest by call depth (fewest links from the card),
+   * ties to the lowest id. Undefined when no card reaches the function. A sync edge's end joins this card.
+   */
+  cardOf(fn: string): string | undefined;
+}
+
+/**
+ * The reach of the cards of a scope, over the caller-to-callee graph of unrootedFunctions (calls, references, dispatches, a
+ * spawn's owner to its roots, a coroutine's dispatchers to its target). Each function a sync site names is drawn under the
+ * nearest card that reaches it, so a site in a spawned thread (which has no card of its own) joins its spawner's card.
+ */
+export function unrootedReach(model: ExecModel, drawn: ReadonlySet<string>): UnrootedReach {
+  const g = cardGraph(model, drawn);
+  const cardSet = new Set(g.cards);
+  const memo = new Map<string, string | undefined>();
+  const cardOf = (fn: string): string | undefined => {
+    if (memo.has(fn)) return memo.get(fn);
+    // Breadth-first over the callers of `fn`: the first level holding a card names it (lowest id within that level).
+    const seen = new Set<string>([fn]);
+    let frontier = [fn];
+    let found: string | undefined;
+    while (frontier.length > 0 && found === undefined) {
+      const hits = frontier.filter((x) => cardSet.has(x)).sort();
+      if (hits.length > 0) {
+        found = hits[0];
+        break;
+      }
+      const next: string[] = [];
+      for (const x of frontier) {
+        for (const c of g.into.get(x) ?? []) {
+          if (seen.has(c)) continue;
+          seen.add(c);
+          next.push(c);
+        }
+      }
+      frontier = next;
+    }
+    memo.set(fn, found);
+    return found;
+  };
+  const reachOf = (card: string): string[] => {
+    const seen = new Set<string>([card]);
+    const stack = [card];
+    while (stack.length > 0) {
+      const cur = stack.pop() as string;
+      for (const to of g.out.get(cur) ?? []) {
+        if (seen.has(to)) continue;
+        seen.add(to);
+        stack.push(to);
+      }
+    }
+    return [...seen].sort();
+  };
+  return { cards: g.cards, reachOf, cardOf };
 }
 
 /**
  * The Flow canvas's scene: the cards of unrootedFunctions drawn as one flat grid under the project, each function once, in
  * name order. A grid of more than MORE_AFTER cards shows its first MORE_KEEP and a "+N more" card, unless its root id is in
- * `expanded` (the grid is expanded). Sync edges join the card that holds their end. The input is not changed.
+ * `expanded` (the grid is expanded). A sync edge joins the card that reaches its site (see unrootedReach), and is dropped when
+ * both ends join one card (the renderer draws no self-edge) or no card reaches an end. The input is not changed.
  */
 export function unrootedScene(full: Scene, model: ExecModel, expanded: ReadonlySet<string> = new Set()): Scene {
   const drawn = new Set<string>();
-  for (const n of full.nodes.values()) if (n.kind === "function" && n.ref !== undefined) drawn.add(n.ref);
-  const cards = new Set(unrootedFunctions(model, drawn));
+  // Each function's first placement by id: the placement its card is drawn at.
+  const firstOf = new Map<string, string>();
+  const placed = [...full.nodes.values()].filter((n) => n.kind === "function" && n.ref !== undefined).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  for (const n of placed) {
+    const ref = n.ref ?? "";
+    drawn.add(ref);
+    if (!firstOf.has(ref)) firstOf.set(ref, n.id);
+  }
+  const reach = unrootedReach(model, drawn);
+  const cards = new Set(reach.cards);
   const keep = new Set<string>();
-  for (const n of full.nodes.values()) if (n.kind === "function" && n.ref !== undefined && cards.has(n.ref)) keep.add(n.id);
-  const flat = flattenRoots(keepScene(full, keep), model);
+  for (const n of placed) if (cards.has(n.ref ?? "")) keep.add(n.id);
+
+  // A sync end (a placement, or a container's functions) moves to the first placement of the card that reaches it.
+  const cardPlacement = (placementId: string): string | undefined => {
+    const direct = full.nodes.get(placementId);
+    const card = direct?.kind === "function" && direct.ref !== undefined ? reach.cardOf(direct.ref) : undefined;
+    if (direct?.kind === "function") return card === undefined ? undefined : firstOf.get(card);
+    for (const fnId of functionsUnder(full, placementId)) {
+      const c = reach.cardOf(fnId);
+      if (c !== undefined) return firstOf.get(c);
+    }
+    return undefined;
+  };
+  const edges: SceneEdge[] = [];
+  for (const e of full.edges) {
+    if (e.kind !== "sync") {
+      edges.push(e);
+      continue;
+    }
+    const from = cardPlacement(e.from);
+    const to = cardPlacement(e.to);
+    if (from !== undefined && to !== undefined) edges.push({ ...e, from, to });
+  }
+
+  const flat = flattenRoots(keepScene({ ...full, edges }, keep), model);
   return withMore(flat, expanded);
 }
 
-/** The flat grid with its "+N more" card when it is long and not expanded. */
+/** The function placements under a node, in id order: the node itself when it is one, else every one below it. */
+function functionsUnder(scene: Scene, id: string): string[] {
+  const out: string[] = [];
+  const stack = [id];
+  const seen = new Set<string>();
+  while (stack.length > 0) {
+    const cur = stack.pop() as string;
+    if (seen.has(cur)) continue;
+    seen.add(cur);
+    const n: SceneNode | undefined = scene.nodes.get(cur);
+    if (n === undefined) continue;
+    if (n.kind === "function" && n.ref !== undefined) out.push(n.ref);
+    for (const c of n.children) stack.push(c);
+  }
+  return out.sort();
+}
+
+/**
+ * The flat grid with its "+N more" card when it is long and not expanded. A sync edge whose card is hidden behind the
+ * "+N more" card reattaches to that card; edges that then share their ends merge, and one whose ends both land there is dropped.
+ */
 function withMore(flat: Scene, expanded: ReadonlySet<string>): Scene {
   const root = flat.nodes.get(flat.root);
   if (root === undefined) return flat;
@@ -150,7 +305,11 @@ function withMore(flat: Scene, expanded: ReadonlySet<string>): Scene {
     children: [],
     detail: "Click to show every card in this scope",
   });
-  const edges: SceneEdge[] = flat.edges.filter((e) => nodes.has(e.from) && nodes.has(e.to));
+  const edges = rewireEdges(
+    flat.edges,
+    (id) => nodes.has(id),
+    (id) => (nodes.has(id) ? id : hidden.has(id) ? more : undefined),
+  );
   return { ...flat, nodes, edges, levels: { ...flat.levels, more: { box: { w: 160, h: 56 } } } };
 }
 

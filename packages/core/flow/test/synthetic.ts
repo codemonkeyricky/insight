@@ -67,3 +67,23 @@ export function flowOfScope(nodes: readonly IRNode[], edges: readonly IREdge[], 
   const cut = cutScope(nodes, edges, inScope);
   return summarizeScope(cut.nodes, cut.edges, inScope);
 }
+
+/** The IR facts of a lock acquisition or other sync op on `line` of `file`, in `parent`. */
+export const lockOf = (file: string, line: number, parent: string, lock: string): IRNode => syncNode(file, line, parent, "sync.lock-acquire", { lock, mode: "exclusive" });
+
+export const spanAt = (file: string, line: number) => ({ file, start: [line, 2] as [number, number], end: [line, 8] as [number, number] });
+
+/** An IR node in `parent` on `line` of `file`. Its id is unique per kind and line. */
+export function syncNode(file: string, line: number, parent: string, kind: string, attrs: Record<string, unknown>, facet = "sync"): IRNode {
+  return { id: `${file}@${kind}:${line + 1}:2`, facet, kind, parent, span: spanAt(file, line), attrs, provenance: PROVENANCE };
+}
+
+/** A spawn of a thread on `line` of `file`, started by `owner`. Its id is the one the exec model uses for the thread. */
+export function spawnNode(file: string, line: number, owner: string): IRNode {
+  return { id: `${file}@spawn:${line + 1}:2`, facet: "concurrency", kind: "concurrency.spawn-thread", parent: owner, span: spanAt(file, line), attrs: {}, provenance: PROVENANCE };
+}
+
+/** The spawns edge of that spawn: the thread it starts is `to`. */
+export function spawnEdge(file: string, line: number, to: IREdge["to"]): IREdge {
+  return { from: `${file}@spawn:${line + 1}:2`, to, facet: "concurrency", kind: "concurrency.spawns", attrs: { how: "thread" }, span: spanAt(file, line), provenance: PROVENANCE };
+}

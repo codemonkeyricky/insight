@@ -68,6 +68,12 @@ export interface ExecFunctionRef {
   /** How the function runs. See ExecRuntime. */
   runtime: ExecRuntime;
   /**
+   * Set for a function whose own code calls, references, dispatches or spawns something, in any scope: a callee outside the
+   * scope counts, since the model lists only in-scope callees. For a module entry, its top-level code. The flat grid reads
+   * it to keep a file whose top-level code only calls out of scope as a card.
+   */
+  callsOut?: true;
+  /**
    * The width and height of the function's control-flow chart, in chart units. Absent when the IR has no chart for it
    * (no steps, or too many to chart). The canvas sizes the function's box to hold the chart.
    */
@@ -1301,6 +1307,16 @@ function execModelOf(P: ExecPlans, scope: string, opts: ExecModelOptions): ExecM
   }
   const runtimeOf = (id: string): ExecRuntime => (reachedOnThread.has(id) ? "thread" : reachedAll.has(id) ? "coroutine" : "none");
 
+  // Whether a function's own code calls, references, dispatches or spawns anything, in or out of scope. Module-level code is
+  // keyed by its file, so a module entry also checks its file. Read over the whole IR (P), not the listed functions.
+  const outgoing = new Set<string>();
+  for (const d of P.dispatchSites) if (d.targets.length > 0) outgoing.add(d.from);
+  for (const n of P.spawnNodes) if (n.parent !== undefined && (P.spawnsOf.get(n.id)?.targets.size ?? 0) > 0) outgoing.add(P.foldId(n.parent));
+  const callsOutOf = (f: Fn): boolean => {
+    const keys = f.module === true ? [f.id, f.file ?? ""] : [f.id];
+    return keys.some((k) => P.callsOf(k).length > 0 || outgoing.has(k));
+  };
+
   // The function table. Threads are cut in order, so the first threads keep their full lists when the cap is hit.
   const table = new Map<string, ExecFunctionRef>();
   let truncated = false;
@@ -1323,6 +1339,7 @@ function execModelOf(P: ExecPlans, scope: string, opts: ExecModelOptions): ExecM
       ...(fn.anonymous ? { anonymous: true as const, ...(fn.parent !== undefined ? { parent: fn.parent } : {}) } : {}),
       ...(fn.module ? { module: true as const } : {}),
       runtime: runtimeOf(id),
+      ...(callsOutOf(fn) ? { callsOut: true as const } : {}),
       ...(chart !== undefined ? { chart } : {}),
     });
     return true;
