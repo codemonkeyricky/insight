@@ -4,6 +4,7 @@ import type { ExtractContext, Frontend, IRBatch, ProjectRoot } from "@insight/sd
 import { buildProject, emitFile, FRONTEND_ID, SOURCE_RE } from "./extract.js";
 import { apiDigest } from "./digest.js";
 import { isWorkspaceManifest } from "./packages.js";
+import { WRANGLER_RE, parseWrangler, type WranglerInfo } from "./deploy.js";
 
 const SKIP_DIRS = new Set(["node_modules", ".git", ".insight", "dist"]);
 
@@ -29,7 +30,7 @@ function findSource(dir: string, depth: number): string | undefined {
 
 export const frontend: Frontend = {
   id: FRONTEND_ID,
-  version: "0.2.8",
+  version: "0.2.9",
   provides: ["structure", "packaging", "flow", "calls", "effects", "concurrency", "sync", "state", "data"],
 
   async detect(root: ProjectRoot) {
@@ -61,7 +62,14 @@ export const frontend: Frontend = {
     for (const f of ctx.listFiles()) {
       if (isWorkspaceManifest(f)) packageJsons.set(f, await ctx.readFile(f));
     }
-    const project = buildProject(ctx.root.path, rels, texts, html, manifests, packageJsons);
+    // Every wrangler config outside test, fixture and build folders, keyed by its folder (see deploy.ts).
+    const wranglers = new Map<string, WranglerInfo>();
+    for (const f of ctx.listFiles()) {
+      if (WRANGLER_RE.test(f) && !NOISE_PAGE_DIR.test(f)) {
+        wranglers.set(f.includes("/") ? f.slice(0, f.lastIndexOf("/")) : "", parseWrangler(await ctx.readFile(f)));
+      }
+    }
+    const project = buildProject(ctx.root.path, rels, texts, html, manifests, packageJsons, wranglers);
     for (const rel of ctx.files) {
       yield emitFile(project, rel);
     }

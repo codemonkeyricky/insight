@@ -804,3 +804,104 @@ export function matchExportRoute(node: ts.Node): ServeMatch[] {
   }
   return [];
 }
+
+/** The method on a platform binding that reads, lists, writes or deletes, and the store op it is. */
+const STORE_OPS: Record<string, string> = { get: "read", getWithMetadata: "read", list: "list", put: "write", delete: "delete" };
+
+export interface StoreMatch {
+  kind: "effects.store.access";
+  attrs: Record<string, unknown>;
+}
+
+/**
+ * A call on a platform binding a Worker's wrangler config declares: `env.INDEX.get(…)` reads the store INDEX names. The
+ * receiver must be a name the Worker takes as its env (see workerEnvNames) and the binding must be one the config declares.
+ */
+export function matchStoreAccess(call: ts.CallExpression, bindings: Map<string, string>, envNames: Set<string>): StoreMatch | undefined {
+  const callee = unwrapAll(call.expression);
+  if (!ts.isPropertyAccessExpression(callee)) return undefined;
+  const op = STORE_OPS[callee.name.text];
+  if (op === undefined) return undefined;
+  const target = unwrapAll(callee.expression);
+  if (!ts.isPropertyAccessExpression(target) || !ts.isIdentifier(target.expression)) return undefined;
+  const binding = target.name.text;
+  const store = bindings.get(binding);
+  if (store === undefined || !envNames.has(target.expression.text)) return undefined;
+  return {
+    kind: "effects.store.access",
+    attrs: { api: `${target.expression.text}.${binding}.${callee.name.text}`, store, op, binding },
+  };
+}
+
+/**
+ * The names a Worker file takes as its env: the second parameter of every `fetch` handler, and any parameter named `env`
+ * (helpers such as `signingKey(env)` receive the binding object the same way). An alias made by destructuring is not followed.
+ */
+export function workerEnvNames(sf: ts.SourceFile): Set<string> {
+  const names = new Set<string>();
+  const visit = (node: ts.Node): void => {
+    if (ts.isFunctionLike(node) && "parameters" in node) {
+      const params = (node as ts.SignatureDeclaration).parameters;
+      for (const p of params) if (ts.isIdentifier(p.name) && p.name.text === "env") names.add("env");
+      const fetchNamed =
+        (ts.isMethodDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node)) &&
+        (ts.isMethodDeclaration(node) ? ts.isIdentifier(node.name) && node.name.text === "fetch" : propertyNamedFetch(node));
+      const second = params[1];
+      if (fetchNamed && second !== undefined && ts.isIdentifier(second.name)) names.add(second.name.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return names;
+}
+
+/** True when a function expression is the value of an object property named fetch: `{ fetch: (req, env) => … }`. */
+function propertyNamedFetch(fn: ts.Node): boolean {
+  const parent = fn.parent;
+  return parent !== undefined && ts.isPropertyAssignment(parent) && ts.isIdentifier(parent.name) && parent.name.text === "fetch";
+}
+
+/** Property access names that touch a binding object, per file: X[…pathname] makes X a dispatch table. */
+const dispatchTablesOf = new WeakMap<ts.SourceFile, Set<string>>();
+
+function dispatchedNames(sf: ts.SourceFile): Set<string> {
+  const cached = dispatchTablesOf.get(sf);
+  if (cached !== undefined) return cached;
+  const names = new Set<string>();
+  const visit = (node: ts.Node): void => {
+    if (ts.isElementAccessExpression(node) && ts.isIdentifier(node.expression) && node.argumentExpression.getText(sf).endsWith("pathname")) {
+      names.add(node.expression.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  dispatchTablesOf.set(sf, names);
+  return names;
+}
+
+/**
+ * A route table a file dispatches on by path: `const X = { "/api/a": handlerA, "/api/b": "b" }` with at least one key, every
+ * key a string literal starting with "/", and the same file reading `X[<expr>.pathname]`. Each key is one route the file
+ * serves, under the dispatch framework and any method. The value is the handler: its text, or a string value's content.
+ */
+export function matchDispatchTable(stmt: ts.VariableStatement, sf: ts.SourceFile): ServeMatch[] {
+  const out: ServeMatch[] = [];
+  const used = dispatchedNames(sf);
+  for (const d of stmt.declarationList.declarations) {
+    if (!ts.isIdentifier(d.name) || !used.has(d.name.text) || d.initializer === undefined) continue;
+    const init = unwrapAll(d.initializer);
+    if (!ts.isObjectLiteralExpression(init) || init.properties.length === 0) continue;
+    const routes: ServeMatch[] = [];
+    for (const p of init.properties) {
+      if (!ts.isPropertyAssignment(p) || !ts.isStringLiteral(p.name) || !p.name.text.startsWith("/")) {
+        routes.length = 0;
+        break;
+      }
+      const value = unwrapAll(p.initializer);
+      const handler = ts.isStringLiteralLike(value) ? value.text : p.initializer.getText(sf);
+      routes.push({ kind: "effects.net.serve", attrs: { framework: "dispatch", method: "*", path: p.name.text, handler } });
+    }
+    if (routes.length >= 2) out.push(...routes);
+  }
+  return out;
+}
