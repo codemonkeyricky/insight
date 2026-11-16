@@ -8,7 +8,9 @@ import frontend from "../src/index.js";
 // Phase 4a: the local a call's result goes into (`calls.call.attrs.binds`) and the locals a branch or loop condition reads
 // (`flow.branch.attrs.reads`, `flow.loop.attrs.reads`).
 
-const SOURCE = `const LIMIT = 10;
+const SOURCE = `import { readFileSync } from "node:fs";
+
+const LIMIT = 10;
 
 function pair(): { a: number; b: number } {
   return { a: 1, b: 2 };
@@ -34,7 +36,11 @@ export async function run(items: number[], n: number): Promise<void> {
   count = parse("y");
   const { a, b } = pair();
   const r = await fetchX();
+  const text = readFileSync("x", "utf8");
   if (cfg.debug && n > LIMIT) {
+    localLog();
+  }
+  if (text.length > 0) {
     localLog();
   }
   while (count > n) {
@@ -102,6 +108,12 @@ describe("frontend-typescript binds and reads", () => {
   it("binds an awaited call result, with await transparent", () => {
     expect(calls("fetchX")).toHaveLength(1);
     expect(calls("fetchX")[0]?.attrs?.binds).toBe("r");
+  });
+
+  it("binds the result of a builtin io effect, so an io-bound local can taint", () => {
+    const effects = nodes.filter((n) => n.kind === "effects.fs.read");
+    expect(effects).toHaveLength(1);
+    expect(effects[0]?.attrs?.binds).toBe("text");
   });
 
   it("reads the locals of an if with a compound condition, excluding a module constant", () => {

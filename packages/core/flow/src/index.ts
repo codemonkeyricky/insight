@@ -45,7 +45,7 @@ export interface CouplingIndex {
 /** The coupling index of a project's IR records. */
 export function couplingIndex(nodes: readonly IRNode[], edges: readonly IREdge[]): CouplingIndex {
   const { modules, footprints, surface, state, facts } = couplingFacts(nodes, edges);
-  return { modules, footprints, surface, state, unguarded: unguardedStateFromFacts(facts.values(), nodes, edges) };
+  return { modules, footprints, surface, state, unguarded: unguardedStateFromFacts(facts.values(), nodes, edges, state) };
 }
 
 /**

@@ -1,7 +1,7 @@
 import type { IREdge, IRNode } from "@insight/ir";
-import type { FunctionFacts } from "./build.js";
-import { execModel } from "./exec-model.js";
-import { stateWriteSitesFromFacts, unguardedFromSites, type StateWriteSite, type UnguardedState } from "./state-writes.js";
+import type { FunctionFacts, StateIndex } from "./build.js";
+import { execPlans } from "./exec-model.js";
+import { stateWriteSitesFromFacts, unguardedFromSites, type UnguardedState } from "./state-writes.js";
 
 /** The parent of each anonymous function, so a write inside one maps to the thread that runs its owner. */
 function lambdaParents(nodes: readonly IRNode[]): Map<string, string> {
@@ -47,32 +47,21 @@ function threadMapper(
   };
 }
 
-/** The threads of a project-wide exec model, by the function each reaches. */
-function threadsByFunction(model: ReturnType<typeof execModel>): Map<string, string[]> {
-  const out = new Map<string, string[]>();
-  for (const t of model.threads) {
-    for (const id of t.reached) {
-      const list = out.get(id);
-      if (list) list.push(t.id);
-      else out.set(id, [t.id]);
-    }
-  }
-  return out;
-}
-
 /**
- * The unguarded variables of a project, computed from charts `factsForFile` already built. The project execution model gives
- * each writer function the threads that reach it; `maxFunctions: Infinity` keeps every thread's function list whole, so no
- * writer loses its thread to the cap.
+ * The unguarded variables of a project, computed from charts `factsForFile` already built. The project-wide thread map
+ * gives each writer function the threads that reach it; it is the same map every scope's exec model uses, so the badge
+ * does not depend on the view. Passing the write sites (and, when known, the state index) keeps `execPlans` from laying
+ * out every file chart again just to find them.
  */
 export function unguardedStateFromFacts(
   facts: Iterable<FunctionFacts>,
   nodes: readonly IRNode[],
   edges: readonly IREdge[],
+  state?: StateIndex,
 ): UnguardedState {
-  const sites: StateWriteSite[] = stateWriteSitesFromFacts(facts);
+  const sites = stateWriteSitesFromFacts(facts);
   if (sites.length === 0) return { variables: new Map(), threads: new Set() };
-  const model = execModel(nodes, edges, "", { maxFunctions: Infinity });
-  return unguardedFromSites(sites, threadMapper(threadsByFunction(model), lambdaParents(nodes)));
+  const plans = execPlans(nodes, edges, { writes: sites, ...(state !== undefined ? { state } : {}) });
+  return unguardedFromSites(sites, threadMapper(plans.projectThreadOf(), lambdaParents(nodes)));
 }
 

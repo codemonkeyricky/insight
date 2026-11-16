@@ -285,7 +285,12 @@ function declaredNamesOf(declarator: SyntaxNode | null): string[] {
   if (!declarator) return [];
   if (declarator.type === "identifier") return [declarator.text];
   if (declarator.type === "structured_binding_declarator") return declarator.namedChildren.filter((c) => c.type === "identifier").map((c) => c.text);
-  const inner = declarator.childForFieldName("declarator");
+  // `auto& cfg`, `const auto& cfg` and `auto&& cfg` wrap the name in a reference_declarator; pointer and parenthesized
+  // declarators wrap it too, and an init_declarator holds its declared name in `declarator`. Reference and parenthesized
+  // wrappers have no named field in tree-sitter-cpp, so the inner declarator is the named child. Unwrap them all.
+  const inner =
+    declarator.childForFieldName("declarator") ??
+    declarator.namedChildren.find((c) => c.type === "identifier" || c.type === "structured_binding_declarator" || c.type.endsWith("_declarator"));
   return inner ? declaredNamesOf(inner) : [];
 }
 

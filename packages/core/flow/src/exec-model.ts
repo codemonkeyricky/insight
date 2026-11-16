@@ -2,7 +2,7 @@ import type { IREdge, IRNode } from "@insight/ir";
 import { edgeTargets } from "@insight/sdk";
 import { insideScope } from "./scope-map.js";
 import { isNoisePath } from "./scope.js";
-import { factsForFile } from "./build.js";
+import { factsForFile, type StateIndex } from "./build.js";
 import { layoutFunction } from "./layout.js";
 import { stateWriteSites, unguardedFromSites, type StateWriteSite } from "./state-writes.js";
 
@@ -547,6 +547,11 @@ export interface ExecPlans {
   readonly sites: readonly SiteRecord[];
   /** Every write of a mutable variable, with the locks held there. See stateWriteSites. */
   readonly writes: readonly StateWriteSite[];
+  /**
+   * The threads of the whole project, by the function each reaches. Built lazily and independent of any scope, so the
+   * unguarded badge is the same in a file view as at the project root.
+   */
+  readonly projectThreadOf: () => ReadonlyMap<string, readonly string[]>;
   readonly bodyOf: (id: string, roots: readonly string[], script: string | undefined) => PlanBody;
   readonly chartOf: (file: string, id: string) => [number, number] | undefined;
 }
@@ -559,7 +564,21 @@ const PLANS_CACHE = new WeakMap<object, WeakMap<object, Map<string, ExecPlans>>>
  * same `nodes` and `edges` arrays give the same object, so a second scope on one model costs only its own view. The cache
  * is keyed by array identity, so an array that is mutated after a call must be copied first.
  */
-export function execPlans(nodes: readonly IRNode[], edges: readonly IREdge[], opts: { lambdas?: boolean } = {}): ExecPlans {
+export interface ExecPlansOptions {
+  lambdas?: boolean;
+  /**
+   * The project's state index, when the caller already built it. Without it, `stateWriteSites` builds one to classify
+   * the write sites.
+   */
+  state?: StateIndex;
+  /**
+   * The write sites, when the caller already collected them from built charts. Without it, every file chart is laid out
+   * again to find them.
+   */
+  writes?: readonly StateWriteSite[];
+}
+
+export function execPlans(nodes: readonly IRNode[], edges: readonly IREdge[], opts: ExecPlansOptions = {}): ExecPlans {
   const fold = opts.lambdas !== true;
   let byEdges = PLANS_CACHE.get(nodes);
   if (byEdges === undefined) {
@@ -574,13 +593,13 @@ export function execPlans(nodes: readonly IRNode[], edges: readonly IREdge[], op
   const key = fold ? "fold" : "lambdas";
   let plans = byFold.get(key);
   if (plans === undefined) {
-    plans = buildPlans(nodes, edges, fold);
+    plans = buildPlans(nodes, edges, fold, opts);
     byFold.set(key, plans);
   }
   return plans;
 }
 
-function buildPlans(nodes: readonly IRNode[], edges: readonly IREdge[], fold: boolean): ExecPlans {
+function buildPlans(nodes: readonly IRNode[], edges: readonly IREdge[], fold: boolean, opts: ExecPlansOptions = {}): ExecPlans {
   // The parent of each anonymous function, so a lambda folds to its owner: a function, or the file for module-level code.
   const lambdaParent = new Map<string, string>();
   if (fold) {
@@ -924,7 +943,8 @@ function buildPlans(nodes: readonly IRNode[], edges: readonly IREdge[], fold: bo
   }
 
   // The state writes, with the locks held at each, for the unguarded shared state check. Empty for a project with no data facet.
-  const writes = stateWriteSites(nodes, edges);
+  // A caller that already built the charts (the coupling index) passes the sites, so no file chart is laid out twice.
+  const writes = opts.writes ?? stateWriteSites(nodes, edges, opts.state);
 
   // Chart sizes by file, computed on first use: the chart layout is cheap, but only files with a listed function need it.
   const chartSizes = new Map<string, Map<string, [number, number]>>();
@@ -939,6 +959,73 @@ function buildPlans(nodes: readonly IRNode[], edges: readonly IREdge[], fold: bo
       chartSizes.set(file, sizes);
     }
     return sizes.get(id);
+  };
+
+  /**
+   * Every thread of the whole project, with the functions it reaches. Unlike a scope's plans, this is independent of the
+   * view: the main thread starts from every unreferenced function, not only the in-scope ones, and every spawn counts.
+   * The unguarded check reads it so a file view badges the same threads the project root does. Built on first use so an
+   * execution model that never asks pays nothing.
+   */
+  let projectThreads: Map<string, string[]> | undefined;
+  const projectThreadOf = (): ReadonlyMap<string, readonly string[]> => {
+    if (projectThreads !== undefined) return projectThreads;
+    const out = new Map<string, string[]>();
+    const note = (id: string, roots: readonly string[], script?: string): void => {
+      if (roots.length === 0) return;
+      for (const f of bodyOf(id, roots, script).reach) {
+        const list = out.get(f);
+        if (list) list.push(id);
+        else out.set(f, [id]);
+      }
+    };
+    if (!entryMode) {
+      // Project-wide references: a function any project code calls is not a main root.
+      const referencedProject = new Set<string>();
+      for (const { e, from, ids } of keyed) {
+        if (e.kind !== "calls.call" && e.kind !== "calls.reference" && e.kind !== "concurrency.dispatches" && e.kind !== "concurrency.spawns") continue;
+        for (const to of ids) if (to !== from) referencedProject.add(to);
+      }
+      const programMains = new Set(programRecords.flatMap((r) => (r.prog.main !== undefined ? [r.prog.main] : [])));
+      const fallbackEntryModules = [...fns.values()]
+        .filter(
+          (f) =>
+            f.module &&
+            f.file !== undefined &&
+            !f.file.endsWith(".d.ts") &&
+            !scriptFiles.has(f.file) &&
+            (f.htmlEntry || !importedFiles.has(f.file)),
+        )
+        .map((f) => f.id);
+      const roots = [
+        ...[...fns.values()]
+          .filter((f) => !f.anonymous && !f.module && !referencedProject.has(f.id) && !programMains.has(f.id))
+          .map((f) => f.id),
+        ...fallbackEntryModules,
+      ].sort(byText);
+      note("main", roots);
+    }
+    for (const r of programRecords) {
+      note(`main:${r.prog.id}`, r.prog.main !== undefined ? [r.prog.main] : (r.prog.entries ?? []));
+    }
+    for (const n of spawnNodes) {
+      const s = spawnsOf.get(n.id);
+      const targets = s ? [...s.targets].sort(byText) : [];
+      // A target that is not a function is a script file: its top-level code runs the thread, so its callees are roots.
+      const roots = new Set<string>();
+      let script: string | undefined;
+      for (const t of targets) {
+        if (fns.has(t)) {
+          roots.add(t);
+          continue;
+        }
+        script = t;
+        for (const c of callsOf(t)) roots.add(c);
+      }
+      note(n.id, [...roots].sort(byText), script);
+    }
+    projectThreads = out;
+    return out;
   };
 
   return {
@@ -958,6 +1045,7 @@ function buildPlans(nodes: readonly IRNode[], edges: readonly IREdge[], fold: bo
     importedFiles,
     sites,
     writes,
+    projectThreadOf,
     bodyOf,
     chartOf,
   };
@@ -1175,14 +1263,9 @@ function execModelOf(P: ExecPlans, scope: string, opts: ExecModelOptions): ExecM
   // common at every write. Thread membership is each plan's full reach, not the scope's cut. Empty without the data facet.
   const unguardedVars = (() => {
     if (P.writes.length === 0) return [];
-    const threadOf = new Map<string, string[]>();
-    for (const p of plans) {
-      for (const id of p.reach) {
-        const list = threadOf.get(id);
-        if (list) list.push(p.id);
-        else threadOf.set(id, [p.id]);
-      }
-    }
+    // Project-wide membership, not this scope's cut: a function shown in a file view still counts on the thread that a
+    // spawn outside the file starts, so its badge matches the project root's.
+    const threadOf = P.projectThreadOf();
     const threadsOfFn = (fn: string): readonly string[] => {
       let cur = P.foldId(fn);
       for (let hops = 0; hops <= P.fns.size; hops++) {

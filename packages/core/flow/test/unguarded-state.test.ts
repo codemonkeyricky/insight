@@ -19,6 +19,9 @@ const varNode = (file: string, id: string): IRNode =>
 const write = (from: string, to: string, file: string, line: number): IREdge =>
   fx.edge(from, to, "data", "data.write", { attrs: { how: "assign" }, span: sp(file, line) });
 
+const read = (from: string, to: string, file: string, line: number): IREdge =>
+  fx.edge(from, to, "data", "data.read", { attrs: {}, span: sp(file, line) });
+
 const call = (from: string, to: string, file: string, line: number): IREdge =>
   fx.edge(from, to, "calls", "calls.call", { attrs: { callee: to.split("#")[1] ?? to }, span: sp(file, line) });
 
@@ -85,11 +88,32 @@ describe("unguarded shared state", () => {
     expect(unguardedOf(nodes, edges).variables.size).toBe(0);
   });
 
-  it("marks the kept state rows of the flagged variable", () => {
+  it("marks the kept state write row of the flagged variable, not its read row", () => {
     const { nodes, edges } = threadsFixture();
+    // main reads g as well as writing it: only the write row is stamped.
+    edges.push(read(`${M}#main`, G, M, 3));
     const flow = buildFileFlow(M, nodes, edges, { coupling: couplingIndex(nodes, edges) });
-    const rows = flow.functions.flatMap((f) => f.coupling?.chart.nodes ?? []).filter((n) => n.role === "state" && n.write);
-    expect(rows.map((n) => [n.label, n.unguarded])).toEqual([["▲ g", true]]);
+    const rows = flow.functions.flatMap((f) => f.coupling?.chart.nodes ?? []).filter((n) => n.role === "state");
+    const byLabel = new Map(rows.map((n) => [n.label, n.unguarded]));
+    expect(byLabel.get("▲ g")).toBe(true);
+    expect(byLabel.get("▽ g")).toBeUndefined();
+  });
+
+  it("keeps the badge in a file scope when the other writer's thread starts outside it", () => {
+    // a.ts starts a Worker that writes g; b.ts writes g too, on the project's main thread. A view scoped to a.ts sees
+    // only a.ts's threads, but the project-wide thread map still knows b.ts's writer is on the main thread, so the
+    // in-scope Worker's badge is kept.
+    const A = "src/a.ts";
+    const B = "src/b.ts";
+    const nodes = [fnNode(A, "boot", 0), spawnNode(A, 4, `${A}#boot`), fnNode(A, "worker", 6), fnNode(B, "other", 0), varNode(A, G)];
+    const edges = [spawnEdge(A, 4, `${A}#worker`), write(`${A}#worker`, G, A, 7), write(`${B}#other`, G, B, 2)];
+    expect(unguardedOf(nodes, edges).variables.get(G)?.threads).toHaveLength(2);
+    const model = execModel(nodes, edges, A, { maxFunctions: Infinity });
+    const worker = model.threads.find((t) => t.id === `${A}@spawn:5:2`);
+    expect(worker?.unguardedWrites).toEqual(["g"]);
+    const scene = buildExecScene(model);
+    const threads = [...scene.nodes.values()].filter((n) => n.kind === "thread");
+    expect(threads.map((n) => n.unguarded)).toEqual([["g"]]);
   });
 });
 

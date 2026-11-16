@@ -270,7 +270,7 @@ function fork(c: Ctx, mk: Maker, item: Extract<Item, { t: "fork" }>, lane: numbe
             ...(item.span ? { span: item.span } : {}),
             ...(item.coupling !== undefined ? { coupling: item.coupling } : {}),
           })
-        : mk.node(item.role, "decision", clipLabel(item.role === "switch" ? "switch" : item.label, LABEL_MAX), { title: item.title ?? item.label, ...(item.span ? { span: item.span } : {}) });
+        : mk.node(item.role, "decision", clipLabel(item.role === "switch" ? "switch" : item.label, LABEL_MAX), { title: item.title ?? item.label, ...(item.span ? { span: item.span } : {}), ...(item.coupling !== undefined ? { coupling: item.coupling } : {}) });
   row(c, head, lane, labelLane, skip, into);
   const inner = lane + 1 + skip;
   const out: Pend[] = [];
@@ -318,7 +318,7 @@ function fork(c: Ctx, mk: Maker, item: Extract<Item, { t: "fork" }>, lane: numbe
 }
 
 function loop(c: Ctx, mk: Maker, item: Extract<Item, { t: "loop" }>, lane: number, labelLane: number, skip: number, into: Pend[]): Pend[] {
-  const head = mk.node("loop", "loop", clipLabel(item.label, LABEL_MAX), { title: item.title ?? item.label, ...(item.span ? { span: item.span } : {}) });
+  const head = mk.node("loop", "loop", clipLabel(item.label, LABEL_MAX), { title: item.title ?? item.label, ...(item.span ? { span: item.span } : {}), ...(item.coupling !== undefined ? { coupling: item.coupling } : {}) });
   row(c, head, lane, labelLane, skip, into);
   const inner = lane + 1 + skip;
   const first = c.nodes.length - 1;

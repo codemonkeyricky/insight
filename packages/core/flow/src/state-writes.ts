@@ -1,5 +1,5 @@
 import type { IREdge, IRNode } from "@insight/ir";
-import { factsForFile, type FunctionFacts, type Item } from "./build.js";
+import { factsForFile, type FunctionFacts, type Item, type StateIndex } from "./build.js";
 import { stateIndex } from "./coupling.js";
 import { moduleMap } from "./modules.js";
 
@@ -67,7 +67,7 @@ export function stateWriteSitesFromFacts(facts: Iterable<FunctionFacts>): StateW
  * them, so a write sits under the same lock frames. Returns nothing when the IR has no `data.write` edge, so a project
  * without the data facet pays only one scan of the edges.
  */
-export function stateWriteSites(nodes: readonly IRNode[], edges: readonly IREdge[]): StateWriteSite[] {
+export function stateWriteSites(nodes: readonly IRNode[], edges: readonly IREdge[], built?: StateIndex): StateWriteSite[] {
   let any = false;
   for (const e of edges) {
     if (e.kind === "data.write") {
@@ -77,7 +77,8 @@ export function stateWriteSites(nodes: readonly IRNode[], edges: readonly IREdge
   }
   if (!any) return [];
   const modules = moduleMap(nodes);
-  const state = stateIndex(nodes, edges, modules);
+  // A caller that already built the index (couplingFacts) passes it, so it is not rebuilt here.
+  const state = built ?? stateIndex(nodes, edges, modules);
   const byFileNodes = new Map<string, IRNode[]>();
   const byFileEdges = new Map<string, IREdge[]>();
   for (const n of nodes) {

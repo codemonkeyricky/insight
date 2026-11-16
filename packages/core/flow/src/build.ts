@@ -324,7 +324,10 @@ function toEvent(n: IRNode): Ev | undefined {
     case "concurrency.spawn-thread":
       return { ...base, type: "spawn", rank: RANK.spawn, label: `spawn thread · ${str(a.target) || str(a.api)}` };
     default:
-      if (n.facet === "effects") return { ...base, type: "effect", rank: RANK.effect, label: effectLabel(n) };
+      if (n.facet === "effects") {
+        const binds = bindsOf(a);
+        return { ...base, type: "effect", rank: RANK.effect, label: effectLabel(n), ...(binds !== undefined ? { binds } : {}) };
+      }
       return undefined;
   }
 }

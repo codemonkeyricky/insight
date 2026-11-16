@@ -382,13 +382,54 @@ export function run(): void {
 `,
   };
 
+  // A same-module wrapper: the local call itself is not cross, but the wrapper's footprint hoists the cross call inside it.
+  const WRAPPER_FILES: Record<string, string> = {
+    "package.json": JSON.stringify({ name: "root", private: true }),
+    "pkgs/a/package.json": JSON.stringify({ name: "a" }),
+    "pkgs/b/package.json": JSON.stringify({ name: "b" }),
+    "pkgs/b/src/config.ts": `export function loadConfig(): { debug: boolean } {
+  return { debug: true };
+}
+`,
+    "pkgs/a/src/use.ts": `import { loadConfig } from "../../b/src/config.js";
+function wrapper(): { debug: boolean } {
+  return loadConfig();
+}
+function localLog(): void {}
+export function run(): void {
+  const cfg = wrapper();
+  if (cfg.debug) {
+    localLog();
+  }
+}
+`,
+  };
+
+  // A builtin io effect: no project function resolves, but the effect row carries the local its result is bound to.
+  const IO_FILES: Record<string, string> = {
+    "package.json": JSON.stringify({ name: "root", private: true }),
+    "src/use.ts": `import { readFileSync } from "node:fs";
+function localLog(): void {}
+export function run(): void {
+  const text = readFileSync("x", "utf8");
+  if (text.length > 0) {
+    localLog();
+  }
+}
+`,
+  };
+
   let cross: Awaited<ReturnType<typeof couplingOf>>;
   let local: Awaited<ReturnType<typeof couplingOf>>;
   let assign: Awaited<ReturnType<typeof couplingOf>>;
+  let wrapper: Awaited<ReturnType<typeof couplingOf>>;
+  let io: Awaited<ReturnType<typeof couplingOf>>;
   beforeAll(async () => {
     cross = await couplingOf(CROSS_FILES);
     local = await couplingOf(LOCAL_FILES);
     assign = await couplingOf(ASSIGN_FILES);
+    wrapper = await couplingOf(WRAPPER_FILES);
+    io = await couplingOf(IO_FILES);
   });
 
   it("keeps a branch on a local a cross call binds, shows ⇠ cfg, and labels the call cfg ← loadConfig()", () => {
@@ -407,6 +448,37 @@ export function run(): void {
     // The branch body is all local, so it still folds into one ⋯ n local row.
     const trueArm = fork.arms.find((a) => a.kind === "true");
     expect(trueArm?.body.every((i) => i.t === "step" && i.foldId !== undefined)).toBe(true);
+    // The laid-out decision head carries the class too, so the view draws it in `cp-ctl`.
+    const chart = layoutFunction({ id, name: f.name, async: f.async, ...(f.span ? { span: f.span } : {}), items });
+    expect(chart.nodes.find((n) => n.shape === "decision")).toMatchObject({ coupling: "ctl" });
+  });
+
+  it("taints a local bound by a same-module wrapper whose footprint hoists a cross call", () => {
+    const id = fid("pkgs/a/src/use.ts", "run");
+    const f = wrapper.facts.get(id);
+    if (!f) throw new Error(`no function ${id}`);
+    const { items } = couplingChart(id, f.items, wrapper.modules, wrapper.footprints);
+    const call = items.find((i): i is Step => i.t === "step" && i.role === "call");
+    if (!call) throw new Error("expected the wrapper call row");
+    expect(call).toMatchObject({ coupling: "cross" });
+    expect(call.label.startsWith("cfg ← wrapper()")).toBe(true);
+    const fork = items.find((i) => i.t === "fork");
+    if (fork?.t !== "fork") throw new Error("expected the tainted branch to stay");
+    expect(fork).toMatchObject({ role: "branch", coupling: "ctl" });
+    expect(fork.label).toBe("cfg.debug ⇠ cfg");
+  });
+
+  it("taints a local bound by a builtin io effect", () => {
+    const id = fid("src/use.ts", "run");
+    const f = io.facts.get(id);
+    if (!f) throw new Error(`no function ${id}`);
+    const { items } = couplingChart(id, f.items, io.modules, io.footprints);
+    const effect = items.find((i): i is Step => i.t === "step" && i.role === "effect");
+    expect(effect).toMatchObject({ coupling: "io", binds: "text" });
+    const fork = items.find((i) => i.t === "fork");
+    if (fork?.t !== "fork") throw new Error("expected the io-tainted branch to stay");
+    expect(fork).toMatchObject({ role: "branch", coupling: "ctl" });
+    expect(fork.label).toBe("text.length > 0 ⇠ text");
   });
 
   it("drops the branch when the same-module callee has no coupling, so the local is not tainted", () => {
