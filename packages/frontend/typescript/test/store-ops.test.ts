@@ -59,6 +59,21 @@ describe("D1 prepare", () => {
     expect(opOf("env.DB.prepare(sql);")).toBe("read");
   });
 
+  it("reads past leading SQL comments to the statement's first keyword", () => {
+    expect(opOf('env.DB.prepare("-- audit\\nDELETE FROM t");')).toBe("write");
+    expect(opOf('env.DB.prepare("/* nightly */ INSERT INTO t VALUES (1)");')).toBe("write");
+    expect(opOf('env.DB.prepare("-- just a note\\nSELECT * FROM t");')).toBe("read");
+    expect(opOf('env.DB.prepare("/* DELETE */ SELECT * FROM t");')).toBe("read");
+  });
+
+  it("is a write for a WITH statement that holds a write keyword as code, and a read for one that does not", () => {
+    expect(opOf('env.DB.prepare("WITH x AS (SELECT 1) INSERT INTO t SELECT * FROM x");')).toBe("write");
+    expect(opOf('env.DB.prepare("with old as (select id from t) delete from t where id in (select id from old)");')).toBe("write");
+    expect(opOf('env.DB.prepare("WITH x AS (SELECT replace(a, \'b\', \'c\') AS r FROM t) SELECT * FROM x");')).toBe("read");
+    expect(opOf('env.DB.prepare("WITH x AS (SELECT \'update\' AS w FROM t) SELECT * FROM x");')).toBe("read");
+    expect(opOf('env.DB.prepare("WITH x AS (SELECT 1) SELECT * FROM x");')).toBe("read");
+  });
+
   it("does not read a write keyword that only appears inside the statement", () => {
     expect(opOf('env.DB.prepare("SELECT * FROM t WHERE note = \'insert\'");')).toBe("read");
   });

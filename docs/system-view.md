@@ -362,15 +362,27 @@ deployable units, the model sets `reason` and the page falls back to Runtime.
 
 Classification signals, in priority order (each node lists its signals in the card and panel):
 
-- `spa`: a browser program runs code owned by the component (a root function of the browser runtime is in its files),
-  or the component has an `index.html`, or it imports `react-dom`, `vue`, `svelte`, `preact` or `solid-js`. A backend or
-  library that a browser calls into is not a frontend.
+- `spa`: a browser entry. Either a browser program runs code owned by the component (a root function of the browser runtime
+  is in its files), or the component holds a page (`index.html`, `public/index.html` or `src/index.html`) and owns no
+  server. A UI import alone never makes a browser app: `react-dom`, `vue`, `svelte`, `preact` or `solid-js` count only
+  with a browser entry, and their `/server` subpaths (`react-dom/server`) are not browser imports at all. A type-only
+  import does not count. A backend or library that a browser calls into is not a frontend.
+- Server evidence beats a page. A component that owns a server (a route that is not `export` or `dispatch`, or a `listens`
+  edge) is never a `spa` for the `index.html` it serves, so an Express or Fastify app with a static `public/index.html` is
+  a server.
 - `worker`: a route with framework `worker`. The platform is `cloudflare` when a `wrangler.toml` (or `.json`/`.jsonc`)
   sits at the component root.
-- `function`: a route with framework `export` or `dispatch`. The platform is `vercel` when the component imports `@vercel/*`.
-- `server`: any other route, or a `listens` edge. The platform is `node`.
+- `function`: a route with framework `export` or `dispatch`, and no server of its own (no `listens`, no other route). The
+  platform is `vercel` when the component imports `@vercel/*`. A component with dispatch routes that listens is a server,
+  unless it imports `@vercel/*`.
+- `server`: any other route, or a `listens` edge, unless the component is a Vercel function (imports `@vercel/*`). The
+  platform is `node`.
 - `client`: a program entry with no routes and no deployable calling into it, that requests or spawns a backend.
 - Anything else is a library: not drawn, folded into the deployables that call it.
+
+Deploy roots (a folder that holds a `wrangler.toml`, `wrangler.json`, `wrangler.jsonc` or `vercel.json`) are components of
+the System model, so they also appear as components in the Runtime and Pipeline views. The Tiers view classifies them with
+the rules above; the Arch tab does not use them.
 
 Storage and external facts come from the System model's externals. Store drivers are recognised by import
 (`better-sqlite3`, `pg`, `mysql2`, `mongodb`, `redis`/`ioredis`, `@vercel/kv`, `@vercel/blob`, `@aws-sdk/client-s3`), and
@@ -398,7 +410,8 @@ Limits:
 
 - Library folding over-attributes: a backend that uses a shared library inherits that library's stores as inferred edges
   (drawn dotted, with `via`). The Runtime view shows which code caused them.
-- A deployable is classified by the first matching signal. A server that also serves a browser bundle is a frontend.
+- A deployable is classified by the first matching signal. A server that serves a static page (`public/index.html`) is a
+  server: server evidence beats a page.
 
 Self-check: `node scripts/check-tiers.mjs` (after `pnpm -r build`). It indexes the committed tree (`git archive HEAD`) into a
 temp folder, prints the Tiers tables for the root scope, and compares them with the expected Insight topology. It prints

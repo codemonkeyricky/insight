@@ -823,10 +823,20 @@ const STORE_OPS: Record<string, string> = {
 };
 
 const WRITE_SQL = /^\s*(INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER)\b/i;
+/** A WITH statement writes when a write keyword is code in it. REPLACE counts as the statement, not the replace() function. */
+const WRITE_WITH = /\b(INSERT|UPDATE|DELETE)\b|\bREPLACE\b(?!\s*\()/i;
+/** SQL comments, string literals and quoted identifiers, in the order they are met (one pass, so a `--` in a string is a string). */
+const SQL_TOKEN = /\/\*[\s\S]*?\*\/|--[^\n]*|'(?:[^']|'')*'|"(?:[^"]|"")*"/g;
+
+/** The statement's code: each comment is blanked, and each string or quoted identifier is emptied, so a keyword counts only as code. */
+function sqlCode(sql: string): string {
+  return sql.replace(SQL_TOKEN, (tok) => (tok.startsWith("/*") || tok.startsWith("--") ? " " : tok.startsWith("'") ? "''" : '""'));
+}
 
 /**
  * Whether a D1 statement's text, when it is a literal (a string, or a template whose text before the first substitution is
- * read), starts with a write keyword. A statement that is not a literal is read as a read.
+ * read), is a write: it starts with a write keyword after any leading comments, or it is a WITH statement that holds an
+ * INSERT, UPDATE, DELETE or REPLACE keyword as code. A statement that is not a literal is read as a read.
  */
 function sqlWrites(arg: ts.Expression | undefined): boolean {
   if (arg === undefined) return false;
@@ -834,7 +844,10 @@ function sqlWrites(arg: ts.Expression | undefined): boolean {
   let text: string | undefined;
   if (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) text = e.text;
   else if (ts.isTemplateExpression(e)) text = e.head.text;
-  return text !== undefined && WRITE_SQL.test(text);
+  if (text === undefined) return false;
+  const code = sqlCode(text);
+  if (WRITE_SQL.test(code)) return true;
+  return /^\s*WITH\b/i.test(code) && WRITE_WITH.test(code);
 }
 
 export interface StoreMatch {

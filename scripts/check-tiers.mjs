@@ -61,7 +61,10 @@ const src = mkdtempSync(join(tmpdir(), "insight-check-tiers-src-"));
 let failed = false;
 try {
   // The committed tree only: no worktrees, no node_modules, no dirty files.
-  execFileSync("sh", ["-c", `git -C "${repoRoot}" archive --format=tar HEAD | tar -x -C "${src}"`], { stdio: "inherit" });
+  // No shell: the paths are argument-array values, so a repo path with quotes or $ in it is passed through as it is.
+  const archive = join(stateDir, "head.tar");
+  execFileSync("git", ["-C", repoRoot, "archive", "--format=tar", "--output", archive, "HEAD"], { stdio: "inherit" });
+  execFileSync("tar", ["-x", "-f", archive, "-C", src], { stdio: "inherit" });
   const report = await runIndex({
     projectPath: src,
     builtinRoot: repoRoot,

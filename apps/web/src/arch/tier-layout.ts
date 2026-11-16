@@ -45,9 +45,12 @@ export function tierEdgeText(e: Pick<TierEdge, "verb" | "label">): string {
   return repeats ? e.verb : `${e.verb} ${e.label}`;
 }
 
-/** An edge as the System view draws it: its label leads with the verb, as the pill text does. Its APIs show in the panel's evidence. */
+/**
+ * An edge as the System view draws it: its label leads with the verb, as the pill text does. Its APIs show in the panel's
+ * evidence, each with the facts that went through it. A tier edge has no syscall or level to show (the panel hides those).
+ */
 function edgeOf(e: TierEdge): SystemEdge {
-  const evidence = e.apis.map((api) => ({ api, level: "unknown" as const, count: e.count }));
+  const evidence = e.apis.map(({ api, count }) => ({ api, level: "unknown" as const, count }));
   return {
     id: e.id,
     from: e.from,

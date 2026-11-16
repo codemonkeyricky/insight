@@ -28,6 +28,12 @@ export interface TierNode {
   external?: SystemExternal;
 }
 
+/** One API or syscall of a tier edge (e.g. "fs.readFileSync", "fetch"), and how many of the edge's facts went through it. */
+export interface TierApi {
+  api: string;
+  count: number;
+}
+
 export interface TierEdge {
   id: string;
   from: string;
@@ -39,8 +45,9 @@ export interface TierEdge {
   count: number;
   sites: Site[];
   confidence: "exact" | "inferred";
-  /** The APIs and syscalls the edge's facts went through, sorted and distinct (e.g. "fs.readFileSync", "fetch"). For the panel. */
-  apis: string[];
+  /** The APIs and syscalls the edge's facts went through, sorted by API, each with the facts that went through it. For the panel:
+   * the counts sum to the edge's count when every fact names its API. */
+  apis: TierApi[];
   /** The libraries a folded edge came through, sorted. Absent for a direct edge. */
   via?: string[];
 }
@@ -134,8 +141,12 @@ function labelParts(label: string, verb: string): string[] {
     .filter((part) => part !== "");
 }
 
-/** The APIs and syscalls a System edge's facts went through, sorted and distinct. */
-const apisOf = (e: SystemEdge): string[] => [...new Set((e.evidence ?? []).map((ev) => ev.api))].sort(cmp);
+/** The APIs and syscalls a System edge's facts went through, sorted, each with its fact count (evidence rows of one API add up). */
+const apisOf = (e: SystemEdge): TierApi[] => {
+  const counts = new Map<string, number>();
+  for (const ev of e.evidence ?? []) counts.set(ev.api, (counts.get(ev.api) ?? 0) + ev.count);
+  return [...counts].map(([api, count]) => ({ api, count })).sort((x, y) => cmp(x.api, y.api));
+};
 
 /**
  * The Tiers model of one System model. Pure and deterministic: the same inputs always give the same output. `sys` is the
@@ -226,7 +237,7 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
   const importsOf = new Map<string, Set<string>>();
   for (const edge of model.doc.edges) {
     // A type-only import is not code the component runs: it does not make a browser app or a Vercel function.
-    if (edge.kind !== "packaging.import" || (edge.attrs as { typeOnly?: unknown }).typeOnly === true) continue;
+    if (edge.kind !== "packaging.import" || (edge.attrs as { typeOnly?: unknown } | undefined)?.typeOnly === true) continue;
     const text = edgeTargets(edge).unresolved?.text;
     const owner = ownerOfPath(model.fileOf(edge.from));
     if (text === undefined || owner === undefined) continue;
@@ -301,12 +312,15 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
     const sig: string[] = [];
     const ui = imports.filter((t) => UI_IMPORT.test(t) && !SERVER_SUBPATH.test(t));
     const page = BROWSER_PAGES.find((p) => files.has(`${c.path}/${p}`));
-    const browserEntry = browserComponents.has(c.id) || page !== undefined;
+    // Server evidence beats a page: a component that owns a server (a route of its own, or a listen) is not a browser app for
+    // the index.html it serves statically. A page makes a browser app only for a component that owns no server.
+    const pageSpa = page !== undefined && !ownsServer(c.id, rs);
+    const browserEntry = browserComponents.has(c.id) || pageSpa;
     if (browserEntry) {
       role.set(c.id, "spa");
       platform.set(c.id, "browser");
       if (browserComponents.has(c.id)) sig.push("browser program");
-      if (page !== undefined) sig.push(page);
+      if (pageSpa && page !== undefined) sig.push(page);
       if (ui.length > 0) sig.push(`imports ${ui[0]}`);
     } else if (rs.some((r) => r.framework === "worker")) {
       role.set(c.id, "worker");
@@ -412,7 +426,7 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
     sites: Site[];
     confidence: "exact" | "inferred";
     via: string[];
-    apis: string[];
+    apis: TierApi[];
   }
   const candidates: Candidate[] = [];
   const devEdges = new Set<string>();
@@ -514,18 +528,18 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
     sites: Site[];
     inferred: boolean;
     via: Set<string>;
-    apis: Set<string>;
+    apis: Map<string, number>;
   }
   const merged = new Map<string, Merged>();
   for (const c of candidates) {
     const key = `${c.from}\0${c.verb}\0${c.to}`;
-    const m = merged.get(key) ?? { from: c.from, to: c.to, verb: c.verb, parts: [], count: 0, sites: [], inferred: false, via: new Set<string>(), apis: new Set<string>() };
+    const m = merged.get(key) ?? { from: c.from, to: c.to, verb: c.verb, parts: [], count: 0, sites: [], inferred: false, via: new Set<string>(), apis: new Map<string, number>() };
     m.parts.push(...c.parts);
     m.count += c.count;
     m.sites.push(...c.sites);
     m.inferred ||= c.confidence === "inferred";
     for (const v of c.via) m.via.add(v);
-    for (const a of c.apis) m.apis.add(a);
+    for (const a of c.apis) m.apis.set(a.api, (m.apis.get(a.api) ?? 0) + a.count);
     merged.set(key, m);
   }
   const edges: TierEdge[] = [...merged.values()]
@@ -538,7 +552,7 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
       count: m.count,
       sites: dedupeSites(m.sites).slice(0, SITE_CAP),
       confidence: m.inferred ? "inferred" : "exact",
-      apis: [...m.apis].sort(cmp),
+      apis: [...m.apis].map(([api, count]) => ({ api, count })).sort((x, y) => cmp(x.api, y.api)),
       ...(m.via.size > 0 ? { via: [...m.via].sort(cmp) } : {}),
     }))
     .sort((x, y) => cmp(x.from, y.from) || cmp(x.to, y.to) || cmp(x.verb, y.verb) || cmp(x.id, y.id));

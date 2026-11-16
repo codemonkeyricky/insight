@@ -75,10 +75,35 @@ function bracketDepth(text: string): number {
   return depth;
 }
 
+/**
+ * The text with its `#` comments removed (a comment runs to the line's end). A `#` inside a string is part of the string, so
+ * a commented-out table such as `# { binding = "OLD" }` is not read as a binding.
+ */
+function stripTomlComments(text: string): string {
+  let out = "";
+  let quote: string | undefined;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i] ?? "";
+    if (quote !== undefined) {
+      out += c;
+      if (c === "\\" && quote === '"') out += text[++i] ?? "";
+      else if (c === quote) quote = undefined;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+      out += c;
+    } else if (c === "#") {
+      const newline = text.indexOf("\n", i);
+      if (newline === -1) break;
+      i = newline - 1;
+    } else out += c;
+  }
+  return out;
+}
+
 /** The entries of an inline array of tables, `[ { binding = "A", id = "1" }, { binding = "B" } ]`: each table's string values. */
 function inlineTables(body: string): Record<string, string>[] {
   const out: Record<string, string>[] = [];
-  for (const table of body.matchAll(/\{([^{}]*)\}/g)) {
+  for (const table of stripTomlComments(body).matchAll(/\{([^{}]*)\}/g)) {
     const entry: Record<string, string> = {};
     for (const pair of (table[1] ?? "").matchAll(/([A-Za-z0-9_-]+)\s*=\s*("(?:[^"\\]|\\.)*"|'[^']*')/g)) {
       const value = tomlString(pair[2] ?? "");

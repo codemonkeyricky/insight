@@ -187,3 +187,21 @@ describe("system mode", () => {
 function fixedStore(v: string) {
   return { getItem: () => v, setItem: () => undefined };
 }
+
+describe("tier edge evidence", () => {
+  it("carries each API of an edge with its own count, and the counts sum to the edge count", () => {
+    const apis = [
+      { api: "EventSource", count: 1 },
+      { api: "XMLHttpRequest", count: 1 },
+      { api: "fetch", count: 2 },
+    ];
+    const { sys } = tierSystem(tierFixture({ edges: [{ id: `${WEB}>reads>${GH}`, from: WEB, to: GH, verb: "reads", label: "GET", count: 4, sites: [], confidence: "exact", apis }] }));
+    const sysEdge = sys.edges.find((e) => e.id === `${WEB}>reads>${GH}`);
+    expect(sysEdge?.evidence?.map((ev) => [ev.api, ev.count, ev.level])).toEqual([
+      ["EventSource", 1, "unknown"],
+      ["XMLHttpRequest", 1, "unknown"],
+      ["fetch", 2, "unknown"],
+    ]);
+    expect(sysEdge?.evidence?.reduce((n, ev) => n + ev.count, 0)).toBe(sysEdge?.count);
+  });
+});

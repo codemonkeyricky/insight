@@ -121,7 +121,7 @@ export function SystemView({ id, scope }: { id: string; scope: string }) {
       {done === null && <p className="muted" role="status">{mode === "tiers" ? "Computing tiers…" : "Computing runtime…"}</p>}
       {done !== null && loaded === undefined && <p className="error" role="alert">{done.error}</p>}
       {loaded !== undefined && (
-        <SystemDiagram id={id} sys={loaded.sys} layoutOptions={loaded.layout} flat={loaded.layout !== undefined} tests={tests} onTests={setTests} stale={done?.key !== key} />
+        <SystemDiagram id={id} sys={loaded.sys} layoutOptions={loaded.layout} flat={loaded.layout !== undefined} apiEvidenceOnly={loaded.layout !== undefined} tests={tests} onTests={setTests} stale={done?.key !== key} />
       )}
     </div>
   );
@@ -139,10 +139,12 @@ export interface SystemDiagramProps {
   pipeline?: PipelineModel;
   /** A flat diagram (the Pipeline's or the Tiers view's): no frames, strips or kernel band. */
   flat?: boolean;
+  /** The Tiers view: an edge's evidence is its APIs and counts only, so the panel's Syscall and Level columns are left out. */
+  apiEvidenceOnly?: boolean;
 }
 
 /** The diagram, its toolbar and its side panel for one System model. Pure of data loading, so it renders from a model alone. */
-export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOptions, pipeline, flat = false }: SystemDiagramProps) {
+export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOptions, pipeline, flat = false, apiEvidenceOnly = false }: SystemDiagramProps) {
   // The Pipeline and Tiers views are flat: their layout has no frames, strips or kernel band.
   const flatLayout = pipeline !== undefined || flat;
   // The Pipeline view keeps its own layout; the System view draws frames, strips and the kernel band.
@@ -627,7 +629,7 @@ export function SystemDiagram({ id, sys, tests, onTests, stale = false, layoutOp
           {cutRight && <div className="sysv-fade" aria-hidden="true" />}
           {cut && sel === null && <span className="sysv-hint small muted">drag to pan · Fit</span>}
           {!empty && sel === null && <Legend pipeline={pipeline !== undefined} flat={flat} />}
-          {sel !== null && <Panel id={id} sys={sys} layout={layout} sel={sel} onSelect={setSel} onOpen={openScope} onClose={() => setSel(null)} onToggle={toggleFrame} onWiden={widen} />}
+          {sel !== null && <Panel id={id} sys={sys} layout={layout} sel={sel} apiEvidenceOnly={apiEvidenceOnly} onSelect={setSel} onOpen={openScope} onClose={() => setSel(null)} onToggle={toggleFrame} onWiden={widen} />}
         </div>
         {!empty && sel === null && pipeline !== undefined && <PipelineSummary pipeline={pipeline} />}
       </div>
@@ -723,7 +725,7 @@ function Legend({ pipeline, flat }: { pipeline: boolean; flat: boolean }) {
   );
 }
 
-function Panel({ id, sys, layout, sel, onSelect, onOpen, onClose, onToggle, onWiden }: { id: string; sys: SystemModel; layout: SysLayout; sel: NonNullable<Selection>; onSelect: (s: Selection) => void; onOpen: (path: string) => void; onClose: () => void; onToggle: (id: string) => void; onWiden: (id: string) => void }) {
+function Panel({ id, sys, layout, sel, apiEvidenceOnly, onSelect, onOpen, onClose, onToggle, onWiden }: { id: string; sys: SystemModel; layout: SysLayout; sel: NonNullable<Selection>; apiEvidenceOnly: boolean; onSelect: (s: Selection) => void; onOpen: (path: string) => void; onClose: () => void; onToggle: (id: string) => void; onWiden: (id: string) => void }) {
   const nameOf = (nodeId: string): string => {
     const b = layout.boxes.find((x) => x.id === nodeId);
     return b ? (b.kind === "component" ? (b.component?.label ?? nodeId) : (b.external?.label ?? nodeId)) : nodeId;
@@ -738,7 +740,7 @@ function Panel({ id, sys, layout, sel, onSelect, onOpen, onClose, onToggle, onWi
     if (!a) return <aside className="sysv-panel" />;
     return (
       <aside className="sysv-panel" aria-label="Selection">{close}
-        <EdgeDetail id={id} edge={a.edge} fromName={nameOf(a.from)} toName={nameOf(a.to)} />
+        <EdgeDetail id={id} edge={a.edge} fromName={nameOf(a.from)} toName={nameOf(a.to)} apiOnly={apiEvidenceOnly} />
       </aside>
     );
   }
@@ -982,7 +984,8 @@ function ResourceDetail({ id, sys, box, layout, onSelect }: { id: string; sys: S
   );
 }
 
-function EdgeDetail({ id, edge, fromName, toName }: { id: string; edge: SystemEdge; fromName: string; toName: string }) {
+/** The evidence table of an edge. `apiOnly` (the Tiers view) leaves out the Syscall and Level columns: a tier edge has neither. */
+function EdgeDetail({ id, edge, fromName, toName, apiOnly }: { id: string; edge: SystemEdge; fromName: string; toName: string; apiOnly: boolean }) {
   return (
     <>
       <h2 className="mono">
@@ -1000,8 +1003,8 @@ function EdgeDetail({ id, edge, fromName, toName }: { id: string; edge: SystemEd
           <thead>
             <tr>
               <th>API</th>
-              <th>Syscall</th>
-              <th>Level</th>
+              {!apiOnly && <th>Syscall</th>}
+              {!apiOnly && <th>Level</th>}
               <th>Count</th>
             </tr>
           </thead>
@@ -1009,8 +1012,8 @@ function EdgeDetail({ id, edge, fromName, toName }: { id: string; edge: SystemEd
             {edge.evidence.map((ev) => (
               <tr key={`${ev.api}\0${ev.syscall ?? ""}\0${ev.level}`}>
                 <td className="mono">{ev.api}</td>
-                <td className="mono">{ev.syscall ?? "·"}</td>
-                <td>{LEVEL_TEXT[ev.level]}</td>
+                {!apiOnly && <td className="mono">{ev.syscall ?? "·"}</td>}
+                {!apiOnly && <td>{LEVEL_TEXT[ev.level]}</td>}
                 <td>{ev.count}</td>
               </tr>
             ))}

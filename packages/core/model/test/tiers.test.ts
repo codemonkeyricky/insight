@@ -439,3 +439,76 @@ describe("tierModel classification", () => {
     expect(tiers.nodes.find((n) => n.id === "fn")).toMatchObject({ role: "function", platform: "vercel" });
   });
 });
+
+/**
+ * A browser app (web) that calls the server's /api/items with each API in `webApis`, and a server (server) with a static
+ * public/index.html, an express GET /api/items route and a listen. The server serves a page, and it is still a server.
+ */
+function pageServerApp(webApis: string[]): IRDocument {
+  const WEB_MAIN = "web/src/main.ts";
+  const SRVR = "server/src/app.ts";
+  const nodes: IRNode[] = [
+    file("web/package.json"),
+    file("web/index.html"),
+    file(WEB_MAIN),
+    fn(WEB_MAIN, "load"),
+    ...webApis.map((api, i) => effect(WEB_MAIN, "load", 3 + i, "effects.net.connect", net(api, { relative: true, path: "/api/items", method: "GET" }))),
+    file("server/package.json"),
+    file("server/public/index.html"),
+    file(SRVR),
+    fn(SRVR, "start"),
+    effect(SRVR, "start", 3, "effects.net.serve", { framework: "express", method: "GET", path: "/api/items", handler: "list" }),
+    effect(SRVR, "start", 4, "effects.net.listen", { port: 3000 }),
+  ];
+  return { nodes, edges: [imp(WEB_MAIN, "react-dom/client")], findings: [] };
+}
+
+describe("tierModel server evidence beats a page", () => {
+  it("makes a server with a static public/index.html a server, and the browser app in front of it a spa", () => {
+    const tiers = tiersOf(pageServerApp(["fetch"]));
+    expect(tiers.nodes.find((n) => n.id === "web")).toMatchObject({ tier: "frontend", role: "spa", platform: "browser" });
+    expect(tiers.nodes.find((n) => n.id === "server")).toMatchObject({ tier: "backend", role: "server", platform: "node" });
+    expect(tiers.nodes.find((n) => n.id === "server")?.signals).toEqual(["route framework=express", "listens"]);
+    expect(tiers.edges.find((e) => e.from === "web" && e.to === "server")).toMatchObject({ verb: "requests", confidence: "exact" });
+  });
+});
+
+describe("tierModel per-API counts on an edge", () => {
+  it("gives each API of a tier edge its own fact count, and the counts sum to the edge count", () => {
+    // Three APIs reach one outside service (api.github.com): the edge's count is the four facts, split by API.
+    const WEB = "web/src/main.ts";
+    const apis = ["fetch", "fetch", "EventSource", "XMLHttpRequest"];
+    const tiers = tiersOf({
+      nodes: [
+        file("web/package.json"),
+        file("web/index.html"),
+        file(WEB),
+        fn(WEB, "load"),
+        ...apis.map((api, i) => effect(WEB, "load", 3 + i, "effects.net.connect", net(api, { host: "api.github.com", path: "/repos/o/r", method: "GET" }))),
+      ],
+      edges: [imp(WEB, "react-dom/client")],
+      findings: [],
+    });
+    const edge = tiers.edges.find((e) => e.from === "web" && e.to === "svc:github-api");
+    expect(edge?.count).toBe(4);
+    expect(edge?.apis).toEqual([
+      { api: "EventSource", count: 1 },
+      { api: "XMLHttpRequest", count: 1 },
+      { api: "fetch", count: 2 },
+    ]);
+    expect(edge?.apis.reduce((n, a) => n + a.count, 0)).toBe(edge?.count);
+  });
+});
+
+describe("tierModel import facts without attrs", () => {
+  it("reads an import edge with no attrs as not type-only: the UI import still counts, and nothing throws", () => {
+    const bare = imp("web/src/main.ts", "react-dom/client");
+    delete (bare as { attrs?: unknown }).attrs;
+    const tiers = tiersOf({
+      nodes: [file("web/package.json"), file("web/index.html"), file("web/src/main.ts"), fn("web/src/main.ts", "main")],
+      edges: [bare],
+      findings: [],
+    });
+    expect(tiers.nodes.find((n) => n.id === "web")).toMatchObject({ role: "spa", signals: ["index.html", "imports react-dom/client"] });
+  });
+});

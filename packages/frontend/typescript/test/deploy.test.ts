@@ -142,6 +142,24 @@ describe("parseWrangler", () => {
     ]);
   });
 
+  it("ignores a commented-out table inside an inline array, and keeps a # inside a string", () => {
+    const info = parseWrangler(
+      [
+        'name = "commented"',
+        "kv_namespaces = [",
+        '  # { binding = "OLD" }',
+        '  { binding = "INDEX", id = "x" }, # { binding = "GONE" }',
+        '  { binding = "HASH", id = "a#b" },',
+        "]",
+      ].join("\n"),
+      "wrangler.toml",
+    );
+    expect(info.kv).toEqual([
+      { binding: "INDEX", id: "x" },
+      { binding: "HASH", id: "a#b" },
+    ]);
+  });
+
   it("matches only wrangler.toml, wrangler.json and wrangler.jsonc, at any depth", () => {
     expect(WRANGLER_RE.test("wrangler.toml")).toBe(true);
     expect(WRANGLER_RE.test("apps/storage-worker/wrangler.jsonc")).toBe(true);
