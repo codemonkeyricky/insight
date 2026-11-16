@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { StageGraph, StageNode } from "@insight/model";
-import { CONDITION_MAX, layoutStages, type LayoutNode } from "../src/arch/stages-layout";
+import { CONDITION_MAX, LEGIBLE_K, layoutStages, planStages, type LayoutNode } from "../src/arch/stages-layout";
 
 const site = (line: number) => ({ file: "app/src/run.ts", line, fn: "app/src/run.ts#run" });
 const call = (id: string, name: string, extra: Record<string, unknown> = {}): StageNode =>
@@ -50,7 +50,7 @@ function graph(): StageGraph {
       loop,
       helper,
       call("c5", "runOver", { repeatOf: "h1" }),
-      call("c6", "pick", { ambiguous: true }),
+      call("c6", "pick", { ambiguous: true, candidates: 3 }),
       call("c7", "tiny", { minor: true }),
       tr,
       { kind: "exit", id: "ex2", how: "return", site: site(6) } as StageNode,
@@ -122,7 +122,7 @@ describe("stages layout", () => {
     expect(texts).toContain("else: —");
     expect(l.nodes.some((n) => n.kind === "diamond")).toBe(true);
     const detect = cards(l.nodes).find((c) => c.titleFull === "detect") as Extract<LayoutNode, { kind: "card" }>;
-    expect(detect.sub).toBe("interface · 8");
+    expect(detect.sub).toBe("interface · 8 possible");
     expect(detect.chips).toHaveLength(6);
     expect(texts).toContain("+2 more");
     expect(detect.chips[0]?.component).toBe("frontends/a");
@@ -141,7 +141,7 @@ describe("stages layout", () => {
     const shown = layoutStages(graph(), { showAll: true });
     const subs = cards(hidden.nodes).map((c) => c.sub);
     expect(subs).toContain("↺ same as above");
-    expect(subs).toContain("several possible");
+    expect(subs).toContain("3 possible");
     expect(cards(hidden.nodes).some((c) => c.titleFull === "tiny")).toBe(false);
     expect(cards(shown.nodes).some((c) => c.titleFull === "tiny" && c.tone === "minor")).toBe(true);
   });
@@ -160,5 +160,66 @@ describe("stages layout", () => {
     expect(l.nodes).toEqual([]);
     expect(l.paths).toHaveLength(1);
     expect(l.width).toBeGreaterThan(0);
+  });
+
+  it("sizes a fanout chip from its name, so a name of up to 14 characters is never cut", () => {
+    const names = ["cpp", "jsonschema", "systemverilog", "typescript", "bazel", "cmake"];
+    const g: StageGraph = {
+      driver: { id: "app/src/run.ts#run", name: "run", file: "app/src/run.ts" },
+      body: [
+        call("f2", "detect", {
+          fanout: { how: "interface", targets: names.map((c, i) => ({ fn: `pkg/${i}/x.ts#x`, name: "extract", component: `frontends/${c}` })) },
+        }),
+      ],
+      edges: [],
+      coverage: [],
+    };
+    const detect = cards(layoutStages(g).nodes)[0] as Extract<LayoutNode, { kind: "card" }>;
+    expect(detect.chips.map((c) => c.label)).toEqual(names);
+    expect(detect.chips.some((c) => c.label.endsWith("…"))).toBe(false);
+  });
+
+  it("puts a branch's condition just above its diamond, not at the top of the lanes", () => {
+    const l = layoutStages(graph());
+    const diamond = l.nodes.find((n): n is Extract<LayoutNode, { kind: "diamond" }> => n.kind === "diamond" && n.titleFull === "toExtract.length > 0");
+    const cond = l.nodes.find((n): n is Extract<LayoutNode, { kind: "text" }> => n.kind === "text" && n.tone === "cond" && n.text === "toExtract.length > 0");
+    expect(diamond && cond).toBeTruthy();
+    // The label's baseline is above the diamond's top, and it starts at the diamond's left edge.
+    expect(cond?.y).toBeLessThan(diamond?.y ?? 0);
+    expect((diamond?.y ?? 0) - (cond?.y ?? 0)).toBeGreaterThan(0);
+    expect((diamond?.y ?? 0) - (cond?.y ?? 0)).toBeLessThan(12);
+    expect(cond?.x).toBe(diamond?.x);
+  });
+
+  it("keeps one row when the whole driver fits at a legible scale", () => {
+    const p = planStages(graph(), { stageW: 4000 });
+    expect(p.k).toBeGreaterThanOrEqual(LEGIBLE_K);
+    expect(p.k).toBeLessThanOrEqual(1);
+    expect(p.layout).toEqual(layoutStages(graph()));
+  });
+
+  it("wraps the top-level spine into rows that fit the stage, with a return connector between rows", () => {
+    const wide = (i: number): StageNode => call(`w${i}`, `extractUnitOfWork${i}`, { ambiguous: true, candidates: 2 });
+    const g: StageGraph = {
+      driver: { id: "app/src/run.ts#run", name: "run", file: "app/src/run.ts" },
+      body: Array.from({ length: 12 }, (_, i) => wide(i)),
+      edges: [],
+      coverage: [],
+    };
+    const stageW = 800;
+    const p = planStages(g, { stageW });
+    const l = p.layout;
+    expect(p.k).toBeGreaterThanOrEqual(LEGIBLE_K);
+    expect(new Set(cards(l.nodes).map((c) => c.y)).size).toBeGreaterThan(1);
+    // Nothing overlaps and everything stays inside the diagram.
+    const cs = cards(l.nodes);
+    for (let i = 0; i < cs.length; i++) {
+      for (let j = i + 1; j < cs.length; j++) expect(overlaps(rectOf(cs[i] as Rect), rectOf(cs[j] as Rect))).toBe(false);
+    }
+    for (const n of l.nodes) if ("w" in n) expect(inside(rectOf(n), { x: 0, y: 0, w: l.width, h: l.height })).toBe(true);
+    // A return connector runs from a row's end back to the left, into the next row.
+    const back = l.paths.filter((q) => q.arrow && q.points[0] !== undefined && q.points[q.points.length - 1] !== undefined && (q.points[0][0] ?? 0) > (q.points[q.points.length - 1]?.[0] ?? 0));
+    expect(back.length).toBe(new Set(cs.map((c) => c.y)).size - 1);
+    expect(l.width * p.k).toBeLessThanOrEqual(stageW + 1);
   });
 });

@@ -23,6 +23,8 @@ const CARD_TOP = 8;
 const TITLE_H = 16;
 const SUB_H = 14;
 const CHIP_H = 16;
+/** The chip labels are 11px monospace: about 0.62em a character. Chips are sized from this, so a name is not cut to fit. */
+const CHIP_CHAR_W = 0.62 * 11;
 const CHIP_GAP = 4;
 const CHIP_PAD = 12;
 const CHIPS_MAX = 6;
@@ -31,13 +33,21 @@ const RET_H = 18;
 const CATCH_GAP = 14;
 const LANE_LABEL_H = 16;
 const LANE_GAP = 14;
-const COND_H = 18;
 const DIAMOND = 24;
+/** A branch's condition sits just above its diamond. The diamond's centre is this far below the block's top, so the label fits above it. */
+const COND_ABOVE = 12 + 4 + DIAMOND / 2;
 /** The arm lanes start this far right of a branch's left edge; their elbows run in the gap. */
 const LANE_X = DIAMOND + 22;
 const ELBOW_X = DIAMOND + 10;
 const PILL_H = 18;
 const EMPTY_W = 24;
+/** A top-level spine that wraps: each row starts this far in, so a connector can come back from the row's end on the left. */
+const ROW_INDENT = 18;
+/** The space between two wrapped rows, where the return connector runs. */
+const ROW_GAP = 64;
+/** A stage is legible when its text stays at least 9px. The labels are 11px at most, so the scale must stay above 9/11. */
+export const LEGIBLE_K = 0.85;
+const MAX_K = 1;
 /** A loop's or branch's condition is shown at most this many characters long; the full text is the title. */
 export const CONDITION_MAX = 48;
 
@@ -96,6 +106,8 @@ export interface StageLayout {
 export interface StageLayoutOptions {
   /** Minor calls (utility callees) are shown. Hidden by default. */
   showAll?: boolean;
+  /** When set, the top-level spine wraps into rows no wider than this many px (breaking only between items). */
+  rowW?: number;
 }
 
 // ---- measuring and clipping -------------------------------------------------------------------------------------------------
@@ -106,6 +118,7 @@ export function clip(s: string, maxChars: number): string {
   return s.length <= maxChars ? s : `${s.slice(0, Math.max(0, maxChars - 1))}…`;
 }
 const charsIn = (w: number): number => Math.max(1, Math.floor(w / CHAR_W));
+const chipW = (s: string): number => s.length * CHIP_CHAR_W;
 const base = (path: string): string => path.slice(path.lastIndexOf("/") + 1);
 
 // ---- sized blocks -----------------------------------------------------------------------------------------------------------
@@ -141,7 +154,11 @@ function leaf(w: number, h: number, draw: (x: number, y: number, out: Out) => vo
 
 /** A sequence laid out left to right on one spine. Blocks are aligned on their spines; connectors join neighbours. */
 function chain(nodes: StageNode[], o: StageLayoutOptions): Sized {
-  const parts = nodes.map((n) => sizeOf(n, o)).filter((p): p is Sized => p !== undefined);
+  return spine(nodes.map((n) => sizeOf(n, o)).filter((p): p is Sized => p !== undefined));
+}
+
+/** Blocks laid left to right on one spine, joined by arrows. */
+function spine(parts: Sized[]): Sized {
   if (parts.length === 0) {
     return { w: EMPTY_W, h: 0, mid: 0, empty: true, draw: (x, y, out) => pushPath(out, [[x, y], [x + EMPTY_W, y]], "flow", false) };
   }
@@ -223,7 +240,7 @@ function callSized(n: Extract<StageNode, { kind: "call" }>, o: StageLayoutOption
     }));
     return cardSized({
       title: n.name,
-      sub: `${n.fanout.how} · ${n.fanout.targets.length}${n.fanout.truncated === true ? "+" : ""}`,
+      sub: `${n.fanout.how} · ${n.fanout.targets.length}${n.fanout.truncated === true ? "+" : ""} possible`,
       tone: "fanout",
       site: n.site,
       fn: n.fn,
@@ -231,7 +248,10 @@ function callSized(n: Extract<StageNode, { kind: "call" }>, o: StageLayoutOption
       more: all.length - chips.length,
     });
   }
-  if (n.ambiguous === true) return cardSized({ title: n.name, sub: "several possible", tone: "ambiguous", site: n.site });
+  if (n.ambiguous === true) {
+    const sub = n.candidates !== undefined ? `${n.candidates} possible` : "several possible";
+    return cardSized({ title: n.name, sub, tone: "ambiguous", site: n.site });
+  }
   return cardSized({ title: n.name, ...(n.file !== undefined ? { sub: base(n.file) } : {}), tone: n.minor === true ? "minor" : "call", site: n.site, fn: n.fn });
 }
 
@@ -242,8 +262,8 @@ function cardSized(s: CardSpec): Sized {
   const need = Math.max(
     textW(clip(s.title, charsIn(CARD_MAX_W - 2 * PAD))),
     s.sub !== undefined ? textW(s.sub) : 0,
-    ...chips.map((c) => textW(c.label) + CHIP_PAD),
-    more > 0 ? textW(`+${more} more`) + CHIP_PAD : 0,
+    ...chips.map((c) => chipW(c.label) + CHIP_PAD),
+    more > 0 ? chipW(`+${more} more`) + CHIP_PAD : 0,
   );
   const w = Math.ceil(Math.min(CARD_MAX_W, Math.max(CARD_MIN_W, need + 2 * PAD)));
   const inner = w - 2 * PAD;
@@ -253,13 +273,14 @@ function cardSized(s: CardSpec): Sized {
   const h = rows > 0 ? chipsTop + rows * (CHIP_H + CHIP_GAP) - CHIP_GAP + CARD_TOP : titleBottom + CARD_TOP;
   return leaf(w, h, (x, y, out) => {
     const chipAt = chips.map((c, i) => {
-      const cw = Math.min(inner, textW(c.label) + CHIP_PAD);
+      const cw = Math.min(inner, chipW(c.label) + CHIP_PAD);
       return {
         x: x + PAD,
         y: y + chipsTop + i * (CHIP_H + CHIP_GAP),
         w: cw,
         h: CHIP_H,
-        label: clip(c.label, charsIn(cw - CHIP_PAD)),
+        // A label that fits its chip is kept whole; only one wider than the chip is cut.
+        label: cw >= chipW(c.label) + CHIP_PAD - 0.01 ? c.label : clip(c.label, Math.max(1, Math.floor((cw - CHIP_PAD) / CHIP_CHAR_W))),
         title: c.title,
         ...(c.component !== undefined ? { component: c.component } : {}),
       };
@@ -316,15 +337,17 @@ function branchSized(n: Extract<StageNode, { kind: "branch" }>, o: StageLayoutOp
   const join = LANE_X + laneW + 14;
   const lanesH = arms.reduce((sum, a) => sum + LANE_LABEL_H + a.body.h, 0) + LANE_GAP * Math.max(0, arms.length - 1);
   const w = Math.ceil(Math.max(textW(clip(n.condition, CONDITION_MAX)), join + 14));
-  const h = COND_H + lanesH;
-  const mid = COND_H + lanesH / 2;
+  // The spine runs through the diamond's centre. The lanes start at the diamond's top, so the condition above the diamond clears them.
+  const laneTop = COND_ABOVE - DIAMOND / 2;
+  const h = Math.max(laneTop + lanesH, COND_ABOVE);
+  const mid = COND_ABOVE;
   const condText = clip(n.condition, CONDITION_MAX);
   return leaf(w, h, (x, y, out) => {
     const cy = y + mid;
-    pushNode(out, { kind: "text", x, y: y + 12, text: condText, titleFull: n.condition, tone: "cond" });
+    pushNode(out, { kind: "text", x, y: cy - DIAMOND / 2 - 4, text: condText, titleFull: n.condition, tone: "cond" });
     pushNode(out, { kind: "diamond", x, y: cy - DIAMOND / 2, w: DIAMOND, h: DIAMOND, titleFull: n.condition, site: n.site });
     const spines: number[] = [cy];
-    let top = y + COND_H;
+    let top = y + laneTop;
     for (const a of arms) {
       const laneX = x + LANE_X;
       pushNode(out, { kind: "text", x: laneX, y: top + 11, text: a.text, titleFull: a.text, tone: "lane" });
@@ -379,10 +402,77 @@ function exitSized(how: "continue" | "break" | "return" | "throw", site: Site): 
 
 // ---- the whole diagram ------------------------------------------------------------------------------------------------------
 
+/**
+ * The top-level spine of a driver, broken into rows no wider than `rowW`. A row breaks only between two items. The end of each row
+ * runs a connector down into the gap and back to the start of the next row, so the order reads row by row.
+ */
+function wrapRows(nodes: StageNode[], o: StageLayoutOptions, rowW: number): Sized {
+  const parts = nodes.map((n) => sizeOf(n, o)).filter((p): p is Sized => p !== undefined);
+  const rows: Sized[][] = [];
+  let cur: Sized[] = [];
+  let curW = 0;
+  for (const p of parts) {
+    if (cur.length > 0 && curW + GAP + p.w > rowW) {
+      rows.push(cur);
+      cur = [];
+      curW = 0;
+    }
+    curW = cur.length === 0 ? p.w : curW + GAP + p.w;
+    cur.push(p);
+  }
+  if (cur.length > 0) rows.push(cur);
+  if (rows.length <= 1) return spine(parts);
+  const lines = rows.map(spine);
+  const tops: number[] = [];
+  let h = 0;
+  lines.forEach((r, i) => {
+    if (i > 0) h += ROW_GAP;
+    tops.push(h);
+    h += r.h;
+  });
+  const first = lines[0];
+  return {
+    w: Math.max(...lines.map((r) => r.w)) + 2 * ROW_INDENT,
+    h,
+    mid: (tops[0] ?? 0) + (first?.mid ?? 0),
+    empty: false,
+    draw(x, y, out) {
+      lines.forEach((r, i) => {
+        const ry = y + (tops[i] ?? 0);
+        r.draw(x + ROW_INDENT, ry, out);
+        const next = lines[i + 1];
+        if (next === undefined) return;
+        const spineA = ry + r.mid;
+        const spineB = y + (tops[i + 1] ?? 0) + next.mid;
+        const rowRight = x + ROW_INDENT + r.w;
+        const bandY = ry + r.h + ROW_GAP / 2;
+        const outX = rowRight + 10;
+        const inX = x + ROW_INDENT - 10;
+        pushPath(out, [[rowRight, spineA], [outX, spineA], [outX, bandY], [inX, bandY], [inX, spineB], [x + ROW_INDENT, spineB]], "flow", true);
+      });
+    },
+  };
+}
+
 /** The layout of a stage graph: the driver's body on one spine from the left, with its margin. Deterministic. */
 export function layoutStages(graph: StageGraph, opts: StageLayoutOptions = {}): StageLayout {
-  const body = chain(graph.body, opts);
+  const body = opts.rowW !== undefined ? wrapRows(graph.body, opts, opts.rowW) : chain(graph.body, opts);
   const out: Out = { nodes: [], paths: [], seq: 0 };
   body.draw(MARGIN, MARGIN, out);
   return { width: Math.ceil(body.w + 2 * MARGIN), height: Math.ceil(body.h + 2 * MARGIN), nodes: out.nodes, paths: out.paths };
+}
+
+/**
+ * The layout of a stage graph fitted to a stage `stageW` px wide. It is drawn on one row while that fits at a scale of at least
+ * LEGIBLE_K. Otherwise its top-level spine wraps into rows as wide as the stage at LEGIBLE_K. `k` is the scale it is shown at.
+ */
+export function planStages(graph: StageGraph, o: StageLayoutOptions & { stageW: number }): { layout: StageLayout; k: number } {
+  const { stageW, ...opts } = o;
+  const flat = layoutStages(graph, opts);
+  if (!(stageW > 0)) return { layout: flat, k: MAX_K };
+  const kFlat = Math.min(MAX_K, stageW / flat.width);
+  if (kFlat >= LEGIBLE_K) return { layout: flat, k: kFlat };
+  const rowW = Math.max(1, stageW / LEGIBLE_K - 2 * MARGIN - 2 * ROW_INDENT);
+  const layout = layoutStages(graph, { ...opts, rowW });
+  return { layout, k: Math.min(MAX_K, stageW / layout.width) };
 }

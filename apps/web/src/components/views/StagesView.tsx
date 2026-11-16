@@ -1,15 +1,36 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import type { StageGraph, StageDriver } from "@insight/model";
 import { api } from "../../api";
-import { layoutStages, LABEL_H, type LayoutChip, type LayoutNode, type LayoutPath, type Point } from "../../arch/stages-layout";
+import { LABEL_H, planStages, type LayoutChip, type LayoutNode, type LayoutPath, type Point } from "../../arch/stages-layout";
 import { fileTarget, useCodeTarget } from "../../codeTarget";
 import { hrefView } from "../../router";
 import type { StagesPayload } from "../../model/payloads";
 import { usePanZoom } from "./usePanZoom";
 
 type Site = { file: string; line: number };
-/** The smallest scale Fit settles on: the labels are 11 to 13 px, and a wider diagram is panned rather than shrunk. */
-const STAGES_FIT_MIN_K = 0.9;
+/** The smallest scale Fit may settle on. The layout wraps before it gets this small, so this only bounds a very tall diagram. */
+const STAGE_MIN_K = 0.35;
+/** The stage is as tall as its diagram at the fitted scale, plus this room; at least STAGE_MIN_H px, at most 75% of the window. */
+const STAGE_PAD = 16;
+const STAGE_MIN_H = 240;
+const STAGE_MAX_VH = 0.75;
+/** The width a stage is laid out for until it is measured. */
+const FALLBACK_W = 1000;
+
+/** The width of an element, kept current as it resizes. 0 until it is measured. */
+function useElementWidth(el: HTMLElement | null): number {
+  const [w, setW] = useState(0);
+  useLayoutEffect(() => {
+    if (!el) return;
+    const measure = () => setW(el.clientWidth);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [el]);
+  return w;
+}
 type FrameNode = Extract<LayoutNode, { kind: "frame" }>;
 
 const base = (path: string): string => path.slice(path.lastIndexOf("/") + 1);
@@ -76,10 +97,14 @@ export function StagesDiagram({
   onDriver: (driverId: string) => void;
   stale?: boolean;
 }) {
-  const layout = useMemo(() => layoutStages(graph, { showAll }), [graph, showAll]);
   const [stageEl, setStageEl] = useState<HTMLDivElement | null>(null);
-  // Fit never shrinks the diagram below 0.9: a wide driver is panned, and its labels stay readable.
-  const pz = usePanZoom(stageEl, { w: layout.width, h: layout.height }, STAGES_FIT_MIN_K);
+  const stageW = useElementWidth(stageEl);
+  // One row when the whole driver fits at a legible scale; otherwise its spine wraps into rows as wide as the stage.
+  const plan = useMemo(() => planStages(graph, { showAll, stageW: stageW > 0 ? stageW : FALLBACK_W }), [graph, showAll, stageW]);
+  const layout = plan.layout;
+  const vh = typeof window === "undefined" ? 900 : window.innerHeight;
+  const stageH = Math.round(Math.min(Math.max(layout.height * plan.k + STAGE_PAD, STAGE_MIN_H), vh * STAGE_MAX_VH));
+  const pz = usePanZoom(stageEl, { w: layout.width, h: layout.height }, { fitMinK: STAGE_MIN_K, maxK: 1, height: stageH });
   const { showCode } = useCodeTarget();
   const empty = graph.body.length === 0;
   const open = (site: Site | undefined) => {
@@ -130,7 +155,7 @@ export function StagesDiagram({
         <div
           className={`sysv-stage stg-stage${stale ? " stale" : ""}`}
           ref={setStageEl}
-          style={pz.stageH === null ? undefined : { height: pz.stageH }}
+          style={pz.expanded ? undefined : { height: stageH }}
           onPointerDown={pz.pointer.onPointerDown}
           onPointerMove={pz.pointer.onPointerMove}
           onPointerUp={pz.pointer.onPointerUp}

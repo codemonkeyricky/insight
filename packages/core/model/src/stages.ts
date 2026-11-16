@@ -39,6 +39,7 @@ export type StageNode =
       minor?: boolean; // utility callee (fan-in > FAN_IN_MAX or fewer than STAGE_TARGETS_MIN targets): hidden unless "Show all"
       fanout?: { how: "interface" | "registry"; targets: { fn: NodeId; name: string; component?: string }[]; truncated?: boolean };
       ambiguous?: boolean; // candidates without how interface|registry: ONE stage, no fan-out
+      candidates?: number; // with ambiguous: how many distinct targets the call could be
       body?: StageNode[]; // inlined local helper (named fn nested in the driver), depth <= 3, cycle-guarded
       repeatOf?: string; // the helper was inlined by an earlier call (this one: id of that call): no body, "same as above"
       binds?: string[];
@@ -370,7 +371,7 @@ function resolveCall(group: Rel[], env: Env): StageNode | undefined {
         ...(binds !== undefined ? { binds } : {}),
       };
     }
-    return { kind: "call", id, name: callee ?? "call", site, ambiguous: true, ...(binds !== undefined ? { binds } : {}) };
+    return { kind: "call", id, name: callee ?? "call", site, ambiguous: true, candidates: targets.length, ...(binds !== undefined ? { binds } : {}) };
   }
 
   const t = first.to;

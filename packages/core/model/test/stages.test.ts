@@ -173,6 +173,9 @@ describe("stage graph: interface fan-out and ambiguous calls", () => {
     expect(detect?.kind === "call" && detect.fanout?.how).toBe("interface");
     expect(detect?.kind === "call" && detect.fanout?.targets.map((t) => t.component)).toEqual(["b", "b", "c", "c", "c"]);
     expect(g.coverage).toContain("1 calls with several possible targets shown once");
+    // The ambiguous call carries how many distinct targets it could be.
+    const amb = g.body[2];
+    expect(amb?.kind === "call" && amb.candidates).toBe(2);
   });
 });
 
