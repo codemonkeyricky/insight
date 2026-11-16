@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ExecFunctionRef, ExecModel, ExecModelStats, ExecThread, LayoutGraph, SolvedGraph } from "@insight/flow";
+import type { ExecFunctionRef, ExecModel, ExecModelStats, ExecThread } from "@insight/flow";
 import { ExecStore } from "../src/zoom/execStore.js";
 import { execFocus } from "../src/zoom/execMap.js";
 
@@ -9,18 +9,6 @@ vi.mock("../src/api", () => ({
   api: {
     getScopeExec: async () => fixture.model,
     getScopeCallers: async () => undefined,
-  },
-}));
-vi.mock("../src/zoom/elk", () => ({
-  solve: async (g: LayoutGraph): Promise<{ result: SolvedGraph; ms: number }> => {
-    // Stacks each container's children in a column, so every node has a place.
-    let y = 0;
-    const children = g.children.map((c) => {
-      const out = { id: c.id, x: 0, y };
-      y += c.height + 10;
-      return out;
-    });
-    return { result: { children }, ms: 0 };
   },
 }));
 

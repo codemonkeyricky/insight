@@ -56,6 +56,12 @@ export interface SceneNode {
    * (`⚠ unguarded shared state`): the variable names. The map draws the badge on the thread's box.
    */
   unguarded?: string[];
+  /**
+   * A card (see unrooted.ts) whose function shares these sync resources with threads it starts: a sync edge whose two ends
+   * both land on this card, which the renderer cannot draw as an edge, so the resources are kept here. The map draws the
+   * `⇆ N` badge on the card.
+   */
+  syncSelf?: SceneSyncResource[];
 }
 
 /**

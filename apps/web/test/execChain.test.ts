@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { execCallChain, type ExecIndex } from "../src/zoom/execMap.js";
 
-// A roots-only view draws the functions a thread starts in (`main`, `onMessage`); `pump` and `finish` have no box.
+// The grid draws only some functions as boxes (`main`, `onMessage`, the cards here); `pump` and `finish` have no box.
 // `verify` calls `pump`, `pump` calls `finish`, `onMessage` calls `verify`.
 function indexOf(callers: Record<string, string[]>, placed: string[]): ExecIndex {
   const placements = new Map(placed.map((id) => [id, [{ nodeId: `thread:t>${id}`, thread: "thread:t", depth: 0 }]]));

@@ -2,8 +2,8 @@
 
 ## The Flow tab now
 
-The Flow tab draws the execution canvas of the scope: program, threads, coroutines and functions, as one zoom map.
-`apps/web/src/components/views/FlowView.tsx` holds it.
+The Flow tab draws the execution canvas of the scope as one flat grid of cards (one per unrooted function), with
+`ZoomMap` as its renderer. `apps/web/src/components/views/FlowView.tsx` holds it.
 
 - The tab opens on the canvas. `#/projects/:id/view/flow?scope=X` opens at X, and `fn=` opens on that function's first
   place. A `mode` parameter from the old views is ignored.
@@ -11,8 +11,8 @@ The Flow tab draws the execution canvas of the scope: program, threads, coroutin
   tab shows those). A card is an in-scope function that nothing in scope calls, references, dispatches or spawns. A cycle
   that nothing outside enters gets one card. A file's module entry is a card only when its top-level code calls, dispatches
   or spawns something (`unrootedScene` in `packages/core/flow/src/unrooted.ts`). A grid of more than 24 cards shows 23 and a
-  "+N more" card. The grid is laid out in the browser (`gridRootsLayout`). The `roots` URL flag is no longer read by the
-  canvas; it only rides in the links the function panel writes.
+  "+N more" card. The grid is laid out in the browser (`gridRootsLayout`). The `roots` URL flag is gone: the client
+  neither reads nor writes it.
 - A function's control-flow chart is drawn in an expansion beside its box, not inside it. The exec model gives each
   function the chart's size (`ExecFunctionRef.chart`, from `layoutFunction` in `packages/core/flow/src/layout.ts`), and the
   scene node keeps it (`SceneNode.chart`). A function box with a chart is always compact: a box just wide enough for
@@ -49,26 +49,25 @@ The Flow tab draws the execution canvas of the scope: program, threads, coroutin
   <thread>", with the coroutine it runs in), the other places it runs, and the chart's stats and legend. A function in
   plain code flow says "Plain code flow, no runtime context found"
   (`apps/web/src/components/zoom/ExecFunctionPanel.tsx`).
-- The function panel also shows its call trail and its Calls and Called by lists. The trail is the call path from its
-  thread's roots; a function in plain code flow has the trail project, then the function. A coroutine, thread or the
-  project (when it holds plain code flow) shows its functions as pills and a sortable table
-  (`ExecContainerPanel.tsx`, `ExecLists.tsx`, helpers in `execMap.ts`).
-- The map's breadcrumb is the scene path: project, process, thread, coroutine, function. There is no file level.
-- The first view of a scope (no `fn=`) opens the project, every process box and every thread box, so it shows
-  process ▸ thread ▸ function boxes. Coroutines and function charts stay closed (`execFirstOpen` in `execMap.ts`). With
-  `fn=`, only the function's ancestors open.
-- With build targets in the IR, the root is a project holding one node per executable (Bazel `*_binary`, CMake
-  `add_executable`), each with its own main thread and the threads it spawns.
-- Threads that take the same lock (including C++ RAII guards) are joined by a dotted `sync` edge; a channel joins its
-  sender to its receiver with a solid one.
+- The function panel also shows its call trail and its Calls and Called by lists. The trail is the call path from the
+  thread that runs the function (a function in plain code flow has the trail project, then the function). The list
+  helpers are in `ExecLists.tsx` and `execMap.ts`.
+- The map's breadcrumb is the project, then the function. The grid has no program, thread or coroutine boxes; the System
+  tab shows those.
+- The grid's cards are its only boxes, and nothing is open on the first view. `fn=` selects that function's card; a
+  function with no card in the grid (one drawn under another card, say) leaves the project selected (`execResolve`).
+- Sync edges join card to card. Two functions of different cards that take the same lock (including C++ RAII guards) are
+  joined by a dotted `sync` edge; a channel joins its sender's card to its receiver's card with a solid one. A sync site
+  whose two ends land on one card (a function that shares a lock with a thread it starts, say) draws no edge: the card
+  carries a `⇆ N` self-sync badge instead, with N the number of shared resources. Its tooltip names them, such as
+  "Shares lock a with threads it starts". A card whose reach holds a function of a thread with unguarded shared state
+  carries that thread's `⚠` badge, since the thread's own box is not drawn (`unguardedScene` in `unrooted.ts`).
 - Labels fit their box's on-screen width and drop out when too small (`apps/web/src/zoom/lod.ts`). A gesture or Enter
   over a gap opens the nearest box within 60 px. Only a click, Enter or a link opens a box; a gesture only moves the camera.
-- Layouts: the demo reads `scope/<key>/exec-layout.json`, laid out with no chart expanded; the live app asks the server
-  (`GET /api/projects/:id/scope/exec-layout`), which solves in a worker thread and caches per snapshot and scope. The
-  browser solves only when neither has one. A layout with charts open is solved in the browser from that base layout
-  (`layoutScene` with `open` and `reuse`): only the containers that differ from the base layout, and the containers above
-  them, are solved again. Expansions never change the layout, so only open containers do; each set of them is kept
-  (`ExecStore.layoutFor`, up to 32 sets per scope).
+- Layouts: the client does not read a saved execution layout. `ExecStore` lays the flat grid out in the browser
+  (`gridRootsLayout`, `packages/core/flow/src/roots-grid.ts`), with no solver and no containers, so an expansion never
+  changes the layout. The server's `GET /api/projects/:id/scope/exec-layout` route and its worker still exist, but the
+  Flow canvas does not call them.
 - For a folder or the project, the table of files sits below the canvas.
 - A focus carries its scope: `execFocus(scope, nodeId)` in `apps/web/src/zoom/execMap.ts`. A node id is unique only
   within one scope's scene. `MapSource.focusOf` turns a clicked node id into a focus.
@@ -178,7 +177,7 @@ for expanded frames are reserved in the layout, so an opened container does not 
 calls that leave the open scope are dashed (`stubsFor`).
 
 `apps/web/src/zoom/scene.ts` holds `ZoomStore`. It loads scope flows lazily, caches layouts per container, and runs
-the ELK solves through `apps/web/src/zoom/elk.ts`. `ensureFocus` loads the file of the focused function before its
+the ELK solves through `apps/web/src/zoom/elk.ts` (removed: the grid needs no solver). `ensureFocus` loads the file of the focused function before its
 CFG is shown.
 
 ### M3: renderer
@@ -342,5 +341,5 @@ It is the Flow tab's view since Phase 4 (see `.claude/plans/execution-canvas.md`
   no thread is grounded. There are no file nodes and no "no runtime" group.
 - A container past `LAYERED_MAX_CHILDREN` (150) children is laid out in call columns (`callColumns` in
   `packages/core/flow/src/scene-layout.ts`), not by ELK's layered algorithm, which takes seconds past a few hundred.
-- The demo capture saves each scope's layout as `scope/<key>/exec-layout.json`; the page uses it when it covers the
-  scene, else it solves in the elkjs worker.
+- The demo capture saves each scope's layout as `scope/<key>/exec-layout.json`. The Flow canvas no longer reads it: the
+  grid is laid out in the browser.

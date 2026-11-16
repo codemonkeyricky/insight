@@ -6,7 +6,7 @@
 // and the model are read, never changed.
 import type { ExecModel } from "./exec-model.js";
 import { flattenRoots, keepScene, rewireEdges } from "./scene-filter.js";
-import type { Scene, SceneEdge, SceneNode } from "./scene.js";
+import { addSyncResources, type Scene, type SceneEdge, type SceneNode, type SceneSyncResource } from "./scene.js";
 
 /** A grid with more cards than this shows its first MORE_KEEP and one "+N more" card, unless it is expanded. */
 export const MORE_AFTER = 24;
@@ -217,8 +217,10 @@ export function unrootedReach(model: ExecModel, drawn: ReadonlySet<string>): Unr
 /**
  * The Flow canvas's scene: the cards of unrootedFunctions drawn as one flat grid under the project, each function once, in
  * name order. A grid of more than MORE_AFTER cards shows its first MORE_KEEP and a "+N more" card, unless its root id is in
- * `expanded` (the grid is expanded). A sync edge joins the card that reaches its site (see unrootedReach), and is dropped when
- * both ends join one card (the renderer draws no self-edge) or no card reaches an end. The input is not changed.
+ * `expanded` (the grid is expanded). A sync edge joins the card that reaches its site (see unrootedReach). When both ends join
+ * one card, the edge's resources are kept on that card as `syncSelf` (the renderer draws no self-edge). An edge with no card
+ * at an end is dropped. A card whose reach holds a function of a thread with unguarded shared state carries that thread's
+ * `unguarded` names, since the thread's own box is not drawn. The input is not changed.
  */
 export function unrootedScene(full: Scene, model: ExecModel, expanded: ReadonlySet<string> = new Set()): Scene {
   const drawn = new Set<string>();
@@ -247,6 +249,8 @@ export function unrootedScene(full: Scene, model: ExecModel, expanded: ReadonlyS
     return undefined;
   };
   const edges: SceneEdge[] = [];
+  // Each card placement's sync resources when both ends of an edge land on it (a thread starting a thread that shares its lock).
+  const selfSync = new Map<string, SceneSyncResource[]>();
   for (const e of full.edges) {
     if (e.kind !== "sync") {
       edges.push(e);
@@ -254,11 +258,64 @@ export function unrootedScene(full: Scene, model: ExecModel, expanded: ReadonlyS
     }
     const from = cardPlacement(e.from);
     const to = cardPlacement(e.to);
-    if (from !== undefined && to !== undefined) edges.push({ ...e, from, to });
+    if (from === undefined || to === undefined) continue;
+    if (from === to) {
+      selfSync.set(from, addSyncResources(selfSync.get(from) ?? [], e.resources ?? []));
+      continue;
+    }
+    edges.push({ ...e, from, to });
   }
 
-  const flat = flattenRoots(keepScene({ ...full, edges }, keep), model);
+  const marks = new Map<string, { syncSelf?: SceneSyncResource[]; unguarded?: string[] }>();
+  for (const [placement, resources] of selfSync) marks.set(placement, { syncSelf: resources });
+  for (const [card, names] of unguardedCards(full, reach)) {
+    const placement = firstOf.get(card);
+    if (placement === undefined) continue;
+    marks.set(placement, { ...marks.get(placement), unguarded: names });
+  }
+
+  const flat = markCards(flattenRoots(keepScene({ ...full, edges }, keep), model), marks);
   return withMore(flat, expanded);
+}
+
+/**
+ * The unguarded variables of each card: the union of the `unguarded` names of every thread whose functions the card reaches
+ * (its own thread, or one it starts, or a dispatch target). Only the cards that reach such a thread get an entry, sorted by name.
+ */
+function unguardedCards(full: Scene, reach: UnrootedReach): Map<string, string[]> {
+  const out = new Map<string, Set<string>>();
+  const reachOf = new Map<string, Set<string>>();
+  for (const t of full.nodes.values()) {
+    if (t.kind !== "thread" || t.unguarded === undefined || t.unguarded.length === 0) continue;
+    const own = new Set(functionsUnder(full, t.id));
+    for (const card of reach.cards) {
+      let r = reachOf.get(card);
+      if (r === undefined) reachOf.set(card, (r = new Set(reach.reachOf(card))));
+      let touches = false;
+      for (const f of own) if (r.has(f)) touches = true;
+      if (!touches) continue;
+      let names = out.get(card);
+      if (names === undefined) out.set(card, (names = new Set()));
+      for (const v of t.unguarded) names.add(v);
+    }
+  }
+  return new Map([...out].map(([card, names]) => [card, [...names].sort()]));
+}
+
+/** The scene with each marked node given its marks. A mark names a node that the scene draws; the input is not changed. */
+function markCards(flat: Scene, marks: ReadonlyMap<string, { syncSelf?: SceneSyncResource[]; unguarded?: string[] }>): Scene {
+  if (marks.size === 0) return flat;
+  const nodes = new Map(flat.nodes);
+  for (const [id, mark] of marks) {
+    const n = nodes.get(id);
+    if (n === undefined) continue;
+    nodes.set(id, {
+      ...n,
+      ...(mark.syncSelf !== undefined ? { syncSelf: mark.syncSelf } : {}),
+      ...(mark.unguarded !== undefined ? { unguarded: mark.unguarded } : {}),
+    });
+  }
+  return { ...flat, nodes };
 }
 
 /** The function placements under a node, in id order: the node itself when it is one, else every one below it. */

@@ -216,7 +216,7 @@ describe("unrootedScene: the flat grid", () => {
 });
 
 describe("sync edges in the flat grid", () => {
-  it("(i) main takes lock a and spawns a thread whose work takes a: the card is main, and the edge joins main to itself, which is dropped", () => {
+  it("(i) main takes lock a and spawns a thread whose work takes a: the card is main, and the edge joins main to itself, so main carries a as syncSelf", () => {
     const nodes = [
       fnNode("src/m.ts", "main", 0),
       lockOf("src/m.ts", 1, "src/m.ts#main", "a"),
@@ -231,8 +231,25 @@ describe("sync edges in the flat grid", () => {
     expect(unrootedReach(m, drawnOf(full)).cardOf("src/w.ts#work")).toBe("src/m.ts#main");
     const flat = unrootedScene(full, m);
     expect(refsOf(flat)).toEqual(["src/m.ts#main"]);
-    // The renderer draws no self-edge (sceneEdges drops a == b), so the flat grid keeps none.
+    // The renderer draws no self-edge (sceneEdges drops a == b), so the flat grid keeps none. Its resource stays on the card.
     expect(syncOf(flat)).toEqual([]);
+    const card = [...flat.nodes.values()].find((n) => n.kind === "function");
+    expect(card?.ref).toBe("src/m.ts#main");
+    expect(card?.syncSelf).toEqual([{ name: "a", kind: "lock" }]);
+  });
+
+  it("(i) a card with no self-sync edge carries no syncSelf", () => {
+    const nodes = [
+      fnNode("src/m.ts", "main", 0),
+      lockOf("src/m.ts", 1, "src/m.ts#main", "a"),
+      spawnNode("src/m.ts", 3, "src/m.ts#main"),
+      fnNode("src/w.ts", "work", 0),
+      lockOf("src/w.ts", 1, "src/w.ts#work", "b"),
+    ];
+    const m = execModel(nodes, [spawnEdge("src/m.ts", 3, "src/w.ts#work")], "src");
+    const flat = unrootedScene(buildExecScene(m), m);
+    expect(syncOf(flat)).toEqual([]);
+    expect([...flat.nodes.values()].some((n) => n.syncSelf !== undefined)).toBe(false);
   });
 
   it("(ii) a sync site in a card's callee joins that card, not a sibling card of its thread", () => {
@@ -280,6 +297,39 @@ describe("sync edges in the flat grid", () => {
     ]);
     const merged = flat.edges.find((e) => e.kind === "sync" && nameOf(flat, e.from) === "f00");
     expect(merged?.count).toBe(2);
+  });
+});
+
+describe("unguarded threads in the flat grid", () => {
+  it("N2: a card whose reach holds a function of a thread with unguarded shared state carries that thread's names; an unrelated card does not", () => {
+    const m = model({
+      functions: [fn("main", 1), fn("lone", 2), fn("w", 3)],
+      threads: [
+        thread("main", ["main", "lone"], ["main", "lone"]),
+        { ...thread("t1", ["w"], ["w"], [], spawnedBy("main")), unguardedWrites: ["counter"] },
+      ],
+    });
+    const full = buildExecScene(m);
+    // The thread's own box carries the names in the full scene: the flat grid drops that box, so its cards must carry them.
+    expect([...full.nodes.values()].find((n) => n.kind === "thread" && n.unguarded !== undefined)?.unguarded).toEqual(["counter"]);
+    const flat = unrootedScene(full, m);
+    expect(refsOf(flat).sort()).toEqual(["lone", "main"]);
+    const card = (ref: string) => [...flat.nodes.values()].find((n) => n.kind === "function" && n.ref === ref);
+    // main spawns w, so main's card reaches the unguarded thread; lone reaches nothing of it.
+    expect(card("main")?.unguarded).toEqual(["counter"]);
+    expect(card("lone")?.unguarded).toBeUndefined();
+    expect([...flat.nodes.values()].some((n) => n.kind === "thread")).toBe(false);
+  });
+
+  it("N2: a thread's own card carries the thread's names when the thread has no spawner in scope", () => {
+    const m = model({
+      functions: [fn("a", 1), fn("b", 2)],
+      threads: [thread("main", ["a"]), { ...thread("t1", ["b"]), unguardedWrites: ["q", "p"] }],
+    });
+    const flat = unrootedScene(buildExecScene(m), m);
+    const card = (ref: string) => [...flat.nodes.values()].find((n) => n.kind === "function" && n.ref === ref);
+    expect(card("b")?.unguarded).toEqual(["p", "q"]);
+    expect(card("a")?.unguarded).toBeUndefined();
   });
 });
 

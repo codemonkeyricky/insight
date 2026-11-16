@@ -290,6 +290,9 @@ a.flow-node { cursor: pointer; }
 .flow-warn { fill: var(--warn-text); font-weight: 700; }
 /* The same badge on a thread's frame or card. */
 .zm-warn { fill: var(--warn-text); font-weight: 700; }
+/* A card's self-sync badge: its function shares a lock or channel with threads it starts (`⇆ N`), in the card's corner. Accent
+   text, so light and dark both hold; it keeps its size on screen at every zoom, like the other labels. */
+.zm-sync-self { fill: var(--accent-text); font-family: var(--font-ui); font-weight: 700; font-size: max(11px, calc(11px * var(--zinv, 1))); pointer-events: none; }
 .zm-frame.zm-unguarded .zm-frame-head { stroke: var(--warn-text); stroke-width: 1.5; }
 .zm-box.zm-unguarded .zm-box-body { stroke: var(--warn-text); stroke-width: 1.5; }
 .flow-fold .flow-text { fill: var(--muted); font-size: 11px; font-style: italic; }
@@ -491,7 +494,7 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
 .zm-box.zm-function .zm-label { font-family: var(--font-ui); font-weight: 600; font-size: max(11px, calc(13px * var(--zinv, 1))); fill: var(--ink); }
 .zm-box:hover .zm-box-body { stroke: color-mix(in srgb, var(--accent) 55%, var(--hair)); stroke-width: 1.25; }
 .zm-stub-body { fill: none; stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 6 4; }
-/* A roots-only card: a name line over a muted file line (see ZoomMap BoxShape). */
+/* A grid card: a name line over a muted file line (see ZoomMap BoxShape). */
 .zm-card-sub { fill: var(--graphite); font-family: var(--font-ui); font-size: max(11px, calc(11.5px * var(--zinv, 1))); pointer-events: none; }
 .zm-box.zm-card .zm-label { font-family: var(--font-ui); font-weight: 600; font-size: max(11px, calc(13px * var(--zinv, 1))); fill: var(--ink); }
 .zm-label-stub { fill: var(--muted); font-weight: 400; font-style: italic; }

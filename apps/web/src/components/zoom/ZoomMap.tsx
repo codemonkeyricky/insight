@@ -236,7 +236,7 @@ interface Props {
   findings?: ReadonlyMap<string, number>;
   /** Which parts of the map are drawn: the frames (file and runtime frames) and the call edges. Both on by default. */
   layers?: { frames: boolean; calls: boolean };
-  /** The roots-only flat map: its boxes are cards with a file line, and the zone rulers and lines are off. */
+  /** The flat grid: its boxes are cards with a file line, and the zone rulers and lines are off. */
   flat?: boolean;
   /** Whether the charts' edges march and the back-edges pulse (the Flow motion choice). On by default. */
   motion?: boolean;
@@ -618,7 +618,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
       return { ...c, x: c.x + leftRef.current, y: c.y + TOP_RESERVE };
     }
     const opens = b.placed.items.some((i) => i.id === b.nodeId && i.kind === "frame");
-    // A roots-only grid fits at 1x when it fits: the cards are never enlarged past their size.
+    // The flat grid fits at 1x when it fits: the cards are never enlarged past their size.
     let c = opens || b.node(b.nodeId)?.chart !== undefined ? fitChartCamera(rect, room, CHART_MIN_PX) : fitCamera(rect, room, flat ? { maxK: 1 } : {});
     // The whole project (the first view): its full width is scaled down to fit the room, and aligned to the room's top-left,
     // so no frame is clipped at the right. The height may run on (the map is panned), and the scale never goes above 1.
@@ -961,7 +961,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   /**
    * Selects a function of the build: the source panel shows it, and the camera and the open expansions stay where they
    * are. A function the scope draws is selected on the map, and the URL shows it. A function with no box (a callee outside
-   * the scope, or hidden by the roots-only view) is selected off the map: the panel takes its name and file from its
+   * the scope, or hidden by the grid's "+N more" card) is selected off the map: the panel takes its name and file from its
    * chart. The URL is not written for it, since a `fn` the map does not draw would re-resolve and move the map; it keeps
    * the last on-map focus.
    */
@@ -1071,7 +1071,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
 
   /**
    * Nests a call step's callee in the step, inside the same box: the step grows into a frame holding the callee's chart, the
-   * box grows to fit, and the roots grid makes room (setExp). A callee that cannot nest (it is already in the chain, the
+   * box grows to fit, and the grid makes room (setExp). A callee that cannot nest (it is already in the chain, the
    * chart would be too large, or the chart has no pre-layout steps) opens beside the step instead. A click on a frame
    * folds it back, with every call nested in it.
    */
@@ -1326,7 +1326,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
       const b = buildRef.current;
       const here = b && focusRef.current !== undefined ? source.url(b, focusRef.current) : undefined;
       if (here !== undefined && here.scope === scope && here.fn === fn) return;
-      // A function the scope draws no box for (a callee hidden by the roots-only view) opens the chain of calls that reaches it.
+      // A function the scope draws no box for (a callee hidden behind the grid's "+N more" card) opens the chain of calls that reaches it.
       const chained = fn === undefined ? undefined : await source.chainTo?.(scope, fn);
       if (cancelled) return;
       if (chained !== undefined && fn !== undefined) {
@@ -1956,7 +1956,7 @@ export function BoxShape({
   bare?: boolean;
   /** A mid-tier tile: its name in a small font, sized to the tile's height on screen. */
   small?: boolean;
-  /** A roots-only card: its name, and its file line under it when the box is tall enough (see roots-grid.ts). */
+  /** A grid card: its name, and its file line under it when the box is tall enough (see roots-grid.ts). */
   card?: boolean;
   /** The card's place in reading order, which sets its pop-in delay (see zoom/pop.ts). */
   rank?: number;
@@ -1970,6 +1970,9 @@ export function BoxShape({
   // A thread box carries a badge when its code writes unguarded shared state (see scene.ts).
   const unguarded = node.unguarded !== undefined && node.unguarded.length > 0;
   const unguardedTitle = unguarded ? ` · ⚠ unguarded shared state: ${node.unguarded?.join(", ")}` : "";
+  // A card whose function shares a lock or channel with threads it starts carries a self-sync badge (see unrootedScene).
+  const selfSync = node.syncSelf !== undefined && node.syncSelf.length > 0 ? node.syncSelf : undefined;
+  const selfSyncTitle = selfSync ? ` · Shares ${selfSync.map((r) => `${r.kind} ${r.name}`).join(", ")} with threads it starts` : "";
   // The mid tier's name is 10-13 px on screen (the zoom's inverse scales it): its characters are measured at that size.
   const fontPx = small ? Math.min(13, Math.max(10, Math.round(rect.h * k * 0.42))) : 0;
   const label = bare ? null : small ? fitLabel(shown, labelChars(rect.w * k, fontPx * 0.6, 10)) : fitLabel(shown, labelChars(rect.w * k));
@@ -2014,10 +2017,16 @@ export function BoxShape({
     const name = compactCallers ? nameIn(CALLERS_COMPACT_W + 26) : fullName;
     return (
       <g className={`zm-box zm-${node.kind} zm-card ${lineClass(line)}${holdsChart ? " zm-has-chart" : ""}${chartOpen ? " expanded" : ""}${unguarded ? " zm-unguarded" : ""}`} data-sx={rect.x} data-fid={item.id} onClick={() => onOpen(item.id)} onDoubleClick={onDoubleOpen ? () => onDoubleOpen(item.id) : undefined}>
-        <title>{`${node.detail !== undefined ? `${node.label} (${node.detail})` : node.title || node.label}${unguardedTitle}`}</title>
+        <title>{`${node.detail !== undefined ? `${node.label} (${node.detail})` : node.title || node.label}${unguardedTitle}${selfSyncTitle}`}</title>
         {/* The pop-in sits on this inner group: the outer one carries the slide transform (writeShift and the FLIP). */}
         <g className="zm-pop" style={{ ["--d" as string]: `${popDelay(rank)}ms` }}>
           <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={12} className="zm-box-body" />
+          {/* The self-sync badge sits in the card's bottom-right corner, clear of the centred name. */}
+          {selfSync && (
+            <text x={rect.x + rect.w - 10} y={rect.y + rect.h - 9} textAnchor="end" className="zm-sync-self">
+              {`⇆ ${selfSync.length}`}
+            </text>
+          )}
           {name !== null && (
             <text x={rect.x + 12 + (showCallers ? (compactCallers ? CALLERS_COMPACT_W : CALLERS_BTN_W) - 4 + 6 : 0)} y={rect.y + rect.h / 2} dominantBaseline="central" className="zm-label">
               <tspan className="zm-card-glyph">ƒ</tspan>{" "}{name}

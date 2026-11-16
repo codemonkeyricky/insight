@@ -1,4 +1,4 @@
-// The selection of a function the map does not draw as a box (a callee outside the scope, or hidden by the roots-only view).
+// The selection of a function the map does not draw as a box (a callee outside the scope, or hidden behind the grid's "+N more" card).
 // The source panel still follows it, so its MapSelected is built from the function's chart, not from a node.
 import type { FlowSpan } from "@insight/flow";
 import { fileOfId } from "../flowTargets";

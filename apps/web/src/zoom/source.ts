@@ -36,6 +36,11 @@ export interface MapNode {
    * (`⚠ unguarded shared state`): the variable names, for the box's badge and tooltip.
    */
   unguarded?: string[];
+  /**
+   * A card whose function shares sync resources with threads it starts (a self-sync: the edge would join the card to itself).
+   * The card's `⇆ N` badge counts them, and its tooltip names them.
+   */
+  syncSelf?: { name: string; kind: string }[];
 }
 
 /**

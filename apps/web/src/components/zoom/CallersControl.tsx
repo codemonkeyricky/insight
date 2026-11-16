@@ -1,5 +1,5 @@
 // The "◂ callers" button: a small header control that opens the callers box of a function. It sits in the header of a
-// chart box, a nested frame, or a roots-only card, and it never selects or toggles the box it is in (a click stops there).
+// chart box, a nested frame, or a grid card, and it never selects or toggles the box it is in (a click stops there).
 // It is a keyboard control too: Tab reaches it, Enter or Space presses it. Its look follows the close × and the chevron: the
 // same hairline and fill tokens (see styles.css).
 import { keyActivates } from "./keys";

@@ -1,4 +1,4 @@
-// A roots-only card expands in place: the expansion takes the card's own slot, the layout reflows around it, and the
+// A grid card expands in place: the expansion takes the card's own slot, the layout reflows around it, and the
 // calls inside keep the inline behaviour (same-thread nests, thread/process hops open a side box).
 import { describe, expect, it } from "vitest";
 import { gridRootsLayout, layoutFunction, placeSceneLayout, type FunctionFlow, type Rect, type Scene, type SceneNode } from "@insight/flow";

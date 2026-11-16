@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// The callers box wired into the zoom map: a fake source draws a roots-only map of two function cards, F and G, so the map's
+// The callers box wired into the zoom map: a fake source draws a flat grid of two function cards, F and G, so the map's
 // own handlers (the card chip, Escape, the rows' ◂, the focus after a close) run as they do in the app.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
