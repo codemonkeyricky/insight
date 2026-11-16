@@ -6,7 +6,7 @@ import type { NodeId, Span, IREdge } from "@insight/ir";
 import { isNoisePath } from "@insight/flow";
 import type { ProjectModel, Rel } from "./model.js";
 import { normalizeScope, ROOT_SCOPE } from "./scope.js";
-import { componentOf, nodePackageRoots, packageRoots, systemModel, type Site, type SystemComponent, type SystemOptions } from "./system.js";
+import { componentOf, nodePackageRoots, packageRoots, systemModel, type Site, type SystemComponent, type SystemModel, type SystemOptions } from "./system.js";
 import { scopeView } from "./view.js";
 import { enclosingFn, sequencePipelines, type PipelineSequence } from "./sequence.js";
 
@@ -71,6 +71,45 @@ interface RawPoint {
   sites: RawSite[];
 }
 
+/** The scope the System view's components are drawn over: a single code folder is descended into, as systemModel does. */
+function innerScope(scope: string, sys: { via?: string }): string {
+  return sys.via === undefined ? scope : scope === ROOT_SCOPE ? sys.via : `${scope}/${sys.via}`;
+}
+
+/** Whether noise folders count: the flag, or a scope that is itself a noise folder. */
+function testsOf(scope: string, opts: PipelineOptions): boolean {
+  return opts.tests === true || isNoisePath(scope) || isNoisePath(`${scope}/x`);
+}
+
+/**
+ * Ownership of each in-scope file: its System component (files of dropped components, and noise files unless `tests`, have none).
+ * Shared by the Pipeline model and the stage graphs, so both name the same component for a file.
+ */
+function fileOwners(model: ProjectModel, sys: SystemModel, inner: string, tests: boolean): (file: string | undefined) => string | undefined {
+  const view = scopeView(model, inner);
+  const packages = packageRoots(model.files, nodePackageRoots(model));
+  const sysById = new Map(sys.components.map((c) => [c.id, c] as const));
+  const compOfFile = new Map<string, string>();
+  for (const file of view.files()) {
+    if (!tests && isNoisePath(file)) continue;
+    const id = componentOf(file, inner, packages, view.kind === "file").id;
+    if (sysById.has(id)) compOfFile.set(file, id);
+  }
+  return (file) => (file === undefined ? undefined : compOfFile.get(file));
+}
+
+/**
+ * The ownership the stage graphs use for a scope: the same components and noise rule as pipelineModel. `compOf` is undefined
+ * for every file when the scope has no System components.
+ */
+export function stageOwnership(model: ProjectModel, scopePath: string, opts: PipelineOptions = {}): { compOf: (file: string | undefined) => string | undefined; tests: boolean } {
+  const scope = normalizeScope(scopePath);
+  const tests = testsOf(scope, opts);
+  const sys = systemModel(model, scope, opts);
+  if (sys.components.length === 0) return { compOf: () => undefined, tests };
+  return { compOf: fileOwners(model, sys, innerScope(scope, sys), tests), tests };
+}
+
 /**
  * The Pipeline model of one scope. Components are the System view's components for the scope (same ownership, same noise
  * rule). Points are extension points: interface call sites whose targets span two or more components.
@@ -93,20 +132,10 @@ export function pipelineModel(model: ProjectModel, scopePath: string, opts: Pipe
   // The System view's own scope: a single code folder is descended into, exactly as systemModel does.
   const sys = systemModel(model, scope, opts);
   if (sys.components.length === 0) return empty();
-  const inner = sys.via === undefined ? scope : scope === ROOT_SCOPE ? sys.via : `${scope}/${sys.via}`;
-  const tests = opts.tests === true || isNoisePath(scope) || isNoisePath(`${scope}/x`);
-  const view = scopeView(model, inner);
-  const packages = packageRoots(model.files, nodePackageRoots(model));
+  const inner = innerScope(scope, sys);
+  const tests = testsOf(scope, opts);
   const sysById = new Map(sys.components.map((c) => [c.id, c] as const));
-
-  // Ownership of each in-scope, non-noise file: its System component (files of dropped components have none).
-  const compOfFile = new Map<string, string>();
-  for (const file of view.files()) {
-    if (!tests && isNoisePath(file)) continue;
-    const id = componentOf(file, inner, packages, view.kind === "file").id;
-    if (sysById.has(id)) compOfFile.set(file, id);
-  }
-  const compOf = (file: string | undefined): string | undefined => (file === undefined ? undefined : compOfFile.get(file));
+  const compOf = fileOwners(model, sys, inner, tests);
   const sequences = sequencePipelines(model, compOf, tests);
 
   // Interface relations grouped by their shared edge: one group is one call site with its candidates.

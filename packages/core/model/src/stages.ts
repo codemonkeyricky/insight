@@ -40,6 +40,7 @@ export type StageNode =
       fanout?: { how: "interface" | "registry"; targets: { fn: NodeId; name: string; component?: string }[]; truncated?: boolean };
       ambiguous?: boolean; // candidates without how interface|registry: ONE stage, no fan-out
       body?: StageNode[]; // inlined local helper (named fn nested in the driver), depth <= 3, cycle-guarded
+      repeatOf?: string; // the helper was inlined by an earlier call (this one: id of that call): no body, "same as above"
       binds?: string[];
       reads?: string[]; // P2
     }
@@ -577,7 +578,7 @@ export function stageGraph(
   const ctx: Ctx = { model, idx, compOf, tests, driverId, inScope, memo: new Map(), ids: new Set(), noCallEnd: false };
   const fn = model.functionById.get(driverId);
   const env: Env = { ctx, fnId: driverId, prefix: "", stack: [driverId], loops: 0, exitOk: false };
-  const body = pruneList(emitList(membersOf(driverId, ctx), env));
+  const body = markRepeats(pruneList(emitList(membersOf(driverId, ctx), env)), new Map());
   const component = fn ? compOf(fn.file) : undefined;
   return {
     driver: { id: driverId, name: fn?.name ?? driverId, file: fn?.file ?? "", ...(component !== undefined ? { component } : {}) },
@@ -585,6 +586,29 @@ export function stageGraph(
     edges: [],
     coverage: coverageOf(ctx, body, driverId),
   };
+}
+
+/**
+ * A helper inlined a second time keeps no body: its call is marked `repeatOf` the first call that inlined it. Runs after pruning
+ * and walks in call order, so the first call that is still shown is the one named.
+ */
+function markRepeats(nodes: StageNode[], first: Map<NodeId, string>): StageNode[] {
+  return nodes.map((n): StageNode => {
+    if (n.kind === "call") {
+      if (n.fn === undefined || n.body === undefined) return n;
+      const prior = first.get(n.fn);
+      if (prior !== undefined) {
+        const { body: _inlined, ...rest } = n;
+        return { ...rest, repeatOf: prior };
+      }
+      first.set(n.fn, n.id);
+      return { ...n, body: markRepeats(n.body, first) };
+    }
+    if (n.kind === "loop") return { ...n, body: markRepeats(n.body, first) };
+    if (n.kind === "branch") return { ...n, arms: n.arms.map((a) => ({ ...a, body: markRepeats(a.body, first) })) };
+    if (n.kind === "try") return { ...n, body: markRepeats(n.body, first), handler: markRepeats(n.handler, first) };
+    return n;
+  });
 }
 
 function coverageOf(ctx: Ctx, body: StageNode[], driverId: NodeId): string[] {

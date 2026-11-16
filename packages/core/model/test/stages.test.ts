@@ -64,7 +64,7 @@ function show(nodes: StageNode[]): string {
     .map((n): string => {
       switch (n.kind) {
         case "call": {
-          const name = n.name + (n.minor ? "~" : "") + (n.fanout ? `[${n.fanout.targets.length}]` : "") + (n.ambiguous ? "?" : "");
+          const name = n.name + (n.minor ? "~" : "") + (n.fanout ? `[${n.fanout.targets.length}]` : "") + (n.ambiguous ? "?" : "") + (n.repeatOf !== undefined ? "↺" : "");
           return n.body ? `${name}{${show(n.body)}}` : name;
         }
         case "loop":
@@ -130,6 +130,18 @@ describe("stage graph: local helpers", () => {
     expect(show(g.body)).toBe("helper{s1 s2}");
     const helper = g.body[0];
     expect(helper?.kind === "call" && helper.fn).toBe(H);
+  });
+
+  it("marks a second inline of the same helper repeatOf the first call, with no body", () => {
+    const H = `${F}#run.helper`;
+    const nodes = [fn(H, "helper", F, DRV)];
+    const edges = [call(DRV, H, 8, 2, 8), call(DRV, H, 9, 2, 8), call(H, stageId("s1"), 22, 4, 6), call(H, stageId("s2"), 23, 4, 6)];
+    const g = graphOf(doc({ nodes, edges }));
+    expect(show(g.body)).toBe("helper{s1 s2} helper↺");
+    const [first, second] = g.body;
+    expect(first?.kind === "call" && first.body?.length).toBe(2);
+    expect(second).toMatchObject({ kind: "call", name: "helper", repeatOf: first?.kind === "call" ? first.id : undefined });
+    expect(second?.kind === "call" && second.body).toBeUndefined();
   });
 
   it("guards against a helper cycle: the call back into an active helper keeps no body", () => {

@@ -3,7 +3,7 @@
 // flow and exec functions run on the same scoped IR, so the payloads are equal. Pure, with no React and no
 // browser globals: the demo capture (scripts/capture-demo.mjs) imports this file too.
 import { execModel, summarizeScope, type ExecFunctionRef, type ExecModel, type ScopeFlow } from "@insight/flow";
-import { callerGraph, CALLER_DEFAULTS, pipelineModel, refsOf, scopeView, ScopeError, systemModel, type CallerGraph, type CallerOptions, type PipelineModel, type ProjectModel, type Refs, type ScopeKindName, type SystemModel } from "@insight/model";
+import { callerGraph, CALLER_DEFAULTS, pipelineModel, refsOf, scopeView, ScopeError, stageDrivers, stageGraph, stageOwnership, systemModel, type CallerGraph, type CallerOptions, type PipelineModel, type ProjectModel, type Refs, type ScopeKindName, type StageDriver, type StageGraph, type SystemModel } from "@insight/model";
 // The extension is written so the capture script can load this file with Node's type stripping (see scripts/capture-demo.mjs).
 import { ApiError } from "../apiError.ts";
 
@@ -148,4 +148,28 @@ export function systemFor(model: ProjectModel, path: string, tests = false): Sys
 export function pipelineFor(model: ProjectModel, path: string, tests = false): PipelineModel {
   const scope = canonical(model, path);
   return remember(model, `pipeline\0${scope}\0${tests ? 1 : 0}`, () => pipelineModel(model, scope, { tests }));
+}
+
+/** The drivers the Stages picker offers: the best of a scope's pipeline drivers. */
+export const STAGE_PICKER = 5;
+
+/** The Stages section of a scope: its top drivers, and the stage graph of the selected one (the first driver by default). */
+export interface StagesPayload {
+  drivers: StageDriver[];
+  graph?: StageGraph;
+}
+
+/**
+ * The stage graphs of a scope, computed from the project model the way pipelineFor computes the Pipeline model: the same
+ * components and noise rule. `driver` picks the graph; one outside the picker's drivers falls back to the first driver.
+ */
+export function stagesFor(model: ProjectModel, path: string, opts: { tests?: boolean; driver?: string } = {}): StagesPayload {
+  const scope = canonical(model, path);
+  const tests = opts.tests === true;
+  const owner = remember(model, `stages-owner\0${scope}\0${tests ? 1 : 0}`, () => stageOwnership(model, scope, { tests }));
+  const drivers = remember(model, `stages\0${scope}\0${tests ? 1 : 0}`, () => stageDrivers(model, owner.compOf, owner.tests).slice(0, STAGE_PICKER));
+  const pick = drivers.some((d) => d.id === opts.driver) ? opts.driver : drivers[0]?.id;
+  if (pick === undefined) return { drivers };
+  const graph = remember(model, `stage\0${scope}\0${tests ? 1 : 0}\0${pick}`, () => stageGraph(model, pick, owner.compOf, owner.tests));
+  return { drivers, graph };
 }

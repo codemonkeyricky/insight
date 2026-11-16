@@ -50,11 +50,12 @@ interface Drag {
 
 /**
  * Pan and zoom for a stage element, as the System view has them: the wheel zooms around the pointer, a drag pans, the + and −
- * buttons zoom around the centre, Fit refits the content, and Expand fills the window (Esc leaves). The stage's height is the
+ * buttons zoom around the centre, Fit refits the content (never below `fitMinK`, so text stays readable), and Expand fills the window
+ * (Esc leaves). The stage's height is the
  * room the window leaves, at least 60% of the window, or the whole window while expanded. `moved()` tells a drag from a click:
  * it is true from the drag's first 3 px until the next press.
  */
-export function usePanZoom(stageEl: HTMLDivElement | null, content: { w: number; h: number }) {
+export function usePanZoom(stageEl: HTMLDivElement | null, content: { w: number; h: number }, fitMinK: number = FIT.fitMinK) {
   const [cam, setCam] = useState<Camera>({ k: 1, x: 0, y: 0 });
   const [expanded, setExpanded] = useState(false);
   /** The stage's height in px when not expanded; null while expanded, so the window sets it. */
@@ -67,7 +68,7 @@ export function usePanZoom(stageEl: HTMLDivElement | null, content: { w: number;
     if (expanded) {
       const vw = typeof window === "undefined" ? 1440 : window.innerWidth;
       setStageH(null);
-      setCam(fitBox(content.w, content.h, vw, vh, FIT));
+      setCam(fitBox(content.w, content.h, vw, vh, { ...FIT, fitMinK }));
       return;
     }
     const w = stageEl?.clientWidth ?? 900;
@@ -75,8 +76,8 @@ export function usePanZoom(stageEl: HTMLDivElement | null, content: { w: number;
     const room = stageEl ? vh - stageEl.getBoundingClientRect().top - BOTTOM_ROOM : 0;
     const h = Math.max(420, vh * 0.6, room);
     setStageH(h);
-    setCam(fitBox(content.w, content.h, w, h, FIT));
-  }, [stageEl, expanded, content.w, content.h]);
+    setCam(fitBox(content.w, content.h, w, h, { ...FIT, fitMinK }));
+  }, [stageEl, expanded, content.w, content.h, fitMinK]);
 
   // Fits when the content changes (a new layout), when the stage first mounts, and when it expands or collapses.
   useLayoutEffect(() => {
