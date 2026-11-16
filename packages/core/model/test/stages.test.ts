@@ -596,3 +596,103 @@ describe("stage graph: review fixes", () => {
     ]);
   });
 });
+
+/** The stages a reader sees by default: minor calls dropped, and containers left empty by that dropped. */
+function shownOf(nodes: StageNode[]): StageNode[] {
+  const out: StageNode[] = [];
+  for (const n of nodes) {
+    if (n.kind === "call") {
+      if (n.minor === true) continue;
+      out.push(n.body ? { ...n, body: shownOf(n.body) } : n);
+    } else if (n.kind === "exit") out.push(n);
+    else if (n.kind === "loop") {
+      const body = shownOf(n.body);
+      if (body.length > 0) out.push({ ...n, body });
+    } else if (n.kind === "try") {
+      const body = shownOf(n.body);
+      const handler = shownOf(n.handler);
+      if (body.length + handler.length > 0) out.push({ ...n, body, handler });
+    } else {
+      const arms = n.arms.map((a) => ({ ...a, body: shownOf(a.body) }));
+      if (arms.some((a) => a.body.length > 0)) out.push({ ...n, arms });
+    }
+  }
+  return out;
+}
+
+describe("stage graph: exits inside inlined helpers", () => {
+  it("keeps no exit for a return in a helper's own loop, while the helper's stages stay", () => {
+    // helper() loops over its items, returns early from inside the loop (as depsCurrent does), and calls two stages.
+    const H = `${F}#run.helper`;
+    const nodes = [
+      fn(H, "helper", F, DRV),
+      flow("loop:22:2", "flow.loop", [22, 2, 27, 3], { variant: "for-of", condition: "const p of items" }, H),
+      flow("if:23:4", "flow.branch", [23, 4, 25, 5], { condition: "bad(p)" }, H),
+      flow("arm:23:20", "flow.branch-arm", [23, 20, 25, 5], { label: "then" }, H),
+      flow("return:24:6", "flow.return", [24, 6, 24, 14], {}, H),
+    ];
+    const edges = [call(DRV, H, 8, 2, 8), call(H, stageId("s1"), 26, 4, 6), call(H, stageId("s2"), 28, 4, 6)];
+    const g = graphOf(doc({ nodes, edges }));
+    expect(JSON.stringify(g.body)).not.toContain('"kind":"exit"');
+    expect(show(g.body)).toContain("s1");
+    expect(show(g.body)).toContain("s2");
+  });
+});
+
+describe("stage graph: callback slots on the driver's options (runIndex shape)", () => {
+  // runIndex(opts, plugins): say and phase are const-arrow helpers that call opts.onProgress / opts.onPhase, a single-candidate
+  // interface fan-out into a lambda elsewhere. Three real stages s1 to s3, one loop of frontends with s2 and say, and a loop of
+  // disabled plugins with only say.
+  const SAY = `${F}#run.say`;
+  const PHASE = `${F}#run.phase`;
+  const CB = "apps/server/src/jobs.ts#JobRunner.execute.λ221:21";
+  const CB2 = "apps/server/src/jobs.ts#JobRunner.execute.λ222:18";
+  function slotParts(): { nodes: IRNode[]; edges: IREdge[] } {
+    const stages = stageParts();
+    const nodes: IRNode[] = [
+      ...stages.nodes,
+      fn(SAY, "say", F, DRV, { params: ["line"] }),
+      fn(PHASE, "phase", F, DRV, { params: ["p"] }),
+      fn(CB, "λ221:21", "apps/server/src/jobs.ts", "apps/server/src/jobs.ts"),
+      fn(CB2, "λ222:18", "apps/server/src/jobs.ts", "apps/server/src/jobs.ts"),
+      flow("loop:5:2", "flow.loop", [5, 2, 7, 3], { variant: "for-of", condition: "const d of plugins.disabled" }),
+      flow("loop:11:2", "flow.loop", [11, 2, 14, 3], { variant: "for-of", condition: "const lf of plugins.frontends" }),
+    ];
+    const edges: IREdge[] = [
+      ...stages.edges,
+      call(SAY, [CB], 3, 2, 14, { how: "interface", callee: "opts.onProgress" }),
+      call(PHASE, [CB2], 3, 2, 14, { how: "interface", callee: "opts.onPhase" }),
+      call(DRV, SAY, 2, 2, 6),
+      call(DRV, PHASE, 3, 2, 6),
+      call(DRV, SAY, 6, 4, 8),
+      call(DRV, stageId("s1"), 9, 2, 6),
+      call(DRV, stageId("s2"), 12, 4, 8),
+      call(DRV, PHASE, 12, 20, 25),
+      call(DRV, SAY, 13, 4, 8),
+      call(DRV, stageId("s3"), 16, 2, 6),
+      call(DRV, SAY, 17, 2, 8),
+      call(DRV, PHASE, 18, 2, 8),
+    ];
+    return { nodes, edges };
+  }
+
+  it("shows the three stages and the frontends loop by default, and none of the callback helpers", () => {
+    const g = graphOf(docWithDriver({ params: ["opts", "plugins"] }, slotParts()));
+    const visible = show(shownOf(g.body));
+    // Golden: the default outline. Show all (show(g.body)) keeps the callbacks and the say-only loop, marked `~`.
+    expect(visible).toBe("s1 for[s2] s3");
+    const all = show(g.body);
+    expect(all).toContain("say~{opts.onProgress~[1]}");
+    expect(all).toContain("phase~{opts.onPhase~[1]}");
+    expect(all).toContain("for[s2 phase~↺ say~↺]");
+  });
+
+  it("keeps a single-candidate fan-out whose receiver is a local, not a driver parameter, as a stage", () => {
+    const H = `${F}#run.handler`;
+    const nodes = [fn(H, "handler", F, DRV), fn(CB, "λ221:21", "apps/server/src/jobs.ts", "apps/server/src/jobs.ts")];
+    const edges = [call(DRV, [CB], 20, 2, 12, { how: "interface", callee: "reg.handle" })];
+    const g = graphOf(doc({ nodes, edges }));
+    expect(show(shownOf(g.body))).toBe("reg.handle[1]");
+  });
+});
+

@@ -318,6 +318,9 @@ const siteOf = (ir: IRNode, env: Env): Site => ({ file: (ir.span as Span).file, 
 function exitNode(n: TNode, env: Env): StageNode | undefined {
   if (!env.exitOk) return undefined;
   const ir = n.ir as IRNode;
+  // A return, break or continue inside an inlined helper leaves that helper or its own loop, never the driver: no exit. A throw
+  // still propagates out of the driver, so it stays.
+  if (env.fnId !== env.ctx.driverId && ir.kind !== "flow.throw") return undefined;
   const isBreak = str(attr(ir, "variant")) === "break";
   // An unlabelled break inside a switch leaves the switch only: it is no exit from the loop around it.
   if (isBreak && env.inSwitch && str(attr(ir, "label")) === undefined) return undefined;
@@ -386,6 +389,17 @@ function tryNode(n: TNode, env: Env): StageNode {
   };
 }
 
+/**
+ * Whether a callee's receiver chain roots at a parameter of the driver: `opts.onProgress` and `opts.frontend.extract` do, `say`
+ * and `this.x` do not. The parameter names are the driver's `attrs.params` (local keys, so a shadowed parameter does not match).
+ */
+function rootsAtDriverParam(ctx: Ctx, callee: string | undefined): boolean {
+  const root = callee?.match(/^[A-Za-z_$][\w$]*(?=[.?[(])/)?.[0];
+  if (root === undefined) return false;
+  const params = ctx.model.byId.get(ctx.driverId)?.attrs.params;
+  return Array.isArray(params) && params.includes(root);
+}
+
 /** A candidate-free or candidate call turned into one stage: an exact target, a fan-out, or one ambiguous stage. */
 function resolveCall(group: Rel[], env: Env): StageNode | undefined {
   const { ctx } = env;
@@ -424,12 +438,16 @@ function resolveCall(group: Rel[], env: Env): StageNode | undefined {
         const component = ctx.compOf(f.file);
         return { fn: t, name: f.name, ...(component !== undefined ? { component } : {}) };
       });
+      // A callback slot the driver calls on its own parameter (opts.onProgress?.(line)): one candidate reached through a driver
+      // parameter. The slot is wired by a caller, not a stage the driver runs, so it is minor like a utility.
+      const slot = targets.length === 1 && rootsAtDriverParam(ctx, callee);
       return {
         kind: "call",
         id,
         name: callee ?? shown[0]?.name ?? "call",
         site,
         fanout: { how, targets: shown, ...(targets.length > FANOUT_CAP ? { truncated: true } : {}) },
+        ...(slot ? { minor: true } : {}),
         ...dataAttrs,
       };
     }
