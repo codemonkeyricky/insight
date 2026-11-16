@@ -70,8 +70,10 @@ The Flow tab draws the execution canvas of the scope: program, threads, coroutin
 - A focus carries its scope: `execFocus(scope, nodeId)` in `apps/web/src/zoom/execMap.ts`. A node id is unique only
   within one scope's scene. `MapSource.focusOf` turns a clicked node id into a focus.
 - Callers: a `◂ callers` button (`zm-callers-btn`, `components/zoom/CallersControl.tsx`) sits in a chart box's header
-  (left of its ×), in a nested frame's header (left of its ▾), and on a roots-only function card (top-right, when the
-  card has no chart open). It opens a callers box to the right of its source: a box listing one row per caller
+  (left of its ×), in a nested frame's header (left of its ▾), and at the top-left of a roots-only function card (when
+  the card has no chart open). The callers box opens LEFT of a roots-only function card, and LEFT from the header of an
+  in-place chart that replaced such a card; on any other chart (one opened from a call step) it opens RIGHT of the
+  chart. The box lists one row per caller
   (`mergeCallers` in `zoom/callers.ts` merges a call and a dispatch of one caller into one row, with its kind as a
   badge). Each row's ▸ opens that caller's chart to the right of the row, with a beam, and that chart has its own
   Callers button, so the chain walks up. The box is keyed `callers:<fnRef>` (`kind: "callers"` in `zoom/expand.ts`),

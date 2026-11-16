@@ -1,4 +1,6 @@
-// The callers box: a box to the right of a function (or of a chart's header, or of a call step) that lists who calls it.
+// The callers box: a box that lists who calls a function. It opens left of a roots-only function card and left from the
+// header of an in-place chart that replaced such a card; from any other chart's header (one opened from a call step) it
+// opens right of the chart.
 // Its header is "Callers of <name>" with a close ×, and its body is one row per caller: the name, the file and line, the
 // kinds of its edges, and a ◂ at the row's left end that opens the caller's chart to the left of the row (see ZoomMap.openCallerChart). A caller
 // already open above it (a recursion) shows ↺ instead: its ◂ selects that chart rather than opening it again. The rows are

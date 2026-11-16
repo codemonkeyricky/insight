@@ -1,7 +1,7 @@
 import type { NodeId } from "@insight/ir";
 import { findCycles } from "@insight/sdk";
 import type { ProjectModel, RelKind } from "./model.js";
-import { cmp, describe, folded, INVOKING_HOWS, order } from "./refs-common.js";
+import { cmp, describe, folded, INVOKING_HOWS, order, preferHow } from "./refs-common.js";
 import type { RefRow } from "./refs.js";
 import type { ScopeView } from "./view.js";
 
@@ -338,7 +338,7 @@ function computeGroups(view: ScopeView, id: NodeId): Group[] {
     if (g) {
       g.count++;
       g.candidate &&= rel.candidate;
-      if (rel.how !== undefined && (g.how === undefined || rel.how < g.how)) g.how = rel.how;
+      g.how = preferHow(g.how, rel.how);
       if (site && (!g.site || site.file < g.site.file || (site.file === g.site.file && site.line < g.site.line))) g.site = site;
       continue;
     }

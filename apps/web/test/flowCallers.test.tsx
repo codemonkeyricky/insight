@@ -571,6 +571,27 @@ describe("the Callers chip on a roots-only card", () => {
     expect(nameOf(html)).toBe("run");
     expect(html).toContain("◂ callers");
   });
+
+  it("a card with no chip keeps its whole name: no room is reserved for a button that is not drawn", () => {
+    // 14 characters fit in a 160-wide card at 1× with no chip (15 allowed after the glyph). Keeping 24 world units free
+    // for an absent chip leaves 12, so this test fails if the no-chip room goes back to 24.
+    const label = "loadCallersMap";
+    const html = renderToStaticMarkup(
+      <svg>
+        <BoxShape
+          item={{ id: "n", kind: "box", rect: { x: 0, y: 0, w: 160, h: 56 }, depth: 1 }}
+          node={{ id: "n", kind: "function", label, ref: "f#x" }}
+          line="none"
+          k={1}
+          onOpen={() => undefined}
+          chartOpen={false}
+          card
+        />
+      </svg>,
+    );
+    expect(html).not.toContain("zm-callers-btn");
+    expect(nameOf(html)).toBe(label);
+  });
 });
 
 describe("a card's name when zoomed in (review 2, finding 4)", () => {

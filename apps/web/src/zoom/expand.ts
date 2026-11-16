@@ -1,6 +1,8 @@
 // The zoom map's expansions: a function's control-flow chart drawn in a box beside the map. An expansion is anchored to a
-// function box on the map, or to a call step in another expansion's chart. A chart sits to the right of its anchor; a callers
-// box sits to the left (callers are upstream), and so does everything opened from it (see Expansion.side). The
+// function box on the map, or to a call step in another expansion's chart. A chart sits to the right of its anchor. A callers
+// box sits to the left (callers are upstream) when it hangs from a roots-only card or from the header of the chart that
+// replaced such a card in place; on a chart opened from a call step it sits to the right, like the chart (see opensLeft), and
+// everything opened from a left box is left too (see Expansion.side). The
 // layout never depends on expansions (a function box keeps its compact size), so everything here is placement: where
 // each expansion goes, how a chain follows its parent, what closes with what, and how the camera shows a new one. Pure,
 // so these rules are unit tested (test/expand.test.ts).
@@ -54,14 +56,19 @@ const sameRect = (a: Rect, b: Rect): boolean => a.x === b.x && a.y === b.y && a.
 
 /**
  * The rect, in its parent's chart units, of an expansion's header strip for an expansion `w` wide, zero wide: where a box hung
- * from the header starts. A callers box opens to the left (`left`), from the header's left edge, where the Callers button is;
- * a box opening to the right starts at the header's right edge.
+ * from the header starts. `left` is the box's side (see opensLeft): a callers box opens to the left, from the header's left
+ * edge where the Callers button is, only when the chart replaced its card in place (or the box hangs from one that did); on
+ * a chart opened from a call step it opens to the right, from the header's right edge.
  */
 export function headerRect(w: number, left = false): Rect {
   return { x: left ? -CHART_PAD : w - CHART_PAD, y: -(CHART_HEAD + CHART_PAD), w: 0, h: CHART_HEAD };
 }
 
-/** The anchor of a box hung from an expansion's header (a Callers button in the header): its left edge, since the box opens to the left. */
+/**
+ * The anchor of a box hung from an expansion's header (a Callers button in the header): the header's left edge, where the
+ * button is. The box opens to the left only on an in-place chart (see opensLeft); when it opens to the right, reflow
+ * rebuilds the rect from the header's right edge (headerRect with `left` false), so this left edge is just the starting point.
+ */
 export function headerAnchor(parent: Expansion): ExpandAnchor {
   return { kind: "step", fnId: parent.fnId, stepId: HEADER_STEP, rect: headerRect(parent.w, true) };
 }
@@ -116,8 +123,9 @@ export interface Expansion {
    */
   pivot: number;
   /**
-   * "left" when the box opens to the left of its anchor: a callers box, and anything opened from it (a caller's chart, and
-   * what that opens). Absent, the box opens to the right. Set by reflow, from the chain, so it cannot go stale.
+   * "left" when the box opens to the left of its anchor: a callers box on a roots-only card or on an in-place chart's header,
+   * and anything opened from a left box (a caller's chart, and what that opens). Absent, the box opens to the right. Set by
+   * reflow, from the chain, so it cannot go stale.
    */
   side?: "left";
 }

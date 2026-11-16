@@ -1847,7 +1847,7 @@ export function BoxShape({
   card?: boolean;
   /** The card's place in reading order, which sets its pop-in delay (see zoom/pop.ts). */
   rank?: number;
-  /** Opens or closes the callers box of the card's function: a Callers button at its top-right. Absent, no button. */
+  /** Opens or closes the callers box of the card's function: a Callers button at its top-left. Absent, no button. */
   onCallers?: () => void;
   callersOpen?: boolean;
 }) {
@@ -1893,7 +1893,7 @@ export function BoxShape({
     const charPx = Math.max(8, 6.8 * k);
     // The name starts 12 units in (after the chip, when there is one) and keeps 12 clear of the card's right edge.
     const nameIn = (room: number) => fitLabel(shown, Math.max(1, labelChars((rect.w - room) * k, charPx, 20) - 2));
-    const fullName = nameIn(showCallers ? CALLERS_BTN_W + 26 : 24);
+    const fullName = nameIn(showCallers ? CALLERS_BTN_W + 26 : 0);
     const compactCallers = showCallers && (fullName !== shown || k < FULL_K);
     const name = compactCallers ? nameIn(CALLERS_COMPACT_W + 26) : fullName;
     return (

@@ -193,7 +193,8 @@ function NestFrame({ node, onNodeClick, onNodeOpen, onCallers, callersOpen, k, s
         </text>
         <Chevron node={node} x={x + w - CHEV_INSET - CHEV_HIT / 2} y={y} fold onNodeOpen={onNodeOpen} />
         {onCallers !== undefined && node.target !== undefined && (
-          // Left of the name: the callers of the callee this frame nests. Its box opens to the left.
+          // Left of the name: the callers of the callee this frame nests. Its box opens left when the chart replaced its
+          // card in place, and right when the chart opened from a call step (see expand.ts's opensLeft).
           <CallersButton x={labelAt(node)} y={y + (NEST_HEAD - CALLERS_BTN_H) / 2} name={node.label} open={callersOpen} onClick={() => onCallers(node)} k={k} />
         )}
       </g>
