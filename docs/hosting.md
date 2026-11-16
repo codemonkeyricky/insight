@@ -14,9 +14,10 @@ This document is the operator's view.
 ```
 browser ──► arch-insight.vercel.app (static: dist-hosted, VITE_STORAGE_BASE = KV_PUBLIC_BASE/)
    │
-   ├─ POST /api/index ──┐
-   ├─ GET  /api/status ─┼─► Vercel Function (index.func, one function, Node 22, 2 GB, 300 s)
-   ├─ GET  /api/health ─┘      route by ?route= (set by the rewrites in config.json)
+   ├─ POST /api/index ───┐
+   ├─ GET  /api/status ──┤
+   ├─ GET  /api/coupling ┼─► Vercel Function (index.func, one function, Node 22, 2 GB, 300 s)
+   ├─ GET  /api/health ──┘      route by ?route= (set by the rewrites in config.json)
    │                             index: 1. GitHub REST: repo size, ref → commit sha
    │                                    2. status.json (queued) → 202, job continues in the background
    │                                    3. codeload tarball → /tmp/insight/<sha>, extracted under caps
@@ -128,8 +129,15 @@ INSIGHT_STORAGE_DIR=/tmp/insight-storage node scripts/hosted-dev.mjs --port 4330
 open http://127.0.0.1:4330/
 ```
 
-`scripts/hosted-dev.mjs` serves `apps/web/dist-hosted` and runs `/api/index`, `/api/status` and `/api/health` through the
-same handlers the Function uses. Its store follows the same variables: **with the KV variables in the shell, a local run
+`scripts/hosted-dev.mjs` serves `apps/web/dist-hosted` and runs `/api/index`, `/api/status`, `/api/coupling` and
+`/api/health` through the same handlers the Function uses.
+
+`GET /api/coupling?repo=<owner/repo>&sha=<40 hex>[&scope=<file|folder>][&fn=<function id>][&visibility=private]` answers
+the same coupling JSON as the local server's `/api/projects/:id/coupling` and the CLI's `insight coupling --json` (see
+`docs/zoom-map.md`). The folder store must already hold the commit's `graph.json` (the exporter writes it); the local
+server reads snapshots instead. The built index and file list are cached for the last two repo+sha+visibility keys per
+Function instance, so a repeat request does not download the graph again. A report is capped at 200 functions and 100
+entries per class bucket; when the cap cuts anything the JSON carries `"truncated": true`. Its store follows the same variables: **with the KV variables in the shell, a local run
 writes to the real namespace** (every write is logged as `storage write <key>`). Unset them to use the folder in
 `INSIGHT_STORAGE_DIR`, which then also serves `/storage/*` with the sidecar headers. R2 variables are ignored there.
 Indexing needs network access to GitHub.
@@ -332,3 +340,6 @@ Seeding a private repository from a local checkout (the same files, under `priva
   on the first deploy too.
 - The daily counters are a read-modify-write in storage, so concurrent submissions can overshoot the caps slightly.
 - The index job runs in `/tmp` with the function's 2 GB of memory. The watchdog ends a run at 270 s.
+- `/api/coupling` keeps at most two built coupling indexes per Function instance. A cold instance parses `graph.json`
+  again; there is no cross-instance cache. Reports are capped at 200 functions and 100 entries per class, marked with
+  `"truncated": true` when cut. Both are in-process only: no storage or auth semantics change.

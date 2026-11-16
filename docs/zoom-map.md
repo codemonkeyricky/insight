@@ -101,6 +101,48 @@ the URL and the Explorer.
 The work came in three milestones. M1 was the spike that checked the stack. M2 was the scene model. M3 is the
 renderer described below.
 
+## Agent queries
+
+An agent that does not read the chart asks for the same footprint as JSON. `couplingReport` in
+`packages/core/flow/src/coupling-report.ts` builds one report; the CLI, the local server and the hosted Function all
+return it unchanged, so their bytes match.
+
+- CLI: `insight coupling <fn|file|scope> [--path <dir>] [--state <dir>] [--json]`. The selector is a function id or
+  name, a file path, or a folder prefix; `.` is the whole project. A selector that names an indexed file is a file
+  scope, even when the file's top-level flow id is the file path, so the report holds the top-level flow and every
+  function in the file (the same set `?scope=<path>` returns). `--path` is the project folder (default the current
+  directory) and `--state` reads the state folder (default `<path>/.insight`). It reads an existing snapshot and never
+  indexes: without one it prints `no snapshot …; index the project first: insight index <path>` and exits 1. An
+  absolute selector or one with a `..` segment is refused before the snapshot is read. `--json` prints exactly the
+  route's body; the default is a text report grouped by class.
+- HTTP: `GET /api/projects/:id/coupling?scope=<file|folder>[&snapshot=<id>]`, or `&fn=<function id>` for one function
+  (`fn` takes precedence over a valid `scope`). `scope` is normalized and checked as the other scope routes check
+  `path`: a path that leaves the project is a 400, one that names no indexed file is a 404, and a project with no
+  snapshot is a 404. Hosted: `GET /api/coupling?repo=<owner/repo>&sha=<40 hex>[&scope=…][&fn=…]`, with
+  `&visibility=private` for a private index, answered by `apps/hosted/src/coupling.ts` through the same Function as
+  `/api/status`.
+
+  The CLI and both HTTP routes share one normalizer, `normalizeScopeInput` in
+  `packages/core/flow/src/scope-input.ts`: a leading `/` is refused rather than stripped, and a `..` segment is refused,
+  even when `fn=` is present. So `?scope=/apps` and `?scope=../outside` are both 400 locally and hosted. A report is
+  capped at 200 functions and 100 entries per class bucket; when the cap cuts anything the JSON carries
+  `"truncated": true`, so a short report is never mistaken for a complete one.
+
+```json
+{ "functions": [ {
+  "id": "apps/app/src/main.ts#run", "name": "run", "file": "apps/app/src/main.ts", "module": "apps/app",
+  "summary": "⇄ 1 module",
+  "cross":  [ { "label": "local()", "target": "libs/util/src/u.ts#local", "file": "libs/util/src/u.ts", "line": 4 } ],
+  "io": [], "state": [], "conc": [], "escape": []
+} ] }
+```
+
+Every function of the scope is listed, including ones with `"summary": "no coupling"`. `cross` rows name the callee and
+`state` rows the variable; those two carry the target's declaration `file` and 1-based `line` when the IR has a span.
+`io`, `conc` and `escape` rows carry only a `label`, because the footprint records no site for them. `◆ ` in a label
+marks module-private state. Functions are sorted by id and each class by target, label, file and line, so the output is
+stable across runs and record order. There is no IR change: the report is built from `CouplingFootprint` rows.
+
 ## Milestones
 
 ### M1: spike (commits 2cdfe95 and earlier)

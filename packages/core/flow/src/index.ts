@@ -22,9 +22,21 @@ export * from "./runtime-boxes.js";
 export * from "./names.js";
 export * from "./modules.js";
 export * from "./coupling.js";
+export * from "./coupling-report.js";
+export * from "./scope-input.js";
 export * from "./resource-peers.js";
 export * from "./state-writes.js";
 export * from "./unguarded.js";
+
+/** A function of the snapshot as a coupling report names it: its id, display name, and declaration site. */
+export interface CouplingFunction {
+  id: string;
+  name: string;
+  /** The source file, when the IR gives the function a span. A file's top-level flow has no span. */
+  file?: string;
+  /** The 1-based line the function starts on, when it has a span. */
+  line?: number;
+}
 
 /**
  * What the coupling view needs from the whole project: its modules, every function's footprint, the module surface (the
@@ -35,6 +47,8 @@ export interface CouplingIndex {
   footprints: ReadonlyMap<string, CouplingFootprint>;
   surface: ReadonlySet<string>;
   state: StateIndex;
+  /** Every function by id, with the name, file and line a report shows (see `couplingReport`). */
+  functions: ReadonlyMap<string, CouplingFunction>;
   /**
    * The mutable variables written from two or more threads with no lock held in common at every write, and the threads that
    * write them. Built from the same charts as the footprints, so the project execution model is the only extra pass.
@@ -45,7 +59,20 @@ export interface CouplingIndex {
 /** The coupling index of a project's IR records. */
 export function couplingIndex(nodes: readonly IRNode[], edges: readonly IREdge[]): CouplingIndex {
   const { modules, footprints, surface, state, facts } = couplingFacts(nodes, edges);
-  return { modules, footprints, surface, state, unguarded: unguardedStateFromFacts(facts.values(), nodes, edges, state) };
+  const filePaths = new Set<string>();
+  for (const n of nodes) if (n.kind === "structure.file") filePaths.add(String(n.attrs.path ?? n.id));
+  const functions = new Map<string, CouplingFunction>();
+  for (const [id, f] of facts) {
+    // A file's top-level flow has no span; its id is the file path, so it still names its file.
+    const file = f.span?.file ?? (filePaths.has(id) ? id : undefined);
+    functions.set(id, {
+      id,
+      name: f.name,
+      ...(file !== undefined ? { file } : {}),
+      ...(f.span !== undefined ? { line: f.span.start[0] + 1 } : {}),
+    });
+  }
+  return { modules, footprints, surface, state, functions, unguarded: unguardedStateFromFacts(facts.values(), nodes, edges, state) };
 }
 
 /**

@@ -30,6 +30,7 @@
   },
   "dependencies": {
     "@insight/export": "workspace:*",
+    "@insight/flow": "workspace:*",
     "@insight/frontend-bazel": "workspace:*",
     "@insight/frontend-cmake": "workspace:*",
     "@insight/frontend-cpp": "workspace:*",

@@ -27,6 +27,9 @@ importers:
 
   apps/cli:
     dependencies:
+      '@insight/flow':
+        specifier: workspace:*
+        version: link:../../packages/core/flow
       '@insight/indexer':
         specifier: workspace:*
         version: link:../../packages/core/indexer
@@ -51,6 +54,9 @@ importers:
       '@insight/export':
         specifier: workspace:*
         version: link:../export
+      '@insight/flow':
+        specifier: workspace:*
+        version: link:../../packages/core/flow
       '@insight/frontend-bazel':
         specifier: workspace:*
         version: link:../../packages/frontend/bazel
