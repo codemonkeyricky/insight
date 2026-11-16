@@ -527,6 +527,7 @@ export function buildExecScene(model: ExecModel): Scene {
       children: [],
       detail: plural(t.reach, "function"),
       ...(external ? { external: true } : {}),
+      ...(t.unguardedWrites !== undefined && t.unguardedWrites.length > 0 ? { unguarded: [...t.unguardedWrites] } : {}),
     };
     const s = t.spawn;
     if (s !== undefined) {

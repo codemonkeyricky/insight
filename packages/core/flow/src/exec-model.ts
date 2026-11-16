@@ -4,6 +4,7 @@ import { insideScope } from "./scope-map.js";
 import { isNoisePath } from "./scope.js";
 import { factsForFile } from "./build.js";
 import { layoutFunction } from "./layout.js";
+import { stateWriteSites, unguardedFromSites, type StateWriteSite } from "./state-writes.js";
 
 /**
  * The execution model of one scope: the threads its code starts, the functions each thread runs, and the
@@ -124,6 +125,11 @@ export interface ExecThread {
   reach: number;
   /** Those functions, sorted by id. Shorter than `reach` only when the model is truncated. */
   reached: string[];
+  /**
+   * The mutable variables this thread writes that another thread also writes with no lock held in common at every write
+   * (`⚠ unguarded shared state`), as names, sorted. Absent when it writes none. The check is project-wide.
+   */
+  unguardedWrites?: string[];
   coroutines: ExecCoroutine[];
   /**
    * The functions this thread reaches only through its coroutines, sorted by id: `reached` without the functions the
@@ -539,6 +545,8 @@ export interface ExecPlans {
   readonly scriptFiles: ReadonlySet<string>;
   readonly importedFiles: ReadonlySet<string>;
   readonly sites: readonly SiteRecord[];
+  /** Every write of a mutable variable, with the locks held there. See stateWriteSites. */
+  readonly writes: readonly StateWriteSite[];
   readonly bodyOf: (id: string, roots: readonly string[], script: string | undefined) => PlanBody;
   readonly chartOf: (file: string, id: string) => [number, number] | undefined;
 }
@@ -915,6 +923,9 @@ function buildPlans(nodes: readonly IRNode[], edges: readonly IREdge[], fold: bo
     }
   }
 
+  // The state writes, with the locks held at each, for the unguarded shared state check. Empty for a project with no data facet.
+  const writes = stateWriteSites(nodes, edges);
+
   // Chart sizes by file, computed on first use: the chart layout is cheap, but only files with a listed function need it.
   const chartSizes = new Map<string, Map<string, [number, number]>>();
   const chartOf = (file: string, id: string): [number, number] | undefined => {
@@ -946,6 +957,7 @@ function buildPlans(nodes: readonly IRNode[], edges: readonly IREdge[], fold: bo
     scriptFiles,
     importedFiles,
     sites,
+    writes,
     bodyOf,
     chartOf,
   };
@@ -1159,6 +1171,37 @@ function execModelOf(P: ExecPlans, scope: string, opts: ExecModelOptions): ExecM
     return true;
   };
 
+  // Unguarded shared state, over the whole project: the variables two or more of its threads write with no lock held in
+  // common at every write. Thread membership is each plan's full reach, not the scope's cut. Empty without the data facet.
+  const unguardedVars = (() => {
+    if (P.writes.length === 0) return [];
+    const threadOf = new Map<string, string[]>();
+    for (const p of plans) {
+      for (const id of p.reach) {
+        const list = threadOf.get(id);
+        if (list) list.push(p.id);
+        else threadOf.set(id, [p.id]);
+      }
+    }
+    const threadsOfFn = (fn: string): readonly string[] => {
+      let cur = P.foldId(fn);
+      for (let hops = 0; hops <= P.fns.size; hops++) {
+        const hit = threadOf.get(cur);
+        if (hit !== undefined) return hit;
+        const up = P.fns.get(cur)?.parent;
+        if (up === undefined) break;
+        cur = up;
+      }
+      return threadOf.get(`${fn}#(module)`) ?? [];
+    };
+    return [...unguardedFromSites(P.writes, threadsOfFn).variables.values()];
+  })();
+  const unguardedWritesOf = (threadId: string): string[] =>
+    unguardedVars
+      .filter((v) => v.threads.includes(threadId))
+      .map((v) => v.name)
+      .sort(byText);
+
   // The scope's view of each shown thread. Membership and grounding are the whole project's (the plans above); what is
   // listed is only the in-scope functions the thread runs. Its roots are its in-scope roots, plus the in-scope functions
   // it runs that only out-of-scope code starts, so no out-of-scope function is a card or counted in a frame.
@@ -1181,6 +1224,7 @@ function execModelOf(P: ExecPlans, scope: string, opts: ExecModelOptions): ExecM
     }
     // A main thread is grounded when a root is a program's main, a function named `main`, or a module entry; a spawn always is.
     const grounded = p.kind !== "main" || p.roots.some((r) => programMains.has(r) || fns.get(r)?.name === "main" || fns.get(r)?.module === true);
+    const unguardedWrites = unguardedWritesOf(p.id);
     return {
       id: p.id,
       kind: p.kind,
@@ -1189,6 +1233,7 @@ function execModelOf(P: ExecPlans, scope: string, opts: ExecModelOptions): ExecM
       roots,
       reach: reachIn.length,
       reached,
+      ...(unguardedWrites.length > 0 ? { unguardedWrites } : {}),
       coroutines,
       coroutineOnly,
     };
