@@ -3,8 +3,8 @@
 //
 //   <outDir>/.vercel/output/config.json                version 3: files first, then the API rewrites, then /index.html
 //   <outDir>/.vercel/output/static/                    the hosted web build (VITE_STORAGE_BASE = KV_PUBLIC_BASE/)
-//   <outDir>/.vercel/output/functions/api/index.func   one Function: POST /api/index, GET /api/status, GET /api/health,
-//                                                      /api/auth/*, /api/private/* (self-contained Node bundle; the route comes from ?route=)
+//   <outDir>/.vercel/output/functions/api/index.func   one Function: POST /api/index, GET /api/status, GET /api/coupling,
+//                                                      GET /api/health, /api/auth/*, /api/private/* (self-contained Node bundle; the route comes from ?route=)
 //
 // The Function holds node_modules from `pnpm deploy --prod` (hoisted linker, so no symlinks), the hosted dist, the built-in
 // plugins under packages/ (frontends and lenses; cmake is packages/frontend/cmake), and a pnpm-workspace.yaml marker at its root. Core finds built-in plugins by walking
@@ -28,6 +28,7 @@ const FUNCTIONS = [{ dir: "functions/api/index.func" }];
 const API_ROUTES = [
   { src: "/api/index", route: "index" },
   { src: "/api/status", route: "status" },
+  { src: "/api/coupling", route: "coupling" },
   { src: "/api/health", route: "health" },
   { src: "/api/auth/login", route: "auth-login" },
   { src: "/api/auth/callback", route: "auth-callback" },
