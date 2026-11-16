@@ -68,6 +68,8 @@ export interface FlowNode {
   hidden?: true;
   /** A state row (coupling view only): global state, visible from every module. */
   global?: true;
+  /** A state write (coupling view only): the variable is also written from another thread with no lock held in common. */
+  unguarded?: true;
   /** Absolute lane of the node's station (line map layout). */
   lane?: number;
   /** Absolute x where the label text starts. */

@@ -54,6 +54,8 @@ interface Ctx {
   onSurface: boolean;
   /** Branches and loops kept because their condition reads a tainted local, with the reads that are tainted. */
   taint?: ReadonlyMap<Item, string[]>;
+  /** The variables written from two or more threads with no common lock at every write. */
+  unguarded?: ReadonlySet<string>;
 }
 
 /** How a state row classifies: whether it is kept, and its flags. */
@@ -276,6 +278,7 @@ function keepItem(item: Item, caught: boolean, ctx: Ctx, st: { next: number }): 
           ...(cls.write ? { write: true as const } : {}),
           ...(cls.hidden ? { hidden: true as const } : {}),
           ...(cls.global ? { global: true as const } : {}),
+          ...(ctx.unguarded?.has(item.state.variable) ? { unguarded: true as const } : {}),
         };
       }
       const info = stepInfo(item, caught, ctx);
@@ -568,10 +571,11 @@ export function couplingChart(
   modules: ModuleMap,
   footprints: ReadonlyMap<string, CouplingFootprint>,
   surface?: ReadonlySet<string>,
+  unguarded?: ReadonlySet<string>,
 ): { items: Item[]; info: CouplingInfo } {
   const M = modules.moduleOf(fnId);
   const fp = footprints.get(fnId) ?? { entries: [], modules: [], escape: false, state: { writes: 0, reads: 0, hidden: false } };
-  const ctx: Ctx = { M, modules, footprints, onSurface: surface === undefined || surface.has(fnId) };
+  const ctx: Ctx = { M, modules, footprints, onSurface: surface === undefined || surface.has(fnId), ...(unguarded !== undefined ? { unguarded } : {}) };
   ctx.taint = taintedControlsOf(items, false, ctx);
   const out = prune(items, false, ctx, { next: 0 });
   return { items: out, info: { module: M ?? ".", footprint: fp, summary: footprintSummary(fp) } };
