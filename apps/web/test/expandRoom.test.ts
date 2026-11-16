@@ -1,6 +1,6 @@
 // Opened expansions keep their room in the layout: no expansion overlaps a card, another expansion, or a frame's edge.
 import { describe, expect, it } from "vitest";
-import { gridRootsLayout, placeSceneLayout, runtimeOpen, runtimeRootsLayout, type FunctionFlow, type Rect, type Scene, type SceneNode } from "@insight/flow";
+import { gridRootsLayout, placeSceneLayout, type FunctionFlow, type Rect, type Scene, type SceneNode } from "@insight/flow";
 import { type Expansion, type ExpandAnchor, footprintOf, openExpansion, refresh } from "../src/zoom/expand.js";
 
 const chart = (id: string, width: number, height: number) => ({ id, name: id, width, height, nodes: [], edges: [] }) as unknown as FunctionFlow;
@@ -13,10 +13,12 @@ function sceneOf(threads: Record<string, string[]>): Scene {
   const nodes = new Map<string, SceneNode>();
   const root = "root";
   const procChildren: string[] = [];
-  for (const [t, cards] of Object.entries(threads)) {
-    procChildren.push(t);
-    nodes.set(t, node(t, "thread", `Worker · ${t}`, root, cards));
-    for (const c of cards) nodes.set(c, node(c, "function", c.toUpperCase(), t, []));
+  // The grid is flat: every card sits directly on the project.
+  for (const cards of Object.values(threads)) {
+    for (const c of cards) {
+      procChildren.push(c);
+      nodes.set(c, node(c, "function", c.toUpperCase(), root, []));
+    }
   }
   nodes.set(root, node(root, "project", "root", undefined, procChildren));
   return { root, nodes, edges: [], levels: {} } as unknown as Scene;
@@ -27,26 +29,23 @@ function overlaps(a: Rect, b: Rect): boolean {
   return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 }
 
-function place(scene: Scene, opened: readonly Expansion[], runtime: boolean) {
-  const fp = footprintOf(opened);
-  const layout = runtime ? runtimeRootsLayout(scene, fp) : gridRootsLayout(scene, fp);
-  const open = runtime ? runtimeOpen(scene) : new Set([scene.root]);
-  return placeSceneLayout(scene, layout, open);
+function place(scene: Scene, opened: readonly Expansion[]) {
+  return placeSceneLayout(scene, gridRootsLayout(scene, footprintOf(opened)), new Set([scene.root]));
 }
 
 /** Opens each root's expansion in turn, placing every expansion on the layout the open ones keep. */
-function openRoots(scene: Scene, runtime: boolean, roots: { fn: string; w: number; h: number }[]) {
+function openRoots(scene: Scene, roots: { fn: string; w: number; h: number }[]) {
   let list: Expansion[] = [];
   for (const r of roots) {
-    const rect = place(scene, list, runtime).rects.get(r.fn) as Rect;
+    const rect = place(scene, list).rects.get(r.fn) as Rect;
     list = openExpansion(list, r.fn, { kind: "box", nodeId: r.fn, rect } as ExpandAnchor, chart(r.fn, r.w, r.h), undefined);
   }
-  const placed = place(scene, list, runtime);
+  const placed = place(scene, list);
   return { list: refresh(list, (id) => placed.rects.get(id), undefined), placed };
 }
 
-function assertNoOverlap(scene: Scene, runtime: boolean, roots: { fn: string; w: number; h: number }[]) {
-  const { list, placed } = openRoots(scene, runtime, roots);
+function assertNoOverlap(scene: Scene, roots: { fn: string; w: number; h: number }[]) {
+  const { list, placed } = openRoots(scene, roots);
   const boxes: [string, Rect][] = [];
   for (const [id, r] of placed.rects) if (scene.nodes.get(id)?.kind === "function") boxes.push([id, r]);
   const exps: [string, Rect][] = list.map((e) => [`exp:${e.fnId}`, { x: e.x, y: e.y, w: e.w, h: e.h }]);
@@ -65,7 +64,7 @@ function assertNoOverlap(scene: Scene, runtime: boolean, roots: { fn: string; w:
 describe("expansions keep their room", () => {
   it("two opened roots in the same thread do not overlap", () => {
     const scene = sceneOf({ t1: ["alpha", "beta", "gamma"] });
-    assertNoOverlap(scene, true, [
+    assertNoOverlap(scene, [
       { fn: "alpha", w: 420, h: 300 },
       { fn: "beta", w: 380, h: 260 },
     ]);
@@ -73,7 +72,7 @@ describe("expansions keep their room", () => {
 
   it("two opened roots in different threads do not overlap", () => {
     const scene = sceneOf({ t1: ["alpha", "beta"], t2: ["gamma"] });
-    assertNoOverlap(scene, true, [
+    assertNoOverlap(scene, [
       { fn: "alpha", w: 420, h: 300 },
       { fn: "gamma", w: 380, h: 260 },
     ]);
@@ -84,7 +83,7 @@ describe("expansions keep their room", () => {
     for (const c of ["alpha", "beta", "gamma"]) nodes.set(c, node(c, "function", c.toUpperCase(), "root", []));
     nodes.set("root", node("root", "project", "root", undefined, ["alpha", "beta", "gamma"]));
     const scene = { root: "root", nodes, edges: [], levels: {} } as unknown as Scene;
-    assertNoOverlap(scene, false, [
+    assertNoOverlap(scene, [
       { fn: "alpha", w: 420, h: 300 },
       { fn: "beta", w: 380, h: 260 },
     ]);

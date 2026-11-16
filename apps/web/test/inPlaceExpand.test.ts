@@ -1,7 +1,7 @@
 // A roots-only card expands in place: the expansion takes the card's own slot, the layout reflows around it, and the
 // calls inside keep the inline behaviour (same-thread nests, thread/process hops open a side box).
 import { describe, expect, it } from "vitest";
-import { gridRootsLayout, layoutFunction, placeSceneLayout, runtimeOpen, runtimeRootsLayout, type FunctionFlow, type Rect, type Scene, type SceneNode } from "@insight/flow";
+import { gridRootsLayout, layoutFunction, placeSceneLayout, type FunctionFlow, type Rect, type Scene, type SceneNode } from "@insight/flow";
 import { calloutOf, closeExpansion, footprintOf, isInPlace, openExpansion, refresh, setInline, type Expansion, type ExpandAnchor } from "../src/zoom/expand.js";
 
 const call = (label: string, target?: string, role: "call" | "spawn" = "call") => ({ t: "step" as const, role, label, ...(target ? { target } : {}) });
@@ -11,15 +11,14 @@ const node = (id: string, kind: string, label: string, parent: string | undefine
 
 function sceneOf(threads: Record<string, string[]>): Scene {
   const nodes = new Map<string, SceneNode>();
-  for (const [t, cards] of Object.entries(threads)) {
-    nodes.set(t, node(t, "thread", t, "root", cards));
-    for (const c of cards) nodes.set(c, node(c, "function", c, t, []));
-  }
-  nodes.set("root", node("root", "project", "root", undefined, Object.keys(threads)));
+  // The grid is flat: every card sits directly on the project.
+  const cards = Object.values(threads).flat();
+  for (const c of cards) nodes.set(c, node(c, "function", c, "root", []));
+  nodes.set("root", node("root", "project", "root", undefined, cards));
   return { root: "root", nodes, edges: [], levels: {} } as unknown as Scene;
 }
 const overlaps = (a: Rect, b: Rect) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
-const placeOf = (scene: Scene, list: readonly Expansion[]) => placeSceneLayout(scene, runtimeRootsLayout(scene, footprintOf(list)), runtimeOpen(scene));
+const placeOf = (scene: Scene, list: readonly Expansion[]) => placeSceneLayout(scene, gridRootsLayout(scene, footprintOf(list)), new Set([scene.root]));
 const inPlace = (rect: Rect, nodeId: string): ExpandAnchor => ({ kind: "box", nodeId, rect, inPlace: true });
 
 describe("in-place root expansion", () => {

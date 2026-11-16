@@ -1,5 +1,3 @@
-import type { ReactNode } from "react";
-
 /** What the map shows: the frames, the call edges, and the findings layer (clouds and markers). */
 export interface LayerState {
   frames: boolean;
@@ -9,8 +7,6 @@ export interface LayerState {
   lambdas: boolean;
   /** The charts' motion: edges march in their direction, and a loop's back-edge carries a pulse. On by default. */
   motion: boolean;
-  /** The roots-only view's runtime boxes: process and thread frames around the roots. On by default. */
-  runtime: boolean;
   /** Detail: the coupling chart of each function (on by default), or the full control-flow chart (off). Off while the inter-module focus is on. */
   coupling: boolean;
   /** Inter-module calls only: each chart keeps its calls to exported functions of other files, and drops kernel and env effects. On by default. */
@@ -23,12 +19,10 @@ interface Props {
   findingCount?: number;
   onChange: (key: keyof LayerState, on: boolean) => void;
   onClose: () => void;
-  /** The roots-only switch. On a phone the switch lives here, since the map has no room for it. */
-  roots?: ReactNode;
 }
 
 /** The small card over the flow map's left edge: what the map draws, and the keys. The pages and lenses are the tabs. */
-export function LayersPanel({ shown, findingCount, onChange, onClose, roots }: Props) {
+export function LayersPanel({ shown, findingCount, onChange, onClose }: Props) {
   return (
     <section className="sh-card sh-layers" aria-label="Show on the map">
       <header className="sh-card-head">
@@ -61,9 +55,6 @@ export function LayersPanel({ shown, findingCount, onChange, onClose, roots }: P
         <input type="checkbox" checked={shown.motion} onChange={(e) => onChange("motion", e.target.checked)} /> Flow motion
       </label>
       <label className="sh-check">
-        <input type="checkbox" checked={shown.runtime} onChange={(e) => onChange("runtime", e.target.checked)} /> Runtime boxes
-      </label>
-      <label className="sh-check">
         <input type="checkbox" checked={shown.intermodule} onChange={(e) => onChange("intermodule", e.target.checked)} /> Inter-module calls only
       </label>
       <p className="muted">Hides file/OS/env access, try frames, and calls to functions that are not exported from another file. Empty branches and loops are pruned.</p>
@@ -86,7 +77,6 @@ export function LayersPanel({ shown, findingCount, onChange, onClose, roots }: P
         <div><span className="cp-key cp-fold" /> ⋯ n local (open to show)</div>
         <p className="muted">Throw statements only; promise rejections are not modelled.</p>
       </div>
-      {roots !== undefined && <div className="sh-layers-roots">{roots}</div>}
       <details className="sh-keys">
         <summary>? Keyboard and mouse</summary>
         <ul>

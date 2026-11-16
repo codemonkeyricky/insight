@@ -1,7 +1,6 @@
 import { readLambdas, writeLambdas } from "../../zoom/lambdaPref";
 import { readDetail, readFlowFocus, writeDetail, writeFlowFocus, type FlowFocus } from "../../zoom/detailPref";
 import { readFlowMotion, writeFlowMotion } from "../../zoom/flowMotionPref";
-import { readRuntimeBoxes, writeRuntimeBoxes } from "../../zoom/runtimePref";
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { api, type FileEntry, type FindingRow } from "../../api";
@@ -25,7 +24,7 @@ interface Props {
   files: FileEntry[];
   scope: string;
   fn?: string;
-  /** The canvas shows only the functions each thread starts in. */
+  /** The `roots` URL flag. The canvas is always the flat grid now; the flag only rides in the links the function panel writes. */
   roots: boolean;
   /** The workspace's flow store: the charts the map and the code pane read. */
   store: ZoomStore;
@@ -53,10 +52,10 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
   const { showCode } = useCodeTarget();
   const kind = scopeKind(scope, files);
   /** What the map shows: frames and calls on by default, findings off until the reader turns the layer on, lambdas off (folded). */
-  const [shown, setShown] = useState<LayerState>(() => ({ frames: true, calls: true, findings: findingKind !== undefined, lambdas: readLambdas(), motion: readFlowMotion(), runtime: readRuntimeBoxes(), coupling: readDetail() === "coupling", intermodule: readFlowFocus() === "intermodule" }));
+  const [shown, setShown] = useState<LayerState>(() => ({ frames: true, calls: true, findings: findingKind !== undefined, lambdas: readLambdas(), motion: readFlowMotion(), coupling: readDetail() === "coupling", intermodule: readFlowFocus() === "intermodule" }));
   /** The flow focus the charts are read under: the inter-module focus, or the full chart. */
   const flowFocus: FlowFocus = shown.intermodule ? "intermodule" : "all";
-  const exec = useMemo(() => new ExecStore(id, roots, shown.lambdas, shown.runtime, flowFocus), [id, roots, shown.lambdas, shown.runtime, flowFocus]);
+  const exec = useMemo(() => new ExecStore(id, shown.lambdas, flowFocus), [id, shown.lambdas, flowFocus]);
   // A "Show in Flow" link for a kind turns the findings layer on, even when the flow is already open.
   useEffect(() => {
     if (findingKind !== undefined) setShown((s) => (s.findings ? s : { ...s, findings: true }));
@@ -115,7 +114,7 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
       <div className="sh-sheet">
         <div className="sh-canvas">
           <ZoomMap
-            key={`${roots ? "roots" : "all"}-${shown.lambdas ? "lambdas" : "folded"}-${shown.runtime ? "runtime" : "flat"}-${shown.coupling ? "coupling" : "full"}-${flowFocus}`}
+            key={`${shown.lambdas ? "lambdas" : "folded"}-${shown.coupling ? "coupling" : "full"}-${flowFocus}`}
             id={id}
             source={exec}
             scope={scope}
@@ -124,7 +123,7 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
             onSelect={setSel}
             onFocus={setFocus}
             hint={false}
-            flat={roots}
+            flat
             motion={shown.motion}
             bottomInset={bottomInset}
             leftInset={leftInset}
@@ -158,10 +157,8 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
               }
               if (key === "lambdas") writeLambdas(on);
               if (key === "motion") writeFlowMotion(on);
-              if (key === "runtime") writeRuntimeBoxes(on);
             }}
             onClose={() => setLayersOpen(false)}
-            roots={<RootsOnly id={id} scope={scope} fn={fn} roots={roots} />}
           />
         ) : (
           <button type="button" className="sh-card sh-layers-open" onClick={() => setLayersOpen(true)}>
@@ -176,21 +173,5 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
         />
       </div>
     </>
-  );
-}
-
-/** The roots-only switch in the Show menu. Turning it on or off changes the URL, and the canvas follows the URL. */
-function RootsOnly({ id, scope, fn, roots }: { id: string; scope: string; fn?: string; roots: boolean }) {
-  return (
-    <label className="sh-check">
-      <input
-        type="checkbox"
-        checked={roots}
-        onChange={(e) => {
-          window.location.hash = hrefView(id, "flow", { scope, ...(fn ? { fn } : {}), roots: e.target.checked });
-        }}
-      />{" "}
-      Roots only
-    </label>
   );
 }

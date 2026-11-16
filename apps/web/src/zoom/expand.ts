@@ -646,7 +646,7 @@ export interface RootRoom {
  * The room the open expansions take around each box they hang from, in world units: to the left of the box's left edge (a
  * callers box and what hangs from it), to the right of its right edge (charts), and below its top. It is computed from
  * the charts' sizes and the step anchors alone, so it does not depend on where anything is placed. The layout keeps this
- * room clear (see runtimeRootsLayout), so an opened box never overlaps its neighbours.
+ * room clear (see gridRootsLayout), so an opened box never overlaps its neighbours.
  */
 export function footprintOf(list: readonly Expansion[]): Map<string, RootRoom> {
   const byFn = new Map(list.map((e) => [e.fnId, e] as const));
