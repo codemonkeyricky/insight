@@ -100,9 +100,9 @@ describe("object-literal functions bound to a name", () => {
     expect(callFrom(edges, "src/props.ts#run", "o.go")).toBeUndefined();
   });
 
-  it("makes no reference edges to named properties, so only the inline lambda has a closure edge", async () => {
+  it("gives closure edges to the inline lambda and to the named property made inside a function, and none to top-level properties", async () => {
     const { edges } = await extract();
-    expect(pairs(edges, "calls.reference")).toEqual(["src/props.ts#(module) -> src/props.ts#λ28:33"]);
+    expect(pairs(edges, "calls.reference")).toEqual(["src/props.ts#(module) -> src/props.ts#λ28:33", "src/props.ts#make -> src/props.ts#make.local.go"]);
   });
 });
 
