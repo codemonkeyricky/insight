@@ -1,0 +1,13 @@
+{
+  "name": "fixture-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vite": "7.1.0"
+  }
+}
