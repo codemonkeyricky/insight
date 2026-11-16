@@ -10,9 +10,9 @@ import type { Site } from "./system.js";
 export const MIN_STAGES = 4;
 export const MIN_STAGE_FILES = 2;
 /** A stage makes at least this many distinct exact call targets, so a leaf helper never counts as a stage. */
-const STAGE_TARGETS_MIN = 2;
+export const STAGE_TARGETS_MIN = 2;
 /** A stage with more distinct folded callers than this is a shared utility, not a step of one run. */
-const FAN_IN_MAX = 25;
+export const FAN_IN_MAX = 25;
 /** Stages kept per sequence. The `more` count covers the rest. */
 const STAGE_CAP = 16;
 /** Sequences kept per scope. */
@@ -49,28 +49,22 @@ export function enclosingFn(model: ProjectModel, id: NodeId): NodeId | undefined
   return model.functionById.has(cur) ? cur : undefined;
 }
 
+/** Whether a function is a React-style component: rendered through a jsx edge, or a capitalised name in a .tsx/.jsx file. */
+export function isComponentFn(model: ProjectModel, fn: FunctionEntity): boolean {
+  const rendered = [...(model.out.get(fn.id) ?? []), ...(model.in.get(fn.id) ?? [])].some((r) => r.how === "jsx");
+  if (rendered) return true;
+  return /\.(tsx|jsx)$/.test(fn.file) && /^[A-Z]/.test(fn.name);
+}
+
 /**
- * The sequences of one scope, best first. `compOf` gives a file's System component (undefined when the file is out of scope
- * or dropped), and `tests` says whether noise folders count. Orchestrators are in-scope, named, non-module functions that are
- * not React components. Stages are in-scope functions in other files.
+ * The exact calls of the model by their folded caller, the folded callers of each callee, and the distinct exact targets of
+ * each folded caller (a callee's own targets are its `targetCount`). Candidate calls are not counted.
  */
-export function sequencePipelines(
-  model: ProjectModel,
-  compOf: (file: string | undefined) => string | undefined,
-  tests: boolean,
-): PipelineSequence[] {
-  const inScope = (file: string | undefined): boolean => file !== undefined && compOf(file) !== undefined && (tests || !isNoisePath(file));
-
-  const isModuleEntry = (id: NodeId): boolean => model.byId.get(id)?.attrs.module === true;
-  const isStage = (fn: FunctionEntity): boolean => !fn.anonymous && !isModuleEntry(fn.id) && inScope(fn.file);
-
-  const isComponent = (fn: FunctionEntity): boolean => {
-    const rendered = [...(model.out.get(fn.id) ?? []), ...(model.in.get(fn.id) ?? [])].some((r) => r.how === "jsx");
-    if (rendered) return true;
-    return /\.(tsx|jsx)$/.test(fn.file) && /^[A-Z]/.test(fn.name);
-  };
-
-  // Exact calls by their folded caller, and the folded callers of each callee.
+export function foldedCalls(model: ProjectModel): {
+  callsBy: Map<NodeId, Rel[]>;
+  callersOf: Map<NodeId, Set<NodeId>>;
+  targetCount: Map<NodeId, number>;
+} {
   const callsBy = new Map<NodeId, Rel[]>();
   const callersOf = new Map<NodeId, Set<NodeId>>();
   for (const rel of model.relations) {
@@ -87,6 +81,27 @@ export function sequencePipelines(
   // A stage must call STAGE_TARGETS_MIN distinct functions besides itself: counted once per function, not per orchestrator.
   const targetCount = new Map<NodeId, number>();
   for (const [caller, rels] of callsBy) targetCount.set(caller, new Set(rels.map((r) => r.to).filter((t) => t !== caller)).size);
+  return { callsBy, callersOf, targetCount };
+}
+
+/**
+ * The sequences of one scope, best first. `compOf` gives a file's System component (undefined when the file is out of scope
+ * or dropped), and `tests` says whether noise folders count. Orchestrators are in-scope, named, non-module functions that are
+ * not React components. Stages are in-scope functions in other files.
+ */
+export function sequencePipelines(
+  model: ProjectModel,
+  compOf: (file: string | undefined) => string | undefined,
+  tests: boolean,
+): PipelineSequence[] {
+  const inScope = (file: string | undefined): boolean => file !== undefined && compOf(file) !== undefined && (tests || !isNoisePath(file));
+
+  const isModuleEntry = (id: NodeId): boolean => model.byId.get(id)?.attrs.module === true;
+  const isStage = (fn: FunctionEntity): boolean => !fn.anonymous && !isModuleEntry(fn.id) && inScope(fn.file);
+
+  const isComponent = (fn: FunctionEntity): boolean => isComponentFn(model, fn);
+
+  const { callsBy, callersOf, targetCount } = foldedCalls(model);
 
   const candidates: Array<{ seq: PipelineSequence; score: number }> = [];
   for (const fn of model.functions) {
@@ -146,21 +161,22 @@ export function sequencePipelines(
     .map((c) => c.seq);
 }
 
-type Pos = readonly [number, number];
+export type Pos = readonly [number, number];
 /** Where a call sorts: the end of the orchestrator's own call it runs under (`at`), then its own end inside that (`sub`). */
-type OrderKey = { at: Pos; sub: Pos };
+export type OrderKey = { at: Pos; sub: Pos };
 const LAST: Pos = [Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER];
-const NONE: Pos = [-1, -1];
+/** A position before every other one: the `sub` of a key that is not inside another call. */
+export const NONE: Pos = [-1, -1];
 
-const cmpPos = (a: Pos, b: Pos): number => a[0] - b[0] || a[1] - b[1];
-const cmpKey = (a: OrderKey, b: OrderKey): number => cmpPos(a.at, b.at) || cmpPos(a.sub, b.sub);
+export const cmpPos = (a: Pos, b: Pos): number => a[0] - b[0] || a[1] - b[1];
+export const cmpKey = (a: OrderKey, b: OrderKey): number => cmpPos(a.at, b.at) || cmpPos(a.sub, b.sub);
 
 /**
  * The position a call finishes at, as [line, column]. The frontend records the whole call expression's end as `callEnd`,
  * because the span covers only the callee name, which would put `f(g(x))` the wrong way round. Without it, the span's end
  * is used. A call with neither sorts last.
  */
-function callEnd(rel: Rel): Pos {
+export function callEnd(rel: Rel): Pos {
   const end = rel.edge.attrs?.callEnd;
   if (Array.isArray(end) && typeof end[0] === "number" && typeof end[1] === "number") return [end[0], end[1]];
   const span: Span | undefined = rel.edge.span;
@@ -172,7 +188,7 @@ function callEnd(rel: Rel): Pos {
  * anonymous callback of `fn` sorts right after the call of `fn` that the callback is passed to, so `s1(x, () => s2())` puts
  * s1 first: the callback runs once s1 has started. A callback that is not inside one of `fn`'s calls keeps its own end.
  */
-function orderKeys(model: ProjectModel, fn: FunctionEntity, own: Rel[]): (rel: Rel) => OrderKey {
+export function orderKeys(model: ProjectModel, fn: FunctionEntity, own: Rel[]): (rel: Rel) => OrderKey {
   const direct = own.filter((r) => r.from === fn.id && r.edge.span !== undefined);
   return (rel) => {
     const end = callEnd(rel);

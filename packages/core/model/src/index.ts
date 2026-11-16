@@ -50,3 +50,4 @@ export {
 } from "./arch/arch.js";
 export { pipelineModel, type PipelineEdge, type PipelineModel, type PipelineOptions, type PipelinePoint } from "./pipeline.js";
 export { MIN_STAGES, sequencePipelines, type PipelineSequence, type PipelineStage } from "./sequence.js";
+export { stageDrivers, stageGraph, type DataEdge, type StageDriver, type StageGraph, type StageNode } from "./stages.js";
