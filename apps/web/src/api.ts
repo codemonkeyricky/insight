@@ -1,8 +1,8 @@
 import type { ExecFunctionRef, ExecModel, FileFlow, FileFlowSummary, SceneLayout, ScopeFlow } from "@insight/flow";
 import type { ArchModel, CallerOptions } from "@insight/model";
 import { ApiError } from "./apiError";
-import type { PipelineModel, SerializedModel, SystemModel } from "@insight/model";
-import { callerGraphFor, pipelineFor, refsFor, scopeCallersFor, scopeExecFor, scopeFlowFor, systemFor, type CallerGraphPayload, type ScopeRefsPayload } from "./model/payloads";
+import type { PipelineModel, SerializedModel, SystemModel, TierModel } from "@insight/model";
+import { callerGraphFor, pipelineFor, refsFor, scopeCallersFor, scopeExecFor, scopeFlowFor, systemFor, tiersFor, type CallerGraphPayload, type ScopeRefsPayload } from "./model/payloads";
 import { models } from "./model/store";
 import { staticApi } from "./staticApi";
 import { hostedApi } from "./hostedApi";
@@ -515,6 +515,8 @@ const liveApi = {
   // The Pipeline view of a scope, computed from the project model (no request), like getSystem.
   getPipeline: (id: string, scope: string, opts: { tests?: boolean } = {}): Promise<PipelineModel> =>
     liveModel(id).then(({ model }) => pipelineFor(model, scope, opts.tests === true)),
+  // The Tiers view of a scope (frontend, backend, storage, external), computed from the project model (no request).
+  getTiers: (id: string, scope: string, tests = false): Promise<TierModel> => liveModel(id).then(({ model }) => tiersFor(model, scope, tests)),
   // The server adds scope, snapshot and kind to the model; the page does not use them. The model covers the whole project.
   getScopeArch: (id: string, scope: string) => call<ArchModel>("GET", `/api/projects/${id}/scope/arch?path=${encodeURIComponent(scope)}`),
   // The server lays the execution scene out whole and keeps it per snapshot. Any failure, a 404 included, gives undefined,

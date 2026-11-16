@@ -250,9 +250,15 @@ const SOLID_VERBS: ReadonlySet<SystemEdge["verb"]> = new Set(["produces", "feeds
 
 /** Options of the layout: the column titles (one per column, left to right) and a note drawn as a chip on a component's card. */
 export interface LayoutOptions {
-  /** Without titles the first column is "Entry" and the rest have none. */
+  /** Without titles the first column is "Entry" and the rest have none. Titles are per stage, so an empty stage keeps its place. */
   titles?: readonly string[];
   notes?: ReadonlyMap<string, string>;
+  /** The outside systems, one column per entry, left to right. An outside system goes in the first column that names its category, else the last. Absent: one "Outside" column. */
+  externalColumns?: { title: string; categories: string[] }[];
+  /** The line under a component's name, by component id. Absent: its file and function counts. */
+  subs?: ReadonlyMap<string, string>;
+  /** Keep a last column of components nothing connects to, instead of folding it into the column before (the Pipeline and System default). */
+  keepStages?: boolean;
 }
 
 /** The geometry of one System model. The Pipeline view passes its column titles and host notes through `opts`. */
@@ -276,19 +282,27 @@ export function layoutSystem(sys: SystemModel, opts: LayoutOptions = {}): SysLay
   const top = SYS_PAD + SYS_HEADER_H;
 
   // Component columns, one per stage. Stages with no known component (never from the model) are skipped.
-  const stages = sys.stages.map((s) => s.filter((id) => compById.has(id))).filter((s) => s.length > 0);
+  // Each stage keeps the index it had in the model, so its title stays with it when an empty stage is dropped (-1: no title).
+  const kept = sys.stages.map((s, idx) => ({ idx, ids: s.filter((id) => compById.has(id)) })).filter((s) => s.ids.length > 0);
+  const stages = kept.map((s) => s.ids);
+  const stageIdx = kept.map((s) => s.idx);
   const placed = new Set(stages.flat());
   const stray = sys.components.filter((c) => !placed.has(c.id)).map((c) => c.id);
-  if (stray.length > 0) stages.push(stray);
+  if (stray.length > 0) {
+    stages.push(stray);
+    stageIdx.push(-1);
+  }
   // A last column of components nothing connects to is folded into the column before it, so it does not cost a column of width.
   const linked = new Set(sys.edges.filter((e) => e.from !== e.to).flatMap((e) => [e.from, e.to]));
-  while (stages.length > 1 && (stages[stages.length - 1] as string[]).every((id) => !linked.has(id))) {
+  while (opts.keepStages !== true && stages.length > 1 && (stages[stages.length - 1] as string[]).every((id) => !linked.has(id))) {
     const last = stages.pop() as string[];
+    stageIdx.pop();
     (stages[stages.length - 1] as string[]).push(...last);
   }
   const stacks: Array<{ column: number; items: SysBox[]; headers: Array<{ category: SystemExternal["category"]; before: number }> }> = [];
   stages.forEach((stage, i) => {
-    columns.push({ index: i, title: opts.titles?.[i] ?? (i === 0 ? "Entry" : ""), x, w: SYS_CARD_W });
+    const titleAt = stageIdx[i] as number;
+    columns.push({ index: i, title: (titleAt >= 0 ? opts.titles?.[titleAt] : undefined) ?? (i === 0 ? "Entry" : ""), x, w: SYS_CARD_W });
     const items = stage.map((id): SysBox => {
       const c = compById.get(id) as SystemComponent;
       const routes = routesBy.get(id) ?? [];
@@ -305,7 +319,7 @@ export function layoutSystem(sys: SystemModel, opts: LayoutOptions = {}): SysLay
         w: SYS_CARD_W,
         h: SYS_COMP_H + chips.length * SYS_CHIP_H,
         title: cardTitle(c, base),
-        sub: `${plural(c.files, "file")} · ${plural(c.functions, "function")}`,
+        sub: opts.subs?.get(id) ?? `${plural(c.files, "file")} · ${plural(c.functions, "function")}`,
         chips,
         component: c,
       };
@@ -314,14 +328,23 @@ export function layoutSystem(sys: SystemModel, opts: LayoutOptions = {}): SysLay
     x += SYS_CARD_W + SYS_GAP_X;
   });
 
-  // The external systems: one column, grouped by category with a small header per group.
-  if (sys.externals.length > 0) {
+  // The external systems: one column (or one per entry of opts.externalColumns), grouped by category with a small header per group.
+  const extColumns = opts.externalColumns ?? [{ title: "Outside", categories: [...CATEGORY_ORDER] }];
+  const columnOf = (e: SystemExternal): number => {
+    const i = extColumns.findIndex((c) => c.categories.includes(e.category));
+    return i === -1 ? extColumns.length - 1 : i;
+  };
+  extColumns.forEach((ext, ci) => {
+    const members = sys.externals.filter((e) => columnOf(e) === ci);
+    if (members.length === 0) return;
     const col = columns.length;
-    columns.push({ index: col, title: "Outside", x, w: SYS_EXT_W });
+    columns.push({ index: col, title: ext.title, x, w: SYS_EXT_W });
     const items: SysBox[] = [];
     const headers: Array<{ category: SystemExternal["category"]; before: number }> = [];
-    for (const category of CATEGORY_ORDER) {
-      const list = sys.externals.filter((e) => e.category === category);
+    // Categories in the order the column names them, then the rest in the default order.
+    const order = [...new Set([...ext.categories, ...CATEGORY_ORDER])] as SystemExternal["category"][];
+    for (const category of order) {
+      const list = members.filter((e) => e.category === category);
       if (list.length === 0) continue;
       headers.push({ category, before: items.length });
       for (const e of list) {
@@ -343,7 +366,7 @@ export function layoutSystem(sys: SystemModel, opts: LayoutOptions = {}): SysLay
     }
     stacks.push({ column: col, items, headers });
     x += SYS_EXT_W + SYS_GAP_X;
-  }
+  });
 
   // Heights: each stack is centred on the tallest one.
   const heightOf = (s: (typeof stacks)[number]): number =>
