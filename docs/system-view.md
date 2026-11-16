@@ -345,6 +345,71 @@ Other limits, from the code and from the earlier view:
 - Components far apart still draw dense bundles of edges at root scope. Pick a narrower scope, or hover a card to read
   them.
 
+## Tiers mode
+
+The System tab's **Tiers** mode (the default) draws the scope left to right as Frontend → Backend → Storage, with the
+outside services in a fourth column. It is derived by `tierModel(model, sys, { tests })` in
+`packages/core/model/src/tiers.ts` from the System model of the same scope, so the classification uses the same facts
+as the Runtime view. Runtime (the toggle next to it) keeps the process and thread view. When a scope has fewer than two
+deployable units, the model sets `reason` and the page falls back to Runtime.
+
+- **Frontend** holds browser apps (`spa`) and client programs (`client`): a program entry that serves nothing and calls
+  or spawns a backend, such as a CLI.
+- **Backend** holds servers (`server`, node, or any other route or `listens`), Vercel-style functions (`function`, for
+  `export` or `dispatch` routes) and Cloudflare Workers (`worker`).
+- **Storage** holds stores (databases, KV, object stores, `fs` as "Local disk") and **External** holds the outside
+  services and APIs, both as the System model names them.
+
+Classification signals, in priority order (each node lists its signals in the card and panel):
+
+- `spa`: a browser program runs code owned by the component (a root function of the browser runtime is in its files),
+  or the component has an `index.html`, or it imports `react-dom`, `vue`, `svelte`, `preact` or `solid-js`. A backend or
+  library that a browser calls into is not a frontend.
+- `worker`: a route with framework `worker`. The platform is `cloudflare` when a `wrangler.toml` (or `.json`/`.jsonc`)
+  sits at the component root.
+- `function`: a route with framework `export` or `dispatch`. The platform is `vercel` when the component imports `@vercel/*`.
+- `server`: any other route, or a `listens` edge. The platform is `node`.
+- `client`: a program entry with no routes and no deployable calling into it, that requests or spawns a backend.
+- Anything else is a library: not drawn, folded into the deployables that call it.
+
+Storage and external facts come from the System model's externals. Store drivers are recognised by import
+(`better-sqlite3`, `pg`, `mysql2`, `mongodb`, `redis`/`ioredis`, `@vercel/kv`, `@vercel/blob`, `@aws-sdk/client-s3`), and
+the Cloudflare KV binding of a Worker (`env.<BINDING>.get|put|…`) joins the hosted KV REST calls to the same store.
+
+Edges are the deployable's own facts plus the facts of the libraries it calls:
+
+- **Verbs**: `requests` (HTTP and API calls), `reads`, `writes`, `opens` (store and database access), `spawns`.
+- **Library folding.** A deployable's `calls` into library components are followed. Each store, service or other
+  deployable a library reaches is drawn from the deployable, with `via` naming the libraries it came through and
+  `confidence: "inferred"`. A browser program is not given local-disk or database facts this way.
+- **Env heuristic.** A browser that GETs a URL built from an env var (`import.meta.env.VITE_*` and other env reads) is
+  linked to the Worker whose wrangler name or path shares a word with the variable, as an inferred `reads` edge labelled
+  `GET via <ENV>`. Stop words (vite, base, url, api, public, root, origin, host, endpoint, app) never count.
+
+Noise rules:
+
+- Tests, fixtures and samples are already left out of the System model (`isNoisePath`).
+- Components and edge sites under `scripts/`, `tools/`, `dev/`, `bench/` or `examples/` are hidden unless `tests` is on.
+  An edge whose every site is in those folders, with at most 20 facts, is dropped.
+- Unmatched `api:` externals are counted in `hidden.unmatchedApi`, not drawn. Library components are counted in
+  `hidden.libraries`.
+
+Limits:
+
+- Library folding over-attributes: a backend that uses a shared library inherits that library's stores as inferred edges
+  (drawn dotted, with `via`). The Runtime view shows which code caused them.
+- A deployable is classified by the first matching signal. A server that also serves a browser bundle is a frontend.
+
+Self-check: `node scripts/check-tiers.mjs` (after `pnpm -r build`). It indexes the committed tree (`git archive HEAD`) into a
+temp folder, prints the Tiers tables for the root scope, and compares them with the expected Insight topology. It prints
+`MISSING` for an expected node or edge that is not drawn, `MISMATCH` for a wrong tier or role, and `EXTRA` for a drawn
+edge the expectation does not list. It exits 1 on any MISSING or MISMATCH. It is slow (about 20 seconds), so run it by
+hand, not from `pnpm test`.
+
+Tests: `packages/core/model/test/tiers.test.ts`, `packages/core/indexer/test/system-tiers.test.ts` (the golden
+`packages/core/indexer/test/fixtures/tiers-app/`: a Vite SPA, a fastify server with SQLite, a Vercel function and a
+Cloudflare Worker), and `packages/frontend/typescript/test/deploy.test.ts`.
+
 ## Pipeline mode
 
 Arch's Pipeline mode shows the processing stages of the explorer scope: where the scope's data comes from, which
