@@ -115,6 +115,18 @@ describe("stages layout", () => {
     }
   });
 
+  it("gives a loop, a helper and a branch's diamond the stage ids of the cards inside them, so hovering reveals their data links", () => {
+    const l = layoutStages(graph(), { showAll: true });
+    const loop = frames(l.nodes).find((f) => f.tone === "loop");
+    const helper = frames(l.nodes).find((f) => f.tone === "helper");
+    const detect = cards(l.nodes).find((c) => c.titleFull === "detect");
+    const store = cards(l.nodes).find((c) => c.titleFull === "store");
+    const diamond = l.nodes.find((n): n is Extract<LayoutNode, { kind: "diamond" }> => n.kind === "diamond");
+    expect(loop?.members).toContain(detect?.stage);
+    expect(helper?.members).toContain(store?.stage);
+    expect(diamond?.members?.length ?? 0).toBeGreaterThan(0);
+  });
+
   it("draws the branch as a diamond with its condition, lanes labelled then and else: —, and the fanout chips capped with +N", () => {
     const l = layoutStages(graph());
     const texts = l.nodes.filter((n): n is Extract<LayoutNode, { kind: "text" }> => n.kind === "text").map((n) => n.text);

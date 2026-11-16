@@ -13,3 +13,4 @@ export { CORE_FACETS, isCoreFacet, isFacetId, type CoreFacet } from "./facets.js
 export { KindRegistry, KindRegistryError, createIRAjv, type IRSchemaSet, type RegisteredKind } from "./registry.js";
 export { validateIR, parseNdjson, type Diagnostic, type IRDocument, type ValidationReport, type ValidateOptions } from "./validate.js";
 export { CORE_SCHEMA_ID, KIND_DEFINITION_SCHEMA_ID } from "./ids.js";
+export { displayLocal } from "./local-names.js";

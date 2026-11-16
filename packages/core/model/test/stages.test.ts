@@ -392,7 +392,7 @@ describe("stage graph: data edges", () => {
 
   it("follows a captured local from an inlined helper to the driver's producer", () => {
     const H = `${F}#run.helper`;
-    const nodes = [fn(H, "helper", F, DRV, { derives: { x: ["scan"] } })];
+    const nodes = [fn(H, "helper", F, DRV, { derives: { x: ["scan"] }, params: [] })];
     const edges = [
       call(DRV, stageId("s3"), 2, 2, 6, { binds: "scan" }),
       call(DRV, H, 8, 2, 8),
@@ -639,6 +639,87 @@ describe("stage graph: exits inside inlined helpers", () => {
   });
 });
 
+describe("stage graph: callback scopes", () => {
+  // A callback folded into the driver: its parameters and locals belong to it, and a driver local of the same name is shadowed.
+  const L = `${F}#run.λ136:17`;
+  const lambda = (params: string[]): IRNode => fn(L, "λ136:17", F, DRV, { anonymous: true, params });
+
+  it("gives a callback parameter no producer, so it does not shadow-link to the driver's same-named local", () => {
+    // const file = s1(); s2(file); paths.forEach((file) => s3(file)); s4()
+    const nodes = [lambda(["file"])];
+    const edges = [
+      call(DRV, stageId("s1"), 2, 2, 6, { binds: "file" }),
+      call(DRV, stageId("s2"), 3, 2, 6, { reads: ["file"] }),
+      call(L, stageId("s3"), 4, 4, 6, { reads: ["file"] }),
+      call(DRV, stageId("s4"), 6, 2, 6),
+    ];
+    const g = graphOf(docWithDriver({ params: ["paths"] }, { nodes, edges }));
+    expect(g.edges).toEqual([{ from: idOf(g, "s1"), to: idOf(g, "s2"), label: "file" }]);
+  });
+
+  it("links a producer and a consumer inside one callback through the callback's own local", () => {
+    // xs.map((x) => { const y = s1(x); s2(y); })
+    const nodes = [lambda(["x"])];
+    const edges = [
+      call(L, stageId("s1"), 31, 4, 9, { binds: "y", reads: ["x"] }),
+      call(L, stageId("s2"), 32, 4, 9, { reads: ["y"] }),
+      call(DRV, stageId("s3"), 33, 2, 6),
+    ];
+    const g = graphOf(docWithDriver({ params: ["xs"] }, { nodes, edges }));
+    expect(g.edges).toEqual([{ from: idOf(g, "s1"), to: idOf(g, "s2"), label: "y" }]);
+  });
+
+  it("drops a return inside a callback as the driver's exit, but keeps a throw there", () => {
+    // for (const x of xs) { s1(); xs.forEach((y) => { if (!y) return; s2(y); }) } s3()
+    const bodyNodes = (kind: string): IRNode[] => [
+      lambda(["y"]),
+      flow("loop:5:2", "flow.loop", [5, 2, 12, 3], { variant: "for-of", condition: "const x of xs" }),
+      flow("if:7:6", "flow.branch", [7, 6, 9, 7], { condition: "!y" }, L),
+      flow("arm:7:14", "flow.branch-arm", [7, 14, 9, 7], { label: "then" }, L),
+      flow(`${kind}:8:8`, kind, [8, 8, 8, 14], {}, L),
+    ];
+    const edges = [call(DRV, stageId("s1"), 6, 4, 8), call(L, stageId("s2"), 10, 4, 8, {}), call(DRV, stageId("s3"), 13, 2, 6)];
+    const ret = graphOf(docWithDriver({ params: ["xs"] }, { nodes: bodyNodes("flow.return"), edges }));
+    expect(JSON.stringify(ret.body)).not.toContain('"kind":"exit"');
+    const thr = graphOf(docWithDriver({ params: ["xs"] }, { nodes: bodyNodes("flow.throw"), edges }));
+    expect(JSON.stringify(thr.body)).toContain('"how":"throw"');
+  });
+});
+
+describe("stage graph: missing params (an older frontend)", () => {
+  const H = `${F}#run.digestFor`;
+
+  it("takes a helper's undeclared name as its parameter, approximately, and does not walk outward to a shadowed local", () => {
+    // The driver binds x (s3) and scan (s2). digestFor reads x, but its params are unknown, so x may be its parameter.
+    const nodes = [fn(H, "digestFor", F, DRV)];
+    const edges = [
+      call(DRV, stageId("s2"), 2, 2, 6, { binds: "scan" }),
+      call(DRV, stageId("s3"), 3, 2, 6, { binds: "x" }),
+      call(DRV, H, 8, 2, 8, { reads: ["scan"] }),
+      call(H, stageId("s4"), 22, 4, 6, { reads: ["x"] }),
+      call(H, stageId("s5"), 23, 4, 6),
+    ];
+    const g = graphOf(doc({ nodes, edges }));
+    // Edges into digestFor's own call stage are the call's reads (scan feeds it); the inner stages are the ones under test.
+    expect(g.edges.filter((e) => e.to.includes("digestFor@"))).toEqual([{ from: idOf(g, "s2"), to: idOf(g, "s4"), label: "scan→x" }]);
+    expect(g.coverage).toContain("Helper arguments approximate");
+  });
+
+  it("with params known, the same undeclared name is not a parameter and resolves to the driver's local", () => {
+    const nodes = [fn(H, "digestFor", F, DRV, { params: [] })];
+    const edges = [
+      call(DRV, stageId("s2"), 2, 2, 6, { binds: "scan" }),
+      call(DRV, stageId("s3"), 3, 2, 6, { binds: "x" }),
+      call(DRV, H, 8, 2, 8, { reads: ["scan"] }),
+      call(H, stageId("s4"), 22, 4, 6, { reads: ["x"] }),
+      call(H, stageId("s5"), 23, 4, 6),
+    ];
+    const g = graphOf(doc({ nodes, edges }));
+    expect(g.edges.filter((e) => e.to.includes("digestFor@"))).toEqual([{ from: idOf(g, "s3"), to: idOf(g, "s4"), label: "x" }]);
+    expect(g.coverage).not.toContain("Helper arguments approximate");
+  });
+});
+
 describe("stage graph: callback slots on the driver's options (runIndex shape)", () => {
   // runIndex(opts, plugins): say and phase are const-arrow helpers that call opts.onProgress / opts.onPhase, a single-candidate
   // interface fan-out into a lambda elsewhere. Three real stages s1 to s3, one loop of frontends with s2 and say, and a loop of
@@ -682,17 +763,29 @@ describe("stage graph: callback slots on the driver's options (runIndex shape)",
     // Golden: the default outline. Show all (show(g.body)) keeps the callbacks and the say-only loop, marked `~`.
     expect(visible).toBe("s1 for[s2] s3");
     const all = show(g.body);
-    expect(all).toContain("say~{opts.onProgress~[1]}");
-    expect(all).toContain("phase~{opts.onPhase~[1]}");
-    expect(all).toContain("for[s2 phase~↺ say~↺]");
+    // The callback slots are dropped, so say and phase are helpers with no calls left: minor, and their callee is gone.
+    expect(all).not.toContain("opts.onProgress");
+    expect(all).not.toContain("opts.onPhase");
+    expect(all).toContain("for[s2 phase~ say~]");
   });
 
-  it("keeps a single-candidate fan-out whose receiver is a local, not a driver parameter, as a stage", () => {
+  it("keeps a single named-candidate interface call as a stage, whatever its receiver", () => {
     const H = `${F}#run.handler`;
-    const nodes = [fn(H, "handler", F, DRV), fn(CB, "λ221:21", "apps/server/src/jobs.ts", "apps/server/src/jobs.ts")];
-    const edges = [call(DRV, [CB], 20, 2, 12, { how: "interface", callee: "reg.handle" })];
+    const IMPL = `${F}#Handler.handle`;
+    const nodes = [fn(H, "handler", F, DRV), fn(IMPL, "handle", F, DRV)];
+    const edges = [call(DRV, [IMPL], 20, 2, 12, { how: "interface", callee: "reg.handle" })];
     const g = graphOf(doc({ nodes, edges }));
     expect(show(shownOf(g.body))).toBe("reg.handle[1]");
+  });
+
+  it("keeps an injected parser's interface call as a stage when its candidates are named functions (di.ts shape)", () => {
+    const P1 = `${F}#JsonParser.parse`;
+    const P2 = `${F}#YamlParser.parse`;
+    const nodes = [fn(P1, "parse", F, DRV), fn(P2, "parse", F, DRV)];
+    const edges = [call(DRV, [P1, P2], 3, 2, 14, { how: "interface", callee: "parser.parse" })];
+    const g = graphOf(docWithDriver({ params: ["parser"] }, { nodes, edges }));
+    expect(show(shownOf(g.body))).toContain("parser.parse[2]");
+    expect(show(g.body)).not.toContain("~");
   });
 });
 

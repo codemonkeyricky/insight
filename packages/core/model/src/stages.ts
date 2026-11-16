@@ -2,7 +2,15 @@
 // call sites. A driver's exact calls to in-scope functions are its stages. A candidate call with how interface|registry fans
 // out to every candidate. A named helper nested in the driver is inlined under its call. Pure: the same model always gives the
 // same output.
-import type { IREdge, IRNode, NodeId, Span } from "@insight/ir";
+//
+// Callbacks: a candidate call whose every target is an anonymous function is a callback slot (`opts.onProgress`), not a stage,
+// and is dropped. An anonymous function passed to a call (a lambda) is folded into the driver's statements, but its locals and
+// parameters are scoped to it: a read inside it resolves through its own declarations first, then outward.
+//
+// Exits: a return, break or continue counts as the driver's exit only inside a loop's branch arm, and only when it sits in the
+// driver itself, not in an inlined helper or a callback. Top-level guard returns (`if (!x) return;` before the stages) are dropped
+// on purpose: they are preconditions, not a point where the pipeline stops. A throw always counts.
+import { displayLocal, type IREdge, type IRNode, type NodeId, type Span } from "@insight/ir";
 import { isNoisePath } from "@insight/flow";
 import type { FunctionEntity, ProjectModel, Rel } from "./model.js";
 import {
@@ -48,6 +56,7 @@ export type StageNode =
       reads?: string[]; // locals the receiver and arguments read (calls.call attrs.reads)
       argReads?: string[][]; // the locals each positional argument reads (calls.call attrs.argReads)
       argSpread?: number; // index of the first spread argument (calls.call attrs.argSpread)
+      lambdas?: NodeId[]; // the anonymous callbacks the call sits in, outermost first, between it and the driver (or helper)
     }
   | { kind: "loop"; id: string; variant: string; condition?: string; reads?: string[]; site: Site; body: StageNode[] }
   | {
@@ -315,12 +324,45 @@ function emitList(nodes: TNode[], env: Env): StageNode[] {
 
 const siteOf = (ir: IRNode, env: Env): Site => ({ file: (ir.span as Span).file, line: (ir.span as Span).start[0] + 1, fn: env.fnId });
 
+/** The nearest function-like node above a node, the node itself included: an anonymous callback or a named function. */
+function nearestFnOf(model: ProjectModel, from: NodeId): NodeId | undefined {
+  let cur: NodeId | undefined = from;
+  for (let depth = 0; cur !== undefined && depth < 1000; depth++) {
+    const node = model.byId.get(cur);
+    if (node === undefined) return undefined;
+    if (node.kind === "structure.function") return cur;
+    cur = node.parent;
+  }
+  return undefined;
+}
+
+/** A callback: an anonymous function, whether the model marks it so or its id carries a lambda segment (`.λ221:21`). */
+const isCallbackFn = (model: ProjectModel, id: NodeId): boolean => model.functionById.get(id)?.anonymous === true || /[.#]λ\d/.test(id);
+
+/** The anonymous callbacks between a node and the function being emitted, outermost first: the callbacks a call sits in. */
+function lambdasBetween(model: ProjectModel, from: NodeId, fnId: NodeId): NodeId[] {
+  const out: NodeId[] = [];
+  let cur: NodeId | undefined = from;
+  for (let depth = 0; cur !== undefined && cur !== fnId && depth < 1000; depth++) {
+    const node = model.byId.get(cur);
+    if (node === undefined) break;
+    if (node.kind === "structure.function") {
+      if (node.attrs.anonymous !== true) break;
+      out.push(cur);
+    }
+    cur = node.parent;
+  }
+  return out.reverse();
+}
+
 function exitNode(n: TNode, env: Env): StageNode | undefined {
   if (!env.exitOk) return undefined;
   const ir = n.ir as IRNode;
   // A return, break or continue inside an inlined helper leaves that helper or its own loop, never the driver: no exit. A throw
   // still propagates out of the driver, so it stays.
-  if (env.fnId !== env.ctx.driverId && ir.kind !== "flow.throw") return undefined;
+  // A callback folded into the driver is a function of its own: a return, break or continue in it leaves the callback only.
+  const inCallback = nearestFnOf(env.ctx.model, ir.id) !== env.ctx.driverId;
+  if ((env.fnId !== env.ctx.driverId || inCallback) && ir.kind !== "flow.throw") return undefined;
   const isBreak = str(attr(ir, "variant")) === "break";
   // An unlabelled break inside a switch leaves the switch only: it is no exit from the loop around it.
   if (isBreak && env.inSwitch && str(attr(ir, "label")) === undefined) return undefined;
@@ -389,17 +431,6 @@ function tryNode(n: TNode, env: Env): StageNode {
   };
 }
 
-/**
- * Whether a callee's receiver chain roots at a parameter of the driver: `opts.onProgress` and `opts.frontend.extract` do, `say`
- * and `this.x` do not. The parameter names are the driver's `attrs.params` (local keys, so a shadowed parameter does not match).
- */
-function rootsAtDriverParam(ctx: Ctx, callee: string | undefined): boolean {
-  const root = callee?.match(/^[A-Za-z_$][\w$]*(?=[.?[(])/)?.[0];
-  if (root === undefined) return false;
-  const params = ctx.model.byId.get(ctx.driverId)?.attrs.params;
-  return Array.isArray(params) && params.includes(root);
-}
-
 /** A candidate-free or candidate call turned into one stage: an exact target, a fan-out, or one ambiguous stage. */
 function resolveCall(group: Rel[], env: Env): StageNode | undefined {
   const { ctx } = env;
@@ -412,7 +443,9 @@ function resolveCall(group: Rel[], env: Env): StageNode | undefined {
   const reads = namesOf(first.edge.attrs?.reads);
   const argReads = argReadsOf(first.edge.attrs?.argReads);
   const argSpread = typeof first.edge.attrs?.argSpread === "number" ? first.edge.attrs.argSpread : undefined;
+  const lambdas = lambdasBetween(ctx.model, first.from, env.fnId);
   const dataAttrs = {
+    ...(lambdas.length > 0 ? { lambdas } : {}),
     ...(binds !== undefined ? { binds } : {}),
     ...(bindsType !== undefined ? { bindsType } : {}),
     ...(reads !== undefined ? { reads } : {}),
@@ -433,21 +466,20 @@ function resolveCall(group: Rel[], env: Env): StageNode | undefined {
     if (targets.length === 0) return undefined;
     const how = first.how;
     if (how === "interface" || how === "registry") {
+      // A callback slot: every candidate is an anonymous function, a callback a caller passes in (`opts.onProgress?.(line)`). The
+      // driver runs no stage of its own there, so the call is dropped like one with no target.
+      if (targets.every((t) => isCallbackFn(ctx.model, t))) return undefined;
       const shown = targets.slice(0, FANOUT_CAP).map((t): { fn: NodeId; name: string; component?: string } => {
         const f = ctx.model.functionById.get(t) as FunctionEntity;
         const component = ctx.compOf(f.file);
         return { fn: t, name: f.name, ...(component !== undefined ? { component } : {}) };
       });
-      // A callback slot the driver calls on its own parameter (opts.onProgress?.(line)): one candidate reached through a driver
-      // parameter. The slot is wired by a caller, not a stage the driver runs, so it is minor like a utility.
-      const slot = targets.length === 1 && rootsAtDriverParam(ctx, callee);
       return {
         kind: "call",
         id,
         name: callee ?? shown[0]?.name ?? "call",
         site,
         fanout: { how, targets: shown, ...(targets.length > FANOUT_CAP ? { truncated: true } : {}) },
-        ...(slot ? { minor: true } : {}),
         ...dataAttrs,
       };
     }
@@ -713,13 +745,17 @@ function flatten(
   arms: Array<{ branch: string; arm: number }>,
   out: Flat[],
 ): void {
-  const open = (n: { id: string; reads?: string[]; binds?: string[]; bindsType?: string }): Flat => {
+  const open = (
+    n: { id: string; reads?: string[]; binds?: string[]; bindsType?: string },
+    sc: NodeId[] = scope,
+    ar: Array<CallArgs | undefined> = args,
+  ): Flat => {
     const e: Flat = {
       id: n.id,
       index: out.length,
       end: 0,
-      scope,
-      args,
+      scope: sc,
+      args: ar,
       arms,
       ...(n.reads !== undefined ? { reads: n.reads } : {}),
       ...(n.binds !== undefined ? { binds: n.binds } : {}),
@@ -731,13 +767,17 @@ function flatten(
   for (const n of nodes) {
     if (n.kind === "call") {
       if (n.minor === true) continue;
-      const e = open(n);
+      // The callbacks the call sits in are scope levels of their own, with no arguments mapped to their parameters.
+      const lams = n.lambdas ?? [];
+      const here = [...scope, ...lams];
+      const hereArgs = [...args, ...lams.map((): CallArgs | undefined => undefined)];
+      const e = open(n, here, hereArgs);
       const call: CallArgs = {
         ...(n.reads !== undefined ? { reads: n.reads } : {}),
         ...(n.argReads !== undefined ? { argReads: n.argReads } : {}),
         ...(n.argSpread !== undefined ? { argSpread: n.argSpread } : {}),
       };
-      if (n.body && n.fn !== undefined) flatten(n.body, [...scope, n.fn], [...args, call], arms, out);
+      if (n.body && n.fn !== undefined) flatten(n.body, [...here, n.fn], [...hereArgs, call], arms, out);
       e.end = out.length;
     } else if (n.kind === "loop") {
       const e = open(n);
@@ -759,9 +799,6 @@ function flatten(
  * the enclosing functions, for a captured local) until they reach a local a stage call bound earlier, which is a producer. A
  * local bound by a stage stops the walk, so a producer's own inputs are not edges. Pure.
  */
-/** A local's name for display: its `name@line` key (see the frontend's localKey) without the line. */
-const displayLocal = (key: string): string => key.replace(/@\d+(?::\d+)?$/, "");
-
 function dataEdges(model: ProjectModel, body: StageNode[], driverId: NodeId): { edges: DataEdge[]; approx: boolean } {
   const flat: Flat[] = [];
   /** Some helper parameter took the union of its call's arguments' reads: the mapping is approximate. */
@@ -779,6 +816,10 @@ function dataEdges(model: ProjectModel, body: StageNode[], driverId: NodeId): { 
   };
   /** Two arms of one branch: a stage in one never runs with a stage in the other, so it is no producer for it. */
   const exclusive = (p: Flat, c: Flat): boolean => p.arms.some((a) => c.arms.some((b) => b.branch === a.branch && b.arm !== a.arm));
+  const paramsKnown = (fn: NodeId): boolean => {
+    const node = model.byId.get(fn);
+    return node !== undefined && attr(node, "params") !== undefined;
+  };
   const producers = new Map<string, Flat[]>();
   for (const s of flat) {
     if (s.binds === undefined) continue;
@@ -790,6 +831,15 @@ function dataEdges(model: ProjectModel, body: StageNode[], driverId: NodeId): { 
       else producers.set(key, [s]);
     }
   }
+  /**
+   * Whether a name read in a frame is that frame's parameter. With `params` known, the list says. Without it (an older frontend),
+   * a name the frame does not declare might be one: it is taken as a parameter, approximately, rather than walked outward.
+   */
+  const isParamOf = (fn: NodeId, name: string): boolean => {
+    if (paramsKnown(fn)) return paramsOf(fn).includes(name);
+    const declared = producers.has(`${fn}\u0000${name}`) || Object.prototype.hasOwnProperty.call(derivesOf(fn), name);
+    return !declared;
+  };
   interface Found {
     producer: Flat;
     bound: string; // the producer's local
@@ -799,10 +849,14 @@ function dataEdges(model: ProjectModel, body: StageNode[], driverId: NodeId): { 
     for (let i = depth; i >= 0; i--) {
       const owner = consumer.scope[i] as NodeId;
       // A helper's parameter is the call site's argument: its reads, in the scope the call sits in. Never a local of the same name.
-      if (i > 0 && paramsOf(owner).includes(name)) {
+      // A callback's parameter has no arguments mapped to it, so it reads nothing (and shadows a driver local of the same name).
+      if (i > 0 && isParamOf(owner, name)) {
         const call = consumer.args[i];
         let nexts: string[];
-        if (call?.argReads !== undefined) {
+        if (!paramsKnown(owner)) {
+          nexts = call?.reads ?? [];
+          approx = true;
+        } else if (call?.argReads !== undefined) {
           // The argument at this parameter's position; a parameter past a spread argument takes the spread's reads.
           const p = paramsOf(owner).indexOf(name);
           const at = call.argSpread !== undefined && p >= call.argSpread ? call.argSpread : p;

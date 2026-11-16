@@ -119,8 +119,22 @@ export type LayoutNode =
       tone: "loop" | "helper" | "try";
       site?: Site;
       stage?: string;
+      /** The cards this frame draws (their stage ids): hovering the frame's header reveals the data links that touch any of them. */
+      members?: string[];
     }
-  | { kind: "diamond"; key: string; x: number; y: number; w: number; h: number; titleFull: string; site?: Site; stage?: string }
+  | {
+      kind: "diamond";
+      key: string;
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+      titleFull: string;
+      site?: Site;
+      stage?: string;
+      /** The cards of its arms (their stage ids): hovering the diamond reveals the data links that touch any of them. */
+      members?: string[];
+    }
   | { kind: "pill"; key: string; x: number; y: number; w: number; h: number; text: string; how: "continue" | "break" | "return" | "throw"; site?: Site }
   | { kind: "text"; key: string; x: number; y: number; text: string; titleFull?: string; tone: "cond" | "lane" | "catch" | "muted" }
   /** A data edge drawn on the connector between two neighbouring stages. */
@@ -315,10 +329,11 @@ function sizeOf(n: StageNode, o: Ctx): Sized | undefined {
     draw(x, y, out) {
       const from = out.nodes.length;
       draw(x, y, out);
-      for (let i = from; i < out.nodes.length; i++) {
-        const d = out.nodes[i];
-        if (d !== undefined && (d.kind === "card" || d.kind === "frame" || d.kind === "diamond") && d.stage === undefined) d.stage = id;
-      }
+      const sub = out.nodes.slice(from);
+      for (const d of sub) if ((d.kind === "card" || d.kind === "frame" || d.kind === "diamond") && d.stage === undefined) d.stage = id;
+      // The cards this stage draws: a frame or diamond keeps them, so its hover can reveal the data links that touch any of them.
+      const members = [...new Set(sub.flatMap((d) => (d.kind === "card" && d.stage !== undefined ? [d.stage] : [])))];
+      for (const d of sub) if ((d.kind === "frame" || d.kind === "diamond") && d.stage === id) (d as { members?: string[] }).members = members;
     },
   };
 }

@@ -281,8 +281,8 @@ describe("frontend-typescript function params", () => {
     expect(fnNamed("derive")?.attrs.params).toEqual(["input", "other"]);
   });
 
-  it("gives a const arrow its own parameters", () => {
-    expect(fnNamed("viaConst")?.attrs).not.toHaveProperty("params");
+  it("gives a function with no parameters an empty params list", () => {
+    expect(fnNamed("viaConst")?.attrs.params).toEqual([]);
   });
 });
 

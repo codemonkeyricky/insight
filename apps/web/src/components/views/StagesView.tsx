@@ -120,6 +120,8 @@ export function StagesDiagram({
   const [showData, setShowData] = useState(true);
   // The stage under the pointer: its data links that leave or enter it are drawn.
   const [hover, setHover] = useState<string | undefined>(undefined);
+  // A frame or a branch under the pointer or focus: the data links that touch any card it draws are drawn.
+  const [hoverGroup, setHoverGroup] = useState<string[] | undefined>(undefined);
   // One row when the whole driver fits at a legible scale; otherwise its spine wraps into rows as wide as the stage.
   const plan = useMemo(
     () => planStages(graph, { showAll, data: showData, stageW: stageW > 0 ? stageW : FALLBACK_W }),
@@ -136,7 +138,8 @@ export function StagesDiagram({
   };
   const frames = layout.nodes.filter((n): n is FrameNode => n.kind === "frame");
   const others = layout.nodes.filter((n) => n.kind !== "frame");
-  const links = hover !== undefined ? layout.links.filter((l) => l.from === hover || l.to === hover) : [];
+  const hot = hover !== undefined ? [hover] : (hoverGroup ?? []);
+  const links = hot.length > 0 ? layout.links.filter((l) => hot.includes(l.from) || hot.includes(l.to)) : [];
   const picked = drivers.some((d) => d.id === graph.driver.id) ? graph.driver.id : drivers[0]?.id;
   return (
     <div className="stg">
@@ -201,13 +204,13 @@ export function StagesDiagram({
             </defs>
             <g transform={`translate(${pz.cam.x} ${pz.cam.y}) scale(${pz.cam.k})`}>
               {frames.map((f) => (
-                <FrameShape key={f.key} n={f} onOpen={open} />
+                <FrameShape key={f.key} n={f} onOpen={open} onGroup={setHoverGroup} />
               ))}
               {layout.paths.map((p) => (
                 <PathShape key={p.key} p={p} marker={markerId} />
               ))}
               {others.map((n) => (
-                <NodeShape key={n.key} id={id} n={n} onOpen={open} onHover={setHover} />
+                <NodeShape key={n.key} id={id} n={n} onOpen={open} onHover={setHover} onGroup={setHoverGroup} />
               ))}
               {links.map((l) => (
                 <LinkShape key={l.key} l={l} marker={markerId} />
@@ -220,13 +223,35 @@ export function StagesDiagram({
   );
 }
 
-function FrameShape({ n, onOpen }: { n: FrameNode; onOpen: (site: Site | undefined) => void }) {
-  // The label bar opens the frame's call site; the body is left to its cards.
+function FrameShape({
+  n,
+  onOpen,
+  onGroup,
+}: {
+  n: FrameNode;
+  onOpen: (site: Site | undefined) => void;
+  onGroup: (ids: string[] | undefined) => void;
+}) {
+  // The label bar opens the frame's call site; the body is left to its cards. Hovering or focusing the bar reveals the data links
+  // of the cards the frame draws.
   const clickable = n.site !== undefined;
+  const reveal = (on: boolean) => onGroup(on ? n.members : undefined);
   return (
     <g className={`stg-frame ${n.tone}`}>
       <rect className="stg-frame-body" x={n.x} y={n.y} width={n.w} height={n.h} rx={8} />
-      <g className={clickable ? "stg-clickable" : undefined} onClick={clickable ? () => onOpen(n.site) : undefined}>
+      <g
+        className={clickable ? "stg-clickable" : undefined}
+        role={clickable ? "button" : undefined}
+        tabIndex={0}
+        onClick={clickable ? () => onOpen(n.site) : undefined}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && clickable) onOpen(n.site);
+        }}
+        onMouseEnter={() => reveal(true)}
+        onMouseLeave={() => reveal(false)}
+        onFocus={() => reveal(true)}
+        onBlur={() => reveal(false)}
+      >
         <title>{n.titleFull}</title>
         <rect className="stg-frame-bar" x={n.x} y={n.y} width={n.w} height={LABEL_H} rx={8} />
         <text className="stg-frame-label" x={n.x + 10} y={n.y + 14}>
@@ -247,11 +272,13 @@ function NodeShape({
   n,
   onOpen,
   onHover,
+  onGroup,
 }: {
   id: string;
   n: Exclude<LayoutNode, { kind: "frame" }>;
   onOpen: (site: Site | undefined) => void;
   onHover: (stage: string | undefined) => void;
+  onGroup: (ids: string[] | undefined) => void;
 }) {
   switch (n.kind) {
     case "card":
@@ -289,7 +316,19 @@ function NodeShape({
       const cy = n.y + n.h / 2;
       const pts = `${n.x},${cy} ${cx},${n.y} ${n.x + n.w},${cy} ${cx},${n.y + n.h}`;
       return (
-        <g className="stg-diamond-g stg-clickable" onClick={() => onOpen(n.site)}>
+        <g
+          className="stg-diamond-g stg-clickable"
+          tabIndex={0}
+          role="button"
+          onClick={() => onOpen(n.site)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") onOpen(n.site);
+          }}
+          onMouseEnter={() => onGroup(n.members)}
+          onMouseLeave={() => onGroup(undefined)}
+          onFocus={() => onGroup(n.members)}
+          onBlur={() => onGroup(undefined)}
+        >
           <title>{n.titleFull}</title>
           <polygon className="stg-diamond" points={pts} />
         </g>

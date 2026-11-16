@@ -1395,14 +1395,26 @@ export function emitFile(project: Project, rel: string): IRBatch {
     for (let p: ts.Node | undefined = d.parent; p !== undefined; p = p.parent) if (ts.isFunctionLike(p)) return p;
     return undefined;
   };
+  /**
+   * The function a local's name is counted in: an anonymous function (an arrow or a function expression) counts in the function it
+   * sits in, so a callback's parameter or variable collides with the enclosing function's locals of the same name.
+   */
+  const namingRoot = (fn: ts.Node): ts.Node => {
+    let cur = fn;
+    while ((ts.isArrowFunction(cur) || ts.isFunctionExpression(cur)) && enclosingFunction(cur) !== undefined) cur = enclosingFunction(cur)!;
+    return cur;
+  };
   const localsCache = new WeakMap<ts.Node, Map<string, ts.Identifier[]>>();
-  /** The identifiers a function declares itself, by name: its parameters and its variables. Nested functions are not descended into. */
+  /**
+   * The identifiers a function declares, by name: its parameters and its variables, and those of the anonymous functions nested in it.
+   * Named nested functions are not descended into.
+   */
   const localsOf = (fn: ts.Node): Map<string, ts.Identifier[]> => {
     const hit = localsCache.get(fn);
     if (hit !== undefined) return hit;
     const byName = new Map<string, ts.Identifier[]>();
     const walk = (n: ts.Node): void => {
-      if (n !== fn && ts.isFunctionLike(n)) return;
+      if (n !== fn && ts.isFunctionLike(n) && !(ts.isArrowFunction(n) || ts.isFunctionExpression(n))) return;
       if (ts.isVariableDeclaration(n) || ts.isParameter(n)) {
         for (const id of bindingIdents(n.name)) {
           const list = byName.get(id.text);
@@ -1428,7 +1440,7 @@ export function emitFile(project: Project, rel: string): IRBatch {
     if (decl === undefined || !(ts.isVariableDeclaration(decl) || ts.isBindingElement(decl) || ts.isParameter(decl))) return id.text;
     const fn = enclosingFunction(decl);
     if (fn === undefined) return id.text;
-    const same = localsOf(fn).get(id.text) ?? [];
+    const same = localsOf(namingRoot(fn)).get(id.text) ?? [];
     if (same.length < 2) return id.text;
     const declId = same.find((d) => project.checker.getSymbolAtLocation(d) === sym);
     if (declId === undefined) return id.text;
@@ -1576,10 +1588,13 @@ export function emitFile(project: Project, rel: string): IRBatch {
     return ts.isFunctionLike(node) ? node : undefined;
   };
 
-  /** The `params` attribute: the parameter names in order, each name a destructured parameter binds included. Omitted when none. */
-  const paramsAttr = (node: ts.Node): { params?: string[] } => {
+  /**
+   * The `params` attribute: the parameter names in order, each name a destructured parameter binds included. Always present on a
+   * function, `[]` when none: a model without it was emitted by a frontend that predates the attribute.
+   */
+  const paramsAttr = (node: ts.Node): { params: string[] } => {
     const names = (functionOf(node)?.parameters ?? []).flatMap((p) => bindingIdents(p.name));
-    return names.length > 0 ? { params: names.map((id) => localKey(id)) } : {};
+    return { params: names.map((id) => localKey(id)) };
   };
 
   const derivesAttr = (node: ts.Node): { derives: Record<string, string[]> } => {

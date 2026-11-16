@@ -328,6 +328,17 @@ describe("coupling pass with no package metadata", () => {
 // output, so the `binds` and `reads` attributes come from the extractor, not from hand-built items.
 describe("locals that carry external values (phase 4)", () => {
   const CROSS_FILES: Record<string, string> = {
+    // `direct` is declared twice in one function, so the frontend keys it `direct@line`: the rows must show the bare name.
+    "pkgs/a/src/shadow.ts": `import { loadConfig } from "../../b/src/config.js";
+export function twice(flag: boolean): void {
+  if (flag) {
+    const direct = loadConfig();
+    void direct;
+  }
+  const direct = loadConfig();
+  void direct;
+}
+`,
     "package.json": JSON.stringify({ name: "root", private: true }),
     "pkgs/a/package.json": JSON.stringify({ name: "a" }),
     "pkgs/b/package.json": JSON.stringify({ name: "b" }),
@@ -430,6 +441,18 @@ export function run(): void {
     assign = await couplingOf(ASSIGN_FILES);
     wrapper = await couplingOf(WRAPPER_FILES);
     io = await couplingOf(IO_FILES);
+  });
+
+  it("shows a local declared twice in one function by its bare name, not name@line, in a row label", () => {
+    const id = fid("pkgs/a/src/shadow.ts", "twice");
+    const f = cross.facts.get(id);
+    if (!f) throw new Error(`no function ${id}`);
+    const { items } = couplingChart(id, f.items, cross.modules, cross.footprints);
+    const labels = (xs: readonly Item[]): string[] =>
+      xs.flatMap((i): string[] => (i.t === "step" ? [i.label] : i.t === "fork" ? i.arms.flatMap((a) => labels(a.body)) : labels(i.body)));
+    const all = labels(items);
+    expect(all).toContain("direct ← loadConfig()");
+    expect(all.join("\n")).not.toContain("@");
   });
 
   it("keeps a branch on a local a cross call binds, shows ⇠ cfg, and labels the call cfg ← loadConfig()", () => {
