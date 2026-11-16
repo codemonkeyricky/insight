@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { StageGraph, StageNode } from "@insight/model";
-import { CONDITION_MAX, DATA_H, LEGIBLE_K, layoutStages, planStages, type LayoutNode } from "../src/arch/stages-layout";
+import { CONDITION_MAX, DATA_H, LABEL_H, LEGIBLE_K, MARGIN, ROW_INDENT, layoutStages, planStages, type LayoutNode } from "../src/arch/stages-layout";
 
 const site = (line: number) => ({ file: "app/src/run.ts", line, fn: "app/src/run.ts#run" });
 const call = (id: string, name: string, extra: Record<string, unknown> = {}): StageNode =>
@@ -288,7 +288,7 @@ describe("stages layout: data edges", () => {
     const flat = layoutStages(dataGraph(), { data: false });
     expect(layout.height).toBe(flat.height);
     expect(layout.links[0]?.points[0]?.[1]).toBeGreaterThan(0);
-    expect(layout.links[0]?.y).toBe(0);
+    expect(layout.links[0]?.y).toBeLessThan(layout.links[0]?.points[0]?.[1] ?? 0);
   });
 
   it("draws no data at all when data is off, and the layout is the same as without edges", () => {
@@ -306,32 +306,79 @@ describe("stages layout: data edges", () => {
   });
 });
 
+/** Twelve cards on one spine, each linked to the card three places on: links that span the rows once the spine wraps. */
+function spanGraph(): StageGraph {
+  return {
+    driver: { id: "app/src/run.ts#run", name: "run", file: "app/src/run.ts" },
+    body: Array.from({ length: 12 }, (_, i) => call(`s${i}`, `stageNumber${i}`, { ambiguous: true, candidates: 2 })),
+    edges: Array.from({ length: 9 }, (_, i) => ({ from: `s${i}`, to: `s${i + 3}`, label: `v${i}` })),
+    coverage: [],
+  };
+}
+
+/** The data graph with a link into a loop's frame, so a label can meet a frame header. */
+function framedGraph(): StageGraph {
+  const g = dataGraph();
+  return { ...g, edges: [...g.edges, { from: "c1", to: "c4", label: "files" }, { from: "c0", to: "loop9", label: "n" }, { from: "c4", to: "c0", label: "back" }] };
+}
+
+/** The boxes a link label must clear: the cards and diamonds, the frame headers (not the frame bodies) and the data pills. */
+function obstaclesOf(nodes: LayoutNode[]): Array<{ x: number; y: number; w: number; h: number }> {
+  return nodes.flatMap((n) => {
+    if (n.kind === "frame") return [{ x: n.x, y: n.y, w: n.w, h: LABEL_H }];
+    const b = boxOf(n);
+    return b !== undefined ? [b] : [];
+  });
+}
+
 describe("stages layout: link labels", () => {
-  it("keeps link labels clear of each other, and the first row clear of every card, even when several links share a span", () => {
-    const g = dataGraph();
-    const graph: StageGraph = {
-      ...g,
-      edges: [...g.edges, { from: "c1", to: "c4", label: "files" }],
-    };
-    const layout = layoutStages(graph, { data: true });
-    expect(layout.links.length).toBe(2);
-    const labels = layout.links.map((l) => ({ x: l.x, y: l.y, w: l.w, h: DATA_H }));
-    const solid = layout.nodes.filter((n) => n.kind === "card" || n.kind === "frame" || n.kind === "diamond");
-    for (let i = 0; i < labels.length; i++) {
-      const li = labels[i];
-      if (li === undefined) continue;
-      expect(li.y).toBeGreaterThanOrEqual(0);
-      // The first row sits in the margin above the cards; a further row is drawn over them, as a hover label.
-      if (li.y === 0) {
-        for (const s of solid) {
-          const sb = boxOf(s);
-          if (sb !== undefined) expect(boxesCross(li, sb), `label ${JSON.stringify(li)} vs ${JSON.stringify(sb)}`).toBe(false);
-        }
-      }
-      for (let j = i + 1; j < labels.length; j++) {
-        const lj = labels[j];
-        if (lj !== undefined) expect(boxesCross(li, lj), `${JSON.stringify(li)} vs ${JSON.stringify(lj)}`).toBe(false);
+  const layouts = () => [layoutStages(dataGraph(), { data: true }), layoutStages(framedGraph(), { data: true }), layoutStages(spanGraph(), { data: true, rowW: 600 })];
+
+  it("arcs rise above both endpoints: the apex is above the higher card, and its label sits at the apex", () => {
+    for (const layout of layouts()) {
+      expect(layout.links.length).toBeGreaterThan(0);
+      for (const l of layout.links) {
+        const ys = l.points.map((p) => p[1]);
+        const higher = Math.min(ys[0] ?? 0, ys[ys.length - 1] ?? 0);
+        // The label's bottom edge is above the higher endpoint, and the curve's highest point is the apex under the label.
+        expect(l.y + DATA_H).toBeLessThan(higher);
+        expect(Math.min(...ys)).toBeLessThan(higher);
       }
     }
+  });
+
+  it("keeps every link label inside the diagram: x at least 0, inside the width, and below the drawn top", () => {
+    for (const layout of layouts()) {
+      for (const l of layout.links) {
+        expect(l.x).toBeGreaterThanOrEqual(0);
+        expect(l.x + l.w).toBeLessThanOrEqual(layout.width);
+        expect(l.y).toBeGreaterThanOrEqual(layout.top);
+      }
+    }
+  });
+
+  it("no link label overlaps a card, a frame header, a data pill or another label", () => {
+    for (const layout of layouts()) {
+      const obstacles = obstaclesOf(layout.nodes);
+      const labels = layout.links.map((l) => ({ x: l.x, y: l.y, w: l.w, h: DATA_H }));
+      labels.forEach((li, i) => {
+        for (const o of obstacles) expect(boxesCross(li, o), `label ${JSON.stringify(li)} vs ${JSON.stringify(o)}`).toBe(false);
+        labels.slice(i + 1).forEach((lj) => expect(boxesCross(li, lj), `${JSON.stringify(li)} vs ${JSON.stringify(lj)}`).toBe(false));
+      });
+    }
+  });
+
+  it("wraps the spine so that each row fits the row width with its connectors and pills counted", () => {
+    const g: StageGraph = {
+      driver: { id: "app/src/run.ts#run", name: "run", file: "app/src/run.ts" },
+      body: Array.from({ length: 8 }, (_, i) => call(`p${i}`, `step${i}`)),
+      edges: Array.from({ length: 7 }, (_, i) => ({ from: `p${i}`, to: `p${i + 1}`, label: "item", type: "AVeryLongTypeNameForThePillHere" })),
+      coverage: [],
+    };
+    const rowW = 700;
+    const layout = layoutStages(g, { data: true, rowW });
+    expect(new Set(cards(layout.nodes).map((c) => c.y)).size).toBeGreaterThan(1);
+    // The widest row is the diagram less its margins and row indent; no row may be wider than rowW.
+    expect(layout.width - 2 * MARGIN - 2 * ROW_INDENT).toBeLessThanOrEqual(rowW);
   });
 });

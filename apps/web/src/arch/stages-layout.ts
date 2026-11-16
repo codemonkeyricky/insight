@@ -14,7 +14,7 @@ const CHAR_W = 6.6;
 /** Room kept inside a card or a frame, in px. */
 const PAD = 10;
 /** Room kept around the whole diagram. */
-const MARGIN = 16;
+export const MARGIN = 16;
 /** Space between two items on a spine. */
 const GAP = 22;
 const CARD_MIN_W = 110;
@@ -42,7 +42,7 @@ const ELBOW_X = DIAMOND + 10;
 const PILL_H = 18;
 const EMPTY_W = 24;
 /** A top-level spine that wraps: each row starts this far in, so a connector can come back from the row's end on the left. */
-const ROW_INDENT = 18;
+export const ROW_INDENT = 18;
 /** The space between two wrapped rows, where the return connector runs. */
 const ROW_GAP = 64;
 /** A stage is legible when its text stays at least 9px. The labels are 11px at most, so the scale must stay above 9/11. */
@@ -59,10 +59,20 @@ const PILL_GAP = 9;
 /** A data pill's label is shown at most this many characters long. */
 const DATA_TEXT_MAX = 26;
 /**
- * Each row of link labels sits this far below the one above it. Links are drawn in the margin above the diagram, which is
- * MARGIN tall, so no space is reserved for them: the first row fits there, and any further row overlays the top cards.
+ * A link's arc rises LINK_RISE above the higher of its two cards, plus LINK_STEP for its tier, so links over one span stay apart.
+ * Its label sits at the apex and is nudged up by LABEL_NUDGE_Y, or sideways by LABEL_NUDGE_X, until it clears what it would hit.
+ * No space is reserved for the arcs: they draw over the gaps between rows and the frames, and a top-row label stays in the margin.
  */
-const LINK_ROW = DATA_H + 4;
+const LINK_RISE = 22;
+const LINK_STEP = 14;
+const LINK_TIERS = 3;
+const LABEL_NUDGE_Y = DATA_H + 4;
+const LABEL_NUDGE_X = 24;
+const LABEL_NUDGE_STEPS = 6;
+/** The room kept between a link label and what it must clear. */
+const LABEL_GAP = 2;
+/** The highest apex: a label's top sits at the margin's edge, so a label of the top row stays inside the stage at any scale up to 1. */
+const MARGIN_TOP_LABEL = -MARGIN + DATA_H / 2;
 const ARC_STEPS = 16;
 
 /** The text of an exit pill, by how the flow leaves. */
@@ -147,6 +157,8 @@ export interface StageLayout {
   paths: LayoutPath[];
   /** Data edges that are not drawn on a connector: shown on hover of one of their stages. Empty unless `data` is set. */
   links: LayoutDataLink[];
+  /** The highest y any link reaches. It is never above -MARGIN, so every arc and label is inside the stage at the fit. */
+  top: number;
 }
 
 export interface StageLayoutOptions {
@@ -233,6 +245,12 @@ function pillBetween(prev: Sized, next: Sized, o: Ctx): { key: string; pill: Dat
   return key !== undefined && pill !== undefined ? { key, pill } : undefined;
 }
 
+/** The width of the connector before `next`: a data pill on it widens it to fit the pill. */
+function connectorW(prev: Sized, next: Sized, o: Ctx): number {
+  const hit = pillBetween(prev, next, o);
+  return hit !== undefined ? Math.max(GAP, hit.pill.w + 2 * PILL_GAP) : GAP;
+}
+
 /** Blocks laid left to right on one spine, joined by arrows. A connector with a data pill is as wide as the pill. */
 function spine(parts: Sized[], o: Ctx): Sized {
   if (parts.length === 0) {
@@ -243,9 +261,7 @@ function spine(parts: Sized[], o: Ctx): Sized {
   // gaps[i] is the connector before part i (unused for the first part).
   const gaps = parts.map((p, i) => {
     const prev = parts[i - 1];
-    if (prev === undefined) return 0;
-    const hit = pillBetween(prev, p, o);
-    return hit !== undefined ? Math.max(GAP, hit.pill.w + 2 * PILL_GAP) : GAP;
+    return prev === undefined ? 0 : connectorW(prev, p, o);
   });
   const w = parts.reduce((sum, p) => sum + p.w, 0) + gaps.reduce((sum, g) => sum + g, 0);
   return {
@@ -536,12 +552,17 @@ function wrapRows(nodes: StageNode[], o: Ctx, rowW: number): Sized {
   let cur: Sized[] = [];
   let curW = 0;
   for (const p of parts) {
-    if (cur.length > 0 && curW + GAP + p.w > rowW) {
+    // A row's width counts its connectors as the spine draws them, a pill's width included.
+    const prev = cur[cur.length - 1];
+    if (prev === undefined) {
+      curW = p.w;
+    } else if (curW + connectorW(prev, p, o) + p.w > rowW) {
       rows.push(cur);
       cur = [];
-      curW = 0;
+      curW = p.w;
+    } else {
+      curW += connectorW(prev, p, o) + p.w;
     }
-    curW = cur.length === 0 ? p.w : curW + GAP + p.w;
     cur.push(p);
   }
   if (cur.length > 0) rows.push(cur);
@@ -596,14 +617,19 @@ function boxesOf(nodes: LayoutNode[]): Map<string, Box> {
   return boxes;
 }
 
-/** A dashed arc from the top middle of one box to the top middle of another, its apex `rise` px above the top of the diagram. */
-function arcBetween(a: Box, b: Box, top: number, rise: number): Point[] {
+/** Whether two boxes overlap, with `gap` px of room kept between them. */
+const overlaps = (a: Box, b: Box, gap = 0): boolean =>
+  a.x < b.x + b.w + gap && b.x < a.x + a.w + gap && a.y < b.y + b.h + gap && b.y < a.y + a.h + gap;
+
+/** A dashed arc from the top middle of one box to the top middle of another, passing through `apex` at its midpoint. */
+function arcBetween(a: Box, b: Box, apex: Point): Point[] {
   const xa = a.x + a.w / 2;
   const ya = a.y;
   const xb = b.x + b.w / 2;
   const yb = b.y;
-  const cx = (xa + xb) / 2;
-  const cy = top - 2 * rise;
+  // A quadratic curve's midpoint is a quarter of the start, half the control and a quarter of the end: the control that puts it at `apex`.
+  const cx = 2 * apex[0] - (xa + xb) / 2;
+  const cy = 2 * apex[1] - (ya + yb) / 2;
   const pts: Point[] = [];
   for (let i = 0; i <= ARC_STEPS; i++) {
     const t = i / ARC_STEPS;
@@ -622,24 +648,60 @@ function drawPass(graph: StageGraph, opts: StageLayoutOptions, pills: Map<string
   return { body, out, used: o.used };
 }
 
+/** A link to place: its data edge and the boxes of its two stages. */
+interface LinkSpan {
+  e: DataEdge;
+  a: Box;
+  b: Box;
+}
+
 /**
- * The row of each link's label above the body. A label sits above the whole diagram; a label whose horizontal span
- * would meet one already placed in the same row takes the next row up, so no two labels sit on each other.
+ * The arcs and labels of the links. A link's apex sits LINK_RISE above the higher of its two cards, plus a step for its tier. Its label
+ * is centred on the apex, then nudged up, then sideways, until it clears the cards, frame headers, data pills and labels placed before it.
+ * It stays inside the diagram's width, so its x is at least 0.
  */
-function linkRows(linked: DataEdge[], boxes: Map<string, Box>): number[] {
-  const placed: { row: number; x0: number; x1: number }[] = [];
-  return linked.map((e) => {
-    const a = boxes.get(e.from);
-    const b = boxes.get(e.to);
-    if (a === undefined || b === undefined) return 0;
-    const w = pillOf(e).w;
-    const mid = (a.x + a.w / 2 + b.x + b.w / 2) / 2;
-    const x0 = mid - w / 2 - PILL_GAP;
-    const x1 = mid + w / 2 + PILL_GAP;
-    let row = 0;
-    while (placed.some((p) => p.row === row && p.x0 < x1 && x0 < p.x1)) row++;
-    placed.push({ row, x0, x1 });
-    return row;
+function placeLinks(spans: LinkSpan[], obstacles: Box[], width: number): LayoutDataLink[] {
+  const placed: Box[] = [];
+  return spans.map(({ e, a, b }, i) => {
+    const pill = pillOf(e);
+    const top = Math.min(a.y, b.y);
+    const ideal = (a.x + a.w / 2 + b.x + b.w / 2) / 2;
+    // The apex stays low enough that its label's top is within the margin above the diagram, so the label is inside the stage.
+    const apexY = Math.max(MARGIN_TOP_LABEL, top - (LINK_RISE + LINK_STEP * (i % LINK_TIERS)));
+    const at = (dx: number, up: number): { apex: Point; label: Box } => {
+      const x = Math.min(Math.max(0, ideal + dx - pill.w / 2), Math.max(0, width - pill.w));
+      const y = apexY - up * LABEL_NUDGE_Y;
+      return { apex: [x + pill.w / 2, y], label: { x, y: y - DATA_H / 2, w: pill.w, h: DATA_H } };
+    };
+    const clear = (label: Box): boolean =>
+      label.y >= -MARGIN && !obstacles.some((o) => overlaps(label, o, LABEL_GAP)) && !placed.some((p) => overlaps(label, p, LABEL_GAP));
+    // Labels in the top band can only move sideways, so the search reaches across the whole width.
+    const maxSteps = Math.ceil(width / LABEL_NUDGE_X);
+    let chosen: { apex: Point; label: Box } | undefined;
+    for (let up = 0; up <= LABEL_NUDGE_STEPS && chosen === undefined; up++) {
+      for (let k = 0; k <= maxSteps && chosen === undefined; k++) {
+        for (const dx of k === 0 ? [0] : [k * LABEL_NUDGE_X, -k * LABEL_NUDGE_X]) {
+          const c = at(dx, up);
+          if (clear(c.label)) {
+            chosen = c;
+            break;
+          }
+        }
+      }
+    }
+    const { apex, label } = chosen ?? at(0, 0);
+    placed.push(label);
+    return {
+      key: `l${i}`,
+      from: e.from,
+      to: e.to,
+      points: arcBetween(a, b, apex),
+      text: pill.text,
+      titleFull: pill.title,
+      x: label.x,
+      y: label.y,
+      w: pill.w,
+    };
   });
 }
 
@@ -652,39 +714,29 @@ export function layoutStages(graph: StageGraph, opts: StageLayoutOptions = {}): 
   if (opts.data === true) for (const e of graph.edges) pills.set(`${e.from}\0${e.to}`, pillOf(e));
   const pass = drawPass(graph, opts, pills);
   const boxes = boxesOf(pass.out.nodes);
+  const width = Math.ceil(pass.body.w + 2 * MARGIN);
   // The links are the edges that are not on a connector and have both stages drawn (a minor stage is hidden).
   const linked = opts.data === true ? graph.edges.filter((e) => !pass.used.has(`${e.from}\0${e.to}`) && boxes.has(e.from) && boxes.has(e.to)) : [];
-  const rows = linkRows(linked, boxes);
-  // The top of the highest box, frames included. The first row of labels sits in the margin above it, so it is clear of every card.
-  const diagramTop = Math.min(...Array.from(boxes.values(), (b) => b.y));
-  const links: LayoutDataLink[] = [];
-  linked.forEach((e, i) => {
+  const spans = linked.flatMap((e): LinkSpan[] => {
     const a = boxes.get(e.from);
     const b = boxes.get(e.to);
-    if (a === undefined || b === undefined) return;
-    const labelTop = LINK_ROW * (rows[i] ?? 0);
-    // The arc's apex sits on the label's top edge, so the label stays inside the layout.
-    const rise = Math.max(0, diagramTop - labelTop);
-    const pill = pillOf(e);
-    const midX = (a.x + a.w / 2 + b.x + b.w / 2) / 2;
-    links.push({
-      key: `l${links.length}`,
-      from: e.from,
-      to: e.to,
-      points: arcBetween(a, b, diagramTop, rise),
-      text: pill.text,
-      titleFull: pill.title,
-      x: midX - pill.w / 2,
-      y: labelTop,
-      w: pill.w,
-    });
+    return a !== undefined && b !== undefined ? [{ e, a, b }] : [];
   });
+  // What a link label must clear: the cards and diamonds, the frame headers, and the data pills.
+  const obstacles = pass.out.nodes.flatMap((n): Box[] => {
+    if (n.kind === "card" || n.kind === "diamond" || n.kind === "data") return [n];
+    if (n.kind === "frame") return [{ x: n.x, y: n.y, w: n.w, h: LABEL_H }];
+    return [];
+  });
+  const links = placeLinks(spans, obstacles, width);
+  const top = Math.min(0, ...links.flatMap((l) => [l.y, ...l.points.map((p) => p[1])]));
   return {
-    width: Math.ceil(pass.body.w + 2 * MARGIN),
+    width,
     height: Math.ceil(pass.body.h + 2 * MARGIN),
     nodes: pass.out.nodes,
     paths: pass.out.paths,
     links,
+    top,
   };
 }
 
