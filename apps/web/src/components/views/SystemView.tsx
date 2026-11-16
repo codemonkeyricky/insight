@@ -867,7 +867,7 @@ function FrameDetail({ id, sys, frame, onToggle, onWiden }: { id: string; sys: S
           <ul className="arch-list">
             {rootFns.map((fn) => (
               <li key={fn} className="small">
-                <a className="mono" href={hrefView(id, "flow", { scope: dirname(fn.slice(0, fn.indexOf("#"))), fn, roots: true })} title={`Open ${fnName(fn)} in Flow`}>
+                <a className="mono" href={hrefView(id, "flow", { scope: dirname(fn.slice(0, fn.indexOf("#"))), fn })} title={`Open ${fnName(fn)} in Flow`}>
                   {fnName(fn)}
                 </a>
               </li>
@@ -1043,7 +1043,7 @@ export function SiteLinks({ id, sites }: { id: string; sites: Site[] }) {
           {s.fn !== undefined && (
             <>
               {" "}
-              <a className="small" href={hrefView(id, "flow", { scope: dirname(s.file), fn: s.fn, roots: true })} title={`Open ${fnName(s.fn)} in Flow`}>
+              <a className="small" href={hrefView(id, "flow", { scope: dirname(s.file), fn: s.fn })} title={`Open ${fnName(s.fn)} in Flow`}>
                 {fnName(s.fn)} in Flow
               </a>
             </>

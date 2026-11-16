@@ -30,7 +30,6 @@ interface Props {
   id: string;
   /** The scope the map shows. Its flow supplies the table's counts. */
   scope: string;
-  roots: boolean;
   /** The flow store. The scope's flow is loaded through it. */
   store: ZoomStore;
   index: ExecIndex;
@@ -67,14 +66,14 @@ function countsOf(flow: ScopeFlow | undefined): Map<string, ExecFlowCounts> | un
   return new Map(flow.functions.map((f): [string, ExecFlowCounts] => [f.id, { steps: f.steps, decisions: f.decisions, loops: f.loops }]));
 }
 
-export function ExecContainerPanel({ id, scope, roots, store, index, nodeId, onOpen, rootKind = "project" }: Props) {
+export function ExecContainerPanel({ id, scope, store, index, nodeId, onOpen, rootKind = "project" }: Props) {
   const node = index.scene.nodes.get(nodeId);
   const { flow, error } = useScopeFlow(store, scope);
   const counts = useMemo(() => countsOf(flow), [flow]);
   const chips = useMemo(() => execChips(index.scene, nodeId), [index, nodeId]);
   const rows = useMemo(() => execRows(index, nodeId, counts), [index, nodeId, counts]);
   if (node === undefined) return null;
-  const base: ListBase = { id, scope, roots, onOpen };
+  const base: ListBase = { id, scope, onOpen };
   const word = node.kind === "project" ? ROOT_WORD[rootKind] : (KIND_WORD[node.kind] ?? node.kind);
   // The project lists its functions only when it holds plain code flow; its processes and threads are listed by their own boxes.
   const holdsFunctions = LISTS_FUNCTIONS.has(node.kind);

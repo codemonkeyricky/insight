@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { api, type FileEntry, type FindingRow } from "../../api";
 import { useCodeTarget } from "../../codeTarget";
-import { hrefFlow, hrefView } from "../../router";
+import { hrefFlow } from "../../router";
 import { ExecStore } from "../../zoom/execStore";
 import { kindOf } from "../../findingGroups";
 import { findingCounts } from "../../zoom/findingsLayer";
@@ -24,8 +24,6 @@ interface Props {
   files: FileEntry[];
   scope: string;
   fn?: string;
-  /** The `roots` URL flag. The canvas is always the flat grid now; the flag only rides in the links the function panel writes. */
-  roots: boolean;
   /** The workspace's flow store: the charts the map and the code pane read. */
   store: ZoomStore;
   /** The code pane's exec slot: the element the focused function's or container's panel is drawn into. */
@@ -48,7 +46,7 @@ const LAYERS_INSET = 200 + 16 + 16;
  * function's source, and its calls, are in the code pane beside the workspace (see CodePane). Below the map, a folder or the
  * project lists its files with their flows.
  */
-export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emphasis, findingKind, codeOpen }: Props) {
+export function FlowView({ id, files, scope, fn, store, slot, facts, emphasis, findingKind, codeOpen }: Props) {
   const { showCode } = useCodeTarget();
   const kind = scopeKind(scope, files);
   /** What the map shows: frames and calls on by default, findings off until the reader turns the layer on, lambdas off (folded). */
@@ -133,7 +131,7 @@ export function FlowView({ id, files, scope, fn, roots, store, slot, facts, emph
               // The code pane shows code. A function's exec panel goes there; a file's or folder's summary stays in the centre.
               const view = exec.viewOf(build);
               if (view === undefined || slot === null || build.selected === undefined) return null;
-              const panel = { id, scope: build.path, roots, store, index: view.index, model: view.model, nodeId: build.nodeId, onOpen: openNode };
+              const panel = { id, scope: build.path, store, index: view.index, model: view.model, nodeId: build.nodeId, onOpen: openNode };
               return createPortal(<ExecFunctionPanel {...panel} selected={build.selected} />, slot);
             }}
           />

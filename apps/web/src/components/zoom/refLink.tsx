@@ -6,12 +6,11 @@ import { hrefFlow, hrefView } from "../../router";
 export function refHref(
   id: string,
   scope: string,
-  roots: boolean,
   row: { id: string; file: string; isFunction: boolean; inScope: boolean },
   trace?: string,
 ): string {
   return row.isFunction
-    ? hrefView(id, "flow", { scope: row.inScope ? scope : row.file, fn: row.id, roots, ...(trace ? { trace } : {}) })
+    ? hrefView(id, "flow", { scope: row.inScope ? scope : row.file, fn: row.id, ...(trace ? { trace } : {}) })
     : hrefFlow(id, row.file);
 }
 

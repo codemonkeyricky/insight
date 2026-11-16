@@ -76,7 +76,7 @@ describe("LayerTabs", () => {
 });
 
 describe("CodePane", () => {
-  const common = { id: "p", roots: false, store: {} as ZoomStore, open: true, docked: true, onClose: () => {}, onSlot: () => {} };
+  const common = { id: "p", store: {} as ZoomStore, open: true, docked: true, onClose: () => {}, onSlot: () => {} };
 
   it("shows the empty state before anything is picked", () => {
     const html = renderToStaticMarkup(<CodePane {...common} target={undefined} />);

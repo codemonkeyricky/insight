@@ -100,7 +100,6 @@ const capped = graphOf(
 const viewProps = (g: CallerGraph, over: Partial<Parameters<typeof CallerChainView>[0]> = {}) => ({
   id: "p1",
   scope: "packages/core",
-  roots: false,
   graph: g,
   expanded: new Set<string>(),
   possible: false,
@@ -116,7 +115,7 @@ describe("caller chain container", () => {
   it("renders a collapsed details without fetching", () => {
     const spy = vi.spyOn(api, "getCallerGraph");
     const sel = { build: { path: "packages/core" }, selected: { ref: "packages/core/x.ts#f" } } as unknown as MapSelection;
-    const html = renderToStaticMarkup(<CallerChain id="p1" sel={sel} roots={false} />);
+    const html = renderToStaticMarkup(<CallerChain id="p1" sel={sel} />);
     expect(html).toContain('<details class="ref-list caller-chain">');
     expect(html).not.toMatch(/<details[^>]* open/);
     expect(html).toContain("Caller chain");
@@ -297,19 +296,19 @@ describe("tree markup", () => {
 describe("callerHref", () => {
   it("keeps the scope for an in-scope function", () => {
     const n = node("packages/core/model/src/scope.ts#inScope", 1, { file: "packages/core/model/src/scope.ts" });
-    const route = parseRoute(callerHref("p1", "packages/core/model", false, n));
+    const route = parseRoute(callerHref("p1", "packages/core/model", n));
     expect(route).toMatchObject({ name: "workspace", tab: "flow", scope: "packages/core/model", fn: n.id });
   });
 
   it("switches to the file's scope for an outside function", () => {
     const n = node("packages/core/test/scope.test.ts#caller", 1, { file: "packages/core/test/scope.test.ts", inScope: false });
-    const route = parseRoute(callerHref("p1", "packages/core/model", false, n));
+    const route = parseRoute(callerHref("p1", "packages/core/model", n));
     expect(route).toMatchObject({ name: "workspace", scope: "packages/core/test/scope.test.ts", fn: n.id });
   });
 
   it("opens the file's flow for a non-function", () => {
     const n = node("src/mod.ts", 1, { isFunction: false, file: "src/mod.ts" });
-    const route = parseRoute(callerHref("p1", "packages/core", false, n));
+    const route = parseRoute(callerHref("p1", "packages/core", n));
     expect(route).toMatchObject({ name: "workspace", tab: "flow", scope: "src/mod.ts" });
     expect((route as { fn?: string }).fn).toBeUndefined();
   });
@@ -328,7 +327,7 @@ describe("trace anchor", () => {
   });
 
   it("round-trips trace through hrefView and parseRoute", () => {
-    const href = hrefView("p", "flow", { scope: "src", fn: "src/a.ts#a", trace: "src/b.ts#b", roots: true });
+    const href = hrefView("p", "flow", { scope: "src", fn: "src/a.ts#a", trace: "src/b.ts#b" });
     expect(href).toContain("trace=");
     expect(parseRoute(href)).toMatchObject({ trace: "src/b.ts#b", fn: "src/a.ts#a", scope: "src" });
   });
@@ -336,13 +335,13 @@ describe("trace anchor", () => {
   it("keeps trace in callerHref for in-scope and out-of-scope function rows", () => {
     const inside = node("src/x.ts#f", 1, { file: "src/x.ts" });
     const outside = node("lib/y.ts#g", 1, { file: "lib/y.ts", inScope: false });
-    expect(parseRoute(callerHref("p1", "src", true, inside, "src/t.ts#t"))).toMatchObject({ trace: "src/t.ts#t", scope: "src" });
-    expect(parseRoute(callerHref("p1", "src", true, outside, "src/t.ts#t"))).toMatchObject({ trace: "src/t.ts#t", scope: "lib/y.ts" });
+    expect(parseRoute(callerHref("p1", "src", inside, "src/t.ts#t"))).toMatchObject({ trace: "src/t.ts#t", scope: "src" });
+    expect(parseRoute(callerHref("p1", "src", outside, "src/t.ts#t"))).toMatchObject({ trace: "src/t.ts#t", scope: "lib/y.ts" });
   });
 
   it("drops trace for a non-function row", () => {
     const file = node("src/z.ts", 1, { isFunction: false, file: "src/z.ts" });
-    expect(callerHref("p1", "src", true, file, "src/t.ts#t")).not.toContain("trace=");
+    expect(callerHref("p1", "src", file, "src/t.ts#t")).not.toContain("trace=");
   });
 
   it("shows trace in the row links of a traced view", () => {
@@ -350,7 +349,7 @@ describe("trace anchor", () => {
       <CallerChainView
         id="p1"
         scope="src"
-        roots={true}
+
         graph={chainA}
         expanded={new Set(["B"])}
         possible={false}
@@ -366,7 +365,7 @@ describe("trace anchor", () => {
 
   it("offers Anchor here in the untraced view", () => {
     const html = renderToStaticMarkup(
-      <CallerChainView id="p1" scope="src" roots={true} graph={chainA} expanded={new Set()} possible={false} stayInScope={false} depth={6} lambdas={true} pin="T" />,
+      <CallerChainView id="p1" scope="src" graph={chainA} expanded={new Set()} possible={false} stayInScope={false} depth={6} lambdas={true} pin="T" />,
     );
     expect(html).toContain('class="chain-pin"');
     expect(html).toContain("trace=T");
@@ -374,7 +373,7 @@ describe("trace anchor", () => {
 
   it("renders the traced container open with the Callers header and a clearing link without trace", () => {
     const sel = { build: { path: "src" }, selected: { ref: "src/a.ts#walk", name: "walk" } } as unknown as MapSelection;
-    const html = renderToStaticMarkup(<CallerChain id="p1" sel={sel} roots={true} trace="src/t.ts#target" />);
+    const html = renderToStaticMarkup(<CallerChain id="p1" sel={sel} trace="src/t.ts#target" />);
     expect(html).toMatch(/<details class="ref-list caller-chain" open="">/);
     expect(html).toContain("Callers of");
     expect(html).toContain("target");
@@ -421,7 +420,7 @@ const liOf = (html: string, key: string): string => html.split("<li").find((s) =
 describe("chain survives walking up", () => {
   it("keeps the caller chain mounted while the refs load", () => {
     const sel = { build: { path: "packages/core" }, selected: { ref: "packages/core/x.ts#f" } } as never;
-    const html = renderToStaticMarkup(<FunctionRefs id="p1" sel={sel} roots={false} />);
+    const html = renderToStaticMarkup(<FunctionRefs id="p1" sel={sel} />);
     expect(html).toContain("Loading the references");
     expect(html).toContain('class="ref-list caller-chain"');
   });

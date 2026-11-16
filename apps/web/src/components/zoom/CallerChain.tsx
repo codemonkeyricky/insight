@@ -21,8 +21,8 @@ import {
 } from "./callerTree";
 
 /** The link of a chain row, as RefItem links a reverse reference row: a function opens in its scope, or its file's scope when outside it. */
-export function callerHref(id: string, scope: string, roots: boolean, node: CallerNode, trace?: string): string {
-  return refHref(id, scope, roots, node, trace);
+export function callerHref(id: string, scope: string, node: CallerNode, trace?: string): string {
+  return refHref(id, scope, node, trace);
 }
 
 /**
@@ -92,7 +92,6 @@ const DEPTHS: Array<{ value: number; label: string }> = [
 interface ViewProps {
   id: string;
   scope: string;
-  roots: boolean;
   graph: CallerGraph;
   expanded: ReadonlySet<string>;
   focus?: string;
@@ -115,7 +114,7 @@ interface ViewProps {
 
 /** The chain's controls, summary, tree and completeness note. Presentational: it renders from its props only. */
 export function CallerChainView(props: ViewProps) {
-  const { id, scope, roots, graph, expanded, possible, stayInScope, depth, lambdas, capped, trace, pin, onOption } = props;
+  const { id, scope, graph, expanded, possible, stayInScope, depth, lambdas, capped, trace, pin, onOption } = props;
   const rows = visibleRows(graph, expanded, { lambdas });
   // The focus names a visible row, or else the first row takes the tab stop: a hidden focus must not leave the tree unreachable.
   const focusKey = rows.some((r) => r.key === props.focus) ? props.focus : rows[0]?.key;
@@ -152,7 +151,7 @@ export function CallerChainView(props: ViewProps) {
         {trace === undefined && pin !== undefined && (
           <>
             {" "}
-            <a className="chain-pin" href={hrefView(id, "flow", { scope, fn: pin, roots, trace: pin })}>
+            <a className="chain-pin" href={hrefView(id, "flow", { scope, fn: pin, trace: pin })}>
               Anchor here
             </a>
           </>
@@ -214,7 +213,7 @@ export function CallerChainView(props: ViewProps) {
               row={r}
               tab={tab}
               indent={indent}
-              href={callerHref(id, scope, roots, r.node, trace)}
+              href={callerHref(id, scope, r.node, trace)}
               onToggle={props.onToggle}
               onFocus={props.onFocus}
             />
@@ -296,7 +295,7 @@ function ChainRow({
 }
 
 /** The caller chain section of the side panel: collapsed until opened, then fetched once for the selected function. */
-export function CallerChain({ id, sel, roots, trace }: { id: string; sel: MapSelection; roots: boolean; trace?: string }) {
+export function CallerChain({ id, sel, trace }: { id: string; sel: MapSelection; trace?: string }) {
   const scope = sel.build.path;
   const fn = sel.selected.ref;
   // A traced chain is the anchored function's, whatever function the reader walks to; the anchor's chain is kept while it stays.
@@ -398,11 +397,11 @@ export function CallerChain({ id, sel, roots, trace }: { id: string; sel: MapSel
     setFocus(r.focus);
     if (r.open !== undefined) {
       const row = rows.find((x) => x.key === r.open);
-      if (row?.type === "node") window.location.assign(callerHref(id, scope, roots, row.node, trace));
+      if (row?.type === "node") window.location.assign(callerHref(id, scope, row.node, trace));
     }
   };
 
-  const clearHref = hrefView(id, "flow", { scope, fn, roots });
+  const clearHref = hrefView(id, "flow", { scope, fn });
   const anchorHeader =
     trace === undefined ? null : (
       <p className="chain-anchor">
@@ -439,7 +438,6 @@ export function CallerChain({ id, sel, roots, trace }: { id: string; sel: MapSel
           <CallerChainView
             id={id}
             scope={scope}
-            roots={roots}
             graph={graph}
             trace={trace}
             pin={fn}

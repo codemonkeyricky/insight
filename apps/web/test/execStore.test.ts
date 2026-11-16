@@ -8,7 +8,6 @@ const fixture = vi.hoisted(() => ({ model: undefined as unknown }));
 vi.mock("../src/api", () => ({
   api: {
     getScopeExec: async () => fixture.model,
-    scopeExecLayout: async () => undefined,
     getScopeCallers: async () => undefined,
   },
 }));
@@ -128,5 +127,20 @@ describe("ExecStore", () => {
     expect([...build.placed.rects.keys()].sort()).toEqual(["project", "thread:main>main"]);
     expect(store.url(build, build.focus)).toEqual({ scope: "", fn: "main" });
   });
-});
 
+  it("names every thread that runs the selected function, not only the one its card was placed in", async () => {
+    // shared has no caller, and both main and the worker start in it: it is a card that two threads run.
+    const base = model();
+    const main = base.threads[0] as ExecThread;
+    const worker: ExecThread = { id: "t1", kind: "thread", grounded: true, roots: ["shared"], reach: 1, reached: ["shared"], coroutines: [], coroutineOnly: [] };
+    fixture.model = {
+      ...base,
+      functions: [...base.functions, fn("shared", 12)],
+      threads: [{ ...main, roots: ["main", "shared"], reached: ["helper", "leaf", "main", "shared"], reach: 4 }, worker],
+    };
+    const store = new ExecStore("p1");
+    const build = await store.build(await store.resolve("", "shared"));
+    expect(build.selected?.runtime).toBe("thread");
+    expect(build.selected?.thread).toBe("Main thread, Thread · shared");
+  });
+});

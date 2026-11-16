@@ -8,7 +8,6 @@
       "function": 19,
       "uniqueFids": 19,
       "more": [],
-      "frames": 0,
       "bodyHasThreadWord": false,
       "errors": []
     },
@@ -22,7 +21,6 @@
       "more": [
         "+4 more (Click to show every root card of this thread)ƒ +4 more"
       ],
-      "frames": 0,
       "bodyHasThreadWord": false,
       "errors": []
     },
@@ -36,7 +34,6 @@
       "more": [
         "+16 more (Click to show every root card of this thread)ƒ +16 more"
       ],
-      "frames": 0,
       "bodyHasThreadWord": true,
       "errors": []
     },
@@ -52,7 +49,6 @@
         "+17 more (Click to show every root card of this thread)ƒ +17 more",
         "+37 more (Click to show every root card of this thread)ƒ +37 more"
       ],
-      "frames": 0,
       "bodyHasThreadWord": true,
       "errors": []
     },
@@ -66,7 +62,6 @@
       "more": [
         "+12 more (Click to show every card in this scope)ƒ +12 more"
       ],
-      "frames": 0,
       "bodyHasThreadWord": false,
       "errors": []
     },
@@ -80,7 +75,6 @@
       "more": [
         "+12 more (Click to show every card in this scope)ƒ +12 more"
       ],
-      "frames": 0,
       "bodyHasThreadWord": false,
       "errors": []
     },
@@ -94,7 +88,6 @@
       "more": [
         "+2 more (Click to show every card in this scope)ƒ +2 more"
       ],
-      "frames": 0,
       "bodyHasThreadWord": false,
       "errors": []
     },
@@ -108,7 +101,6 @@
       "more": [
         "+2 more (Click to show every card in this scope)ƒ +2 more"
       ],
-      "frames": 0,
       "bodyHasThreadWord": false,
       "errors": []
     }
@@ -119,7 +111,6 @@
     "hashAfterClick": "#/projects/9cac16c5/view/flow?scope=core%2Fphysics&fn=core%2Fphysics%2FcamAnalysis.ts%23analyseCam",
     "callersChips": 23,
     "hashAfterReload": "#/projects/9cac16c5/view/flow?scope=core%2Fphysics&fn=core%2Fphysics%2FcamAnalysis.ts%23analyseCam",
-    "deepLinkShowsName": false,
     "errors": []
   },
   "system": {

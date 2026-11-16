@@ -19,7 +19,7 @@ export function PipelineSequences({ id, sequences, capped = false, stale = false
             <div className="pipe-seq-head">
               <h3 className="pipe-seq-h small muted" id={head}>
                 Sequence ·{" "}
-                <a className="mono" href={hrefView(id, "flow", { scope: dirname(s.file), fn: s.id, roots: true })} title={`Open ${s.name} in Flow`}>
+                <a className="mono" href={hrefView(id, "flow", { scope: dirname(s.file), fn: s.id })} title={`Open ${s.name} in Flow`}>
                   {s.name}
                 </a>
               </h3>
@@ -44,7 +44,7 @@ function StageCard({ id, stage }: { id: string; stage: PipelineStage }) {
     <li className="pipe-seq-card">
       <div className="pipe-seq-title">
         <span className="pipe-seq-n mono small muted">{stage.order + 1}</span>
-        <a className="mono pipe-seq-name" href={hrefView(id, "flow", { scope: dirname(stage.file), fn: stage.fn, roots: true })} title={`Open ${stage.name} in Flow`}>
+        <a className="mono pipe-seq-name" href={hrefView(id, "flow", { scope: dirname(stage.file), fn: stage.fn })} title={`Open ${stage.name} in Flow`}>
           {stage.name}
         </a>
       </div>

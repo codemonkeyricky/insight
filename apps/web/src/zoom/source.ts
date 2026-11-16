@@ -92,11 +92,10 @@ export interface MapBuild {
   footprint?: ReadonlyMap<string, { left?: number; w: number; h: number }>;
 }
 
-/** The URL that shows a focus: the scope, the function, and whether the map is the roots-only view. */
+/** The URL that shows a focus: the scope and the function. */
 export interface MapUrl {
   scope: string;
   fn?: string;
-  roots?: boolean;
 }
 
 /**

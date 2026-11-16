@@ -66,7 +66,7 @@ const model = (): ExecModel => {
   };
 };
 
-const base: ListBase = { id: "p1", scope: "src", roots: false, onOpen: () => {} };
+const base: ListBase = { id: "p1", scope: "src", onOpen: () => {} };
 
 describe("the trail", () => {
   it("links each step to its placement, and leaves the focused function in bold", () => {
@@ -77,7 +77,7 @@ describe("the trail", () => {
     const html = renderToStaticMarkup(<ExecTrail base={base} steps={steps} />);
     expect(html).toContain('aria-label="Call path"');
     expect(html).toContain("<strong>leaf</strong>");
-    expect(html).toContain('href="#/projects/p1/view/flow?scope=src&amp;fn=main&amp;roots=0"');
+    expect(html).toContain('href="#/projects/p1/view/flow?scope=src&amp;fn=main"');
     expect(html).toContain("›");
   });
 });
@@ -144,7 +144,7 @@ describe("the panels", () => {
       <ExecFunctionPanel
         id="p1"
         scope="src"
-        roots={false}
+
         store={new ZoomStore("p1")}
         index={index}
         model={m}
@@ -164,14 +164,14 @@ describe("the panels", () => {
     const scene = buildExecScene(m);
     const index = execIndex(scene, m);
     const thread = renderToStaticMarkup(
-      <ExecContainerPanel id="p1" scope="src" roots={false} store={new ZoomStore("p1")} index={index} nodeId="thread:main" onOpen={() => {}} />,
+      <ExecContainerPanel id="p1" scope="src" store={new ZoomStore("p1")} index={index} nodeId="thread:main" onOpen={() => {}} />,
     );
     expect(thread).toContain("Main thread");
     expect(thread).toContain('class="kind thread"');
     expect(thread).toContain("Per function");
     expect(thread).toContain("exec-table");
     const program = renderToStaticMarkup(
-      <ExecContainerPanel id="p1" scope="src" roots={false} store={new ZoomStore("p1")} index={index} nodeId={scene.root} onOpen={() => {}} />,
+      <ExecContainerPanel id="p1" scope="src" store={new ZoomStore("p1")} index={index} nodeId={scene.root} onOpen={() => {}} />,
     );
     expect(program).toContain("Project");
     expect(program).not.toContain("exec-table");
@@ -188,7 +188,7 @@ describe("the panels", () => {
     const selected = execSelected(scene, new Map(m.functions.map((f) => [f.id, f])), flat.id);
     if (selected === undefined) throw new Error("no selection");
     const html = renderToStaticMarkup(
-      <ExecFunctionPanel id="p1" scope="src" roots={false} store={new ZoomStore("p1")} index={index} model={m} nodeId={flat.id} selected={selected} onOpen={() => {}} />,
+      <ExecFunctionPanel id="p1" scope="src" store={new ZoomStore("p1")} index={index} model={m} nodeId={flat.id} selected={selected} onOpen={() => {}} />,
     );
     expect(html).toContain("Plain code flow, no runtime context found");
     expect(html).not.toContain("Runs on");
@@ -202,7 +202,7 @@ describe("the panels", () => {
     const scene = buildExecScene(m);
     const index = execIndex(scene, m);
     const html = renderToStaticMarkup(
-      <ExecContainerPanel id="p1" scope="src" roots={false} store={new ZoomStore("p1")} index={index} nodeId={scene.root} onOpen={() => {}} />,
+      <ExecContainerPanel id="p1" scope="src" store={new ZoomStore("p1")} index={index} nodeId={scene.root} onOpen={() => {}} />,
     );
     expect(html).toContain("Code flow, no runtime context found in this scope.");
     expect(html).toContain("Per function");
@@ -217,7 +217,7 @@ describe("the panels", () => {
         <ExecContainerPanel
           id="p1"
           scope="src"
-          roots={false}
+
           store={new ZoomStore("p1")}
           index={index}
           nodeId={scene.root}

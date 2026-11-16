@@ -7,6 +7,7 @@ import {
   withResourcePeers,
   execThreadId,
   gridRootsLayout,
+  isGroundedThread,
   threadLabelOf,
   unrootedScene,
   type ExecFunctionRef,
@@ -17,7 +18,7 @@ import {
 } from "@insight/flow";
 import { api } from "../api";
 import type { FlowFocus } from "./detailPref";
-import { execBuild, execCallChain, execFocus, execIndex, execOpenSet, execPlacementFor, execResolve, execRunsOn, execThreadKeyOf, execUrl, splitExecFocus, syncSites, type ExecIndex } from "./execMap";
+import { execBuild, execCallChain, execFocus, execIndex, execPlacementFor, execResolve, execRunsOn, execThreadKeyOf, execUrl, splitExecFocus, syncSites, type ExecIndex } from "./execMap";
 import type { MapBuild, MapSource, MapUrl } from "./source";
 
 /** One scope's loaded canvas: its grid scene and layout, the model's functions, and the index the panels read. */
@@ -201,15 +202,23 @@ export class ExecStore implements MapSource {
 }
 
 /**
- * The selected function's thread. The grid draws no thread frame, so its card has no thread above it; the card's id carries
- * the thread it was first placed in ("thread:<id>>fn"), and the model names that thread. A card on no thread stays plain code.
+ * The selected function's threads: every grounded thread that reaches it in the model, labelled and comma-joined, so a
+ * function several threads run names all of them. The flat grid draws no thread frame, and the card's id carries only
+ * the thread it was first placed in ("thread:<id>>fn"), so the card's own thread is not enough. A coroutine keeps its label.
  */
 function withThread(view: ExecView, b: MapBuild): MapBuild {
   const sel = b.selected;
-  if (sel === undefined || sel.runtime !== "none") return b;
-  const t = view.model.threads.find((th) => b.nodeId.startsWith(`${execThreadId(th.id)}>`));
-  if (t === undefined) return b;
-  return { ...b, selected: { ...sel, runtime: "thread", thread: threadLabelOf(t, view.fns) } };
+  if (sel === undefined || sel.runtime === "coroutine" || sel.ref === undefined) return b;
+  const fnName = (id: string) => view.fns.get(id)?.name;
+  const labels = [
+    ...new Set(
+      view.model.threads
+        .filter((t) => isGroundedThread(t, fnName) && t.reached.includes(sel.ref as string))
+        .map((t) => threadLabelOf(t, view.fns)),
+    ),
+  ];
+  if (labels.length === 0) return b;
+  return { ...b, selected: { ...sel, runtime: "thread", thread: labels.join(", ") } };
 }
 
 /** The build's sync edges with their sites: the tooltip of each lists the sites of the resources the edge names. */

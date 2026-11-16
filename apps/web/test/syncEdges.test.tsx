@@ -140,7 +140,7 @@ describe("the function panel and the runs-on line", () => {
     const selected = execSelected(scene, new Map(m.functions.map((f) => [f.id, f])), nodeId);
     if (selected === undefined) throw new Error("no selection");
     const html = renderToStaticMarkup(
-      <ExecFunctionPanel id="p1" scope="src" roots={false} store={new ZoomStore("p1")} index={index} model={m} nodeId={nodeId} selected={selected} onOpen={() => {}} />,
+      <ExecFunctionPanel id="p1" scope="src" store={new ZoomStore("p1")} index={index} model={m} nodeId={nodeId} selected={selected} onOpen={() => {}} />,
     );
     expect(html).toContain('aria-label="Shared resources"');
     expect(html).toContain("Lock");
@@ -161,7 +161,7 @@ describe("the function panel and the runs-on line", () => {
     const selected = execSelected(scene, new Map(m.functions.map((f) => [f.id, f])), nodeId);
     if (selected === undefined) throw new Error("no selection");
     const html = renderToStaticMarkup(
-      <ExecFunctionPanel id="p1" scope="src" roots={false} store={new ZoomStore("p1")} index={index} model={m} nodeId={nodeId} selected={selected} onOpen={() => {}} />,
+      <ExecFunctionPanel id="p1" scope="src" store={new ZoomStore("p1")} index={index} model={m} nodeId={nodeId} selected={selected} onOpen={() => {}} />,
     );
     expect(html).not.toContain("Shared resources");
   });

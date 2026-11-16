@@ -57,7 +57,7 @@ describe("LayersPanel coupling checkbox", () => {
   afterEach(cleanup);
 
   it("calls onChange with coupling when the Coupling only box is toggled", () => {
-    const shown: LayerState = { frames: true, calls: true, findings: false, lambdas: false, motion: true, runtime: true, coupling: true, intermodule: false };
+    const shown: LayerState = { frames: true, calls: true, findings: false, lambdas: false, motion: true, coupling: true, intermodule: false };
     const onChange = vi.fn();
     render(<LayersPanel shown={shown} onChange={onChange} onClose={() => {}} />);
     fireEvent.click(screen.getByLabelText(/Coupling only/));
@@ -119,7 +119,7 @@ describe("FlowChart coupling rows", () => {
 
 describe("CouplingSection", () => {
   it("lists the module and the footprint grouped by class, with cross targets as links", () => {
-    const base: ListBase = { id: "p", scope: "s", roots: false, onOpen: () => {} };
+    const base: ListBase = { id: "p", scope: "s", onOpen: () => {} };
     const { coupling } = coupledFlow();
     const info = {
       module: "m",
@@ -298,7 +298,7 @@ describe("state rows in the coupling view", () => {
   });
 
   it("lists the state entries in the panel with their hidden and global badges", () => {
-    const base: ListBase = { id: "p", scope: "s", roots: false, onOpen: () => {} };
+    const base: ListBase = { id: "p", scope: "s", onOpen: () => {} };
     const { coupling } = coupledFlow();
     const info = {
       module: "m",

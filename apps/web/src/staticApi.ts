@@ -428,15 +428,6 @@ export function makeStaticApi(baseFor: (projectId: string) => string | Promise<s
       if (problem) throw new ApiError(400, problem);
       return (await scopeFile<ArchModel>(id, "", "arch.json")) ?? EMPTY_ARCH;
     },
-    /** A scope's execution scene laid out whole, as the export saved it. Undefined when it saved none. */
-    scopeExecLayout: async (id: string, scope: string, focus: FlowFocus = "all"): Promise<SceneLayout | undefined> => {
-      await checkProject(id);
-      const problem = scopeProblem(scope);
-      if (problem) throw new ApiError(400, problem);
-      // The export saved the full chart's layout only. An inter-module layout is laid out in the page instead.
-      if (focus === "intermodule") return undefined;
-      return scopeFile<SceneLayout>(id, scope, "exec-layout.json");
-    },
     // Comparing commits and keeping review decisions and notes need a git history and a writable
     // store, which the static builds do not have. The tabs are hidden there; these keep the
     // surface identical to the live api.

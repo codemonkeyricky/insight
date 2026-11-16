@@ -524,13 +524,6 @@ const liveApi = {
   getTiers: (id: string, scope: string, tests = false): Promise<TierModel> => liveModel(id).then(({ model }) => tiersFor(model, scope, tests)),
   // The server adds scope, snapshot and kind to the model; the page does not use them. The model covers the whole project.
   getScopeArch: (id: string, scope: string) => call<ArchModel>("GET", `/api/projects/${id}/scope/arch?path=${encodeURIComponent(scope)}`),
-  // The server lays the execution scene out whole and keeps it per snapshot. Any failure, a 404 included, gives undefined,
-  // and the page then lays the scene out in its worker.
-  scopeExecLayout: (id: string, scope: string, focus: FlowFocus = "all"): Promise<SceneLayout | undefined> =>
-    call<SceneLayout>("GET", `/api/projects/${id}/scope/exec-layout?path=${encodeURIComponent(scope)}&focus=${focus}`).then(
-      (r) => ({ containers: r.containers }),
-      () => undefined,
-    ),
   node: (id: string, nodeId: string) => call<NodeFacts>("GET", `/api/projects/${id}/nodes/${nodeId.split("/").map(encodeURIComponent).join("/")}`),
   compare: (id: string, base: string, head: string) => call<Compare>("GET", `/api/projects/${id}/compare${q({ base, head })}`),
   review: (id: string, snapshot?: string) => call<Review>("GET", `/api/projects/${id}/review${q({ snapshot })}`),

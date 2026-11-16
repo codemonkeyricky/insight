@@ -28,7 +28,7 @@ const refs: Refs = {
   calls: [],
 };
 
-const html = renderToStaticMarkup(<RefLists id="p1" scope="packages/core/model" roots={false} refs={refs} />);
+const html = renderToStaticMarkup(<RefLists id="p1" scope="packages/core/model" refs={refs} />);
 
 describe("reverse reference lists", () => {
   it("renders each function row as one link with the ref-row class", () => {
@@ -58,7 +58,7 @@ describe("reverse reference lists", () => {
 describe("reverse reference lists: message edges", () => {
   it("labels a dispatch row with how message as message", () => {
     const msg = renderToStaticMarkup(
-      <RefLists id="p1" scope="packages/core/model" roots={false} refs={{ calledBy: [], calls: [row({ kind: "dispatch", how: "message", name: "onPageMsg" })] }} />,
+      <RefLists id="p1" scope="packages/core/model" refs={{ calledBy: [], calls: [row({ kind: "dispatch", how: "message", name: "onPageMsg" })] }} />,
     );
     expect(msg).toContain('<span class="kind dispatch">message</span>');
   });

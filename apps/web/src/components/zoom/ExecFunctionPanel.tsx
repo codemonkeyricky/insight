@@ -17,8 +17,6 @@ interface Props {
   id: string;
   /** The scope the map shows: the chart's links resolve in it. */
   scope: string;
-  /** Whether the map is the roots-only view, which the links keep. */
-  roots: boolean;
   /** The flow store. The function's chart is loaded through it. */
   store: ZoomStore;
   /** The scope's index: its scene, functions and calls. The trail and the call lists are read from it. */
@@ -74,7 +72,7 @@ export function CouplingSection({ base, info }: { base: ListBase; info: Coupling
             {es.map((e, i) => (
               <li key={`${e.label}\0${e.target ?? ""}\0${i}`}>
                 {cls === "cross" && e.target !== undefined ? (
-                  <a href={hrefView(base.id, "flow", { scope: base.scope, fn: e.target, roots: base.roots })}>{e.label}</a>
+                  <a href={hrefView(base.id, "flow", { scope: base.scope, fn: e.target })}>{e.label}</a>
                 ) : (
                   e.label
                 )}
@@ -140,7 +138,7 @@ export function SharedResources({ base, model, index, fnId }: { base: ListBase; 
   );
 }
 
-export function ExecFunctionPanel({ id, scope, roots, store, index, model, nodeId, selected, onOpen }: Props) {
+export function ExecFunctionPanel({ id, scope, store, index, model, nodeId, selected, onOpen }: Props) {
   const ref = selected.ref;
   const [chart, setChart] = useState<ChartState>();
   useEffect(() => {
@@ -159,7 +157,7 @@ export function ExecFunctionPanel({ id, scope, roots, store, index, model, nodeI
   }, [store, ref]);
   const trail = useMemo(() => execTrail(index, nodeId), [index, nodeId]);
   const lists = useMemo(() => execCallLists(index, nodeId), [index, nodeId]);
-  const base: ListBase = { id, scope, roots, onOpen };
+  const base: ListBase = { id, scope, onOpen };
   const loaded = chart?.ref === ref ? chart : undefined;
   const fn = loaded?.fn;
   return (
@@ -182,7 +180,7 @@ export function ExecFunctionPanel({ id, scope, roots, store, index, model, nodeI
             {selected.placements.map((p) => (
               <li key={p.nodeId}>
                 <a
-                  href={hrefView(id, "flow", { scope, fn: ref, roots })}
+                  href={hrefView(id, "flow", { scope, fn: ref })}
                   onClick={(e) => {
                     e.preventDefault();
                     onOpen(p.nodeId);

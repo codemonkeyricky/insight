@@ -984,7 +984,7 @@ table.grid th { background: var(--faint); }
   .sh-find-list a { grid-template-columns: 56px minmax(0, 1fr); }
   .sh-find-detail { display: none; }
   .sh-page { padding-top: 14px; }
-  /* The Layers card opens as a full-width drawer from the bottom edge, and the roots-only switch lives in it. */
+  /* The Layers card opens as a full-width drawer from the bottom edge. */
   .sh-layers { left: 0; right: 0; top: auto; bottom: 0; width: auto; max-height: 62%; border-radius: 16px 16px 0 0; }
   /* A wide table scrolls inside its page rather than widening the page. */
   .sh-page table.grid { display: block; max-width: 100%; overflow-x: auto; }
