@@ -80,6 +80,8 @@ const UI_IMPORT = /^(react-dom|vue|svelte|preact|solid-js)(\/|$)/;
 /** A UI package's server subpath (react-dom/server, vue/server-renderer): rendering on the server, not a browser import. */
 const SERVER_SUBPATH = /\/server(-renderer)?(\/|$)/;
 const VERCEL_IMPORT = /^@vercel\//;
+/** The page a browser app's folder holds: the project's own (Vite), or the public and src folders of CRA and webpack apps. */
+const BROWSER_PAGES = ["index.html", "public/index.html", "src/index.html"] as const;
 const ROUTE_PREFIX = "route:";
 
 type Role = NonNullable<TierNode["role"]>;
@@ -289,18 +291,22 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
   const role = new Map<string, Role>();
   const platform = new Map<string, NonNullable<TierNode["platform"]>>();
   const signals = new Map<string, string[]>();
+  // A component that listens, or has a server route that is not an exported or dispatched handler, is a server of its own.
+  const ownsServer = (id: string, rs: SystemRoute[]): boolean =>
+    listens.has(id) || rs.some((r) => r.framework !== "export" && r.framework !== "dispatch");
   for (const c of sys.components) {
     if (!shown.has(c.id)) continue;
     const rs = routesOf.get(c.id) ?? [];
     const imports = [...(importsOf.get(c.id) ?? [])].sort(cmp);
     const sig: string[] = [];
     const ui = imports.filter((t) => UI_IMPORT.test(t) && !SERVER_SUBPATH.test(t));
-    const browserEntry = browserComponents.has(c.id) || files.has(`${c.path}/index.html`);
+    const page = BROWSER_PAGES.find((p) => files.has(`${c.path}/${p}`));
+    const browserEntry = browserComponents.has(c.id) || page !== undefined;
     if (browserEntry) {
       role.set(c.id, "spa");
       platform.set(c.id, "browser");
       if (browserComponents.has(c.id)) sig.push("browser program");
-      if (files.has(`${c.path}/index.html`)) sig.push("index.html");
+      if (page !== undefined) sig.push(page);
       if (ui.length > 0) sig.push(`imports ${ui[0]}`);
     } else if (rs.some((r) => r.framework === "worker")) {
       role.set(c.id, "worker");
@@ -308,7 +314,9 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
       const wrangler = WRANGLER_FILES.find((f) => files.has(`${c.path}/${f}`));
       if (wrangler !== undefined) sig.push(wrangler);
       if (wrangler !== undefined || workerPlatform.has(c.id)) platform.set(c.id, "cloudflare");
-    } else if (rs.some((r) => r.framework === "export" || r.framework === "dispatch")) {
+    } else if (rs.some((r) => r.framework === "export" || r.framework === "dispatch") && !(ownsServer(c.id, rs) && !imports.some((t) => VERCEL_IMPORT.test(t)))) {
+      // A function: exported or dispatched handlers. A component that listens or has a server route of its own is a server
+      // (below), unless it imports a Vercel helper that makes it a function.
       role.set(c.id, "function");
       for (const fw of [...new Set(rs.map((r) => r.framework))].sort(cmp)) sig.push(`route framework=${fw}`);
       const vercel = imports.filter((t) => VERCEL_IMPORT.test(t));
@@ -331,12 +339,23 @@ export function tierModel(model: ProjectModel, sys: SystemModel, opts: TierOptio
   // Clients are decided on the roles of the first pass alone, so the order the components come in cannot change the result:
   // two entries that call each other are both clients when both request a backend, whichever is visited first.
   const firstPass = new Set(role.keys());
+  // The links by target and by source, in link order, so each component's scan is its own links alone.
+  const linksTo = new Map<string, Link[]>();
+  const linksFrom = new Map<string, Link[]>();
+  for (const l of links) {
+    const to = linksTo.get(l.to) ?? [];
+    to.push(l);
+    linksTo.set(l.to, to);
+    const from = linksFrom.get(l.from) ?? [];
+    from.push(l);
+    linksFrom.set(l.from, from);
+  }
   for (const c of sys.components) {
     if (!shown.has(c.id) || role.has(c.id) || !c.entry) continue;
     if ((routesOf.get(c.id) ?? []).length > 0 || listens.has(c.id)) continue;
-    const calledByDeployable = links.some((l) => l.to === c.id && firstPass.has(l.from) && !isImportOnly(l.e));
+    const calledByDeployable = (linksTo.get(c.id) ?? []).some((l) => firstPass.has(l.from) && !isImportOnly(l.e));
     if (calledByDeployable) continue;
-    const out = links.find((l) => l.from === c.id && (l.e.verb === "requests" || l.e.verb === "spawns") && backendRole(l.to));
+    const out = (linksFrom.get(c.id) ?? []).find((l) => (l.e.verb === "requests" || l.e.verb === "spawns") && backendRole(l.to));
     if (out === undefined) continue;
     role.set(c.id, "client");
     platform.set(c.id, "node");

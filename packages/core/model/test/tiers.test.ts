@@ -396,4 +396,46 @@ describe("tierModel classification", () => {
     expect(edgeKey(ab)).toEqual(edgeKey(ba));
     expect(ab.nodes.filter((n) => n.role === "client").map((n) => n.id)).toEqual(["a", "b"]);
   });
+
+  it("makes a CRA-style web/public/index.html app with a react-dom import a browser app, though it has no script tag", () => {
+    const APP = "web/src/app.tsx";
+    const tiers = tiersOf({
+      nodes: [file("web/package.json"), file("web/public/index.html"), file(APP), fn(APP, "App")],
+      edges: [imp(APP, "react-dom/client")],
+      findings: [],
+    });
+    expect(tiers.nodes.find((n) => n.id === "web")).toMatchObject({ tier: "frontend", role: "spa", platform: "browser" });
+  });
+
+  it("makes a component that listens and dispatches from a route table a server, not a function, with no Vercel import", () => {
+    const SRVR = "server/src/main.ts";
+    const tiers = tiersOf({
+      nodes: [
+        file("server/package.json"),
+        file(SRVR),
+        fn(SRVR, "start"),
+        effect(SRVR, "start", 3, "effects.net.serve", { framework: "dispatch", method: "*", path: "/api/items", handler: "items" }),
+        effect(SRVR, "start", 4, "effects.net.listen", { port: 3000 }),
+      ],
+      edges: [],
+      findings: [],
+    });
+    expect(tiers.nodes.find((n) => n.id === "server")).toMatchObject({ tier: "backend", role: "server", platform: "node" });
+  });
+
+  it("keeps a dispatch-table component with a Vercel import a function, even when it listens", () => {
+    const FNL = "fn/src/main.ts";
+    const tiers = tiersOf({
+      nodes: [
+        file("fn/package.json"),
+        file(FNL),
+        fn(FNL, "start"),
+        effect(FNL, "start", 3, "effects.net.serve", { framework: "dispatch", method: "*", path: "/api/items", handler: "items" }),
+        effect(FNL, "start", 4, "effects.net.listen", { port: 3000 }),
+      ],
+      edges: [imp(FNL, "@vercel/node")],
+      findings: [],
+    });
+    expect(tiers.nodes.find((n) => n.id === "fn")).toMatchObject({ role: "function", platform: "vercel" });
+  });
 });

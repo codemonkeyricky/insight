@@ -1,21 +1,13 @@
 // The System tab's two views and the one the reader last chose. Tiers (frontend, backend, storage, external) is the default;
 // Runtime is the traced view. The choice lives in localStorage, which can be blocked, so every access is guarded and the page
-// works without it.
+// works without it. The guarded localStorage access is the one arch/mode.ts uses.
+import { defaultStore, type Store } from "./mode";
+
 export type SystemMode = "tiers" | "runtime";
 
 export const SYSTEM_MODE_KEY = "insight-system-mode";
 export const SYSTEM_MODES: readonly SystemMode[] = ["tiers", "runtime"];
 export const SYSTEM_MODE_LABELS: Record<SystemMode, string> = { tiers: "Tiers", runtime: "Runtime" };
-
-type Store = Pick<Storage, "getItem" | "setItem">;
-
-const defaultStore = (): Store | undefined => {
-  try {
-    return globalThis.localStorage;
-  } catch {
-    return undefined;
-  }
-};
 
 /** The saved mode, or "tiers" when none is saved, storage is blocked, or the saved value is unknown. */
 export function readSystemMode(store: Store | undefined = defaultStore()): SystemMode {

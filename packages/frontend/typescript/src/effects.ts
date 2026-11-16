@@ -822,6 +822,21 @@ const STORE_OPS: Record<string, string> = {
   dump: "read",
 };
 
+const WRITE_SQL = /^\s*(INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER)\b/i;
+
+/**
+ * Whether a D1 statement's text, when it is a literal (a string, or a template whose text before the first substitution is
+ * read), starts with a write keyword. A statement that is not a literal is read as a read.
+ */
+function sqlWrites(arg: ts.Expression | undefined): boolean {
+  if (arg === undefined) return false;
+  const e = unwrapAll(arg);
+  let text: string | undefined;
+  if (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) text = e.text;
+  else if (ts.isTemplateExpression(e)) text = e.head.text;
+  return text !== undefined && WRITE_SQL.test(text);
+}
+
 export interface StoreMatch {
   kind: "effects.store.access";
   attrs: Record<string, unknown>;
@@ -834,7 +849,10 @@ export interface StoreMatch {
 export function matchStoreAccess(call: ts.CallExpression, bindings: Map<string, string>, envNames: Set<string>): StoreMatch | undefined {
   const callee = unwrapAll(call.expression);
   if (!ts.isPropertyAccessExpression(callee)) return undefined;
-  const op = STORE_OPS[callee.name.text];
+  // An own key only: a method such as valueOf or constructor is a prototype member, not a store op.
+  const method = callee.name.text;
+  if (!Object.hasOwn(STORE_OPS, method)) return undefined;
+  const op = method === "prepare" ? (sqlWrites(call.arguments[0]) ? "write" : "read") : STORE_OPS[method];
   if (op === undefined) return undefined;
   const target = unwrapAll(callee.expression);
   if (!ts.isPropertyAccessExpression(target) || !ts.isIdentifier(target.expression)) return undefined;

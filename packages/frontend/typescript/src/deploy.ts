@@ -33,6 +33,9 @@ const TOML_TABLES: Record<string, BindingList> = {
   d1_databases: "d1",
 };
 
+/** The list a TOML table name feeds, or undefined: an own key only, so a prototype member (constructor, valueOf) is no table. */
+const tomlTable = (name: string): BindingList | undefined => (Object.hasOwn(TOML_TABLES, name) ? TOML_TABLES[name] : undefined);
+
 /** A TOML basic or literal string value at the start of text, or undefined for any other value. */
 function tomlString(value: string): string | undefined {
   const basic = /^"((?:[^"\\]|\\.)*)"/.exec(value);
@@ -49,7 +52,10 @@ function addBinding(info: WranglerInfo, list: BindingList, entry: Record<string,
   else info.d1.push({ binding: entry.binding, database: entry.database_name });
 }
 
-/** The net count of open brackets in a TOML value's text, outside strings. Zero when an inline array is closed. */
+/**
+ * The net count of open brackets in a TOML value's text, outside strings and `#` comments (a comment runs to the line's end).
+ * Zero when an inline array is closed.
+ */
 function bracketDepth(text: string): number {
   let depth = 0;
   let quote: string | undefined;
@@ -59,7 +65,11 @@ function bracketDepth(text: string): number {
       if (c === "\\" && quote === '"') i++;
       else if (c === quote) quote = undefined;
     } else if (c === '"' || c === "'") quote = c;
-    else if (c === "[") depth++;
+    else if (c === "#") {
+      const newline = text.indexOf("\n", i);
+      if (newline === -1) break;
+      i = newline;
+    } else if (c === "[") depth++;
     else if (c === "]") depth--;
   }
   return depth;
@@ -104,8 +114,9 @@ function parseToml(text: string): WranglerInfo {
       flush();
       topLevel = false;
       const name = (arrayTable ?? table)?.[1] ?? "";
-      if (arrayTable && TOML_TABLES[name] !== undefined) {
-        list = TOML_TABLES[name];
+      const feeds = arrayTable ? tomlTable(name) : undefined;
+      if (feeds !== undefined) {
+        list = feeds;
         entry = {};
       }
       continue;
@@ -114,7 +125,7 @@ function parseToml(text: string): WranglerInfo {
     if (inline && topLevel) {
       let body = inline[2] ?? "";
       while (bracketDepth(body) > 0 && i + 1 < lines.length) body += `\n${lines[++i] ?? ""}`;
-      const target = TOML_TABLES[inline[1] ?? ""];
+      const target = tomlTable(inline[1] ?? "");
       if (target !== undefined) for (const t of inlineTables(body)) addBinding(info, target, t);
       continue;
     }

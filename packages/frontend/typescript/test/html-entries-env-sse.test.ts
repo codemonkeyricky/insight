@@ -25,6 +25,10 @@ const FILES: Record<string, string> = {
   // A page under a test or fixtures folder is not an app's entry.
   "test/fixtures/demo/index.html": '<!doctype html>\n<script type="module" src="/src/app.ts"></script>\n',
   "test/fixtures/demo/src/app.ts": "console.log('fixture');\n",
+  // A CRA-style app: its page under public/ loads /src/boot.ts, which is the app's own apps/web/src/boot.ts, not the root's.
+  "apps/web/public/index.html": '<!doctype html>\n<script type="module" src="/src/boot.ts"></script>\n',
+  "apps/web/src/boot.ts": "console.log('app boot');\n",
+  "src/boot.ts": "console.log('root boot');\n",
 };
 
 let dir: string;
@@ -55,6 +59,11 @@ afterAll(() => {
 const byId = (id: string): IRNode | undefined => nodes.find((n) => n.id === id);
 
 describe("nested index.html entries", () => {
+  it("resolves a leading slash in a public/ page against the app folder above public/, not the project root", () => {
+    expect(byId("apps/web/src/boot.ts#(module)")?.attrs?.htmlEntry).toBe(true);
+    expect(byId("src/boot.ts#(module)")?.attrs?.htmlEntry).not.toBe(true);
+  });
+
   it("makes the module a nested page loads a browser entry, under its own folder", () => {
     expect(byId("apps/web/src/main.ts#(module)")?.attrs?.htmlEntry).toBe(true);
   });

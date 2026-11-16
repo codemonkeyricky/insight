@@ -407,4 +407,21 @@ describe("deploy roots and noise folders", () => {
   it("does not make a wrangler config in examples, tests, build or tool folders a component root", () => {
     expect(deployRoots(["examples/foo/wrangler.toml", "apps/a/wrangler.toml", ".claude/x/wrangler.toml", "dist/wrangler.toml", "build/vercel.json", "__tests__/vercel.json"])).toEqual(["apps/a"]);
   });
+
+  it("keeps a packages/build or examples package.json folder as a System component (the noise list is for deploy roots only)", () => {
+    const doc: IRDocument = {
+      nodes: [
+        file("packages/build/package.json"),
+        file("packages/build/src/a.ts"),
+        fn("packages/build/src/a.ts", "run"),
+        file("examples/app/package.json"),
+        file("examples/app/src/b.ts"),
+        fn("examples/app/src/b.ts", "main"),
+      ],
+      edges: [],
+      findings: [],
+    };
+    const sys = systemModel(buildProjectModel(doc), "");
+    expect(sys.components.map((c) => c.id)).toEqual(expect.arrayContaining(["packages/build", "examples/app"]));
+  });
 });

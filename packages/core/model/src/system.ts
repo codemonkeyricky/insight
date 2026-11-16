@@ -81,12 +81,15 @@ export interface SystemEdge {
 /** Sites kept per edge. The count still covers every fact. */
 const SITE_CAP = 20;
 
+/** Directories whose package.json files describe fixtures, not packages of the project (same rule as the Arch tab). */
+const NOT_A_PACKAGE = /(^|\/)(node_modules|test|tests|fixtures|__fixtures__|samples)(\/|$)/;
+
 /**
- * Folders that are not packages or deployable units of the project: tests, fixtures, samples, examples, builds, tool state.
- * The same list as NOISE_PAGE_DIR in packages/frontend/typescript/src/index.ts (the frontend cannot import this package), so
- * keep the two equal. The rule for package.json folders (the Arch tab's) and for deploy configs both use it.
+ * Folders that are not deployable units of the project either: builds, examples, tool state, and the test and fixture folders
+ * of NOT_A_PACKAGE. Used by deployRoots only. The same folder names as NOISE_PAGE_DIR in packages/frontend/typescript/src/index.ts
+ * (the frontend cannot import this package), so keep the two equal.
  */
-const NOT_A_PACKAGE = /(^|\/)(node_modules|dist|build|test|tests|__tests__|fixtures|__fixtures__|samples|examples|\.claude)(\/|$)/;
+const NOISE_DIR = /(^|\/)(node_modules|dist|build|test|tests|__tests__|fixtures|__fixtures__|samples|examples|\.claude)(\/|$)/;
 
 const EMPTY_LABEL = "(scope)";
 
@@ -934,7 +937,7 @@ export function deployRoots(files: string[]): string[] {
     const slash = file.lastIndexOf("/");
     if (slash === -1 || !DEPLOY_FILES.has(file.slice(slash + 1))) continue;
     const dir = file.slice(0, slash);
-    if (NOT_A_PACKAGE.test(dir)) continue;
+    if (NOISE_DIR.test(dir)) continue;
     roots.add(dir);
   }
   return [...roots].sort();

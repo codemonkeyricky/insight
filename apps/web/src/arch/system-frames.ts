@@ -576,7 +576,7 @@ export function layoutSystemFrames(sys: SystemModel, opts: FrameOptions = {}): S
         w: CARD_W,
         h: COMP_H + chips.length * CHIP_ROW,
         title: shortLabel(comp.label, 24),
-        sub: `${plural(comp.files ?? 0, "file")} · ${plural(comp.functions ?? 0, "function")}`,
+        sub: [comp.files !== undefined ? plural(comp.files, "file") : undefined, comp.functions !== undefined ? plural(comp.functions, "function") : undefined].filter((s) => s !== undefined).join(" · "),
         chips,
         component: comp,
       });

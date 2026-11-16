@@ -57,6 +57,27 @@ describe("parseWrangler", () => {
     expect(info.d1).toEqual([{ binding: "DB", database: "main-db" }]);
   });
 
+  it("reads a multi-line inline binding array past a comment that holds a bracket", () => {
+    const info = parseWrangler(
+      [
+        'name = "app"',
+        "kv_namespaces = [",
+        "  # [unbalanced comment",
+        '  { binding = "CACHE", id = "abc" }',
+        "]",
+        'main = "worker.js"',
+      ].join("\n"),
+      "wrangler.toml",
+    );
+    expect(info.kv).toEqual([{ binding: "CACHE", id: "abc" }]);
+    expect(info.main).toBe("worker.js");
+  });
+
+  it("ignores a table named like a prototype member (constructor) as a binding table", () => {
+    const info = parseWrangler(['name = "app"', "[[constructor]]", 'binding = "X"', 'id = "1"'].join("\n"), "wrangler.toml");
+    expect(info).toMatchObject({ kv: [], r2: [], d1: [] });
+  });
+
   it("reads the same fields from a JSONC config with comments and trailing commas", () => {
     const info = parseWrangler(
       [

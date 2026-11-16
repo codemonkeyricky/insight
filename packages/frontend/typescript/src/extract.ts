@@ -421,7 +421,7 @@ const SCRIPT_SRC = /<script\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/gi;
 /**
  * The project source files an HTML page loads with a script tag. A leading slash is the page's own folder, its Vite root,
  * so an apps/web/index.html that loads /src/main.tsx loads apps/web/src/main.tsx; any other path is relative to the page.
- * A page under public/ keeps the project root for a leading slash, as it did before nested pages were read.
+ * A page under public/ resolves a leading slash against the folder above public/ (its app), then the project root.
  * `html` maps the page's project path to its text.
  */
 function htmlScriptEntries(html: Map<string, string>, rels: Set<string>): Set<string> {
@@ -432,8 +432,12 @@ function htmlScriptEntries(html: Map<string, string>, rels: Set<string>): Set<st
     for (const m of text.matchAll(SCRIPT_SRC)) {
       const src = (m[1] ?? "").split(/[?#]/)[0] ?? "";
       if (src === "" || src.startsWith("//") || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(src)) continue;
-      let hit = sourceAt(src.startsWith("/") ? joinRel(folder, src.slice(1)) : joinRel(folder, src));
-      if (hit === undefined && src.startsWith("/") && /(^|\/)public$/.test(folder)) hit = sourceAt(joinRel("", src.slice(1)));
+      // A page under public/ is served from the folder above it (its app's Vite root), so a leading slash resolves there first,
+      // and to the project root only when that file does not exist.
+      const inPublic = /(^|\/)public$/.test(folder);
+      const root = inPublic ? dirOf(folder) : folder;
+      let hit = sourceAt(src.startsWith("/") ? joinRel(root, src.slice(1)) : joinRel(folder, src));
+      if (hit === undefined && src.startsWith("/") && inPublic) hit = sourceAt(joinRel("", src.slice(1)));
       if (hit !== undefined) out.add(hit);
     }
   }
