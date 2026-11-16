@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Local end-to-end server for the hosted build. It serves apps/web/dist-hosted, runs /api/index, /api/status and /api/health
-// through the same handlers the Vercel Function uses (apps/hosted), and keeps background jobs alive as waitUntil promises.
+// Local end-to-end server for the hosted build. It serves apps/web/dist-hosted, runs /api/index, /api/status,
+// /api/coupling and /api/health through the same handlers the Vercel Function uses (apps/hosted), and keeps background
+// jobs alive as waitUntil promises.
 // The store is Workers KV when the Cloudflare KV variables are in the environment (CLOUDFLARE_API_TOKEN, R2_ACCOUNT_ID or
 // CF_ACCOUNT_ID, CF_KV_NAMESPACE_ID): then the local run writes to the real namespace. Otherwise it is a local folder
 // (INSIGHT_STORAGE_DIR), served at /storage/* with the headers each object's sidecar (<key>.meta.json) records. R2 variables
@@ -12,7 +13,7 @@ import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { dirname, extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildDeps, handleCallback, handleGrant, handleHealth, handleIndex, handleLatest, handleLogin, handleLogout, handleMe, handleRepos, handleSource, handleStatus, observedStorage, storageFromEnv } from "../apps/hosted/dist/index.js";
+import { buildDeps, handleCallback, handleCoupling, handleGrant, handleHealth, handleIndex, handleLatest, handleLogin, handleLogout, handleMe, handleRepos, handleSource, handleStatus, observedStorage, storageFromEnv } from "../apps/hosted/dist/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const webDist = resolve(here, "../apps/web/dist-hosted");
@@ -166,6 +167,9 @@ export function startHostedDev({ port, host, env: given = process.env }) {
       }
       if (pathname === "/api/status") {
         return await sendWebResponse(res, await handleStatus(await toWebRequest(req, origin), { storage, env, fetch }));
+      }
+      if (pathname === "/api/coupling") {
+        return await sendWebResponse(res, await handleCoupling(await toWebRequest(req, origin), { storage, env, fetch }));
       }
       const authOrPrivate = AUTH_ROUTES[pathname];
       if (authOrPrivate) return await sendWebResponse(res, await authOrPrivate(await toWebRequest(req, origin)));
