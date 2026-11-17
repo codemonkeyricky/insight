@@ -194,7 +194,7 @@ CFG is shown.
 - Animated focus: an Explorer or URL change moves the camera to the new focus.
 - Keyboard: `+` and `-` zoom, arrow keys pan, `Enter` opens the item at the view centre, and `Escape` collapses an
   expanded function, then goes up one level.
-- A breadcrumb (`ZoomMap` draws it; the Flow tab's explorer trail is turned off with `ScopeNote trail={false}`).
+- A breadcrumb (`ZoomMap` draws it, so the Flow tab has no separate explorer trail above the map).
 - A minimap, and a resolution meter that reads as text.
 - Dashed external stubs for calls that leave the open scope.
 - File colour bands. Folder boxes stay white.
@@ -276,7 +276,7 @@ Camera updates (culling plus the transform) took 0.1 to 0.6 ms per update in eve
 - Strokes use `vector-effect: non-scaling-stroke`, so edges and box outlines stay thin at any zoom. Arrowheads use
   `markerUnits="userSpaceOnUse"` with a fixed marker size, so they keep a visible size.
 - `Workspace` leaves the scope out of the view key for the flow tab, so scope changes animate instead of remounting.
-- `ScopeNote` takes a `trail` prop. The flow tab turns its explorer trail off, because the map draws its own.
+- The flow tab has no explorer trail, because the map draws its own breadcrumb.
 
 ## Known limitations
 
@@ -289,7 +289,6 @@ with it (see Retired views).
 - The CFG chart lives in the function panel below the canvas, not in the function's slot on the canvas.
 - The minimap overlays the bottom-right of the content.
 - Child boxes touch the frame header with no gap.
-- The `ScopeNote` description is still shown above the flow tab.
 - The grid of unrooted functions is laid out in the browser on every open (it is small, but not precomputed or cached by
   the server).
 - The packages `ir` build externalises `node:url`, `node:fs` and `node:path` for the browser. The warnings are
@@ -301,7 +300,7 @@ Milestone 3 changed these files:
 
 - `apps/web/src/components/zoom/ZoomMap.tsx` (new), `apps/web/src/components/zoom/FunctionDetail.tsx` (new)
 - `apps/web/src/components/views/FlowView.tsx`, `apps/web/src/components/Workspace.tsx`,
-  `apps/web/src/components/ScopeNote.tsx`, `apps/web/src/components/FlowChart.tsx`
+  `apps/web/src/components/FlowChart.tsx` (`apps/web/src/components/ScopeNote.tsx` was deleted with the four-tab bar)
 - `apps/web/src/styles.css`
 - `apps/web/src/flowTargets.ts` (new) with `apps/web/test/flowTargets.test.ts` (new)
 - `packages/core/flow/src/index.ts`, `packages/core/flow/src/zoom-layout.ts` (new) with

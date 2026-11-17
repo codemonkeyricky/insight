@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PhaseProgress, RunProgress } from "../src/api";
-import { initialIndexState, LOG_LIMIT, progressFraction, reduceIndexState, type IndexState } from "../src/indexProgress";
+import { initialIndexState, progressFraction, reduceIndexState } from "../src/indexProgress";
 import type { RunEvent } from "../src/useEvents";
 
 const T0 = "2026-11-10T10:00:00.000Z";
@@ -59,38 +59,6 @@ describe("progressFraction", () => {
 
 describe("index run reducer", () => {
   const phase = (p: RunProgress): RunEvent => ({ type: "phase", projectId: "p", progress: p, at: T0 });
-  const line = (text: string, at: string, replay = false): RunEvent => ({ type: "progress", projectId: "p", line: text, at, replay });
-
-  it("merges replayed and live lines once each", () => {
-    let state: IndexState = initialIndexState;
-    state = reduceIndexState(state, { type: "event", event: phase(run({ startedAt: T0 })) });
-    // The connect replays two lines; a third arrives live and overlaps the replay's last one.
-    state = reduceIndexState(state, { type: "event", event: line("fetching a", "2026-11-10T10:00:01.000Z", true) });
-    state = reduceIndexState(state, { type: "event", event: line("extract b", "2026-11-10T10:00:02.000Z", true) });
-    state = reduceIndexState(state, { type: "event", event: line("extract b", "2026-11-10T10:00:02.000Z") });
-    state = reduceIndexState(state, { type: "event", event: line("link c", "2026-11-10T10:00:03.000Z") });
-    expect(state.entries.map((e) => e.text)).toEqual(["10:00:01  fetching a", "10:00:02  extract b", "10:00:03  link c"]);
-  });
-
-  it("keeps the last LOG_LIMIT lines", () => {
-    let state: IndexState = reduceIndexState(initialIndexState, { type: "event", event: phase(run({})) });
-    for (let i = 0; i < LOG_LIMIT + 5; i++) {
-      const at = new Date(Date.parse(T0) + i * 1000).toISOString();
-      state = reduceIndexState(state, { type: "event", event: line(`n${i}`, at) });
-    }
-    expect(state.entries).toHaveLength(LOG_LIMIT);
-    expect(state.entries[0]!.text).toContain("n5");
-  });
-
-  it("clears the last run's lines when a new run starts, and keeps them within a run", () => {
-    let state = reduceIndexState(initialIndexState, { type: "event", event: phase(run({ startedAt: T0 })) });
-    state = reduceIndexState(state, { type: "event", event: line("old", T0) });
-    state = reduceIndexState(state, { type: "event", event: phase(run({ startedAt: T0, phase: "link", label: "Linking" })) });
-    expect(state.entries).toHaveLength(1);
-    state = reduceIndexState(state, { type: "event", event: phase(run({ startedAt: "2026-11-10T11:00:00.000Z" })) });
-    expect(state.entries).toHaveLength(0);
-  });
-
   it("never lets the shown fraction go down within a run", () => {
     let state = reduceIndexState(initialIndexState, { type: "event", event: phase(run({ phase: "extract", label: "", done: 300, total: 491 })) });
     const high = state.fraction;

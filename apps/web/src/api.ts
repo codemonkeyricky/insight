@@ -9,7 +9,7 @@ import { hostedApi } from "./hostedApi";
 import type { FlowFocus } from "./zoom/detailPref";
 
 // Types only: the flow package is not bundled, its charts are drawn by components/FlowChart.tsx.
-// The architecture model is plain data from the lens package; the Arch tab draws it in components/views/ArchView.tsx.
+// The architecture model is plain data from the lens package; the Packages tab draws it in components/views/ArchView.tsx.
 export type { ArchEdge, ArchModel, ArchPackage, ArchUnresolved, ArchViolation } from "@insight/model";
 export type {
   ExecCoroutine,

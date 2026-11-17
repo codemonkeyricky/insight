@@ -18,17 +18,10 @@ import { TopBar, type Crumb } from "./sheet/TopBar";
 import type { TitleFacts } from "./sheet/TitleBlock";
 import { shortCommit } from "./sheet/TitleBlock";
 import { ArchView } from "./views/ArchView";
-import { useCodePaneCollapse } from "./views/useCodePaneCollapse";
 import { PipelineTab } from "./views/PipelineTab";
 import { FlowView } from "./views/FlowView";
 import { SystemView } from "./views/SystemView";
 import { ZoomStore } from "../zoom/scene";
-
-/** The System tab. It asks the workspace to collapse the code pane while it is shown and no code is open, and restores it on leaving. */
-function SystemTab({ id, scope, onSystemActive }: { id: string; scope: string; onSystemActive: (on: boolean) => void }) {
-  useCodePaneCollapse(onSystemActive);
-  return <SystemView id={id} scope={scope} />;
-}
 
 /** The default widths of the file tree and the code pane, in px, until the reader resizes them. */
 const TREE_DEFAULT = 280;
@@ -81,6 +74,24 @@ export function Workspace({ id, tab, scope, line, fn, trace, base, head, finding
   /** The flow charts, shared by the map and the code pane, so both read one cache. */
   const store = useMemo(() => new ZoomStore(id), [id]);
 
+  // True when this tab wants the width (System or Pipeline) on a desktop. Derived from the tab alone, so no per-tab callback is needed.
+  const wantsWidth = !narrow && (contentOf(tab) === "system" || contentOf(tab) === "pipeline");
+  // The code pane was collapsed by this effect (not by the reader), so leaving the tab restores it. A reader's own Code
+  // click, or a picked code target, clears the flag, which keeps the pane as the reader left it.
+  const autoCodeCollapse = useRef(false);
+  // One effect on the derived flag. Moving System to Pipeline (or back) keeps the flag true, so the pane stays collapsed.
+  useEffect(() => {
+    if (wantsWidth) {
+      if (!codeCollapsed && target === undefined) {
+        autoCodeCollapse.current = true;
+        setCodeCollapsed(true);
+      }
+    } else if (autoCodeCollapse.current) {
+      autoCodeCollapse.current = false;
+      setCodeCollapsed(false);
+    }
+  }, [wantsWidth]);
+
   // Picking code shows it: the pane opens (the Code drawer on a phone). A file scope set by a link shows silently, below.
   const showCode = useCallback((t: CodeTarget) => {
     setTarget(t);
@@ -88,24 +99,6 @@ export function Workspace({ id, tab, scope, line, fn, trace, base, head, finding
       setCodeDrawer(true);
       setFilesOpen(false);
     } else {
-      autoCodeCollapse.current = false;
-      setCodeCollapsed(false);
-    }
-  }, []);
-  // The System view wants the width: while it is shown and no code is open, the code pane starts collapsed. Opening code (a
-  // file:line link) or the Code button brings it back, and leaving System restores it.
-  const autoCodeCollapse = useRef(false);
-  const codeCollapsedNow = useRef(codeCollapsed);
-  codeCollapsedNow.current = codeCollapsed;
-  const targetNow = useRef(target);
-  targetNow.current = target;
-  const onSystemActive = useCallback((on: boolean) => {
-    if (on) {
-      if (!isNarrow() && !codeCollapsedNow.current && targetNow.current === undefined) {
-        autoCodeCollapse.current = true;
-        setCodeCollapsed(true);
-      }
-    } else if (autoCodeCollapse.current) {
       autoCodeCollapse.current = false;
       setCodeCollapsed(false);
     }
@@ -237,9 +230,9 @@ export function Workspace({ id, tab, scope, line, fn, trace, base, head, finding
   const renderPage = (): ReactNode => {
     switch (content) {
       case "system":
-        return <SystemTab id={id} scope={scope} onSystemActive={onSystemActive} />;
+        return <SystemView id={id} scope={scope} />;
       case "pipeline":
-        return <PipelineTab id={id} scope={scope} onSystemActive={onSystemActive} />;
+        return <PipelineTab id={id} scope={scope} />;
       case "packages":
         return (
           <div className="packages-tab">

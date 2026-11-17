@@ -37,7 +37,7 @@ describe("hash router", () => {
     expect(parseRoute("#/projects/ab12/view/source?scope=src%2Fa.ts&line=0")).toEqual({ name: "workspace", id: "ab12", tab: "source", scope: "src/a.ts" });
   });
 
-  it("parses a lens tab by its id", () => {
+  it("parses a legacy lens tab id as its tab (redirectFor sends it to Flow)", () => {
     expect(parseRoute("#/projects/ab12/view/lens-dependencies?scope=src")).toEqual({
       name: "workspace",
       id: "ab12",
@@ -192,7 +192,7 @@ describe("hash router", () => {
     expect([...BUILTIN_TABS]).toEqual(["flow", "system", "pipeline", "packages"]);
   });
 
-  it("parses the arch tab as a view, with no scope needed", () => {
+  it("parses a legacy arch tab id as its tab (redirectFor sends it to Packages)", () => {
     expect(parseRoute("#/projects/p1/view/arch")).toEqual({ name: "workspace", id: "p1", tab: "arch", scope: "" });
     expect(hrefView("p1", "arch")).toBe("#/projects/p1/view/arch");
   });
@@ -244,6 +244,16 @@ describe("the retired views redirect to the tabs that replace them", () => {
   it("send the old files URLs to Flow with the file and line", () => {
     expect(redirectFor(parseRoute("#/projects/p1/files/src/app.ts?line=12"))).toBe("#/projects/p1/view/flow?scope=src%2Fapp.ts&line=12");
     expect(redirectFor(parseRoute("#/projects/p1/files"))).toBe("#/projects/p1/view/flow");
+  });
+
+  it("send the old review URL to Flow, keeping its scope", () => {
+    expect(redirectFor(parseRoute("#/projects/p1/review"))).toBe("#/projects/p1/view/flow");
+    expect(redirectFor(parseRoute("#/projects/p1/view/review?scope=src"))).toBe("#/projects/p1/view/flow?scope=src");
+  });
+
+  it("send a compare URL with base and head to Flow, dropping base and head", () => {
+    expect(redirectFor(parseRoute("#/projects/p1/compare?base=aaa&head=bbb"))).toBe("#/projects/p1/view/flow");
+    expect(redirectFor(parseRoute("#/projects/p1/view/compare?base=aaa&head=bbb"))).toBe("#/projects/p1/view/flow");
   });
 
   it("send Arch to Packages and every other retired view to Flow", () => {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer, useRef } from "react";
+import { useEffect, useReducer, useRef } from "react";
 import type { RunProgress } from "./api";
 import { initialIndexState, reduceIndexState } from "./indexProgress";
 import { useProjectEvents, type RunEvent } from "./useEvents";
@@ -8,8 +8,6 @@ export interface IndexRun {
   progress?: RunProgress;
   /** The furthest fraction shown this run (0 to 1). */
   fraction: number;
-  /** The run's recent log lines, replayed ones included, without duplicates. */
-  lines: string[];
   lastError?: string;
   finishedAt?: string;
 }
@@ -41,12 +39,10 @@ export function useIndexProgress(id: string, initial?: RunProgress, onEvent?: (e
     handler.current?.(event);
   });
 
-  const lines = useMemo(() => state.entries.map((entry) => entry.text), [state.entries]);
   return {
     running: state.running,
     progress: state.progress,
     fraction: state.fraction,
-    lines,
     lastError: state.lastError,
     finishedAt: state.finishedAt,
   };
