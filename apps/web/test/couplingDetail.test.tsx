@@ -252,12 +252,12 @@ describe("re-anchoring by span, inline frames and frames cleared", () => {
     expect(closed.some((x) => x.fnId === "x#helper")).toBe(false);
   });
 
-  it("closes a callers box hung from a nested frame when the frame is cleared by a fold", () => {
+  it("closes a callers box hung from a parallel line's step when the line is cleared by a fold", () => {
     const coupling = foldThenSaveChart();
     const save = coupling.nodes.find((n) => n.label === "db.save()");
     if (!save) throw new Error("no db.save row");
-    // The frame: the save call drawn as a nest step (as an inline callee is), so a callers box can hang from it.
-    const framed = { ...coupling, nodes: coupling.nodes.map((n) => (n.id === save.id ? { ...n, shape: "nest" } : n)) } as unknown as FunctionFlow;
+    // The line: the save call drawn as a parallel line's step (shape fork, as an inline callee is), so a callers box can hang from it.
+    const framed = { ...coupling, nodes: coupling.nodes.map((n) => (n.id === save.id ? { ...n, shape: "fork" } : n)) } as unknown as FunctionFlow;
     const run = { fnId: "m#run", anchor: { kind: "box", nodeId: "n1", rect: { x: 0, y: 0, w: 10, h: 10 } }, chart: framed, base: coupling } as unknown as Expansion;
     const callers = { fnId: "x#callers", kind: "callers", anchor: { kind: "step", fnId: "m#run", stepId: save.id, rect: { x: 0, y: 0, w: 1, h: 1 } }, chart: coupling, base: coupling } as unknown as Expansion;
     const next = toggleFold([run, callers], "m#run", "F1", coupling, undefined);

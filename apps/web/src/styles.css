@@ -197,13 +197,13 @@ textarea { min-height: 3.2em; width: 100%; box-sizing: border-box; resize: verti
 .flow-scroll { overflow: auto; max-height: 70vh; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
 svg.flow { display: block; }
 /* The chart is a line map: one row per step, a station on its lane's line, the label to the right. A lane's colour is
- * --lane-0..4 (tokens above); rows and nests take it as --lc, edges as their stroke. */
+ * --lane-0..4 (tokens above); rows take it as --lc, edges as their stroke. */
 a.flow-node { cursor: pointer; }
-:is(.flow-node, .flow-nest) { --lc: var(--lane-0); }
-:is(.flow-node, .flow-nest).c1 { --lc: var(--lane-1); }
-:is(.flow-node, .flow-nest).c2 { --lc: var(--lane-2); }
-:is(.flow-node, .flow-nest).c3 { --lc: var(--lane-3); }
-:is(.flow-node, .flow-nest).c4 { --lc: var(--lane-4); }
+.flow-node { --lc: var(--lane-0); }
+.flow-node.c1 { --lc: var(--lane-1); }
+.flow-node.c2 { --lc: var(--lane-2); }
+.flow-node.c3 { --lc: var(--lane-3); }
+.flow-node.c4 { --lc: var(--lane-4); }
 .flow-hit { fill: transparent; stroke: none; transition: fill 120ms ease-out; }
 .flow-node:hover .flow-hit { fill: var(--row-hover); }
 .flow-node.selected .flow-hit { fill: color-mix(in srgb, var(--accent) 14%, transparent); stroke: var(--accent); stroke-width: 1.25; }
@@ -1097,18 +1097,6 @@ button.add-submit:disabled { background: var(--faint); color: var(--graphite); b
   .sh-top.sh-page-top .sh-mark { display: inline-flex; }
 }
 
-/* A callee nested in its call step: a frame under the callee's steps, tinted apart from the box it sits in. */
-.flow-nest { animation: zm-fade-in 200ms ease-out backwards; }
-.flow-nest-body { stroke: none; fill-opacity: 0.07; fill: var(--lane-0); pointer-events: none; }
-.flow-nest-body.c1 { fill: var(--lane-1); }
-.flow-nest-body.c2 { fill: var(--lane-2); }
-.flow-nest-body.c3 { fill: var(--lane-3); }
-.flow-nest-body.c4 { fill: var(--lane-4); }
-.flow-nest-hit { fill: transparent; stroke: none; }
-.flow-nest-head { cursor: pointer; }
-.flow-nest-head:hover .flow-nest-hit { fill: var(--row-hover); }
-.flow-nest-label { fill: var(--accent-text); font-weight: 600; pointer-events: none; }
-.flow-nest.selected .flow-nest-hit { fill: color-mix(in srgb, var(--accent) 14%, transparent); }
 .zm-expansion-runtime { fill: var(--thread); font-weight: 600; }
 .zm-expansion.is-runtime .zm-expansion-body { stroke: color-mix(in srgb, var(--thread) 55%, var(--hair)); stroke-dasharray: 6 3; }
 .zm-expansion.is-runtime .zm-expansion-accent { fill: var(--thread); }
