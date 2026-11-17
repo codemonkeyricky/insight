@@ -1,6 +1,6 @@
 # System view
 
-The System tab is a top-level tab, between Flow and Arch (`#/projects/<id>/view/system?scope=…`). It shows what the
+The System tab is a top-level tab, between Flow and Pipeline (`#/projects/<id>/view/system?scope=…`). It shows what the
 code in the current explorer scope runs on and what it touches outside itself: processes, threads, coroutines, the
 components that run on them, the queues and locks between them, the kernel, and the outside systems (network hosts,
 API routes, the filesystem, child processes, stores).
@@ -13,11 +13,11 @@ Every box and edge answers three questions: which code caused it, where it runs,
 
 | Tab | Modes |
 | --- | --- |
-| Overview, Flow, **System**, Arch, Compare, Triage, lenses | System has no modes. |
-| Arch | **Pipeline** or **Packages** (Packages by default). |
+| Flow, **System**, Pipeline, Packages | System has no modes. Pipeline and Packages are tabs of their own, with no mode toggle. |
 
-Arch no longer holds System. A saved Arch mode of `"system"` from before the tab existed reads as Packages. The
-System choice is not stored in the URL; the scope is.
+The tab bar has these four tabs only. `view/arch` redirects to Packages, and `view/overview`, `compare`, `triage`,
+`source`, `findings` and every lens view redirect to Flow, keeping the scope. The System choice is not stored in the
+URL; the scope is.
 
 The model is computed in the page by `api.getSystem`, so the live, static and hosted builds all show it. There is no
 server route.
@@ -384,7 +384,7 @@ Classification signals, in priority order (each node lists its signals in the ca
 
 Deploy roots (a folder that holds a `wrangler.toml`, `wrangler.json`, `wrangler.jsonc` or `vercel.json`) are components of
 the System model, so they also appear as components in the Runtime and Pipeline views. The Tiers view classifies them with
-the rules above; the Arch tab does not use them.
+the rules above; the Packages tab does not use them.
 
 Storage and external facts come from the System model's externals. Store drivers are recognised by import
 (`better-sqlite3`, `pg`, `mysql2`, `mongodb`, `redis`/`ioredis`, `@vercel/kv`, `@vercel/blob`, `@aws-sdk/client-s3`), and
@@ -430,7 +430,7 @@ Cloudflare Worker), and `packages/frontend/typescript/test/deploy.test.ts`.
 
 ## Pipeline mode
 
-Arch's Pipeline mode shows the processing stages of the explorer scope: where the scope's data comes from, which
+The Pipeline tab shows the processing stages of the explorer scope: where the scope's data comes from, which
 component handles it, and where it goes. It is derived by `pipelineModel(model, scope, { tests })` in
 `packages/core/model/src/pipeline.ts`, computed in the page by `api.getPipeline`, and drawn by the same `layoutSystem`
 and card, edge and panel code.

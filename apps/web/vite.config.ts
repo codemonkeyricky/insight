@@ -10,6 +10,5 @@ export default defineConfig({
     port: 5173,
     proxy: { "/api": { target: api, changeOrigin: false } },
   },
-  // Cytoscape is most of the bundle. It is loaded with the lens pages only when they are opened.
   build: { outDir: "dist", emptyOutDir: true, sourcemap: false, chunkSizeWarningLimit: 900 },
 });

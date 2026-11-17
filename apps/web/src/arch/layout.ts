@@ -1,6 +1,6 @@
 import type { ArchEdge, ArchModel, ArchPackage } from "@insight/model";
 
-// Pure geometry for the Arch tab. The view draws what archLayout returns and keeps no sizes of its own.
+// Pure geometry for the Packages tab. The view draws what archLayout returns and keeps no sizes of its own.
 
 /** A folder card: wide and tall enough for a 23 px name over a 16 px line. */
 export const ARCH_BOX_W = 250;

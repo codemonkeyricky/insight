@@ -1,74 +1,30 @@
-// Which content a workspace route shows. Pure, so the router tests can check every old URL form lands on the right content
-// without rendering anything.
-import type { ScopeKind } from "../ScopeNote";
-import type { LensTab } from "../../scopeLenses";
+// Which content a workspace route shows and which tabs the tab bar lists. Pure, so the router tests can check the tab bar and
+// the old URL forms without rendering anything.
 import { hrefView } from "../../router";
 import type { LayerLink } from "./LayerTabs";
 
-/** What the stage shows: the flow sheet, a page, or a lens page. */
-export type ShellContent = "flow" | "overview" | "system" | "arch" | "compare" | "triage" | "lens";
+/** What the stage shows: the flow sheet, System, the Pipeline page or the Packages page. */
+export type ShellContent = "flow" | "system" | "pipeline" | "packages";
 
-/** The content a tab shows. Overview is the flow sheet unless `full`. Any tab id that is not a page is a lens. */
-export function contentOf(tab: string, _kind: ScopeKind, full = false): ShellContent {
+/** The content a tab shows. Only the four tabs have content; any other id is redirected before it gets here (see redirectFor). */
+export function contentOf(tab: string): ShellContent {
   switch (tab) {
-    case "overview":
-      return full ? "overview" : "flow";
-    case "flow":
-      return "flow";
     case "system":
-    case "arch":
-    case "compare":
+    case "pipeline":
+    case "packages":
       return tab;
-    case "review":
-      return "triage";
     default:
-      return "lens";
+      return "flow";
   }
 }
 
-export interface LayersInput {
-  id: string;
-  tab: string;
-  scope: string;
-  content: ShellContent;
-  /** The static demo and the hosted build have no server: no Compare or Triage tab. */
-  noServer: boolean;
-  lenses: LensTab[];
-}
-
-/**
- * The tabs of the centre pane, in order: Overview, Flow, System, Arch, then (with a server) Compare and Triage, then one tab per lens
- * in the order given. A lens's tab is its id, so `view/<lens id>` opens it and a link to it round-trips.
- */
-export function layerLinks({ id, tab, scope, content, noServer, lenses }: LayersInput): LayerLink[] {
-  const page = (t: string, title: string, current: boolean, full = false): LayerLink => ({
+/** The tabs of the tab bar, in order: Flow, System, Pipeline, Packages. Each keeps the scope, so the tabs stay on the same folder or file. */
+export function layerLinks({ id, tab, scope }: { id: string; tab: string; scope: string }): LayerLink[] {
+  const page = (t: string, title: string): LayerLink => ({
     id: t,
     title,
-    href: hrefView(id, t, { scope, ...(full ? { full: true } : {}) }),
-    current,
-    group: "page",
+    href: hrefView(id, t, { scope }),
+    current: tab === t,
   });
-  return [
-    // Overview is current on the overview route, whether it shows the flow root or the full page. Flow is the flow tab otherwise.
-    page("overview", "Overview", tab === "overview", true),
-    page("flow", "Flow", content === "flow" && tab !== "overview"),
-    page("system", "System", content === "system"),
-    page("arch", "Arch", content === "arch"),
-    ...(noServer ? [] : [page("compare", "Compare", content === "compare"), page("review", "Triage", content === "triage")]),
-    ...lenses.map(
-      (t): LayerLink => ({
-        id: t.id,
-        title: t.title,
-        href: hrefView(id, t.id, { scope }),
-        current: t.id === tab,
-        group: "lens",
-        ...(t.dim ? { dim: true } : {}),
-        ...(t.reason ? { reason: t.reason } : {}),
-      }),
-    ),
-  ];
+  return [page("flow", "Flow"), page("system", "System"), page("pipeline", "Pipeline"), page("packages", "Packages")];
 }
-
-/** The overview tab is the flow root, so it always charts the whole project. Other tabs keep their scope. */
-export const flowScopeOf = (tab: string, scope: string): string => (tab === "overview" ? "" : scope);
-

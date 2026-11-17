@@ -49,7 +49,7 @@ A plugin that fails any check (bad JSON, missing entry, wrong export, mismatched
 - `inputs` lists extra globs whose file contents matter. Their contents are hashed into the frontend's `inputsHash`, and when that hash changes every shard of the frontend is extracted again. Use it for files like build definitions, where an edit changes the output.
 - `inputListing` lists globs for frontends whose output depends on which files exist, not on their contents, such as build-file globs (`glob(["*.cc"])`, `file(GLOB ...)`). A matching file contributes only its path to `inputsHash`, so adding or removing one re-extracts every shard, and editing one does not. A file that matches both `inputs` and `inputListing` contributes its path and its contents.
 - `detect` lists globs that suggest the frontend applies. `detect(root)` still decides.
-- `provides` lists the facets it fills. The coverage table in the overview reports them per run.
+- `provides` lists the facets it fills. The run report's `coverage` counts them per run.
 - `roles.frontend` is a module whose default export is the `Frontend`.
 - An optional `roles.resolver` names a module whose default export is a `Resolver` for one reference scheme (see below):
 
@@ -89,7 +89,7 @@ async *extract(ctx) {
 }
 ```
 
-A batch can also list `dependsOn`: other project files its facts were derived from, such as the file that declares a type a call was resolved against. A change to one of them re-extracts this batch. Use `ctx.log(...)` for diagnostics; they go into the run log.
+A batch can also list `dependsOn`: other project files its facts were derived from, such as the file that declares a type a call was resolved against. A change to one of them re-extracts this batch. Use `ctx.log(...)` for diagnostics; they go into the run's `logs`.
 
 If one file throws, only that file fails. The run records it under `failed` and keeps the other files. Prefer reporting a malformed input as a `finding` record in that file's batch, so the rest of the file is still used.
 
@@ -181,11 +181,11 @@ Add golden tests on a small fixture as well: the conformance kit checks shape, n
 
 ## Check it on a real project
 
-After the package builds, index a project and look at the coverage table and the run log:
+After the package builds, index a project and read the run report (`--json` prints all of it):
 
 ```sh
 pnpm -r build
 node apps/cli/dist/cli.js index /path/to/project
 ```
 
-Coverage shows files scanned, files with records and files with errors for each facet. Parse errors and frontend findings are listed under "Index" on the project overview, not under a lens. Messages a frontend logs with `ctx.log` go to the run log.
+`coverage` shows files scanned, files with records and files with errors for each facet. `problems` lists parse errors and frontend findings; they are not tied to a lens. Messages a frontend logs with `ctx.log` are kept in `logs`.

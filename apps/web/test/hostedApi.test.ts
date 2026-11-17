@@ -72,39 +72,6 @@ describe("raw source urls", () => {
 });
 
 describe("hostedApi reads", () => {
-  it("lists scope folders and files as unavailable with the root-only reason", async () => {
-    const id = projectIdOf({ owner: "rootonly", repo: "lists", sha: SHA });
-    const base = `${"/storage/"}gh/rootonly/lists/${SHA}/`;
-    const root = {
-      snapshot: "s1",
-      scope: "",
-      kind: "project",
-      stats: { nodes: 1, edges: 0, findings: 0, external: 0 },
-      facets: [],
-      lenses: [
-        { id: "lens-a", title: "A", status: "ok", findings: 2, hasContent: true },
-        { id: "lens-b", title: "B", status: "unavailable", reason: "no data", findings: null },
-      ],
-    };
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) => {
-        if (url === `${base}project.json`) return json(PROJECT_JSON);
-        if (url === `${base}scope/@root/lenses.json`) return json(root);
-        if (url === `${base}files.json`) return json([{ path: "src/app.ts", size: 1, functions: 0, types: 0, findings: 0 }]);
-        return new Response("missing", { status: 404 });
-      }),
-    );
-    const listing = await hostedApi.scopeLenses(id, "src/app.ts");
-    expect(listing.kind).toBe("file");
-    expect(listing.lenses.map((l) => l.status)).toEqual(["unavailable", "unavailable"]);
-    expect(listing.lenses.every((l) => l.reason === "Hosted indexes cover the project root only")).toBe(true);
-    const folder = await hostedApi.scopeLenses(id, "src");
-    expect(folder.kind).toBe("folder");
-    const rootListing = await hostedApi.scopeLenses(id, "");
-    expect(rootListing.lenses[0]?.status).toBe("ok");
-  });
-
   it("reads a source file from GitHub once and encodes its path", async () => {
     const id = projectIdOf({ owner: "src", repo: "fetch", sha: SHA });
     const fetchMock = vi.fn(async (url: string) => {
@@ -129,7 +96,6 @@ describe("hostedApi reads", () => {
 
   it("refuses writes with 405 and a hosted message", async () => {
     await expect(hostedApi.reindex("gh~o~r~" + SHA)).rejects.toMatchObject({ status: 405 });
-    await expect(hostedApi.compare("gh~o~r~" + SHA, "a", "b")).rejects.toThrow("read-only");
   });
 });
 

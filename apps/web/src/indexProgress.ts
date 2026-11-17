@@ -43,28 +43,18 @@ export function progressFraction(p: PhaseProgress): number {
   return clamp01(start + weight * ((step - 1 + within) / steps));
 }
 
-/** The run's log lines kept on screen. */
-export const LOG_LIMIT = 200;
-
-export interface LogEntry {
-  /** Identifies the line, so a replayed line that also arrives live is kept once. */
-  key: string;
-  text: string;
-}
-
 export interface IndexState {
   running: boolean;
   progress?: RunProgress;
   /** The furthest fraction this run has shown. It never goes down within a run. */
   fraction: number;
-  entries: LogEntry[];
   lastError?: string;
   finishedAt?: string;
 }
 
 export type IndexAction = { type: "reset" } | { type: "seed"; progress: RunProgress } | { type: "event"; event: RunEvent };
 
-export const initialIndexState: IndexState = { running: false, fraction: 0, entries: [] };
+export const initialIndexState: IndexState = { running: false, fraction: 0 };
 
 export function reduceIndexState(state: IndexState, action: IndexAction): IndexState {
   switch (action.type) {
@@ -77,10 +67,10 @@ export function reduceIndexState(state: IndexState, action: IndexAction): IndexS
   }
 }
 
-/** A phase of a run. A phase of another run (a new start) clears the lines of the last one. */
+/** A phase of a run. A phase of another run (a new start) resets the fraction shown. */
 function applyPhase(state: IndexState, p: RunProgress): IndexState {
   const fresh = state.progress?.startedAt !== p.startedAt;
-  const base = fresh ? { ...state, entries: [], fraction: 0 } : state;
+  const base = fresh ? { ...state, fraction: 0 } : state;
   return {
     ...base,
     running: true,
@@ -98,13 +88,6 @@ function reduceEvent(state: IndexState, e: RunEvent): IndexState {
       return state.running ? { ...state, running: false } : state;
     case "phase":
       return e.progress ? applyPhase(state, e.progress) : state;
-    case "progress": {
-      if (!e.line) return state;
-      const key = `${e.at}\u0000${e.line}`;
-      if (state.entries.some((entry) => entry.key === key)) return state;
-      const entries = [...state.entries, { key, text: `${e.at.slice(11, 19)}  ${e.line}` }];
-      return { ...state, entries: entries.slice(-LOG_LIMIT) };
-    }
     case "done":
       return { ...state, running: false, fraction: 1, finishedAt: e.at, lastError: undefined };
     case "failed":

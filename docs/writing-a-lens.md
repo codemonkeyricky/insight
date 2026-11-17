@@ -127,11 +127,11 @@ If two findings share an id, the core appends `#<i>` to the second. The diff giv
   ```
   `from` and `to` are state ids. `kind` `initial` is the filled start dot, `any` is the dashed "any state" pill, `unentered` is a greyed state, and `state` is an ordinary box. `confidence` picks the arc style: solid for `exact`, dashed for `inferred`, dotted for `heuristic`. `sites` are the source places behind the arc. `label` is the text on it, and `notes` are lines shown under the diagram.
 
-Give each view an `id` that is unique within the lens. The lens page draws graph views with cytoscape and renders table views as HTML. A result with `state-machine` views gets a machine list (holder, states, transitions) beside one diagram, laid out with elkjs and drawn as SVG, instead of every view stacked. The first machine is selected, and the choice is kept in the page hash as `machine=<holder id>`, so a reload keeps it. Clicking an arc opens its first site in the source panel and lists every site in a side panel. The lens's tables are drawn below as usual. A result counts as having content when it has a `state-machine` view with at least one transition. See [states-lens.md](states-lens.md) for the lens that uses it. It does not draw tree views yet: a lens can return one, and the API passes it on, but the page shows nothing for it.
+Give each view an `id` that is unique within the lens. Lens results are not shown in the web UI any more: the four tabs (Flow, System, Pipeline and Packages) do not draw them, so a lens's `views` and `metrics` reach only the API. See [states-lens.md](states-lens.md) for the lens that uses it. It does not draw tree views yet: a lens can return one, and the API passes it on, but the page shows nothing for it.
 
 ### Metrics
 
-`metrics` is a flat record of numbers, shown on the lens page. Use it for counts (`locks`, `orderEdges`, `cycles`, `unknownLocks` in the lock-order lens) so that a reader can see how much the lens actually saw. A lens that finds nothing because it saw nothing should say so in `metrics`, not return an empty result that looks like a clean bill of health.
+`metrics` is a flat record of numbers, returned by the API (the web UI does not draw lens results). Use it for counts (`locks`, `orderEdges`, `cycles`, `unknownLocks` in the lock-order lens) so that a reader can see how much the lens actually saw. A lens that finds nothing because it saw nothing should say so in `metrics`, not return an empty result that looks like a clean bill of health.
 
 ## Example: the lock-order lens
 
@@ -191,7 +191,7 @@ Build IR in the test with the fixtures at `@insight/sdk/testing`, not by running
 
 Then call `lens.run(view, ctx)` directly and assert on the findings, their ids and the metrics. `packages/lens/lock-order/test/lock-order.test.ts` does this with a small hand-built fixture, including a deliberate cycle, an inferred cross-call edge and a case with no cycle. Cover those three cases in any lens that has them, and check the `requires` path too: the lens should report unavailable when a required facet is missing.
 
-For the end to end check, index a real project with the CLI and open the lens page:
+For the end to end check, index a real project with the CLI and read the lens result from the API:
 
 ```sh
 pnpm -r build

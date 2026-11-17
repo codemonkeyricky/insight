@@ -1,8 +1,8 @@
 # Arch view
 
-## Arch tab
+## Packages tab
 
-The Arch tab draws the package-level architecture of a project: one box per package, one arrow per import between two
+The Packages tab draws the package-level architecture of a project: one box per package, one arrow per import between two
 packages. The explorer scope picks what is drawn. At the root (the project) it draws the whole project. At a folder or a
 package it draws that scope, as described under "Scoped view" below.
 
@@ -65,15 +65,15 @@ scope)` in `apps/web/src/arch/scoped.ts`, a pure function of the root model, so 
 - The band is two cards wide when the diagram's container (the centre pane) is at least 1400 px, one card otherwise. A
   drawing wider than the container is scaled to fit, so no column is cut off. The cards are coloured by layer: the left,
   the band and the right each keep one colour. The side panel also lists the scope's package's external packages.
-- A click on a folder or package card opens that scope in the Arch tab. A click on a file card opens its source. The
-  workspace's scope crumbs keep the Arch tab, so the view adds no breadcrumb of its own. "Open in Flow" opens the scope in
-  the Flow tab. At the root, a package or folder click also opens Arch, at that scope.
+- A click on a folder or package card opens that scope in the Packages tab. A click on a file card opens its source. The
+  workspace's scope crumbs keep the Packages tab, so the view adds no breadcrumb of its own. "Open in Flow" opens the scope in
+  the Flow tab. At the root, a package or folder click also opens Packages, at that scope.
 - A boundary card for the root package is named "project root". A sibling folder is named by its path inside the
   package, and its full path is in the card's tooltip.
 
 ### Build packages and external packages
 
-When the project has build-system packages (see [build-systems.md](build-systems.md)), the Arch tab shows what the build
+When the project has build-system packages (see [build-systems.md](build-systems.md)), the Packages tab shows what the build
 declares next to the code.
 
 - **External packages.** The side panel lists every `packaging.external` node of the project under "External packages",

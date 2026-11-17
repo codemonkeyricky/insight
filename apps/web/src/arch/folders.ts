@@ -1,7 +1,7 @@
 import type { ArchEdge, ArchFile, ArchFileImport, ArchModel, ArchPackage } from "@insight/model";
 import type { Span } from "../api";
 
-// The folder view of the Arch tab. A project with fewer than three packages draws its folders instead: one card per
+// The folder view of the Packages tab. A project with fewer than three packages draws its folders instead: one card per
 // folder that holds code, at the shallowest depth that gives at least three such folders. Folders without code are not
 // cards; the tab counts them in a line under the diagram. Pure, so it is unit tested.
 
@@ -141,7 +141,7 @@ export function folderView(model: ArchModel): DiagramModel & { depth: number } {
 }
 
 /**
- * The model the Arch tab draws: the package model when it has enough packages, otherwise the folder view when that shows
+ * The model the Packages tab draws: the package model when it has enough packages, otherwise the folder view when that shows
  * more cards than the packages do.
  */
 export function diagramModel(model: ArchModel): DiagramModel {

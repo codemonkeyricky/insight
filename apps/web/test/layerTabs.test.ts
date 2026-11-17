@@ -1,98 +1,96 @@
 import { describe, expect, it } from "vitest";
 import { fileTarget, opensCodePane, scopeCodeTarget } from "../src/codeTarget.js";
-import { layerLinks } from "../src/components/sheet/shell.js";
+import { contentOf, layerLinks } from "../src/components/sheet/shell.js";
 import { hrefFile, hrefView, parseRoute, redirectFor } from "../src/router.js";
-import type { LensTab } from "../src/scopeLenses.js";
 
-const lenses: LensTab[] = [
-  { id: "lens-dependencies", title: "Dependencies", dim: false },
-  { id: "lens-lock-order", title: "Lock order", dim: true, reason: "Nothing to show for this scope." },
-];
+const tabs = (tab: string, scope = "src") => layerLinks({ id: "p1", tab, scope });
 
-const tabs = (tab: string, noServer: boolean, content: Parameters<typeof layerLinks>[0]["content"] = "lens") =>
-  layerLinks({ id: "p1", tab, scope: "src", content, noServer, lenses });
-
-describe("the tab list", () => {
-  it("is Overview, Flow, System, Arch, then one tab per lens, in the order given", () => {
-    const links = tabs("overview", true, "flow");
-    expect(links.map((l) => l.title)).toEqual(["Overview", "Flow", "System", "Arch", "Dependencies", "Lock order"]);
-    expect(links.map((l) => l.group)).toEqual(["page", "page", "page", "page", "lens", "lens"]);
+describe("the tab bar", () => {
+  it("is exactly Flow, System, Pipeline and Packages, in that order", () => {
+    expect(tabs("flow").map((l) => l.title)).toEqual(["Flow", "System", "Pipeline", "Packages"]);
+    expect(tabs("flow").map((l) => l.id)).toEqual(["flow", "system", "pipeline", "packages"]);
   });
 
-  it("marks System current on the system content and links it to the view, keeping the scope", () => {
-    const links = layerLinks({ id: "p1", tab: "system", scope: "src", content: "system", noServer: true, lenses });
-    const system = links.find((l) => l.id === "system");
-    expect(system).toMatchObject({ current: true, href: "#/projects/p1/view/system?scope=src" });
-    expect(links.find((l) => l.id === "arch")?.current).toBe(false);
-  });
-
-  it("has no Source or Findings tab, in any build", () => {
-    for (const noServer of [true, false]) {
-      const ids = tabs("overview", noServer, "flow").map((l) => l.id);
-      expect(ids).not.toContain("source");
-      expect(ids).not.toContain("findings");
+  it("marks only the current tab, for each of the four", () => {
+    for (const t of ["flow", "system", "pipeline", "packages"]) {
+      expect(tabs(t).filter((l) => l.current).map((l) => l.id)).toEqual([t]);
     }
   });
 
-  it("adds Compare and Triage only where there is a server, before the lenses", () => {
-    expect(tabs("overview", false, "flow").map((l) => l.title)).toEqual([
-      "Overview",
-      "Flow",
-      "System",
-      "Arch",
-      "Compare",
-      "Triage",
-      "Dependencies",
-      "Lock order",
+  it("links each tab to its view, keeping the scope", () => {
+    expect(tabs("flow", "packages/core").map((l) => l.href)).toEqual([
+      "#/projects/p1/view/flow?scope=packages%2Fcore",
+      "#/projects/p1/view/system?scope=packages%2Fcore",
+      "#/projects/p1/view/pipeline?scope=packages%2Fcore",
+      "#/projects/p1/view/packages?scope=packages%2Fcore",
     ]);
   });
 
-  it("gives each lens the view URL of its id, so a deep link round-trips", () => {
-    const dep = tabs("lens-dependencies", true).find((l) => l.id === "lens-dependencies")!;
-    expect(dep.href).toBe("#/projects/p1/view/lens-dependencies?scope=src");
-    expect(parseRoute(dep.href)).toEqual({ name: "workspace", id: "p1", tab: "lens-dependencies", scope: "src" });
-    expect(dep.current).toBe(true);
-    expect(tabs("lens-dependencies", true).filter((l) => l.current).map((l) => l.id)).toEqual(["lens-dependencies"]);
-  });
-
-  it("keeps the dim state and reason of a lens with nothing to show", () => {
-    const lock = tabs("overview", true, "flow").find((l) => l.id === "lens-lock-order")!;
-    expect(lock).toMatchObject({ dim: true, reason: "Nothing to show for this scope.", group: "lens" });
-  });
-
-  it("selects Overview on the overview route, full or not, and Flow on the flow route", () => {
-    expect(tabs("overview", true, "flow").find((l) => l.id === "overview")!.current).toBe(true);
-    expect(tabs("overview", true, "flow").find((l) => l.id === "flow")!.current).toBe(false);
-    expect(tabs("flow", true, "flow").find((l) => l.id === "flow")!.current).toBe(true);
-    expect(tabs("overview", true, "overview").find((l) => l.id === "overview")!.current).toBe(true);
+  it("opens Flow for the bare project, and the page of each tab draws its own content", () => {
+    expect(parseRoute("#/projects/p1")).toMatchObject({ tab: "flow", scope: "" });
+    expect(contentOf("flow")).toBe("flow");
+    expect(contentOf("system")).toBe("system");
+    expect(contentOf("pipeline")).toBe("pipeline");
+    expect(contentOf("packages")).toBe("packages");
   });
 });
 
-describe("old URLs land safely", () => {
-  it("view/findings lands on Overview", () => {
-    expect(redirectFor(parseRoute("#/projects/p1/view/findings"))).toBe(hrefView("p1", "overview"));
-    expect(redirectFor(parseRoute("#/projects/p1/view/findings?scope=src"))).toBe(hrefView("p1", "overview", { scope: "src" }));
+describe("old tab URLs redirect, keeping the scope", () => {
+  it("view/arch goes to Packages", () => {
+    expect(redirectFor(parseRoute("#/projects/p1/view/arch?scope=packages%2Fcore"))).toBe("#/projects/p1/view/packages?scope=packages%2Fcore");
+    expect(redirectFor(parseRoute("#/projects/p1/view/arch"))).toBe("#/projects/p1/view/packages");
   });
 
-  it("view/source lands on Overview, and a file:line on the code pane at that line", () => {
+  it("view/triage (and the older review link) goes to Flow", () => {
+    expect(redirectFor(parseRoute("#/projects/p1/view/triage?scope=packages%2Fcore"))).toBe("#/projects/p1/view/flow?scope=packages%2Fcore");
+    expect(redirectFor(parseRoute("#/projects/p1/review"))).toBe("#/projects/p1/view/flow");
+  });
+
+  it("view/overview goes to Flow and drops the full flag", () => {
+    expect(redirectFor(parseRoute("#/projects/p1/view/overview?scope=src&full=1"))).toBe("#/projects/p1/view/flow?scope=src");
+  });
+
+  it("compare goes to Flow and drops its base and head, which Flow ignores", () => {
+    expect(redirectFor(parseRoute("#/projects/p1/compare?base=aaa&head=bbb"))).toBe("#/projects/p1/view/flow");
+    expect(redirectFor(parseRoute("#/projects/p1/view/compare?scope=src&base=aaa&head=bbb"))).toBe("#/projects/p1/view/flow?scope=src");
+  });
+
+  it("every lens view goes to Flow with the same scope", () => {
+    expect(redirectFor(parseRoute("#/projects/p1/view/lens-dependencies?scope=src%2Fcore"))).toBe("#/projects/p1/view/flow?scope=src%2Fcore");
+    expect(redirectFor(parseRoute("#/projects/p1/lenses/lock-order"))).toBe("#/projects/p1/view/flow");
+  });
+
+  it("keeps the line and function of a link through the redirect", () => {
+    const route = parseRoute("#/projects/p1/view/triage?scope=src%2Fa.ts&line=7&fn=src%2Fa.ts%23run");
+    expect(redirectFor(route)).toBe("#/projects/p1/view/flow?scope=src%2Fa.ts&line=7&fn=src%2Fa.ts%23run");
+  });
+
+  it("the findings and source views go to Flow, and a file:line opens the code pane there", () => {
     const route = parseRoute("#/projects/p1/view/source?scope=src%2Fa.ts&line=7");
     const target = parseRoute(redirectFor(route) as string);
-    expect(target).toMatchObject({ name: "workspace", tab: "overview", scope: "src/a.ts", line: 7 });
+    expect(target).toMatchObject({ name: "workspace", tab: "flow", scope: "src/a.ts", line: 7 });
     expect(opensCodePane(route.name === "workspace" ? route.line : undefined)).toBe(true);
+    expect(redirectFor(parseRoute("#/projects/p1/view/findings?scope=src"))).toBe("#/projects/p1/view/flow?scope=src");
+  });
+
+  it("the four tabs are not redirected", () => {
+    for (const t of ["flow", "system", "pipeline", "packages"]) {
+      expect(redirectFor(parseRoute(`#/projects/p1/view/${t}?scope=src`))).toBeUndefined();
+    }
   });
 });
 
 describe("a file:line link opens the code pane", () => {
-  it("an Arch import site keeps the Arch tab and shows the file at its line", () => {
-    const href = hrefFile("p1", "src/core/run.ts", 42, "arch");
+  it("a Packages import site keeps the Packages tab and shows the file at its line", () => {
+    const href = hrefFile("p1", "src/core/run.ts", 42, "packages");
     const route = parseRoute(href);
-    expect(route).toMatchObject({ name: "workspace", tab: "arch", scope: "src/core/run.ts", line: 42 });
+    expect(route).toMatchObject({ name: "workspace", tab: "packages", scope: "src/core/run.ts", line: 42 });
     if (route.name !== "workspace") throw new Error("not a workspace route");
     expect(opensCodePane(route.line)).toBe(true);
     expect(scopeCodeTarget(route.scope, true, route.line)).toEqual(fileTarget("src/core/run.ts", 42));
   });
 
-  it("a flow or lens file link defaults to the flow tab on the file", () => {
+  it("a flow file link defaults to the flow tab on the file", () => {
     const route = parseRoute(hrefFile("p1", "src/a.ts", 3));
     expect(route).toMatchObject({ tab: "flow", scope: "src/a.ts", line: 3 });
   });
@@ -102,5 +100,9 @@ describe("a file:line link opens the code pane", () => {
     if (route.name !== "workspace") throw new Error("not a workspace route");
     expect(opensCodePane(route.line)).toBe(false);
     expect(scopeCodeTarget(route.scope, true, route.line)).toEqual(fileTarget("src/a.ts"));
+  });
+
+  it("the system view link keeps its scope", () => {
+    expect(hrefView("p1", "system", { scope: "src" })).toBe("#/projects/p1/view/system?scope=src");
   });
 });

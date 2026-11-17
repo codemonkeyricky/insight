@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { contentOf, flowScopeOf } from "../src/components/sheet/shell.js";
+import { contentOf } from "../src/components/sheet/shell.js";
 import { fuzzyPositions, fuzzyScore, rankFiles, rankFuzzy } from "../src/components/sheet/fuzzy.js";
-import { BUILTIN_TABS, hrefCompare, hrefFile, hrefFlow, hrefLens, hrefProject, hrefReview, hrefView, inScope, parseRoute, redirectFor } from "../src/router.js";
+import { BUILTIN_TABS, hrefFile, hrefFlow, hrefProject, hrefView, inScope, parseRoute, redirectFor } from "../src/router.js";
 
 describe("hash router", () => {
   it("parses the projects list", () => {
@@ -10,8 +10,8 @@ describe("hash router", () => {
     expect(parseRoute("#/projects")).toEqual({ name: "projects" });
   });
 
-  it("parses a project as its overview of the whole project", () => {
-    expect(parseRoute("#/projects/ab12")).toEqual({ name: "workspace", id: "ab12", tab: "overview", scope: "" });
+  it("parses a project as the Flow tab of the whole project", () => {
+    expect(parseRoute("#/projects/ab12")).toEqual({ name: "workspace", id: "ab12", tab: "flow", scope: "" });
   });
 
   it("parses the canonical view URL with its scope, line and function", () => {
@@ -37,7 +37,7 @@ describe("hash router", () => {
     expect(parseRoute("#/projects/ab12/view/source?scope=src%2Fa.ts&line=0")).toEqual({ name: "workspace", id: "ab12", tab: "source", scope: "src/a.ts" });
   });
 
-  it("parses a lens tab by its id", () => {
+  it("parses a legacy lens tab id as its tab (redirectFor sends it to Flow)", () => {
     expect(parseRoute("#/projects/ab12/view/lens-dependencies?scope=src")).toEqual({
       name: "workspace",
       id: "ab12",
@@ -84,22 +84,22 @@ describe("hash router", () => {
       fn,
       line: 7,
     });
-    expect(parseRoute(hrefView("x y", "overview"))).toEqual({ name: "workspace", id: "x y", tab: "overview", scope: "" });
+    expect(parseRoute(hrefView("x y", "flow"))).toEqual({ name: "workspace", id: "x y", tab: "flow", scope: "" });
   });
 
   it("round-trips the helpers that build links", () => {
-    expect(parseRoute(hrefProject("x y"))).toEqual({ name: "workspace", id: "x y", tab: "overview", scope: "" });
-    expect(parseRoute(hrefLens("p1", "lock-order"))).toEqual({ name: "workspace", id: "p1", tab: "lock-order", scope: "" });
-    expect(parseRoute(hrefLens("p1", "lock-order", "src"))).toEqual({ name: "workspace", id: "p1", tab: "lock-order", scope: "src" });
-    expect(parseRoute(hrefReview("p1"))).toEqual({ name: "workspace", id: "p1", tab: "review", scope: "" });
+    expect(parseRoute(hrefProject("x y"))).toEqual({ name: "workspace", id: "x y", tab: "flow", scope: "" });
+    expect(parseRoute(hrefView("p1", "lock-order"))).toEqual({ name: "workspace", id: "p1", tab: "lock-order", scope: "" });
+    expect(parseRoute(hrefView("p1", "lock-order", { scope: "src" }))).toEqual({ name: "workspace", id: "p1", tab: "lock-order", scope: "src" });
+    expect(parseRoute(hrefView("p1", "review"))).toEqual({ name: "workspace", id: "p1", tab: "review", scope: "" });
     expect(parseRoute(hrefFile("p1"))).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "" });
     expect(parseRoute(hrefFile("p1", "src/a b/c#d.ts", 7))).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "src/a b/c#d.ts", line: 7 });
     expect(parseRoute(hrefFile("p1", "src/a.ts"))).toEqual({ name: "workspace", id: "p1", tab: "flow", scope: "src/a.ts" });
   });
 
-  it("keeps the tab a file link is made from, so an Arch link stays on Arch", () => {
-    expect(hrefFile("p1", "src/a.ts", 7, "arch")).toBe("#/projects/p1/view/arch?scope=src%2Fa.ts&line=7");
-    expect(parseRoute(hrefFile("p1", "src/a.ts", 7, "arch"))).toEqual({ name: "workspace", id: "p1", tab: "arch", scope: "src/a.ts", line: 7 });
+  it("keeps the tab a file link is made from, so a Packages link stays on Packages", () => {
+    expect(hrefFile("p1", "src/a.ts", 7, "packages")).toBe("#/projects/p1/view/packages?scope=src%2Fa.ts&line=7");
+    expect(parseRoute(hrefFile("p1", "src/a.ts", 7, "packages"))).toEqual({ name: "workspace", id: "p1", tab: "packages", scope: "src/a.ts", line: 7 });
   });
 
   it("builds flow links with the file as the scope and the function as fn", () => {
@@ -155,29 +155,21 @@ describe("hash router", () => {
     });
   });
 
-  it("sends a hidden lens to the flow tab with the same scope, from both lens URLs", () => {
-    const hidden = ["lens-execution"];
-    const fromView = parseRoute("#/projects/p1/view/lens-execution?scope=src%2Fcore");
-    const fromLenses = parseRoute("#/projects/p1/lenses/lens-execution");
-    expect(redirectFor(fromView, hidden)).toBe("#/projects/p1/view/flow?scope=src%2Fcore");
-    expect(redirectFor(fromLenses, hidden)).toBe("#/projects/p1/view/flow");
-    expect(redirectFor(parseRoute("#/projects/p1/view/lens-execution"), hidden)).toBe("#/projects/p1/view/flow");
+  it("sends a lens view to Flow with the same scope, from both lens URLs", () => {
+    expect(redirectFor(parseRoute("#/projects/p1/view/lens-execution?scope=src%2Fcore"))).toBe("#/projects/p1/view/flow?scope=src%2Fcore");
+    expect(redirectFor(parseRoute("#/projects/p1/lenses/lens-execution"))).toBe("#/projects/p1/view/flow");
   });
 
-  it("leaves a lens alone until the loaded rows say it is hidden", () => {
-    expect(redirectFor(parseRoute("#/projects/p1/view/lens-execution"))).toBeUndefined();
-    expect(redirectFor(parseRoute("#/projects/p1/view/lens-calls"), ["lens-execution"])).toBeUndefined();
-  });
-
-  it("does not redirect any other route", () => {
-    expect(redirectFor(parseRoute("#/projects/p1/view/flow?scope=src"))).toBeUndefined();
-    expect(redirectFor(parseRoute("#/projects/p1/view/lens-dependencies?scope=src"))).toBeUndefined();
+  it("does not redirect the four tabs or the project", () => {
+    for (const t of ["flow", "system", "pipeline", "packages"]) {
+      expect(redirectFor(parseRoute(`#/projects/p1/view/${t}?scope=src`))).toBeUndefined();
+    }
     expect(redirectFor(parseRoute("#/projects"))).toBeUndefined();
     expect(redirectFor(parseRoute("#/elsewhere"))).toBeUndefined();
   });
 
   it("parses the compare links the helpers build", () => {
-    expect(parseRoute(hrefCompare("ab12", "main~1", "HEAD"))).toEqual({
+    expect(parseRoute(hrefView("ab12", "compare", { base: "main~1", head: "HEAD" }))).toEqual({
       name: "workspace",
       id: "ab12",
       tab: "compare",
@@ -185,7 +177,7 @@ describe("hash router", () => {
       base: "main~1",
       head: "HEAD",
     });
-    expect(parseRoute(hrefCompare("ab12"))).toEqual({ name: "workspace", id: "ab12", tab: "compare", scope: "" });
+    expect(parseRoute(hrefView("ab12", "compare"))).toEqual({ name: "workspace", id: "ab12", tab: "compare", scope: "" });
   });
 
   it("treats anything else as unknown", () => {
@@ -196,11 +188,11 @@ describe("hash router", () => {
     expect(parseRoute("#/projects/ab12/compare/extra?base=a")).toEqual({ name: "unknown" });
   });
 
-  it("lists the built-in tabs; any other tab id is a lens", () => {
-    expect([...BUILTIN_TABS]).toEqual(["overview", "flow", "system", "arch", "compare", "review"]);
+  it("lists the built-in tabs, and a route to any other tab redirects (see redirectFor)", () => {
+    expect([...BUILTIN_TABS]).toEqual(["flow", "system", "pipeline", "packages"]);
   });
 
-  it("parses the arch tab as a view, with no scope needed", () => {
+  it("parses a legacy arch tab id as its tab (redirectFor sends it to Packages)", () => {
     expect(parseRoute("#/projects/p1/view/arch")).toEqual({ name: "workspace", id: "p1", tab: "arch", scope: "" });
     expect(hrefView("p1", "arch")).toBe("#/projects/p1/view/arch");
   });
@@ -221,52 +213,53 @@ describe("hash router", () => {
   });
 });
 
-describe("old URLs land on the sheet content", () => {
-  it("the bare project and the flow tabs draw the flow sheet", () => {
-    expect(parseRoute("#/projects/ab12")).toMatchObject({ tab: "overview" });
-    expect(contentOf("overview", "project")).toBe("flow");
-    expect(contentOf("flow", "folder")).toBe("flow");
-    expect(contentOf("flow", "file")).toBe("flow");
+describe("the content of each tab", () => {
+  it("the bare project opens the flow tab", () => {
+    expect(parseRoute("#/projects/ab12")).toMatchObject({ tab: "flow" });
+    expect(contentOf("flow")).toBe("flow");
   });
 
-  it("overview is the flow root, and the full overview page only with full=1", () => {
-    const route = parseRoute("#/projects/ab12/view/overview?full=1");
-    expect(route).toMatchObject({ tab: "overview", full: true });
-    expect(contentOf("overview", "project", true)).toBe("overview");
-    expect(contentOf("overview", "project")).toBe("flow");
-    expect(flowScopeOf("overview", "src/a")).toBe("");
+  it("system, pipeline and packages draw their own content", () => {
+    expect(contentOf("system")).toBe("system");
+    expect(contentOf("pipeline")).toBe("pipeline");
+    expect(contentOf("packages")).toBe("packages");
   });
 
-  it("arch, compare and review keep their own content, and lens ids draw lens pages", () => {
-    expect(contentOf("arch", "project")).toBe("arch");
-    expect(contentOf("system", "project")).toBe("system");
-    expect(contentOf("compare", "project")).toBe("compare");
-    expect(contentOf("review", "project")).toBe("triage");
-    expect(contentOf("some-lens", "folder")).toBe("lens");
+  it("drops the full flag of the retired overview page", () => {
+    expect(parseRoute("#/projects/ab12/view/overview?full=1")).not.toHaveProperty("full");
   });
-
 });
 
-describe("the retired Source and Findings tabs", () => {
-  it("send the Findings view to Overview, keeping its scope", () => {
-    expect(redirectFor(parseRoute("#/projects/p1/view/findings?scope=src"))).toBe("#/projects/p1/view/overview?scope=src");
-    expect(redirectFor(parseRoute("#/projects/p1/view/findings"))).toBe("#/projects/p1/view/overview");
+describe("the retired views redirect to the tabs that replace them", () => {
+  it("send Findings and Source to Flow, keeping the scope", () => {
+    expect(redirectFor(parseRoute("#/projects/p1/view/findings?scope=src"))).toBe("#/projects/p1/view/flow?scope=src");
+    expect(redirectFor(parseRoute("#/projects/p1/view/findings"))).toBe("#/projects/p1/view/flow");
   });
 
-  it("send the Source view to Overview, keeping the file scope and line, so the code pane opens that file", () => {
-    const route = parseRoute("#/projects/p1/view/source?scope=src%2Fa.ts&line=7");
-    expect(redirectFor(route)).toBe("#/projects/p1/view/overview?scope=src%2Fa.ts&line=7");
-    expect(redirectFor(parseRoute("#/projects/p1/view/source"))).toBe("#/projects/p1/view/overview");
+  it("send the Source view to Flow, keeping the file scope and line", () => {
+    expect(redirectFor(parseRoute("#/projects/p1/view/source?scope=src%2Fa.ts&line=7"))).toBe("#/projects/p1/view/flow?scope=src%2Fa.ts&line=7");
+    expect(redirectFor(parseRoute("#/projects/p1/view/source"))).toBe("#/projects/p1/view/flow");
   });
 
-  it("send the old files URLs to Overview with the file and line", () => {
-    expect(redirectFor(parseRoute("#/projects/p1/files/src/app.ts?line=12"))).toBe("#/projects/p1/view/overview?scope=src%2Fapp.ts&line=12");
-    expect(redirectFor(parseRoute("#/projects/p1/files"))).toBe("#/projects/p1/view/overview");
+  it("send the old files URLs to Flow with the file and line", () => {
+    expect(redirectFor(parseRoute("#/projects/p1/files/src/app.ts?line=12"))).toBe("#/projects/p1/view/flow?scope=src%2Fapp.ts&line=12");
+    expect(redirectFor(parseRoute("#/projects/p1/files"))).toBe("#/projects/p1/view/flow");
   });
 
-  it("the redirect target is a route that shows Overview with the file as its scope", () => {
-    const target = parseRoute(redirectFor(parseRoute("#/projects/p1/view/source?scope=src%2Fa.ts&line=7")) as string);
-    expect(target).toEqual({ name: "workspace", id: "p1", tab: "overview", scope: "src/a.ts", line: 7 });
+  it("send the old review URL to Flow, keeping its scope", () => {
+    expect(redirectFor(parseRoute("#/projects/p1/review"))).toBe("#/projects/p1/view/flow");
+    expect(redirectFor(parseRoute("#/projects/p1/view/review?scope=src"))).toBe("#/projects/p1/view/flow?scope=src");
+  });
+
+  it("send a compare URL with base and head to Flow, dropping base and head", () => {
+    expect(redirectFor(parseRoute("#/projects/p1/compare?base=aaa&head=bbb"))).toBe("#/projects/p1/view/flow");
+    expect(redirectFor(parseRoute("#/projects/p1/view/compare?base=aaa&head=bbb"))).toBe("#/projects/p1/view/flow");
+  });
+
+  it("send Arch to Packages and every other retired view to Flow", () => {
+    expect(redirectFor(parseRoute("#/projects/p1/view/arch?scope=packages%2Fcore"))).toBe("#/projects/p1/view/packages?scope=packages%2Fcore");
+    expect(redirectFor(parseRoute("#/projects/p1/view/compare"))).toBe("#/projects/p1/view/flow");
+    expect(redirectFor(parseRoute("#/projects/p1/view/triage?scope=packages%2Fcore"))).toBe("#/projects/p1/view/flow?scope=packages%2Fcore");
   });
 });
 

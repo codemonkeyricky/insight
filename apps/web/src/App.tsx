@@ -87,7 +87,6 @@ export function App() {
             trace={route.trace}
             base={route.base}
             head={route.head}
-            full={route.full}
             findingKind={route.kind}
           />
         )}
