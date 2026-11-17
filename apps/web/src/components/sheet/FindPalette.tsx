@@ -52,6 +52,7 @@ function pageItems(id: string): FindItem[] {
   const page = (label: string, href: string): FindItem => ({ key: `page:${href}`, label, detail: "Page", href, kind: "page" });
   return [
     page("Flow", hrefView(id, "flow")),
+    page("Symbols", hrefView(id, "symbols")),
     page("System", hrefView(id, "system")),
     page("Pipeline", hrefView(id, "pipeline")),
     page("Packages", hrefView(id, "packages")),

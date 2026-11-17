@@ -1331,3 +1331,46 @@ a.auth-chip { text-decoration: none; }
 .repo-list a:hover { border-color: var(--accent); }
 .repo-name { min-width: 0; overflow-wrap: anywhere; }
 .repo-lock { color: var(--muted); flex: none; }
+
+/* The Symbols tab: a start list of exported functions, and a chain of boxes to its right (see components/symbols/SymbolsView.tsx). */
+.sh-stage-symbols { display: flex; flex-direction: column; overflow: hidden; }
+.sym { flex: 1 1 auto; min-height: 0; display: flex; }
+.sym-list { flex: 0 0 240px; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--hair); background: var(--panel); }
+.sym-filter { padding: 10px 10px 6px; }
+.sym-filter-input { width: 100%; box-sizing: border-box; font: inherit; font-size: var(--t-sm); color: var(--fg); background: var(--box); border: 1px solid var(--hair); border-radius: var(--r-sm); padding: 5px 8px; }
+.sym-filter-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.sym-list > .sym-none { padding: 6px 12px; }
+.sym-group { overflow: visible; }
+.sym-file { margin: 0; padding: 10px 12px 4px; font-size: var(--t-xs); font-weight: var(--w-semi); color: var(--muted); font-family: var(--font-code); overflow-wrap: anywhere; }
+.sym-starts { list-style: none; margin: 0; padding: 0 6px 4px; }
+.sym-start { display: block; width: 100%; text-align: left; font: inherit; font-size: var(--t-sm); color: var(--fg); background: none; border: 0; border-radius: var(--r-sm); padding: 4px 8px; cursor: pointer; overflow-wrap: anywhere; }
+.sym-start:hover { background: var(--row-hover); }
+.sym-start[aria-current="true"] { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent-text); }
+.sym-start:focus-visible, .sym-row:focus-visible, .sym-title:focus-visible, .sym-chip:focus-visible, .sym-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.sym-canvas { flex: 1 1 auto; min-width: 0; overflow: auto; position: relative; }
+.sym-empty, .sym-canvas > .sym-empty { padding: 24px; }
+.sym-track { position: relative; display: flex; align-items: flex-start; gap: 72px; width: max-content; min-height: 100%; padding: 24px 32px 48px; box-sizing: border-box; }
+.sym-column { display: flex; align-items: flex-start; gap: 72px; }
+.sym-links { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.sym-links path { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linecap: round; opacity: 0.8; }
+.sym-box { flex: 0 0 260px; width: 260px; box-sizing: border-box; background: var(--panel); border: 1px solid var(--hair); border-radius: var(--r-md); box-shadow: var(--shadow); overflow: hidden; }
+.sym-callers { border-style: dashed; }
+.sym-head { display: flex; align-items: flex-start; gap: 8px; padding: 10px 10px 8px 12px; border-bottom: 1px solid var(--hair); }
+.sym-title { flex: 1 1 auto; min-width: 0; text-align: left; font: inherit; color: var(--fg); background: none; border: 0; padding: 0; cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
+.sym-title:hover .sym-name { text-decoration: underline; text-underline-offset: 2px; }
+.sym-name, .sym-callers-title { font-size: var(--t-md); font-weight: var(--w-semi); overflow-wrap: anywhere; line-height: var(--lh-tight); }
+.sym-callers-title { flex: 1 1 auto; min-width: 0; color: var(--fg); }
+.sym-path { font-family: var(--font-code); font-size: var(--t-xs); color: var(--muted); overflow-wrap: anywhere; }
+.sym-chip { flex: 0 0 auto; font: inherit; font-size: var(--t-xs); font-weight: var(--w-med); color: var(--accent-text); background: color-mix(in srgb, var(--accent) 12%, transparent); border: 0; border-radius: var(--r-pill); padding: 3px 9px; cursor: pointer; white-space: nowrap; }
+.sym-chip[aria-expanded="true"] { background: var(--accent-fill); color: var(--on-accent); }
+.sym-close { flex: 0 0 auto; font: inherit; font-size: var(--t-md); line-height: 1; color: var(--muted); background: none; border: 0; border-radius: var(--r-sm); padding: 2px 6px; cursor: pointer; }
+.sym-close:hover { background: var(--row-hover); }
+.sym-rows { list-style: none; margin: 0; padding: 4px; }
+.sym-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; width: 100%; box-sizing: border-box; text-align: left; font: inherit; font-size: var(--t-sm); color: var(--fg); background: none; border: 0; border-radius: var(--r-sm); padding: 6px 8px; cursor: pointer; }
+.sym-row:hover { background: var(--row-hover); }
+.sym-row[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent-text); }
+.sym-row-name { min-width: 0; overflow-wrap: anywhere; }
+.sym-via { font-size: var(--t-xs); color: var(--muted); }
+.sym-maybe { font-size: var(--t-xs); color: var(--warn-text); border: 1px solid currentColor; border-radius: var(--r-pill); padding: 0 6px; line-height: 1.5; }
+.sym-box > .sym-none { padding: 8px 12px 10px; margin: 0; }
+@media (prefers-reduced-motion: reduce) { .sym-track * { transition: none !important; } }

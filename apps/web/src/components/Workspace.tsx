@@ -20,6 +20,7 @@ import { shortCommit } from "./sheet/TitleBlock";
 import { ArchView } from "./views/ArchView";
 import { PipelineTab } from "./views/PipelineTab";
 import { FlowView } from "./views/FlowView";
+import { SymbolsView } from "./symbols/SymbolsView";
 import { SystemView } from "./views/SystemView";
 import { ZoomStore } from "../zoom/scene";
 
@@ -39,6 +40,8 @@ export interface WorkspaceProps {
   head?: string;
   /** The flow tab's findings layer, drawing only the findings of this kind. */
   findingKind?: string;
+  /** The Symbols tab's chain of exported functions, as their ids joined by commas. */
+  chain?: string;
 }
 
 interface Loaded {
@@ -54,7 +57,7 @@ const isEditable = (target: EventTarget | null) =>
  * stay put on every tab; the center holds the layers as tabs over the view. On a phone the two side panes are drawers, opened
  * from the top bar. Find opens as an overlay.
  */
-export function Workspace({ id, tab, scope, line, fn, trace, base, head, findingKind }: WorkspaceProps) {
+export function Workspace({ id, tab, scope, line, fn, trace, base, head, findingKind, chain }: WorkspaceProps) {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [findOpen, setFindOpen] = useState(false);
@@ -74,8 +77,8 @@ export function Workspace({ id, tab, scope, line, fn, trace, base, head, finding
   /** The flow charts, shared by the map and the code pane, so both read one cache. */
   const store = useMemo(() => new ZoomStore(id), [id]);
 
-  // True when this tab wants the width (System or Pipeline). Derived from the tab alone, so a resize never changes it.
-  const wantsWidth = contentOf(tab) === "system" || contentOf(tab) === "pipeline";
+  // True when this tab wants the width (Symbols, System or Pipeline). Derived from the tab alone, so a resize never changes it.
+  const wantsWidth = ["symbols", "system", "pipeline"].includes(contentOf(tab));
   // The code pane was collapsed by this effect (not by the reader), so leaving the tab restores it. A reader's own Code
   // click, or a picked code target, clears the flag, which keeps the pane as the reader left it.
   const autoCodeCollapse = useRef(false);
@@ -283,6 +286,10 @@ export function Workspace({ id, tab, scope, line, fn, trace, base, head, finding
           )}
           {noSnapshot ? (
             <FirstIndex name={p.name} run={run} running={run.running || p.status === "indexing"} />
+          ) : content === "symbols" ? (
+            <div className="sh-stage sh-stage-symbols">
+              <SymbolsView id={id} scope={scope} chain={chain} />
+            </div>
           ) : content === "flow" ? (
             <div className="sh-stage sh-stage-flow">
               {error && <p className="error" role="alert">{error}</p>}
