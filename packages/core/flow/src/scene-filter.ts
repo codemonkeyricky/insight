@@ -1,7 +1,6 @@
-// Cuts a scene down to part of itself. The execution canvas's "roots only" view is the one cut the app makes: each
-// thread keeps the functions it starts in, with the thread and the process box that holds it. Pure: the scene and
-// the model are read, never changed.
-import { execFnId, execThreadId } from "./exec-scene.js";
+// Cuts a scene down to part of itself, for the Flow canvas's flat grid of unrooted functions (unrooted.ts). keepScene keeps
+// the chosen nodes with their ancestors and re-attaches the sync edges whose ends it cut. flattenRoots then drops every
+// container, so each kept function is one box on the project. Pure: the scene and the model are read, never changed.
 import type { ExecFunctionRef, ExecModel } from "./exec-model.js";
 import { addSyncResources, syncEdgeKey, type Scene, type SceneEdge, type SceneNode } from "./scene.js";
 
@@ -93,7 +92,7 @@ function reattacher(scene: Scene, kept: ReadonlySet<string>): (id: string) => st
  * and is dropped when one end maps to nothing or both map to one box. Sync edges that then share their ends and
  * direction merge into one, its count summed and its resources listed together, in the order first seen.
  */
-function rewireEdges(edges: readonly SceneEdge[], isKept: (id: string) => boolean, endOf: (id: string) => string | undefined): SceneEdge[] {
+export function rewireEdges(edges: readonly SceneEdge[], isKept: (id: string) => boolean, endOf: (id: string) => string | undefined): SceneEdge[] {
   const out: SceneEdge[] = [];
   const merged = new Map<string, SceneEdge>();
   for (const e of edges) {
@@ -119,38 +118,6 @@ function rewireEdges(edges: readonly SceneEdge[], isKept: (id: string) => boolea
   return out;
 }
 
-/**
- * The execution scene's roots-only view. For each grounded thread of the model it keeps the thread node (even when the
- * thread starts no function that the scene holds) and the placement of each of its roots in that thread, when the scene
- * has one. A root of an ungrounded thread is placed flat, directly on the project (plain code flow), so its placement
- * there is kept instead. The flat functions with no caller inside the flat flow are kept too, since they start it.
- * Coroutines are cut, and so are the functions only called from the roots. A root's process box stays, as an ancestor
- * of the thread.
- */
-export function execRootsOnly(scene: Scene, model: ExecModel): Scene {
-  const keep = new Set<string>();
-  for (const t of model.threads) {
-    const thread = execThreadId(t.id);
-    // A grounded thread has a node in the scene; an ungrounded one does not, and its roots sit on the project.
-    const grounded = scene.nodes.has(thread);
-    if (grounded) keep.add(thread);
-    for (const r of t.roots) {
-      const placement = execFnId(grounded ? thread : scene.root, r);
-      if (scene.nodes.has(placement)) keep.add(placement);
-    }
-  }
-
-  // The plain code flow: the functions placed directly on the project. A call from one of them to another makes the
-  // callee a non-root, so the roots of the flow are the ones nothing calls within it.
-  const flat = new Set<string>();
-  for (const n of scene.nodes.values()) if (n.kind === "function" && n.parent === scene.root) flat.add(n.id);
-  const called = new Set<string>();
-  for (const e of scene.edges) if (e.kind === "call" && flat.has(e.from) && flat.has(e.to)) called.add(e.to);
-  for (const id of flat) if (!called.has(id)) keep.add(id);
-
-  return keepScene(scene, keep);
-}
-
 /** A file's path as the scope shows it: relative to the scope, or its base name when the scope is that file. */
 export function pathInScope(file: string, scope: string): string {
   if (file === scope) return file.split("/").pop() ?? file;
@@ -159,21 +126,20 @@ export function pathInScope(file: string, scope: string): string {
 }
 
 /**
- * The roots-only cut, flat: every container (program, process, thread, coroutine) is dropped, and each root function is
- * one box directly on the project. A function placed in several threads is drawn once, at its first placement by id.
- * Its subtitle is its file relative to the scope and its line. Edges stay only between boxes that are both kept. A sync
- * edge whose end is a container box (its thread) joins that thread's first root box, so the sync edges survive the flat
- * cut too.
+ * The cut, flat: every container (program, process, thread, coroutine) is dropped, and each function is one box directly
+ * on the project, in name order. A function placed in several threads is drawn once, at its first placement by id. Its
+ * subtitle is its file relative to the scope and its line, "top level ·" first for a module entry. Edges stay only between
+ * boxes that are both kept. A sync edge's end is mapped to the box its placement is drawn as; an end with no such box is
+ * dropped. (unrootedScene moves each sync end onto a kept placement first, so none is dropped there.)
  */
 export function flattenRoots(cut: Scene, model: ExecModel): Scene {
   const byFn = new Map<string, ExecFunctionRef>();
   for (const f of model.functions) byFn.set(f.id, f);
   const kept = new Map<string, SceneNode>();
-  // The box drawn for each function, and the first box drawn inside each container (its thread or coroutine).
+  // The box drawn for each function, and the box each function placement is drawn as: its own, or the function's one box
+  // when it is placed again.
   const drawnFor = new Map<string, string>();
-  // The box each function placement is drawn as: its own, or the function's one box when it is placed again.
   const drawnAt = new Map<string, string>();
-  const firstIn = new Map<string, string>();
   const fnNodes = [...cut.nodes.values()].filter((n) => n.kind === "function").sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   for (const n of fnNodes) {
     const fnId = n.ref ?? n.id;
@@ -182,16 +148,21 @@ export function flattenRoots(cut: Scene, model: ExecModel): Scene {
       drawn = n.id;
       drawnFor.set(fnId, drawn);
       const ref = byFn.get(fnId);
-      const detail = ref !== undefined && ref.file !== "" ? `${pathInScope(ref.file, model.scope)}:${ref.line}` : n.detail;
+      const tag = ref?.module === true ? "top level · " : "";
+      const detail = ref !== undefined && ref.file !== "" ? `${tag}${pathInScope(ref.file, model.scope)}:${ref.line}` : n.detail;
       kept.set(n.id, { ...n, parent: cut.root, children: [], ...(detail !== undefined ? { detail } : {}) });
     }
     drawnAt.set(n.id, drawn);
-    if (n.parent !== undefined && !firstIn.has(n.parent)) firstIn.set(n.parent, drawn);
   }
   const root = cut.nodes.get(cut.root);
   if (root === undefined) return cut;
-  const nodes = new Map<string, SceneNode>([[cut.root, { ...root, children: [...kept.keys()].sort() }], ...kept]);
+  const byName = (a: string, b: string): number => {
+    const x = kept.get(a)?.label ?? "";
+    const y = kept.get(b)?.label ?? "";
+    return x < y ? -1 : x > y ? 1 : a < b ? -1 : a > b ? 1 : 0;
+  };
+  const nodes = new Map<string, SceneNode>([[cut.root, { ...root, children: [...kept.keys()].sort(byName) }], ...kept]);
   // A sync end maps to the box drawn for its placement, so a root placed on a second thread keeps its sync edge.
-  const edges = rewireEdges(cut.edges, (id) => kept.has(id), (id) => (kept.has(id) ? id : drawnAt.get(id) ?? firstIn.get(id)));
+  const edges = rewireEdges(cut.edges, (id) => kept.has(id), (id) => (kept.has(id) ? id : drawnAt.get(id)));
   return { root: cut.root, nodes, edges, levels: cut.levels };
 }

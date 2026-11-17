@@ -15,11 +15,10 @@ import {
   type ExecSortKey,
 } from "../../zoom/execMap";
 
-/** What every list needs to link: the project, the scope the map shows, whether it is roots-only, and the opener. */
+/** What every list needs to link: the project, the scope the map shows, and the opener. */
 export interface ListBase {
   id: string;
   scope: string;
-  roots: boolean;
   onOpen: (nodeId: string) => void;
 }
 
@@ -42,7 +41,7 @@ export function FnLink({
   return (
     <a
       className={className}
-      href={hrefView(base.id, "flow", { scope: base.scope, ...(fn !== undefined ? { fn } : {}), roots: base.roots })}
+      href={hrefView(base.id, "flow", { scope: base.scope, ...(fn !== undefined ? { fn } : {}) })}
       onClick={(e) => {
         e.preventDefault();
         base.onOpen(nodeId);

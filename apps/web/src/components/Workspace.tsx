@@ -52,8 +52,6 @@ export interface WorkspaceProps {
   fn?: string;
   /** The function whose caller chain the Caller chain section shows; kept while the reader walks up the chain. */
   trace?: string;
-  /** The flow tab's canvas shows only the functions each thread starts in. */
-  roots?: boolean;
   base?: string;
   head?: string;
   /** The overview tab with the full overview page, rather than the flow root. */
@@ -75,7 +73,7 @@ const isEditable = (target: EventTarget | null) =>
  * stay put on every tab; the center holds the layers as tabs over the view. On a phone the two side panes are drawers, opened
  * from the top bar. Find opens as an overlay.
  */
-export function Workspace({ id, tab, scope, line, fn, trace, roots = true, base, head, full = false, findingKind }: WorkspaceProps) {
+export function Workspace({ id, tab, scope, line, fn, trace, base, head, full = false, findingKind }: WorkspaceProps) {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [listing, setListing] = useState<ScopeLenses | null>(null);
@@ -368,7 +366,6 @@ export function Workspace({ id, tab, scope, line, fn, trace, roots = true, base,
                 files={files}
                 scope={flowScopeOf(tab, scope)}
                 fn={fn}
-                roots={roots}
                 store={store}
                 slot={slot}
                 facts={facts}
@@ -403,7 +400,6 @@ export function Workspace({ id, tab, scope, line, fn, trace, roots = true, base,
         <Splitter side="right" label="Resize the code pane" width={codeEff} shown={codeShown && !narrow} onResize={setCodeW} />
         <CodePane
           id={id}
-          roots={roots}
           trace={trace}
           store={store}
           target={target}

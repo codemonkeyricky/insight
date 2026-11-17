@@ -1,0 +1,134 @@
+{
+ "note": "Re-captured on the flat-roots follow-up (access-site ⚠ and shared-label names). Project cognition-master at snapshot 664a7677 (commit 73f7fa6). ⚠ = g.zm-card.zm-unguarded; ⇆ = .zm-sync-self.",
+ "before_unguarded_cards_previous_commit": {
+  "(root)": 23,
+  "core/physics": 8,
+  "core/pool": "not measured"
+ },
+ "counts": [
+  {
+   "run": "after",
+   "scope": "(root)",
+   "viewport": "1800x1100",
+   "url": "http://127.0.0.1:4371/#/projects/4efc194b/view/flow",
+   "cards": 24,
+   "more": [
+    "ƒ +9 more"
+   ],
+   "warnBadges": 4,
+   "unguardedCards": 4,
+   "unguardedTitles": [
+    "App.tsx (top level · apps/web/ui/App.tsx:1)",
+    "checks.ts (top level · core/verify/checks.ts:6)",
+    "main.tsx (top level · apps/web/main.tsx:1)",
+    "progress.ts (top level · core/util/progress.ts:11)"
+   ],
+   "syncSelfBadges": 1,
+   "mainLabels": [
+    "main · o…",
+    "main · t…",
+    "main · w…"
+   ],
+   "errors": []
+  },
+  {
+   "run": "after",
+   "scope": "(root)",
+   "viewport": "1800x2400",
+   "url": "http://127.0.0.1:4371/#/projects/4efc194b/view/flow",
+   "cards": 24,
+   "more": [
+    "ƒ +9 more"
+   ],
+   "warnBadges": 4,
+   "unguardedCards": 4,
+   "unguardedTitles": [
+    "App.tsx (top level · apps/web/ui/App.tsx:1)",
+    "checks.ts (top level · core/verify/checks.ts:6)",
+    "main.tsx (top level · apps/web/main.tsx:1)",
+    "progress.ts (top level · core/util/progress.ts:11)"
+   ],
+   "syncSelfBadges": 1,
+   "mainLabels": [
+    "main · o…",
+    "main · t…",
+    "main · w…"
+   ],
+   "errors": []
+  },
+  {
+   "run": "after",
+   "scope": "core/physics",
+   "viewport": "1800x1100",
+   "url": "http://127.0.0.1:4371/#/projects/4efc194b/view/flow?scope=core%2Fphysics",
+   "cards": 24,
+   "more": [
+    "ƒ +12 more"
+   ],
+   "warnBadges": 0,
+   "unguardedCards": 0,
+   "unguardedTitles": [],
+   "syncSelfBadges": 0,
+   "mainLabels": [],
+   "errors": []
+  },
+  {
+   "run": "after",
+   "scope": "core/physics",
+   "viewport": "1800x2400",
+   "url": "http://127.0.0.1:4371/#/projects/4efc194b/view/flow?scope=core%2Fphysics",
+   "cards": 24,
+   "more": [
+    "ƒ +12 more"
+   ],
+   "warnBadges": 0,
+   "unguardedCards": 0,
+   "unguardedTitles": [],
+   "syncSelfBadges": 0,
+   "mainLabels": [],
+   "errors": []
+  },
+  {
+   "run": "after",
+   "scope": "core/pool",
+   "viewport": "1800x1100",
+   "url": "http://127.0.0.1:4371/#/projects/4efc194b/view/flow?scope=core%2Fpool",
+   "cards": 4,
+   "more": [],
+   "warnBadges": 1,
+   "unguardedCards": 1,
+   "unguardedTitles": [
+    "fitParallel (parallel.ts:119)"
+   ],
+   "syncSelfBadges": 1,
+   "mainLabels": [],
+   "errors": []
+  }
+ ],
+ "main_labels_full": {
+  "apps/web/main.tsx#(module)": "main · web",
+  "poc/orrery/main.ts#(module)": "main · orrery",
+  "poc/triaxial-tourbillon/main.ts#(module)": "main · triaxial-tourbillon"
+ },
+ "click": {
+  "clickedLabel": "ƒ (first card)",
+  "hash": "#/projects/4efc194b/view/flow?scope=core%2Fphysics&fn=core%2Fphysics%2FcamAnalysis.ts%23analyseCam",
+  "errors": []
+ },
+ "deeplink": {
+  "cards": 22,
+  "unguardedCards": 0,
+  "errors": []
+ },
+ "system": {
+  "errors": []
+ },
+ "errors": {},
+ "selfSyncScope": {
+  "scope": "core/pool",
+  "syncSelfBadges": 1,
+  "warnBadges": 1,
+  "card": "fitParallel (parallel.ts:119)",
+  "screenshot": "after-selfsync-core_pool-1800x1100.png"
+ }
+}

@@ -19,7 +19,7 @@ export * from "./scene-layout.js";
 export * from "./exec-scene.js";
 export * from "./scene-filter.js";
 export * from "./roots-grid.js";
-export * from "./runtime-boxes.js";
+export * from "./unrooted.js";
 export * from "./names.js";
 export * from "./modules.js";
 export * from "./coupling.js";

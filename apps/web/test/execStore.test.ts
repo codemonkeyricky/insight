@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ExecFunctionRef, ExecModel, ExecModelStats, ExecThread, LayoutGraph, SolvedGraph } from "@insight/flow";
+import type { ExecFunctionRef, ExecModel, ExecModelStats, ExecThread } from "@insight/flow";
 import { ExecStore } from "../src/zoom/execStore.js";
 import { execFocus } from "../src/zoom/execMap.js";
 
@@ -8,20 +8,7 @@ const fixture = vi.hoisted(() => ({ model: undefined as unknown }));
 vi.mock("../src/api", () => ({
   api: {
     getScopeExec: async () => fixture.model,
-    scopeExecLayout: async () => undefined,
     getScopeCallers: async () => undefined,
-  },
-}));
-vi.mock("../src/zoom/elk", () => ({
-  solve: async (g: LayoutGraph): Promise<{ result: SolvedGraph; ms: number }> => {
-    // Stacks each container's children in a column, so every node has a place.
-    let y = 0;
-    const children = g.children.map((c) => {
-      const out = { id: c.id, x: 0, y };
-      y += c.height + 10;
-      return out;
-    });
-    return { result: { children }, ms: 0 };
   },
 }));
 
@@ -99,20 +86,20 @@ describe("ExecStore", () => {
     fixture.model = model();
     const store = new ExecStore("p1");
     const build = await store.build(await store.resolve("", "main"));
-    const focus = store.focusOf(build, "thread:main>helper");
-    expect(focus).toBe(execFocus("", "thread:main>helper"));
+    const focus = store.focusOf(build, "thread:main>main");
+    expect(focus).toBe(execFocus("", "thread:main>main"));
     await expect(store.ensureFocus(focus)).resolves.toBeUndefined();
-    expect(store.url(build, focus)).toEqual({ scope: "", fn: "helper" });
+    expect(store.url(build, focus)).toEqual({ scope: "", fn: "main" });
   });
 
   it("exposes the loaded view of a build's scope, with the index the panels read", async () => {
     fixture.model = model();
     const store = new ExecStore("p1");
-    const build = await store.build(await store.resolve("", "helper"));
+    const build = await store.build(await store.resolve("", "main"));
     const view = store.viewOf(build);
-    expect(view?.index.callees.get("helper")).toEqual(["leaf"]);
+    expect(view?.index.callees.get("main")).toEqual(["helper"]);
     expect(view?.index.callers.get("helper")).toEqual(["main"]);
-    expect(view?.index.placements.get("leaf")?.map((p) => p.nodeId)).toEqual(["thread:main>leaf"]);
+    expect(view?.index.placements.get("main")?.map((p) => p.nodeId)).toEqual(["thread:main>main"]);
   });
 
   it("rejects a focus whose node is not in the scene", async () => {
@@ -121,31 +108,27 @@ describe("ExecStore", () => {
     await expect(store.build(execFocus("", "thread:main>nope"))).rejects.toThrow("Nothing in the execution map");
   });
 
-  it("cuts the scene to the roots when it is roots-only, and says so in its URLs", async () => {
+  it("lays the scene out as a grid of unrooted cards: helper and leaf, which main calls, have no card", async () => {
     fixture.model = model();
-    const store = new ExecStore("p1", true, false, false);
-    // helper is not a root, so the roots-only scene has no node for it: a URL that names it resolves to the root.
-    expect(await store.resolve("", "helper")).toBe(execFocus("", "project"));
+    const store = new ExecStore("p1");
     const build = await store.build(await store.resolve("", "main"));
-    expect(store.url(build, build.focus)).toEqual({ scope: "", fn: "main", roots: true });
-    await expect(store.ensureFocus(execFocus("", "thread:main>helper"))).rejects.toThrow("Nothing in the execution map");
-    // Flat: the containers are gone, and the root is one box on the project.
     expect([...build.placed.rects.keys()].sort()).toEqual(["project", "thread:main>main"]);
+    expect(store.url(build, build.focus)).toEqual({ scope: "", fn: "main" });
   });
 
-  it("draws the runtime boxes around the roots when the store is roots-only with runtime on", async () => {
-    fixture.model = model();
-    const store = new ExecStore("p1", true, false, true);
-    const build = await store.build(await store.resolve("", "main"));
-    // The main thread is a frame that holds its root's card, and the card sits inside the frame.
-    const frames = build.placed.items.filter((i) => i.kind === "frame").map((i) => i.id);
-    expect(frames).toContain("thread:main");
-    const frame = build.placed.rects.get("thread:main");
-    const card = build.placed.rects.get("thread:main>main");
-    expect(frame && card).toBeTruthy();
-    expect(card!.y).toBeGreaterThanOrEqual(frame!.y);
-    expect(card!.x + card!.w).toBeLessThanOrEqual(frame!.x + frame!.w);
-    expect(store.url(build, build.focus)).toEqual({ scope: "", fn: "main", roots: true });
+  it("names every thread that runs the selected function, not only the one its card was placed in", async () => {
+    // shared has no caller, and both main and the worker start in it: it is a card that two threads run.
+    const base = model();
+    const main = base.threads[0] as ExecThread;
+    const worker: ExecThread = { id: "t1", kind: "thread", grounded: true, roots: ["shared"], reach: 1, reached: ["shared"], coroutines: [], coroutineOnly: [] };
+    fixture.model = {
+      ...base,
+      functions: [...base.functions, fn("shared", 12)],
+      threads: [{ ...main, roots: ["main", "shared"], reached: ["helper", "leaf", "main", "shared"], reach: 4 }, worker],
+    };
+    const store = new ExecStore("p1");
+    const build = await store.build(await store.resolve("", "shared"));
+    expect(build.selected?.runtime).toBe("thread");
+    expect(build.selected?.thread).toBe("Main thread, Thread · shared");
   });
 });
-

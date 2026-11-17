@@ -85,7 +85,6 @@ export function App() {
             line={route.line}
             fn={route.fn}
             trace={route.trace}
-            roots={route.roots}
             base={route.base}
             head={route.head}
             full={route.full}

@@ -10,15 +10,14 @@ import type { MapSelection } from "./ZoomMap";
 import { CallerChain } from "./CallerChain";
 import { KindTag, refHref } from "./refLink";
 
-/** What every part of the lists needs: the project, the scope the map shows (its rows inside it, the scope a link keeps), and roots-only. */
+/** What every part of the lists needs: the project, and the scope the map shows (its rows inside it, the scope a link keeps). */
 interface Base {
   id: string;
   scope: string;
-  roots: boolean;
 }
 
 /** The references of the selected function, fetched for its scope, with the loading and error states the panel shows. */
-export function FunctionRefs({ id, sel, roots, trace }: { id: string; sel: MapSelection; roots: boolean; trace?: string }) {
+export function FunctionRefs({ id, sel, trace }: { id: string; sel: MapSelection; trace?: string }) {
   const { selected } = sel;
   const scope = sel.build.path;
   const [refState, setRefState] = useState<{ key: string; refs?: Refs; error?: string }>();
@@ -47,23 +46,23 @@ export function FunctionRefs({ id, sel, roots, trace }: { id: string; sel: MapSe
       ) : shown.refs === undefined ? (
         <p className="muted small">The references of this function are not available: {shown.error}</p>
       ) : (
-        <RefLists id={id} scope={scope} roots={roots} refs={shown.refs} />
+        <RefLists id={id} scope={scope} refs={shown.refs} />
       )}
-      <CallerChain id={id} sel={sel} roots={roots} {...(trace !== undefined ? { trace } : {})} />
+      <CallerChain id={id} sel={sel} {...(trace !== undefined ? { trace } : {})} />
     </>
   );
 }
 
-export function RefLists({ id, scope, roots, refs }: Base & { refs: Refs }) {
+export function RefLists({ id, scope, refs }: Base & { refs: Refs }) {
   return (
     <div className="ref-lists">
-      <RefList id={id} scope={scope} roots={roots} title="Called by" rows={refs.calledBy} empty="Nothing in the project calls or references it." />
-      <RefList id={id} scope={scope} roots={roots} title="Calls" rows={refs.calls} empty="It calls nothing." />
+      <RefList id={id} scope={scope} title="Called by" rows={refs.calledBy} empty="Nothing in the project calls or references it." />
+      <RefList id={id} scope={scope} title="Calls" rows={refs.calls} empty="It calls nothing." />
     </div>
   );
 }
 
-function RefList({ id, scope, roots, title, rows: all, empty }: Base & { title: string; rows: RefRow[]; empty: string }) {
+function RefList({ id, scope, title, rows: all, empty }: Base & { title: string; rows: RefRow[]; empty: string }) {
   // With lambdas folded, an anonymous function is not a row: its calls belong to its owner, so its rows are dropped.
   const lambdas = readLambdas();
   const rows = lambdas ? all : all.filter((r) => !r.name.startsWith("λ"));
@@ -78,15 +77,15 @@ function RefList({ id, scope, roots, title, rows: all, empty }: Base & { title: 
         <p className="muted small">{empty}</p>
       ) : (
         <>
-          {inside.length > 0 && <RefGroup id={id} scope={scope} roots={roots} label="In this scope" rows={inside} />}
-          {outside.length > 0 && <RefGroup id={id} scope={scope} roots={roots} label="Outside this scope" rows={outside} />}
+          {inside.length > 0 && <RefGroup id={id} scope={scope} label="In this scope" rows={inside} />}
+          {outside.length > 0 && <RefGroup id={id} scope={scope} label="Outside this scope" rows={outside} />}
         </>
       )}
     </details>
   );
 }
 
-function RefGroup({ id, scope, roots, label, rows }: Base & { label: string; rows: RefRow[] }) {
+function RefGroup({ id, scope, label, rows }: Base & { label: string; rows: RefRow[] }) {
   return (
     <section className="ref-group">
       <h4>
@@ -95,7 +94,7 @@ function RefGroup({ id, scope, roots, label, rows }: Base & { label: string; row
       <ul className="call-list">
         {rows.map((r) => (
           <li key={`${r.id}\0${r.kind}`}>
-            <RefItem id={id} scope={scope} roots={roots} row={r} />
+            <RefItem id={id} scope={scope} row={r} />
           </li>
         ))}
       </ul>
@@ -103,10 +102,10 @@ function RefGroup({ id, scope, roots, label, rows }: Base & { label: string; row
   );
 }
 
-function RefItem({ id, scope, roots, row }: Base & { row: RefRow }) {
+function RefItem({ id, scope, row }: Base & { row: RefRow }) {
   // The whole row is the link: a click or Enter on any part of it opens the function.
   return (
-    <a className="ref-row" href={refHref(id, scope, roots, row)}>
+    <a className="ref-row" href={refHref(id, scope, row)}>
       <span className="ref-name">{row.name}</span>{" "}
       <span className="mono muted small">{row.line > 0 ? `${row.file}:${row.line}` : row.file}</span>
       <KindTag kind={row.kind} how={row.how} />

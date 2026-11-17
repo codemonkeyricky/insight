@@ -1,6 +1,6 @@
 // The zoom map's expansions: a function's control-flow chart drawn in a box beside the map. An expansion is anchored to a
 // function box on the map, or to a call step in another expansion's chart. A chart sits to the right of its anchor. A callers
-// box sits to the left (callers are upstream) when it hangs from a roots-only card or from the header of the chart that
+// box sits to the left (callers are upstream) when it hangs from a grid card or from the header of the chart that
 // replaced such a card in place; on a chart opened from a call step it sits to the right, like the chart (see opensLeft), and
 // everything opened from a left box is left too (see Expansion.side). The
 // layout never depends on expansions (a function box keeps its compact size), so everything here is placement: where
@@ -29,7 +29,7 @@ const REVEAL_MARGIN = 16;
  * plus this rect's corner).
  */
 export type ExpandAnchor =
-  | { kind: "box"; nodeId: string; rect: Rect; /** The expansion replaces the card in its own slot (a roots-only card), instead of opening beside it. */ inPlace?: boolean }
+  | { kind: "box"; nodeId: string; rect: Rect; /** The expansion replaces the card in its own slot (a grid card), instead of opening beside it. */ inPlace?: boolean }
   | { kind: "step"; fnId: string; rect: Rect; stepId?: string };
 
 /** An anchor by its identity alone, without its rect: a function box by its node id, or a step by its parent and step id. */
@@ -125,7 +125,7 @@ export interface Expansion {
    */
   pivot: number;
   /**
-   * "left" when the box opens to the left of its anchor: a callers box on a roots-only card or on an in-place chart's header,
+   * "left" when the box opens to the left of its anchor: a callers box on a grid card or on an in-place chart's header,
    * and anything opened from a left box (a caller's chart, and what that opens). Absent, the box opens to the right. Set by
    * reflow, from the chain, so it cannot go stale.
    */
@@ -646,7 +646,7 @@ export interface RootRoom {
  * The room the open expansions take around each box they hang from, in world units: to the left of the box's left edge (a
  * callers box and what hangs from it), to the right of its right edge (charts), and below its top. It is computed from
  * the charts' sizes and the step anchors alone, so it does not depend on where anything is placed. The layout keeps this
- * room clear (see runtimeRootsLayout), so an opened box never overlaps its neighbours.
+ * room clear (see gridRootsLayout), so an opened box never overlaps its neighbours.
  */
 export function footprintOf(list: readonly Expansion[]): Map<string, RootRoom> {
   const byFn = new Map(list.map((e) => [e.fnId, e] as const));

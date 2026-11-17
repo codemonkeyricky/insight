@@ -863,6 +863,14 @@ export function execModelLegacy(nodes: readonly IRNode[], edges: readonly IREdge
     for (const id of p.reach) reachedAll.add(id);
   }
   const runtimeOf = (id: string): ExecRuntime => (reachedOnThread.has(id) ? "thread" : reachedAll.has(id) ? "coroutine" : "none");
+  // The same callsOut flag the cached model sets: read over every edge of the IR, not only the scope's.
+  const outgoingAll = new Set<string>();
+  for (const { e, ids } of keyed) if (e.kind === "concurrency.dispatches" && ids.some((id) => fns.has(id))) outgoingAll.add(foldId(e.from));
+  for (const n of nodes) if (SPAWN_KINDS.has(n.kind) && n.parent !== undefined && (spawnsOf.get(n.id)?.targets.size ?? 0) > 0) outgoingAll.add(foldId(n.parent));
+  const callsOutOf = (fn: Fn): boolean => {
+    const keys = fn.module ? [fn.id, fn.file ?? ""] : [fn.id];
+    return keys.some((k) => callsOf(k).length > 0 || outgoingAll.has(k));
+  };
 
   // The function table. Threads are cut in order, so the first threads keep their full lists when the cap is hit.
   const table = new Map<string, ExecFunctionRef>();
@@ -900,6 +908,7 @@ export function execModelLegacy(nodes: readonly IRNode[], edges: readonly IREdge
       ...(fn.anonymous ? { anonymous: true as const, ...(fn.parent !== undefined ? { parent: fn.parent } : {}) } : {}),
       ...(fn.module ? { module: true as const } : {}),
       runtime: runtimeOf(id),
+      ...(callsOutOf(fn) ? { callsOut: true as const } : {}),
       ...(chart !== undefined ? { chart } : {}),
     });
     return true;

@@ -1,7 +1,8 @@
-// The roots-only map's layout: each root function is a uniform card, and the cards wrap in a grid, top-left aligned. The
-// grid leaves room the map's own controls take (the title chip and the key plan at the bottom right, the Show button at the
-// top left, the roots switch at the bottom left), so no card sits under them at the default fit. Pure, so it is unit tested.
+// The flat grid's layout (unrooted.ts): each card is a uniform box, and the cards wrap in a grid, top-left aligned. The grid
+// leaves room the map's own controls take (the title chip and the key plan at the bottom right, the Show button at the top
+// left), so no card sits under them at the default fit. Pure, so it is unit tested.
 import type { Scene, SceneLayout } from "./scene.js";
+import { displayName } from "./names.js";
 import type { ContainerLayout, Size, Slot } from "./zoom-layout.js";
 
 /** A card's height: one name line and one file line. */
@@ -9,9 +10,17 @@ export const CARD_H = 56;
 /** A card's width: the full name, between these bounds. Only a name past the maximum is truncated. */
 export const CARD_MIN_W = 160;
 export const CARD_MAX_W = 320;
-/** The width of a monospace character at the card's name size (12 px), and the card's inner padding. */
-const CHAR_W = 8;
-const CARD_PAD_W = 28;
+/**
+ * The name's width at 1x, shared with ZoomMap's card (apps/web/src/components/zoom/ZoomMap.tsx), which fits the name in the
+ * card's width with these. A character of the name is CARD_CHAR_W px (12 px monospace); the leading ƒ glyph takes
+ * CARD_GLYPH_CHARS of the budget; CARD_NAME_PAD is the label's padding (labelChars).
+ */
+export const CARD_CHAR_W = 8;
+export const CARD_GLYPH_CHARS = 2;
+export const CARD_NAME_PAD = 20;
+/** The compact Callers button (the ◂ alone) is CARD_CALLERS_W wide; a card keeps 26 px clear beside it for the name. */
+export const CARD_CALLERS_W = 26;
+export const CARD_CALLERS_ROOM = CARD_CALLERS_W + 26;
 /** The gap between cards, both ways. */
 export const CARD_GAP = 12;
 /** The grid's width: it wraps here, so the grid fits a 1600 px window's map at 1x. */
@@ -21,9 +30,13 @@ export const CARD_PAD_TOP = 64;
 export const CARD_PAD_BOTTOM = 170;
 export const CARD_PAD_SIDE = 16;
 
-/** A card's width for a name: the name's width, between CARD_MIN_W and CARD_MAX_W. */
-export function cardWidth(label: string): number {
-  const w = Math.ceil(label.length * CHAR_W) + CARD_PAD_W;
+/**
+ * A card's width for a name: the whole name fits beside the compact Callers button (a card with no button, such as the
+ * "+N more" card, keeps no room for it). Between CARD_MIN_W and CARD_MAX_W; only a name past the maximum is truncated.
+ */
+export function cardWidth(label: string, callers = true): number {
+  const room = callers ? CARD_CALLERS_ROOM : 0;
+  const w = Math.ceil(CARD_CHAR_W * (label.length + CARD_GLYPH_CHARS) + CARD_NAME_PAD + room);
   return Math.min(CARD_MAX_W, Math.max(CARD_MIN_W, w));
 }
 
@@ -36,7 +49,7 @@ export function cardWidth(label: string): number {
 export type Footprint = ReadonlyMap<string, Size & { left?: number }>;
 
 /**
- * The roots-only layout of a flat scene: the root's children are the cards, wrapped in rows of at most CARD_WRAP_W, in
+ * The flat grid's layout: the root's children are the cards, wrapped in rows of at most CARD_WRAP_W, in
  * the order the scene lists them. The root's container is the grid plus the padding above. A card's slot is its own box;
  * the room in `footprint` is kept clear beside it, so the next card starts past it. Deterministic.
  */
@@ -50,7 +63,7 @@ export function gridRootsLayout(scene: Scene, footprint?: Footprint): SceneLayou
   let width = 0;
   for (const id of kids) {
     const n = scene.nodes.get(id);
-    const w = cardWidth(n?.label ?? id);
+    const w = cardWidth(n === undefined ? id : (n.shownName ?? displayName(n.label, n.ref)), n?.kind !== "more");
     const room = footprint?.get(id);
     const left = room?.left ?? 0;
     const outerW = left + w + (room?.w ?? 0);

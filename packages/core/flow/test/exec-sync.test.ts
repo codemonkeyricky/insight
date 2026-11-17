@@ -2,31 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { IREdge, IRNode } from "@insight/ir";
 import { execModel, resourcesOf, type ExecFunctionRef, type ExecModel, type ExecModelStats, type ExecResource, type ExecThread } from "../src/exec-model.js";
 import { buildExecScene, execFnId, execThreadId } from "../src/exec-scene.js";
-import { execRootsOnly, keepScene } from "../src/scene-filter.js";
+import { keepScene } from "../src/scene-filter.js";
+import { unrootedScene } from "../src/unrooted.js";
 import type { Scene, SceneNode } from "../src/scene.js";
-import { PROVENANCE, callEdge, fnNode } from "./synthetic.js";
-
-const spanAt = (file: string, line: number) => ({ file, start: [line, 2] as [number, number], end: [line, 8] as [number, number] });
-
-/** An IR node in `parent` on `line` of `file`. Its id is unique per kind and line. */
-function syncNode(file: string, line: number, parent: string, kind: string, attrs: Record<string, unknown>, facet = "sync"): IRNode {
-  return { id: `${file}@${kind}:${line + 1}:2`, facet, kind, parent, span: spanAt(file, line), attrs, provenance: PROVENANCE };
-}
-
-/** A spawn of a thread on `line` of `file`, started by `owner`. Its id is the one the exec model uses for the thread. */
-function spawnNode(file: string, line: number, owner: string): IRNode {
-  return { id: `${file}@spawn:${line + 1}:2`, facet: "concurrency", kind: "concurrency.spawn-thread", parent: owner, span: spanAt(file, line), attrs: {}, provenance: PROVENANCE };
-}
-
-/** The spawns edge of that spawn: the thread it starts is `to`. */
-function spawnEdge(file: string, line: number, to: IREdge["to"]): IREdge {
-  return { from: `${file}@spawn:${line + 1}:2`, to, facet: "concurrency", kind: "concurrency.spawns", attrs: { how: "thread" }, span: spanAt(file, line), provenance: PROVENANCE };
-}
+import { PROVENANCE, callEdge, fnNode, lockOf, spanAt, spawnEdge, spawnNode, syncNode } from "./synthetic.js";
 
 /** The id the exec model gives the thread a spawn on `line` of `file` starts. */
 const spawnThread = (file: string, line: number) => `${file}@spawn:${line + 1}:2`;
-
-const lockOf = (file: string, line: number, parent: string, lock: string): IRNode => syncNode(file, line, parent, "sync.lock-acquire", { lock, mode: "exclusive" });
 
 const syncEdges = (s: Scene) => s.edges.filter((e) => e.kind === "sync");
 
@@ -157,7 +139,7 @@ describe("buildExecScene: named sync edges", () => {
     ]);
   });
 
-  it("keeps the roots that reach a site, and joins them with the named edge, when the scene is cut to roots only", () => {
+  it("joins the cards that reach a site with the named edge, when the scene is cut to cards", () => {
     // main's root m1 calls s1, which locks m. The worker's root w1 calls w2, which locks m too. s1 and w2 are not roots.
     const functions: ExecFunctionRef[] = [
       { id: "m1", name: "m1", file: "src/app.ts", line: 1, inScope: true, runtime: "thread" },
@@ -205,14 +187,16 @@ describe("buildExecScene: named sync edges", () => {
     const full = buildExecScene(model);
     expect(syncEdges(full).map((e) => [e.from, e.to])).toEqual([[execFnId(execThreadId("main"), "s1"), execFnId(execThreadId("t1"), "w2")]]);
 
-    const cut = execRootsOnly(full, model);
+    // m1 and w1 are the cards (nothing in scope calls them); s1 and w2 are called, so each site joins the card that reaches it.
+    const cut = unrootedScene(full, model);
     expect(cut.nodes.has(execFnId(execThreadId("main"), "m1"))).toBe(true);
+    expect(cut.nodes.has(execFnId(execThreadId("t1"), "w1"))).toBe(true);
     expect(cut.nodes.has(execFnId(execThreadId("main"), "s1"))).toBe(false);
     expect(cut.nodes.has(execFnId(execThreadId("t1"), "w2"))).toBe(false);
     expect(syncEdges(cut)).toEqual([
       {
-        from: execThreadId("main"),
-        to: execThreadId("t1"),
+        from: execFnId(execThreadId("main"), "m1"),
+        to: execFnId(execThreadId("t1"), "w1"),
         kind: "sync",
         count: 1,
         how: "lock",

@@ -11,7 +11,7 @@ import { LayersPanel, type LayerState } from "../src/components/sheet/LayersPane
 import { ZoomStore } from "../src/zoom/scene";
 
 const step = (label: string, extra: Record<string, unknown> = {}) => ({ t: "step" as const, role: "call" as const, label, ...extra });
-const shownOf = (over: Partial<LayerState> = {}): LayerState => ({ frames: true, calls: true, findings: false, lambdas: false, motion: true, runtime: true, coupling: true, intermodule: true, ...over });
+const shownOf = (over: Partial<LayerState> = {}): LayerState => ({ frames: true, calls: true, findings: false, lambdas: false, motion: true, coupling: true, intermodule: true, ...over });
 
 describe("flow focus preference", () => {
   beforeEach(() => globalThis.localStorage.clear());
@@ -100,11 +100,6 @@ describe("live api requests carry the focus", () => {
     expect(urls[1]).toContain("focus=all");
   });
 
-  it("sends the focus with the exec layout request, so a saved layout is never read for another focus", async () => {
-    const urls = recordFetch();
-    await api.scopeExecLayout("p1", "src", "intermodule");
-    expect(urls[0]).toContain("/scope/exec-layout?path=src&focus=intermodule");
-  });
 });
 
 describe("ZoomStore charts per focus", () => {

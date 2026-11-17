@@ -1,5 +1,5 @@
-// The browser's solver for state diagrams: elkjs in its own worker, like zoom/elk.ts but with its own instance, so a
-// state diagram never queues behind the zoom map. Tests use the bundled solver instead (jsdom has no worker).
+// The browser's solver for state diagrams: elkjs in its own worker, with its own instance, so a
+// state diagram never queues behind other layouts. Tests use the bundled solver instead (jsdom has no worker).
 // Jobs run one at a time and each one's timeout starts when it is sent to the worker. A timeout or a worker failure
 // terminates the worker, rejects only the job that was running, and resubmits the still-wanted queued jobs to a fresh
 // worker. An aborted job rejects with an AbortError; if nothing wanted is left the worker is terminated.

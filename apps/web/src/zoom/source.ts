@@ -36,6 +36,16 @@ export interface MapNode {
    * (`⚠ unguarded shared state`): the variable names, for the box's badge and tooltip.
    */
   unguarded?: string[];
+  /**
+   * A card whose display name another card in the grid shares: the name with its file's stem after it, drawn in place of
+   * the name. The label and the tooltip keep the full name.
+   */
+  shownName?: string;
+  /**
+   * A card whose function shares sync resources with threads it starts (a self-sync: the edge would join the card to itself).
+   * The card's `⇆ N` badge counts them, and its tooltip names them.
+   */
+  syncSelf?: { name: string; kind: string }[];
 }
 
 /**
@@ -92,11 +102,10 @@ export interface MapBuild {
   footprint?: ReadonlyMap<string, { left?: number; w: number; h: number }>;
 }
 
-/** The URL that shows a focus: the scope, the function, and whether the map is the roots-only view. */
+/** The URL that shows a focus: the scope and the function. */
 export interface MapUrl {
   scope: string;
   fn?: string;
-  roots?: boolean;
 }
 
 /**

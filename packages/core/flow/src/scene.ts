@@ -56,6 +56,17 @@ export interface SceneNode {
    * (`⚠ unguarded shared state`): the variable names. The map draws the badge on the thread's box.
    */
   unguarded?: string[];
+  /**
+   * A card (see unrooted.ts) whose function shares these sync resources with threads it reaches: a sync edge whose two ends
+   * both land on this card, which the renderer cannot draw as an edge, so the resources are kept here. The map draws the
+   * `⇆ N` badge on the card.
+   */
+  syncSelf?: SceneSyncResource[];
+  /**
+   * A card (see unrooted.ts) whose display name another card in the grid shares: the name with its file's stem after it
+   * ("main · guideplan"), which the map draws in place of the name. The label, the tooltip and the id keep the full name.
+   */
+  shownName?: string;
 }
 
 /**

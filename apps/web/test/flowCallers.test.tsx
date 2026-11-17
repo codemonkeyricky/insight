@@ -566,10 +566,11 @@ describe("the Callers chip on a roots-only card", () => {
     expect(html).not.toContain("◂ callers");
   });
 
-  it("a wide card whose name fits beside it keeps the full chip", () => {
+  it("a wide card whose name fits beside it still takes the compact ◂ chip: cards all use it", () => {
     const html = card("run", 1, 300);
     expect(nameOf(html)).toBe("run");
-    expect(html).toContain("◂ callers");
+    expect(html).toMatch(/zm-callers-btn[^]*>◂<\/text>/);
+    expect(html).not.toContain("◂ callers");
   });
 
   it("a card with no chip keeps its whole name: no room is reserved for a button that is not drawn", () => {

@@ -182,7 +182,7 @@ export function HostedIndexPage({
   }, [owner, repo, sha, branch, attempt]);
 
   if (openId !== undefined && branch !== undefined) {
-    return <Workspace key={openId} id={openId} tab="flow" scope="" roots />;
+    return <Workspace key={openId} id={openId} tab="flow" scope="" />;
   }
 
   return (
