@@ -3,19 +3,26 @@
 // helpers); picking one opens that callee's box to the right and drops whatever was right of the box. A "Callers" chip opens a
 // box to the left that lists who calls the function, and picking a caller makes it the new head of the chain. The chain is
 // kept in the URL (repeated `chain=` params), so a reload or a shared link opens the same boxes.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+//
+// The boxes sit on a pan and zoom stage (usePanZoom). The camera follows the openings: a box that opens off screen is revealed
+// with a tween, and a box whose left neighbour changes (a caller prepended, a callers box opened or closed) keeps its place on
+// screen, so nothing jumps under the reader. A box that leaves is kept for a moment in place, fading out.
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ProjectModel } from "@insight/model";
 import { api } from "../../api";
 import { fileTarget, useCodeTarget } from "../../codeTarget";
 import { hrefView } from "../../router";
 import { displayName } from "../../zoom/names";
 import { exportedCallees, exportedCallers, exportedFunctions, isExportedFunction, type ExportedSymbol, type SymbolLink } from "../../symbols/graph";
-
-/** The gap between two columns, where the connector runs. */
-const CONNECTOR_GAP = 72;
+import { columnKeys, prefersReducedMotion, type Rect } from "../../symbols/camera";
+import { connectorPath, offsetWithin } from "../../symbols/connectors";
+import { usePanZoom } from "../views/usePanZoom";
 
 /** Separates the ids of a chain when it is kept as one string (a dependency key). No id holds a NUL. */
 const KEY_SEP = "\u0000";
+
+/** How long a box that left stays in place, fading out, before it is dropped. Matches the leave animation (160 ms) plus a margin. */
+const GHOST_MS = 180;
 
 interface Props {
   id: string;
@@ -65,15 +72,69 @@ function memoBy(f: (id: string) => SymbolLink[]): (id: string) => SymbolLink[] {
   };
 }
 
-/**
- * Scrolls the column a box sits in into view (the callers box and the box it leads to are one column), so both show when they
- * fit. A reader who asks for reduced motion gets no animation.
- */
-function reveal(el: HTMLElement | undefined) {
-  const target: HTMLElement | null | undefined = el?.closest<HTMLElement>(".sym-column") ?? el;
-  if (target === null || target === undefined || typeof target.scrollIntoView !== "function") return;
-  const reduce = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
-  target.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "nearest", inline: "nearest" });
+/** One column as it was rendered: plain data, so a column that leaves can be drawn again from it. */
+interface ColView {
+  key: string;
+  i: number;
+  fnId: string;
+  name: string;
+  file: string;
+  callersOpen: boolean;
+  callers: SymbolLink[];
+  callees: SymbolLink[];
+  /** The callee whose box is the next column, if any. */
+  selected: string | undefined;
+}
+
+/** A column (or a callers box) that left the chain, kept for GHOST_MS at its last place. `left` is its place in the track. */
+interface Ghost {
+  id: string;
+  view: ColView;
+  left: number;
+}
+
+interface Link {
+  key: string;
+  d: string;
+  /** Whether the connector carries the ambient flow (a chain connector; a callers connector does not). */
+  flow: boolean;
+}
+
+/** The box that is anchored on screen across a layout change, and where it sat. */
+interface Anchor {
+  key: string;
+  screenX: number;
+}
+
+/** A connector: a stroke that draws on when it first mounts, and carries an ambient flow when it is a chain connector. */
+function Connector({ d, flow }: { d: string; flow: boolean }) {
+  const ref = useRef<SVGPathElement>(null);
+  // Set on mount to the path's length, so the stroke draws from its start; cleared when the draw ends.
+  const [len, setLen] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (el === null || prefersReducedMotion() || typeof el.getTotalLength !== "function") return;
+    setLen(el.getTotalLength());
+  }, []);
+  const drawing = len !== null;
+  return (
+    <>
+      <path
+        ref={ref}
+        d={d}
+        className={drawing ? "sym-link sym-link-draw" : "sym-link"}
+        style={drawing ? ({ strokeDasharray: `${len} ${len}`, "--len": len } as CSSProperties) : undefined}
+        onAnimationEnd={() => setLen(null)}
+      />
+      {flow && <path className="sym-link-flow" d={d} />}
+    </>
+  );
+}
+
+/** The rectangle of `el` in the track's unscaled coordinates. */
+function boxIn(el: HTMLElement, track: HTMLElement): Rect {
+  const o = offsetWithin(el, track);
+  return { x: o.x, y: o.y, w: el.offsetWidth, h: el.offsetHeight };
 }
 
 export function SymbolsView({ id, scope, chain: chainParam }: Props) {
@@ -83,12 +144,32 @@ export function SymbolsView({ id, scope, chain: chainParam }: Props) {
   // The function whose callers box is open, by id, so the box stays on that function whatever the chain becomes.
   const [callersOf, setCallersOf] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
-  // Set when a caller is picked: the new head box is revealed once the chain has moved.
-  const revealHead = useRef(false);
-  // The elements the connectors and the reveal read, by their place in the chain.
+  const [canvasEl, setCanvasEl] = useState<HTMLDivElement | null>(null);
+  const [canvasH, setCanvasH] = useState(0);
+  const [content, setContent] = useState({ w: 0, h: 0 });
+  const [links, setLinks] = useState<Link[]>([]);
+  const [ghosts, setGhosts] = useState<Ghost[]>([]);
+  const [ghostCallers, setGhostCallers] = useState<Ghost[]>([]);
+  // The elements the connectors and the camera read, by their place in the chain.
   const els = useRef(new Map<string, HTMLElement>());
+  const colEls = useRef(new Map<string, HTMLElement>());
   const trackRef = useRef<HTMLDivElement>(null);
-  const [links, setLinks] = useState<string[]>([]);
+  const prevViews = useRef(new Map<string, ColView>());
+  const prevLeft = useRef(new Map<string, number>());
+  const anchor = useRef<Anchor | null>(null);
+  // Set when a caller is picked: the new head box is revealed once the chain has moved.
+  const headPending = useRef(false);
+  const prevLast = useRef("");
+  const prevCallersAt = useRef<number | null>(null);
+  const timers = useRef(new Set<number>());
+
+  const pz = usePanZoom(canvasEl, content, {
+    autoFit: false,
+    fitMinK: 0.4,
+    maxK: 1,
+    height: canvasH > 0 ? canvasH : undefined,
+  });
+  const cam = pz.cam;
 
   useEffect(() => {
     let cancelled = false;
@@ -113,6 +194,15 @@ export function SymbolsView({ id, scope, chain: chainParam }: Props) {
     setCallersOf(null);
   }, [chainUrl]);
 
+  // Drops the timers of boxes that left, when the view goes.
+  useEffect(
+    () => () => {
+      timers.current.forEach((t) => window.clearTimeout(t));
+      timers.current.clear();
+    },
+    [],
+  );
+
   const model = loaded?.key === id ? loaded.model : undefined;
   const error = loaded?.key === id ? loaded.error : undefined;
   const graph = useMemo(
@@ -130,6 +220,24 @@ export function SymbolsView({ id, scope, chain: chainParam }: Props) {
     const at = chain.indexOf(callersOf);
     return at >= 0 ? at : null;
   }, [callersOf, chain]);
+  const keys = useMemo(() => columnKeys(chain), [chain]);
+  const views = useMemo<ColView[]>(() => {
+    if (model === undefined || graph === undefined) return [];
+    return chain.map((fnId, i) => {
+      const fn = model.functionById.get(fnId);
+      return {
+        key: keys[i] ?? fnId,
+        i,
+        fnId,
+        name: displayName(fn?.name ?? fnId, fnId),
+        file: fn?.file ?? "",
+        callersOpen: callersAt === i,
+        callers: graph.callers(fnId),
+        callees: graph.callees(fnId),
+        selected: chain[i + 1],
+      };
+    });
+  }, [model, graph, chain, keys, callersAt]);
 
   // Moves the chain: the state, and the URL that names it (so the chain survives a reload).
   const go = (next: string[]) => {
@@ -140,41 +248,45 @@ export function SymbolsView({ id, scope, chain: chainParam }: Props) {
   };
 
   const chainKey = chain.join(KEY_SEP);
-  // Connectors: from the row that opened the next box to that box, and from the open callers box to the box it leads to.
+
+  // Connectors: from the row that opened the next box to that box, and from the open callers box to the box it leads to. They
+  // are computed in the track's unscaled coordinates, so they do not depend on the camera.
   useLayoutEffect(() => {
     const draw = () => {
       const track = trackRef.current;
       if (track === null) return setLinks([]);
-      const base = track.getBoundingClientRect();
-      const at = (el: HTMLElement) => {
-        const r = el.getBoundingClientRect();
-        return { left: r.left - base.left, right: r.right - base.left, y: r.top - base.top + r.height / 2, top: r.top - base.top };
-      };
-      const paths: string[] = [];
-      const curve = (from: { right: number; y: number }, to: { left: number; y: number }) =>
-        `M ${from.right} ${from.y} C ${from.right + CONNECTOR_GAP / 2} ${from.y}, ${to.left - CONNECTOR_GAP / 2} ${to.y}, ${to.left} ${to.y}`;
+      const out: Link[] = [];
       for (let i = 0; i + 1 < chain.length; i++) {
-        const row = els.current.get(`row:${i}:${chain[i + 1]}`);
-        const box = els.current.get(`box:${i + 1}`);
+        const row = els.current.get(`row:${i}:${chain[i + 1] ?? ""}`);
         // An open callers box sits between the row and the box it leads to, so the row's connector ends at that box instead.
         const cb = callersAt === i + 1 ? els.current.get(`callers:${i + 1}`) : undefined;
-        const to = cb ?? box;
+        const to = cb ?? els.current.get(`box:${i + 1}`);
         if (row && to) {
-          const a = at(row);
-          const b = at(to);
-          paths.push(curve({ right: a.right, y: a.y }, { left: b.left, y: b.top + 20 }));
+          const a = offsetWithin(row, track);
+          const b = offsetWithin(to, track);
+          out.push({
+            key: `row:${keys[i] ?? ""}:${chain[i + 1] ?? ""}->box:${keys[i + 1] ?? ""}`,
+            d: connectorPath({ right: a.x + row.offsetWidth, y: a.y + row.offsetHeight / 2 }, { left: b.x, y: b.y + 20 }),
+            flow: true,
+          });
         }
       }
       if (callersAt !== null) {
         const cb = els.current.get(`callers:${callersAt}`);
         const box = els.current.get(`box:${callersAt}`);
         if (cb && box) {
-          const a = at(cb);
-          const b = at(box);
-          paths.push(curve({ right: a.right, y: a.top + 20 }, { left: b.left, y: b.top + 20 }));
+          const a = offsetWithin(cb, track);
+          const b = offsetWithin(box, track);
+          out.push({
+            key: `callers:${keys[callersAt] ?? ""}->box:${keys[callersAt] ?? ""}`,
+            d: connectorPath({ right: a.x + cb.offsetWidth, y: a.y + 20 }, { left: b.x, y: b.y + 20 }, 72),
+            flow: false,
+          });
         }
       }
-      setLinks(paths);
+      setLinks(out);
+      // The track's own size is the world's content size, for the Fit button.
+      setContent((prev) => (prev.w === track.offsetWidth && prev.h === track.offsetHeight ? prev : { w: track.offsetWidth, h: track.offsetHeight }));
     };
     draw();
     window.addEventListener("resize", draw);
@@ -188,33 +300,108 @@ export function SymbolsView({ id, scope, chain: chainParam }: Props) {
     };
   }, [chainKey, callersAt, model, filter]);
 
-  // A box that opens (the chain's new last box, or a callers box) comes into view.
-  const lastKey = chain.length > 0 ? `${chain.length - 1}:${chain[chain.length - 1]}` : "";
-  useEffect(() => {
-    if (lastKey !== "") reveal(els.current.get(`box:${chain.length - 1}`));
-  }, [lastKey]);
-  useEffect(() => {
-    if (callersAt !== null) reveal(els.current.get(`callers:${callersAt}`));
-  }, [callersAt]);
-  // A caller prepended as the new head comes into view (the chain's first box), once the chain has moved.
-  useEffect(() => {
-    if (!revealHead.current) return;
-    revealHead.current = false;
-    reveal(els.current.get("box:0"));
+  // The stage's height, for Fit.
+  useLayoutEffect(() => {
+    if (canvasEl === null) return;
+    const measure = () => setCanvasH(canvasEl.clientHeight);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(canvasEl);
+    return () => observer.disconnect();
+  }, [canvasEl]);
+
+  // Runs after every commit, before paint: the boxes that left are kept in place, the anchored box keeps its screen place, and
+  // the camera follows what opened. Declared before the early returns so the hooks run in the same order every render.
+  useLayoutEffect(() => {
+    const cur = new Map(views.map((v) => [v.key, v] as const));
+    if (!prefersReducedMotion()) {
+      const cols: Ghost[] = [];
+      const cals: Ghost[] = [];
+      for (const [key, prev] of prevViews.current) {
+        const now = cur.get(key);
+        if (now === undefined) cols.push({ id: key, view: prev, left: prevLeft.current.get(key) ?? 0 });
+        else if (prev.callersOpen && !now.callersOpen) cals.push({ id: key, view: prev, left: 0 });
+      }
+      if (cols.length > 0) setGhosts((g) => [...g, ...cols]);
+      if (cals.length > 0) setGhostCallers((g) => [...g, ...cals]);
+      for (const g of cols) {
+        const t = window.setTimeout(() => {
+          timers.current.delete(t);
+          setGhosts((list) => list.filter((x) => x.id !== g.id));
+        }, GHOST_MS);
+        timers.current.add(t);
+      }
+      for (const g of cals) {
+        const t = window.setTimeout(() => {
+          timers.current.delete(t);
+          setGhostCallers((list) => list.filter((x) => x.id !== g.id));
+        }, GHOST_MS);
+        timers.current.add(t);
+      }
+    }
+    for (const [key, el] of colEls.current) prevLeft.current.set(key, el.offsetLeft);
+    prevViews.current = cur;
+
+    const track = trackRef.current;
+    const a = anchor.current;
+    anchor.current = null;
+    if (a !== null && track !== null) {
+      const idx = keys.indexOf(a.key);
+      const el = idx >= 0 ? els.current.get(`box:${idx}`) : undefined;
+      if (el) {
+        const wx = offsetWithin(el, track).x;
+        pz.moveX(a.screenX - wx * pz.getCam().k);
+      }
+    }
+
+    const lastKey = keys[chain.length - 1] ?? "";
+    let target: string | undefined;
+    if (headPending.current) target = "box:0";
+    else if (callersAt !== null && callersAt !== prevCallersAt.current) target = `callers:${callersAt}`;
+    else if (lastKey !== prevLast.current && lastKey !== "") target = `box:${chain.length - 1}`;
+    headPending.current = false;
+    prevLast.current = lastKey;
+    prevCallersAt.current = callersAt;
+    const reveal = target !== undefined ? els.current.get(target) : undefined;
+    if (reveal !== undefined && track !== null) pz.revealBox(boxIn(reveal, track));
   });
 
   if (error !== undefined) return <p className="error" role="alert">{error}</p>;
   if (model === undefined || graph === undefined) return <p className="muted small">Loading symbols</p>;
 
+  /** Records where the box at chain position `i` is on screen, so the layout change that follows can keep it there. */
+  const anchorAt = (i: number) => {
+    const track = trackRef.current;
+    const el = els.current.get(`box:${i}`);
+    const key = keys[i];
+    if (track === null || el === undefined || key === undefined) return;
+    const c = pz.getCam();
+    anchor.current = { key, screenX: offsetWithin(el, track).x * c.k + c.x };
+  };
   const pickCallee = (i: number, calleeId: string) => {
     const kept = chain.slice(0, i + 1);
     // A row that is already the next box closes everything right of this one.
     go(chain[i + 1] === calleeId ? kept : [...kept, calleeId]);
   };
   const pickCaller = (i: number, callerId: string) => {
-    // The caller becomes the new head; the boxes right of the box it calls stay as they were.
-    revealHead.current = true;
+    // The caller becomes the new head; the boxes right of the box it calls stay as they were. The box it calls keeps its place.
+    anchorAt(i);
+    headPending.current = true;
     go([callerId, ...chain.slice(i)]);
+  };
+  const toggleCallers = (i: number, fnId: string) => {
+    anchorAt(i);
+    setCallersOf(callersAt === i ? null : fnId);
+  };
+  /** A click that ends a drag opens nothing. */
+  const guard = (f: () => void) => () => {
+    if (!pz.moved()) f();
+  };
+  const showSource = (v: ColView) => {
+    const fn = model.functionById.get(v.fnId);
+    const line = model.functionById.get(v.fnId)?.span?.start[0];
+    if (fn !== undefined) showCode(fileTarget(fn.file, line !== undefined ? line + 1 : undefined));
   };
 
   const groups: Array<{ file: string; items: ExportedSymbol[] }> = [];
@@ -224,10 +411,101 @@ export function SymbolsView({ id, scope, chain: chainParam }: Props) {
     else groups.push({ file: s.file, items: [s] });
   }
 
-  const lineOf = (fnId: string) => model.functionById.get(fnId)?.span?.start[0];
   const reg = (key: string) => (el: HTMLElement | null) => {
     if (el) els.current.set(key, el);
     else els.current.delete(key);
+  };
+  const colRef = (key: string) => (el: HTMLElement | null) => {
+    if (el) colEls.current.set(key, el);
+    else colEls.current.delete(key);
+  };
+
+  /** The callers box of a column. A ghost (`live` false) is the one that left: it is inert and hidden from assistive tech. */
+  const callersBox = (v: ColView, live: boolean) => (
+    <section
+      className={live ? "sym-box sym-callers" : "sym-box sym-callers sym-leaving"}
+      aria-label={`Callers of ${v.name}`}
+      aria-hidden={live ? undefined : true}
+      inert={live ? undefined : true}
+      ref={live ? reg(`callers:${v.i}`) : undefined}
+    >
+      <header className="sym-head">
+        <span className="sym-callers-title">Callers of {v.name}</span>
+        {live && (
+          <button type="button" className="sym-close" aria-label={`Close the callers of ${v.name}`} onClick={guard(() => toggleCallers(v.i, v.fnId))}>
+            ×
+          </button>
+        )}
+      </header>
+      {v.callers.length === 0 ? (
+        <p className="muted small sym-none">No exported callers</p>
+      ) : (
+        <ul className="sym-rows">
+          {v.callers.map((c, n) => (
+            <li key={c.id} style={{ "--i": n } as CSSProperties}>
+              <button type="button" className="sym-row" onClick={guard(() => pickCaller(v.i, c.id))}>
+                <span className="sym-row-name">{displayName(c.name, c.id)}</span>
+                {c.via !== undefined && <span className="sym-via">via {displayName(c.via)}</span>}
+                {c.candidate && <span className="sym-maybe">maybe</span>}
+                <span className="sym-chev" aria-hidden="true">›</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+
+  /** One column: its callers box (when open, or leaving), and its function box. */
+  const column = (v: ColView, live: boolean, left?: number) => {
+    const leavingCallers = live && !v.callersOpen ? ghostCallers.find((g) => g.id === v.key) : undefined;
+    return (
+      <div
+        key={live ? v.key : `ghost:${v.key}`}
+        className={live ? "sym-column" : "sym-column sym-leaving"}
+        style={live ? undefined : { left }}
+        aria-hidden={live ? undefined : true}
+        inert={live ? undefined : true}
+        ref={live ? colRef(v.key) : undefined}
+      >
+        {v.callersOpen && callersBox(v, live)}
+        {leavingCallers !== undefined && callersBox(leavingCallers.view, false)}
+        <section className={live ? "sym-box" : "sym-box sym-leaving"} data-box={v.fnId} aria-label={`Calls of ${v.name}`} ref={live ? reg(`box:${v.i}`) : undefined}>
+          <header className="sym-head">
+            <button type="button" className="sym-title" title="Show the source" onClick={guard(() => showSource(v))}>
+              <span className="sym-name">{v.name}</span>
+              <span className="sym-path">{v.file}</span>
+            </button>
+            <button type="button" className="sym-chip" aria-expanded={v.callersOpen} onClick={guard(() => toggleCallers(v.i, v.fnId))}>
+              Callers {v.callers.length}
+            </button>
+          </header>
+          {v.callees.length === 0 ? (
+            <p className="muted small sym-none">Calls no exported functions</p>
+          ) : (
+            <ul className="sym-rows">
+              {v.callees.map((c, n) => (
+                <li key={c.id} style={{ "--i": n } as CSSProperties}>
+                  <button
+                    type="button"
+                    className="sym-row"
+                    aria-pressed={v.selected === c.id}
+                    data-row={c.id}
+                    ref={live ? reg(`row:${v.i}:${c.id}`) : undefined}
+                    onClick={guard(() => pickCallee(v.i, c.id))}
+                  >
+                    <span className="sym-row-name">{displayName(c.name, c.id)}</span>
+                    {c.via !== undefined && <span className="sym-via">via {displayName(c.via)}</span>}
+                    {c.candidate && <span className="sym-maybe">maybe</span>}
+                    <span className="sym-chev" aria-hidden="true">›</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </div>
+    );
   };
 
   return (
@@ -255,7 +533,7 @@ export function SymbolsView({ id, scope, chain: chainParam }: Props) {
                     type="button"
                     className="sym-start"
                     aria-current={chain[0] === s.id ? "true" : undefined}
-                    onClick={() => go([s.id])}
+                    onClick={guard(() => go([s.id]))}
                   >
                     {displayName(s.name, s.id)}
                   </button>
@@ -265,101 +543,43 @@ export function SymbolsView({ id, scope, chain: chainParam }: Props) {
           </section>
         ))}
       </aside>
-      <div className="sym-canvas">
+      <div
+        className={`sym-canvas${pz.expanded ? " expanded" : ""}`}
+        ref={setCanvasEl}
+        onPointerDown={pz.pointer.onPointerDown}
+        onPointerMove={pz.pointer.onPointerMove}
+        onPointerUp={pz.pointer.onPointerUp}
+        onPointerCancel={pz.pointer.onPointerCancel}
+      >
+        <div className="sym-bar">
+          <span className="sysv-zoom" role="group" aria-label="Zoom">
+            <button type="button" onClick={() => pz.zoomBy(1 / 1.25)} aria-label="Zoom out">
+              −
+            </button>
+            <button type="button" onClick={() => pz.zoomBy(1.25)} aria-label="Zoom in">
+              +
+            </button>
+            <button type="button" onClick={() => pz.fit()}>
+              Fit
+            </button>
+            <button type="button" onClick={() => pz.setExpanded(!pz.expanded)} aria-pressed={pz.expanded} title="Fill the window (Esc leaves)">
+              {pz.expanded ? "Close" : "Expand"}
+            </button>
+          </span>
+        </div>
         {chain.length === 0 ? (
           <p className="muted small sym-empty">Pick an exported function on the left to open its calls.</p>
         ) : (
-          <div className="sym-track" ref={trackRef}>
-            {chain.map((fnId, i) => {
-              const fn = model.functionById.get(fnId);
-              const name = displayName(fn?.name ?? fnId, fnId);
-              const callersOpen = callersAt === i;
-              const callers = graph.callers(fnId);
-              const callees = graph.callees(fnId);
-              return (
-                <div key={`${i}:${fnId}`} className="sym-column">
-                  {callersOpen && (
-                    <section className="sym-box sym-callers" aria-label={`Callers of ${name}`} ref={reg(`callers:${i}`)}>
-                      <header className="sym-head">
-                        <span className="sym-callers-title">Callers of {name}</span>
-                        <button type="button" className="sym-close" aria-label={`Close the callers of ${name}`} onClick={() => setCallersOf(null)}>
-                          ×
-                        </button>
-                      </header>
-                      {callers.length === 0 ? (
-                        <p className="muted small sym-none">No exported callers</p>
-                      ) : (
-                        <ul className="sym-rows">
-                          {callers.map((c) => (
-                            <li key={c.id}>
-                              <button type="button" className="sym-row" onClick={() => pickCaller(i, c.id)}>
-                                <span className="sym-row-name">{displayName(c.name, c.id)}</span>
-                                {c.via !== undefined && <span className="sym-via">via {displayName(c.via)}</span>}
-                                {c.candidate && <span className="sym-maybe">maybe</span>}
-                              </button>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </section>
-                  )}
-                  <section className="sym-box" data-box={fnId} aria-label={`Calls of ${name}`} ref={reg(`box:${i}`)}>
-                    <header className="sym-head">
-                      <button
-                        type="button"
-                        className="sym-title"
-                        title="Show the source"
-                        onClick={() => {
-                          const line = lineOf(fnId);
-                          if (fn !== undefined) showCode(fileTarget(fn.file, line !== undefined ? line + 1 : undefined));
-                        }}
-                      >
-                        <span className="sym-name">{name}</span>
-                        <span className="sym-path">{fn?.file ?? ""}</span>
-                      </button>
-                      <button
-                        type="button"
-                        className="sym-chip"
-                        aria-expanded={callersOpen}
-                        onClick={() => setCallersOf(callersOpen ? null : fnId)}
-                      >
-                        Callers {callers.length}
-                      </button>
-                    </header>
-                    {callees.length === 0 ? (
-                      <p className="muted small sym-none">Calls no exported functions</p>
-                    ) : (
-                      <ul className="sym-rows">
-                        {callees.map((c) => {
-                          const selected = chain[i + 1] === c.id;
-                          return (
-                            <li key={c.id}>
-                              <button
-                                type="button"
-                                className="sym-row"
-                                aria-pressed={selected}
-                                data-row={c.id}
-                                ref={reg(`row:${i}:${c.id}`)}
-                                onClick={() => pickCallee(i, c.id)}
-                              >
-                                <span className="sym-row-name">{displayName(c.name, c.id)}</span>
-                                {c.via !== undefined && <span className="sym-via">via {displayName(c.via)}</span>}
-                                {c.candidate && <span className="sym-maybe">maybe</span>}
-                              </button>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    )}
-                  </section>
-                </div>
-              );
-            })}
-            <svg className="sym-links" aria-hidden="true">
-              {links.map((d, k) => (
-                <path key={k} d={d} />
-              ))}
-            </svg>
+          <div className="sym-world" style={{ transform: `translate(${cam.x}px, ${cam.y}px) scale(${cam.k})` }}>
+            <div className="sym-track" ref={trackRef}>
+              {views.map((v) => column(v, true))}
+              {ghosts.map((g) => column(g.view, false, g.left))}
+              <svg className="sym-links" aria-hidden="true">
+                {links.map((l) => (
+                  <Connector key={l.key} d={l.d} flow={l.flow} />
+                ))}
+              </svg>
+            </div>
           </div>
         )}
       </div>

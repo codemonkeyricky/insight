@@ -1337,8 +1337,8 @@ a.auth-chip { text-decoration: none; }
 .sym { flex: 1 1 auto; min-height: 0; display: flex; }
 /* The global button chrome (a glass highlight and blur) reads as a grey gloss on these rows: the view draws its own states. */
 .sym button { box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
-.sym-list { flex: 0 0 240px; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--hair); background: var(--panel); }
-.sym-filter { padding: 10px 10px 6px; }
+.sym-list { flex: 0 0 240px; min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; border-right: 1px solid var(--hair); background: var(--panel); }
+.sym-filter { position: sticky; top: 0; z-index: 1; background: var(--panel); padding: 10px 10px 6px; }
 .sym-filter-input { width: 100%; box-sizing: border-box; font: inherit; font-size: var(--t-sm); color: var(--fg); background: var(--box); border: 1px solid var(--hair); border-radius: var(--r-sm); padding: 5px 8px; }
 .sym-filter-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .sym-list > .sym-none { padding: 6px 12px; }
@@ -1349,14 +1349,30 @@ a.auth-chip { text-decoration: none; }
 .sym-start:hover { background: var(--row-hover); }
 .sym-start[aria-current="true"] { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent-text); }
 .sym-start:focus-visible, .sym-row:focus-visible, .sym-title:focus-visible, .sym-chip:focus-visible, .sym-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.sym-canvas { flex: 1 1 auto; min-width: 0; overflow: auto; position: relative; }
+/* The stage: the camera (a transform on .sym-world) pans and zooms the boxes. The toolbar is outside the world, so it is not scaled. */
+.sym-canvas { flex: 1 1 auto; min-width: 0; min-height: 0; position: relative; overflow: hidden; cursor: grab; touch-action: none; user-select: none; }
+.sym-canvas:active { cursor: grabbing; }
+.sym-canvas.expanded { position: fixed; inset: 0; z-index: 60; background: var(--sheet); }
+.sym-bar { position: absolute; top: 8px; right: 8px; z-index: 2; }
+.sym-bar .sysv-zoom button { padding: 3px 10px; }
+.sym-world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
 .sym-empty, .sym-canvas > .sym-empty { padding: 24px; }
-.sym-track { position: relative; display: flex; align-items: flex-start; gap: 72px; width: max-content; min-height: 100%; padding: 24px 32px 48px; box-sizing: border-box; }
-.sym-column { display: flex; align-items: flex-start; gap: 72px; }
+.sym-track { position: relative; display: flex; align-items: flex-start; gap: 72px; width: max-content; padding: 24px 32px 48px; box-sizing: border-box; }
+.sym-column { position: relative; display: flex; align-items: flex-start; gap: 72px; }
 .sym-links { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
-.sym-links path { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linecap: round; opacity: 0.8; }
-.sym-box { flex: 0 0 260px; width: 260px; box-sizing: border-box; background: var(--panel); border: 1px solid var(--hair); border-radius: var(--r-md); box-shadow: var(--shadow); overflow: hidden; }
-.sym-callers { border-style: dashed; }
+.sym-link { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linecap: round; opacity: 0.8; }
+.sym-link-flow { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linecap: round; stroke-dasharray: 2 10; opacity: 0.35; pointer-events: none; animation: sym-flow 1.6s linear infinite; }
+.sym-link-draw { animation: sym-draw 300ms cubic-bezier(0.22, 1, 0.36, 1) 120ms both; }
+.sym-box { flex: 0 0 260px; width: 260px; box-sizing: border-box; background: var(--panel); border: 1px solid var(--hair); border-radius: var(--r-md); box-shadow: var(--shadow); overflow: hidden; animation: sym-box-in 260ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.sym-callers { border-style: dashed; animation-name: sym-callers-in; }
+/* A callers box that closed stays where it was, out of flow, while it fades: the callers box sits 72 px left of its column's box. */
+.sym-box.sym-callers.sym-leaving { position: absolute; top: 0; left: calc(-260px - 72px); }
+/* A column that left the chain stays at its last place, out of flow, so the boxes that remain do not move while it fades. */
+.sym-column.sym-leaving { position: absolute; top: 24px; pointer-events: none; animation: sym-leave 160ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.sym-box.sym-leaving { pointer-events: none; animation: sym-leave 160ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+/* The boxes and rows inside a leaving column do not enter again. */
+.sym-leaving .sym-box { animation: none; }
+.sym-leaving li { animation: none; }
 .sym-head { display: flex; align-items: flex-start; gap: 8px; padding: 10px 10px 8px 12px; border-bottom: 1px solid var(--hair); }
 .sym-title { flex: 1 1 auto; min-width: 0; text-align: left; font: inherit; color: var(--fg); background: none; border: 0; padding: 0; cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
 .sym-title:hover .sym-name { text-decoration: underline; text-underline-offset: 2px; }
@@ -1368,11 +1384,31 @@ a.auth-chip { text-decoration: none; }
 .sym-close { flex: 0 0 auto; font: inherit; font-size: var(--t-md); line-height: 1; color: var(--muted); background: none; border: 0; border-radius: var(--r-sm); padding: 2px 6px; cursor: pointer; }
 .sym-close:hover { background: var(--row-hover); }
 .sym-rows { list-style: none; margin: 0; padding: 4px; }
-.sym-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; width: 100%; box-sizing: border-box; text-align: left; font: inherit; font-size: var(--t-sm); color: var(--fg); background: none; border: 0; border-radius: var(--r-sm); padding: 6px 8px; cursor: pointer; }
+.sym-row { position: relative; transition: background-color 120ms ease; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; width: 100%; box-sizing: border-box; text-align: left; font: inherit; font-size: var(--t-sm); color: var(--fg); background: none; border: 0; border-radius: var(--r-sm); padding: 6px 8px; cursor: pointer; }
 .sym-row:hover { background: var(--row-hover); }
 .sym-row[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent-text); }
 .sym-row-name { min-width: 0; overflow-wrap: anywhere; }
 .sym-via { font-size: var(--t-xs); color: var(--muted); }
 .sym-maybe { font-size: var(--t-xs); color: var(--warn-text); border: 1px solid currentColor; border-radius: var(--r-pill); padding: 0 6px; line-height: 1.5; }
 .sym-box > .sym-none { padding: 8px 12px 10px; margin: 0; }
-@media (prefers-reduced-motion: reduce) { .sym-track * { transition: none !important; } }
+/* A selected row's accent bar scales in; the trailing chevron slides 2 px on hover or selection. */
+.sym-row[aria-pressed="true"]::before { content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px; border-radius: 2px; background: var(--accent); transform-origin: center; animation: sym-bar-in 160ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.sym-chev { margin-left: auto; color: var(--muted); transition: transform 120ms ease; }
+.sym-row:hover .sym-chev, .sym-row[aria-pressed="true"] .sym-chev { transform: translateX(2px); }
+/* Rows of a newly mounted box enter in a stagger: --i is the row's place, capped at 12. */
+.sym-rows li { animation: sym-row-in 180ms cubic-bezier(0.22, 1, 0.36, 1) both; animation-delay: calc(80ms + min(var(--i), 12) * 22ms); }
+/* Leaving rows (inside a leaving column) are set above and take no entry animation. */
+.sym-leaving li { animation: none; }
+
+@keyframes sym-box-in { from { opacity: 0; transform: translateX(-16px) scale(0.97); } to { opacity: 1; transform: none; } }
+@keyframes sym-callers-in { from { opacity: 0; transform: translateX(16px) scale(0.97); } to { opacity: 1; transform: none; } }
+@keyframes sym-row-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@keyframes sym-draw { from { stroke-dashoffset: var(--len); } to { stroke-dashoffset: 0; } }
+@keyframes sym-flow { from { stroke-dashoffset: 12; } to { stroke-dashoffset: 0; } }
+@keyframes sym-leave { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateX(12px); } }
+@keyframes sym-bar-in { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .sym *, .sym *::before { transition: none !important; animation: none !important; }
+  .sym-link-flow { display: none; }
+}

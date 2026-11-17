@@ -188,66 +188,42 @@ describe("Symbols tab chain", () => {
   });
 });
 
-describe("Symbols tab scrolling", () => {
-  /** Replaces scrollIntoView and matchMedia for one test: every scroll is recorded with the element it moved. */
-  function stubScroll(reduceMotion: boolean) {
-    const calls: Array<{ el: Element; opts: unknown }> = [];
-    const originalScroll = Element.prototype.scrollIntoView;
-    const originalMatch = window.matchMedia;
-    Element.prototype.scrollIntoView = function (this: Element, opts?: ScrollIntoViewOptions) {
-      calls.push({ el: this, opts });
+describe("Symbols tab camera", () => {
+  /** Records every scrollIntoView call. The camera replaces it: opening a box must not scroll the page or any ancestor. */
+  function spyScroll() {
+    const calls: Element[] = [];
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element) {
+      calls.push(this);
     };
-    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
-      matches: reduceMotion && query.includes("prefers-reduced-motion"),
-      media: query,
-      addListener: () => {},
-      removeListener: () => {},
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      onchange: null,
-      dispatchEvent: () => false,
-    })) as unknown as typeof window.matchMedia;
-    return {
-      calls,
-      restore: () => {
-        Element.prototype.scrollIntoView = originalScroll;
-        window.matchMedia = originalMatch;
-      },
-    };
+    return { calls, restore: () => (Element.prototype.scrollIntoView = original) };
   }
 
-  it("scrolls the opened column into view with behavior auto under prefers-reduced-motion, callers column included", async () => {
+  it("opening a box does not scroll the page (the camera follows instead)", async () => {
     getSymbolModel.mockResolvedValue(model());
-    const scroll = stubScroll(true);
+    const scroll = spyScroll();
     try {
       await ready();
       fireEvent.click(startList().getByRole("button", { name: "A" }));
-      const opened = scroll.calls[scroll.calls.length - 1] as { el: Element; opts: unknown };
-      expect(opened.el.classList.contains("sym-column")).toBe(true);
-      expect(opened.opts).toEqual({ behavior: "auto", block: "nearest", inline: "nearest" });
-      // Opening the callers box reveals its column, which holds the box it leads to as well.
       fireEvent.click(within(box("A") as HTMLElement).getByRole("button", { name: /^Callers/ }));
-      const callers = scroll.calls[scroll.calls.length - 1] as { el: Element; opts: unknown };
-      expect(callers.el.classList.contains("sym-column")).toBe(true);
-      expect(callers.el.contains(screen.getByRole("region", { name: "Callers of A" }))).toBe(true);
-      expect(callers.opts).toEqual({ behavior: "auto", block: "nearest", inline: "nearest" });
+      fireEvent.click(within(box("A") as HTMLElement).getByRole("button", { name: /^B/ }));
+      expect(scroll.calls).toEqual([]);
     } finally {
       scroll.restore();
     }
   });
 
-  it("scrolls a caller picked as the new head into view", async () => {
+  it("the start list is a scroll container, and the canvas is the pan and zoom stage with a world layer", async () => {
     getSymbolModel.mockResolvedValue(model());
-    const scroll = stubScroll(true);
-    try {
-      await ready([id(G, "B")]);
-      fireEvent.click(within(box("B") as HTMLElement).getByRole("button", { name: "Callers 1" }));
-      fireEvent.click(within(screen.getByRole("region", { name: "Callers of B" })).getByRole("button", { name: /^A/ }));
-      const head = scroll.calls[scroll.calls.length - 1] as { el: Element };
-      expect(head.el.classList.contains("sym-column")).toBe(true);
-      expect(head.el.querySelector(`[data-box="${id(F, "A")}"]`)).not.toBeNull();
-    } finally {
-      scroll.restore();
-    }
+    await ready([id(F, "A")]);
+    const list = screen.getByRole("complementary", { name: "Exported functions" });
+    expect(list.classList.contains("sym-list")).toBe(true);
+    const canvas = document.querySelector(".sym-canvas") as HTMLElement;
+    expect(canvas).not.toBeNull();
+    const world = canvas.querySelector(".sym-world") as HTMLElement;
+    expect(world.querySelector(".sym-track")).not.toBeNull();
+    expect(world.style.transform).toContain("scale(");
+    // The toolbar sits outside the scaled world.
+    expect(world.contains(canvas.querySelector(".sysv-zoom"))).toBe(false);
   });
 });
