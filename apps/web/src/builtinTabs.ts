@@ -2,7 +2,7 @@
 // stripping (the capture script loads scopeLenses.ts that way, and Node cannot resolve an extensionless import).
 
 /**
- * The tabs every project has. Any other tab id is a lens id. The Source and Findings tabs are gone: their old URLs
- * redirect to Overview (see redirectFor), and their links open the code pane instead.
+ * The tabs of the tab bar, in order: Flow, System, Pipeline and Packages. Any other tab id is not a tab: the routes for the
+ * retired tabs (Overview, Arch, Compare, Triage, Source, Findings and every lens) redirect (see redirectFor).
  */
-export const BUILTIN_TABS = ["overview", "flow", "system", "arch", "compare", "review"] as const;
+export const BUILTIN_TABS = ["flow", "system", "pipeline", "packages"] as const;

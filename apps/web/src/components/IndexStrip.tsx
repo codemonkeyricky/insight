@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { api, NO_SERVER, type Project, type SnapshotSummary } from "../api";
-import { hrefView } from "../router";
 import type { IndexRun } from "../useIndexProgress";
 import { IndexProgress } from "./IndexProgress";
 
@@ -89,9 +88,6 @@ export function IndexStrip({ id, project, snapshot, run, onRequested }: IndexStr
             <IndexProgress progress={run.progress} fraction={run.progress ? run.fraction : undefined} />
           </div>
           {project.queued && <span className="idx-note">One more queued</span>}
-          <a className="small" href={hrefView(id, "overview", { full: true })}>
-            Log
-          </a>
         </>
       ) : failed ? (
         <>

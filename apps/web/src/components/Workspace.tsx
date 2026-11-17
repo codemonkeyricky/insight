@@ -1,19 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { api, IS_HOSTED, NO_SERVER, type FileEntry, type Overview, type ScopeLenses } from "../api";
+import { api, IS_HOSTED, type FileEntry, type Overview } from "../api";
 import { CodeTargetContext, opensCodePane, scopeCodeTarget, type CodeTarget, type CodeTargetValue } from "../codeTarget";
-import { contentOf, flowScopeOf, layerLinks, type ShellContent } from "./sheet/shell";
+import { contentOf, layerLinks, type ShellContent } from "./sheet/shell";
 import { hrefView, redirectFor } from "../router";
-import { canonicalScope } from "../scopeKey";
-import { lensTab, tabbedLenses } from "../scopeLenses";
-import { ComparePage } from "../pages/Compare";
-import { LensPage } from "../pages/LensPage";
-import { ProjectOverview } from "../pages/ProjectOverview";
-import { ReviewPage } from "../pages/Review";
 import { StatusBadge } from "../pages/Projects";
 import { useIndexProgress } from "../useIndexProgress";
 import { FirstIndex, IndexStrip } from "./IndexStrip";
 import { HostedReindex } from "./HostedReindex";
-import { ScopeNote, scopeKind } from "./ScopeNote";
+import { scopeKind } from "./ScopeNote";
 import { CodePane } from "./sheet/CodePane";
 import { FileTree } from "./sheet/FileTree";
 import { FindPalette } from "./sheet/FindPalette";
@@ -23,13 +17,11 @@ import { Splitter } from "./sheet/Splitter";
 import { TopBar, type Crumb } from "./sheet/TopBar";
 import type { TitleFacts } from "./sheet/TitleBlock";
 import { shortCommit } from "./sheet/TitleBlock";
-import { ArchTab } from "./views/ArchTab";
+import { ArchView } from "./views/ArchView";
+import { PipelineTab } from "./views/PipelineTab";
 import { FlowView } from "./views/FlowView";
 import { SystemView } from "./views/SystemView";
 import { ZoomStore } from "../zoom/scene";
-
-/** Tabs that cover the whole project. The explorer scope does not narrow them. */
-const PROJECT_WIDE = new Set(["overview", "compare", "review"]);
 
 /** The System tab. It asks the workspace to collapse the code pane while it is shown and no code is open, and restores it on leaving. */
 function SystemTab({ id, scope, onSystemActive }: { id: string; scope: string; onSystemActive: (on: boolean) => void }) {
@@ -54,8 +46,6 @@ export interface WorkspaceProps {
   trace?: string;
   base?: string;
   head?: string;
-  /** The overview tab with the full overview page, rather than the flow root. */
-  full?: boolean;
   /** The flow tab's findings layer, drawing only the findings of this kind. */
   findingKind?: string;
 }
@@ -73,11 +63,9 @@ const isEditable = (target: EventTarget | null) =>
  * stay put on every tab; the center holds the layers as tabs over the view. On a phone the two side panes are drawers, opened
  * from the top bar. Find opens as an overlay.
  */
-export function Workspace({ id, tab, scope, line, fn, trace, base, head, full = false, findingKind }: WorkspaceProps) {
+export function Workspace({ id, tab, scope, line, fn, trace, base, head, findingKind }: WorkspaceProps) {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [listing, setListing] = useState<ScopeLenses | null>(null);
-  const [listingError, setListingError] = useState<string | null>(null);
   const [findOpen, setFindOpen] = useState(false);
   /** The desktop panes: shown or collapsed. */
   const [treeCollapsed, setTreeCollapsed] = useState(false);
@@ -94,8 +82,6 @@ export function Workspace({ id, tab, scope, line, fn, trace, base, head, full = 
   const [slot, setSlot] = useState<HTMLElement | null>(null);
   /** The flow charts, shared by the map and the code pane, so both read one cache. */
   const store = useMemo(() => new ZoomStore(id), [id]);
-  // Listings by snapshot and scope, so a scope the user has already opened is not asked for again.
-  const listings = useRef(new Map<string, ScopeLenses>());
 
   // Picking code shows it: the pane opens (the Code drawer on a phone). A file scope set by a link shows silently, below.
   const showCode = useCallback((t: CodeTarget) => {
@@ -142,10 +128,8 @@ export function Workspace({ id, tab, scope, line, fn, trace, base, head, full = 
     void load();
   }, [load]);
 
-  // A hidden lens has no tab, so its link goes to the flow tab. The hidden flag comes from the loaded lens rows, so this
-  // waits for the listing; until then the lens page is not shown as a tab. Source and Findings go to Overview.
-  const hiddenLenses = listing ? listing.lenses.filter((r) => r.hidden).map((r) => r.id) : [];
-  const redirect = redirectFor({ name: "workspace", id, tab, scope, ...(line !== undefined ? { line } : {}) }, hiddenLenses);
+  // An old view (Overview, Arch, Compare, Triage, a lens) has no tab any more, so its link goes to the tab that replaces it.
+  const redirect = redirectFor({ name: "workspace", id, tab, scope, line, fn, trace, base, head, kind: findingKind });
   useEffect(() => {
     if (redirect !== undefined) window.location.replace(redirect);
   }, [redirect]);
@@ -172,49 +156,6 @@ export function Workspace({ id, tab, scope, line, fn, trace, base, head, full = 
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const snapshotId = loaded?.overview.snapshot?.id ?? null;
-  const listingKey = snapshotId === null ? null : `${snapshotId}|${scope}`;
-
-  useEffect(() => {
-    if (listingKey === null) return;
-    const hit = listings.current.get(listingKey);
-    if (hit) {
-      setListing(hit);
-      setListingError(null);
-      return;
-    }
-    let cancelled = false;
-    api.scopeLenses(id, scope).then(
-      (next) => {
-        if (cancelled) return;
-        listings.current.set(listingKey, next);
-        setListing(next);
-        setListingError(null);
-      },
-      (e: Error) => {
-        if (cancelled) return;
-        setListing(null);
-        setListingError(e.message);
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [id, scope, listingKey]);
-
-  // Running a lens can store a new result, which changes the tabs. The listing is fetched again once a lens page has loaded.
-  const refreshListing = useCallback(() => {
-    if (listingKey === null) return;
-    api.scopeLenses(id, scope).then(
-      (next) => {
-        listings.current.set(listingKey, next);
-        setListing(next);
-        setListingError(null);
-      },
-      (e: Error) => setListingError(e.message),
-    );
-  }, [id, scope, listingKey]);
-
   // A file scope (a link, a finding, the Find palette, a tree click) shows that file in the code pane. A folder or the project
   // sets nothing, so the pane keeps the code it shows. A link to a line opens the code pane at that line; a file scope with no
   // line shows its code without opening a closed pane.
@@ -232,32 +173,27 @@ export function Workspace({ id, tab, scope, line, fn, trace, base, head, full = 
   const { overview, files } = loaded;
   const p = overview.project;
   const sourceText = p.source.kind === "path" ? p.source.path : p.source.url;
-  const kind = scopeKind(scope, files);
-  const content: ShellContent = contentOf(tab, kind, full);
+  const content: ShellContent = contentOf(tab);
   // A project with no snapshot yet has nothing to chart, so its views give way to the first index's progress.
   const noSnapshot = overview.snapshot === null;
-  const lensTabs = listing ? tabbedLenses(listing.lenses).map((row) => lensTab(row, !NO_SERVER)) : [];
-  // The banner's numbers belong to one scope. A listing for another scope is not shown while the new one loads.
-  const stats = listing && listing.scope === canonicalScope(scope) ? listing.stats : null;
-  // The tree picks flow for the flow view and the project-wide pages (a picked file opens its flow, with its code in the pane),
-  // and the lens's own tab for a lens.
-  const explorerTab = content === "flow" || (PROJECT_WIDE.has(tab) && tab !== "arch") ? "flow" : tab;
-  // Views remount when the snapshot, view or scope changes, so no state from the last one carries over. The flow map
-  // follows the scope and function in place, so a scope change animates the camera rather than remounting the map.
-  const viewKey = `${overview.snapshot?.id ?? "none"}|${content}|${content === "flow" || tab === "arch" || tab === "system" ? "" : scope}|${base ?? ""}|${head ?? ""}|${full}`;
+  // The tree picks flow for the flow tab; the other tabs keep their own tab, so a picked file opens its flow with its code in the pane.
+  const explorerTab = content === "flow" ? "flow" : tab;
+  // Views remount when the snapshot or view changes, so no state from the last one carries over. The flow map follows the scope and
+  // function in place, so a scope change animates the camera rather than remounting the map. The other tabs follow the scope in place.
+  const viewKey = `${overview.snapshot?.id ?? "none"}|${content}`;
 
   const parts = scope ? scope.split("/") : [];
   // A crumb keeps the tab the reader is on (Arch, a lens) and otherwise goes to Flow, so a folder crumb always has a view.
-  const crumbTab = content === "flow" ? "flow" : content === "system" || content === "arch" || content === "lens" ? tab : "flow";
+  const crumbTab = content === "flow" ? "flow" : tab;
   const crumbs: Crumb[] = [
-    { label: p.name, href: hrefView(id, "overview"), current: parts.length === 0 },
+    { label: p.name, href: hrefView(id, "flow"), current: parts.length === 0 },
     ...parts.map((seg, i): Crumb => {
       const path = parts.slice(0, i + 1).join("/");
       return { label: seg, href: hrefView(id, crumbTab, { scope: path }), current: i === parts.length - 1 };
     }),
   ];
 
-  const layers = layerLinks({ id, tab, scope, content, noServer: NO_SERVER, lenses: lensTabs });
+  const layers = layerLinks({ id, tab, scope });
 
   const facts: Omit<TitleFacts, "selected"> = {
     project: p.name,
@@ -302,26 +238,15 @@ export function Workspace({ id, tab, scope, line, fn, trace, base, head, full = 
 
   const renderPage = (): ReactNode => {
     switch (content) {
-      case "overview":
-        return <ProjectOverview id={id} />;
       case "system":
         return <SystemTab id={id} scope={scope} onSystemActive={onSystemActive} />;
-      case "arch":
-        return <ArchTab id={id} scope={scope} onSystemActive={onSystemActive} />;
-      case "compare":
-        return <ComparePage id={id} base={base} head={head} />;
-      case "triage":
-        return <ReviewPage id={id} />;
-      case "lens":
+      case "pipeline":
+        return <PipelineTab id={id} scope={scope} onSystemActive={onSystemActive} />;
+      case "packages":
         return (
-          <LensPage
-            id={id}
-            lensId={tab}
-            scope={scope}
-            projectName={p.name}
-            stats={stats}
-            onLoaded={refreshListing}
-          />
+          <div className="packages-tab">
+            <ArchView id={id} scope={scope} />
+          </div>
         );
       default:
         return null;
@@ -356,7 +281,7 @@ export function Workspace({ id, tab, scope, line, fn, trace, base, head, full = 
           ) : (
             <IndexStrip id={id} project={p} snapshot={overview.snapshot} run={run} onRequested={() => void load()} />
           )}
-          {noSnapshot && content !== "overview" ? (
+          {noSnapshot ? (
             <FirstIndex name={p.name} run={run} running={run.running || p.status === "indexing"} />
           ) : content === "flow" ? (
             <div className="sh-stage sh-stage-flow">
@@ -364,12 +289,12 @@ export function Workspace({ id, tab, scope, line, fn, trace, base, head, full = 
               <FlowView
                 id={id}
                 files={files}
-                scope={flowScopeOf(tab, scope)}
+                scope={scope}
                 fn={fn}
                 store={store}
                 slot={slot}
                 facts={facts}
-                emphasis={tab === "overview"}
+                emphasis={scope === ""}
                 findingKind={findingKind}
                 codeOpen={codeShown}
               />
@@ -378,21 +303,9 @@ export function Workspace({ id, tab, scope, line, fn, trace, base, head, full = 
             <div className="sh-stage sh-page">
               <div className="sh-page-head">
                 <h1>{p.name}</h1>
-                {content !== "overview" && <StatusBadge project={p} />}
+                <StatusBadge project={p} />
               </div>
               {error && <p className="error" role="alert">{error}</p>}
-              {listingError && (
-                <p className="muted small" title={listingError}>
-                  Lenses unavailable
-                </p>
-              )}
-              {tab === "arch" || tab === "system" ? null : PROJECT_WIDE.has(tab) ? (
-                <p className="muted small scope-note">
-                  This page covers the whole project, so the scope does not narrow it. Pick a file in the tree to see its flow and code.
-                </p>
-              ) : (
-                <ScopeNote id={id} tab={tab} scope={scope} kind={kind} files={files} trail />
-              )}
               <div key={viewKey}>{renderPage()}</div>
             </div>
           )}

@@ -110,7 +110,7 @@ function ArchDiagram({ id, scope, model: whole }: { id: string; scope: string; m
   // A file card opens its source. Any other card opens its folder or package in Arch, as the scope. The root package ('.') is the project.
   const fileCard = (box: ArchBox): boolean => scoped !== null && scoped.cards === "files" && box.pkg.layer === scoped.inner;
   const cardHref = (box: ArchBox): string =>
-    fileCard(box) ? hrefFile(id, box.pkg.path) : hrefView(id, "arch", { scope: box.pkg.path === "." ? "" : box.pkg.path });
+    fileCard(box) ? hrefFile(id, box.pkg.path) : hrefView(id, "packages", { scope: box.pkg.path === "." ? "" : box.pkg.path });
   const openBox = (box: ArchBox) => {
     window.location.hash = cardHref(box);
   };
@@ -447,7 +447,7 @@ function Violations({ id, model }: { id: string; model: ArchModel }) {
                   {v.from} -&gt; {v.to}
                 </div>
                 {first && (
-                  <a className="mono small" href={hrefFile(id, first.file, siteLine(first), "arch")}>
+                  <a className="mono small" href={hrefFile(id, first.file, siteLine(first), "packages")}>
                     {first.file}:{siteLine(first)}
                   </a>
                 )}
@@ -486,7 +486,7 @@ function Sites({ id, sites }: { id: string; sites: Span[] }) {
     <ul className="arch-list">
       {sites.map((s, i) => (
         <li key={`${s.file}\0${s.start[0]}\0${s.start[1]}\0${i}`}>
-          <a className="mono small" href={hrefFile(id, s.file, siteLine(s), "arch")}>
+          <a className="mono small" href={hrefFile(id, s.file, siteLine(s), "packages")}>
             {s.file}:{siteLine(s)}
           </a>
         </li>
@@ -512,7 +512,7 @@ function Unresolved({ id, model }: { id: string; model: ArchModel }) {
               {u.span && (
                 <>
                   {" "}
-                  <a className="mono small" href={hrefFile(id, u.span.file, siteLine(u.span), "arch")}>
+                  <a className="mono small" href={hrefFile(id, u.span.file, siteLine(u.span), "packages")}>
                     {u.span.file}:{siteLine(u.span)}
                   </a>
                 </>

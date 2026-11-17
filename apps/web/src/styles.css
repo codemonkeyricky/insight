@@ -1168,8 +1168,7 @@ button.add-submit:disabled { background: var(--faint); color: var(--graphite); b
 
 /* Arch tab: System view. A pannable canvas of cards (components, outside systems) joined by curves with verb pills, and a side
  * panel of the selection. Writes use the accent, reads and calls the neutral tone, runs and spawns are dashed, inferred are faded. */
-.arch-tab { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-.arch-mode { align-self: flex-start; }
+.pipeline-tab, .packages-tab { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .sysv-tab { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .sysv-modebar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .sysv-mode { align-self: flex-start; }

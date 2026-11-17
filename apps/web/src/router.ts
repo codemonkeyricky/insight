@@ -1,17 +1,16 @@
 import { isRefName, isRepoName } from "./hostedRepo";
 
 // The built-in tab ids live in a dependency-free module (see builtinTabs.ts); re-exported here for the router's callers.
-export { BUILTIN_TABS } from "./builtinTabs.ts";
+import { BUILTIN_TABS } from "./builtinTabs.ts";
 
-/** The views that were tabs once and now redirect to Overview, keeping the scope and line of the link. */
-const RETIRED_VIEWS: readonly string[] = ["source", "findings"];
+export { BUILTIN_TABS };
 
 export type Route =
   | { name: "projects" }
   | {
       name: "workspace";
       id: string;
-      /** The view: overview, source, flow, findings, compare, review, or a lens id. */
+      /** The tab: flow, system, pipeline or packages. Any other id is an old view and redirects (see redirectFor). */
       tab: string;
       /** What the tabs show: "" for the whole project, otherwise a folder or file path. */
       scope: string;
@@ -20,8 +19,6 @@ export type Route =
       fn?: string;
       /** The function whose caller chain the Caller chain section shows; kept while the reader walks up the chain. Written as `trace=`. */
       trace?: string;
-      /** The overview tab's full page (`full=1`), rather than the flow sheet with its title block. */
-      full?: boolean;
       /** The flow tab with the findings layer on, drawing only the findings of this kind (`kind=`). */
       kind?: string;
       base?: string;
@@ -37,8 +34,6 @@ export interface ViewOptions {
   fn?: string;
   /** The function whose caller chain the Caller chain section shows; kept while the reader walks up the chain. Written as `trace=`. */
   trace?: string;
-  /** The overview tab's full page. Written as `full=1`, and only when true. */
-  full?: boolean;
   /** The findings layer of the flow tab, for one kind of finding. Written as `kind=`. */
   kind?: string;
   base?: string;
@@ -48,8 +43,8 @@ export interface ViewOptions {
 /**
  * Parses a hash route. The canonical form is
  * #/projects/<id>/view/<tab>?scope=<folder or file>&line=<n>&fn=<function>.
- * Older links are still understood: #/projects/<id>, .../lenses/<lens>, .../compare, .../review
- * and .../files/<path>?line=<n>. A `mode` parameter from the retired flow modes is ignored.
+ * A project with no view opens Flow. Older links still parse (.../lenses/<lens>, .../compare, .../review,
+ * .../files/<path>?line=<n>) and then redirect (see redirectFor). A `mode` or `full` parameter is ignored.
  */
 export function parseRoute(hash: string): Route {
   const raw = hash.replace(/^#/, "");
@@ -67,18 +62,17 @@ export function parseRoute(hash: string): Route {
   };
   const opt = <K extends string>(key: K, value: string | null | undefined) => (value ? ({ [key]: value } as Record<K, string>) : {});
 
-  if (parts.length === 2) return { name: "workspace", id, tab: "overview", scope: "" };
+  if (parts.length === 2) return { name: "workspace", id, tab: "flow", scope: "" };
   if (parts[2] === "view" && parts.length <= 4) {
     const line = lineOf();
     return {
       name: "workspace",
       id,
-      tab: parts[3] ?? "overview",
+      tab: parts[3] ?? "flow",
       scope: query.get("scope") ?? "",
       ...(line ? { line } : {}),
       ...opt("fn", query.get("fn")),
       ...opt("trace", query.get("trace")),
-      ...(query.get("full") === "1" ? { full: true } : {}),
       ...opt("kind", query.get("kind")),
       ...opt("base", query.get("base")),
       ...opt("head", query.get("head")),
@@ -126,7 +120,6 @@ export function hrefView(id: string, tab: string, opts: ViewOptions = {}): strin
   if (opts.line) params.set("line", String(opts.line));
   if (opts.fn) params.set("fn", opts.fn);
   if (opts.trace) params.set("trace", opts.trace);
-  if (opts.full) params.set("full", "1");
   if (opts.kind) params.set("kind", opts.kind);
   if (opts.base) params.set("base", opts.base);
   if (opts.head) params.set("head", opts.head);
@@ -135,26 +128,31 @@ export function hrefView(id: string, tab: string, opts: ViewOptions = {}): strin
 }
 
 /**
- * Where a route must be sent instead of shown, or undefined when it is shown as it is. A hidden lens (one with no tab,
- * listed in `hiddenLenses` from the loaded lens rows) goes to the flow tab, whose canvas draws the same threads, coroutines
- * and functions, for the same scope. The retired Source and Findings views go to Overview. The scope and line ride along,
- * so a link to a file's line still opens that file in the code pane.
+ * Where a route must be sent instead of shown, or undefined when it is shown as it is. The tab bar has four tabs (Flow,
+ * System, Pipeline, Packages). Any other tab is an old view: Arch went to Packages, which is its package view, and every
+ * other retired view (Overview, Compare, Triage, Source, Findings and each lens) goes to Flow. The scope and the other query
+ * parameters ride along, so a link to a file's line still opens that file in the code pane. The `full` parameter is dropped.
  */
-export function redirectFor(route: Route, hiddenLenses: readonly string[] = []): string | undefined {
+export function redirectFor(route: Route): string | undefined {
   if (route.name !== "workspace") return undefined;
-  if (hiddenLenses.includes(route.tab)) return hrefView(route.id, "flow", { scope: route.scope });
-  if (RETIRED_VIEWS.includes(route.tab)) return hrefView(route.id, "overview", { scope: route.scope, ...(route.line ? { line: route.line } : {}) });
-  return undefined;
+  if ((BUILTIN_TABS as readonly string[]).includes(route.tab)) return undefined;
+  const tab = route.tab === "arch" ? "packages" : "flow";
+  return hrefView(route.id, tab, {
+    scope: route.scope,
+    ...(route.line ? { line: route.line } : {}),
+    ...(route.fn ? { fn: route.fn } : {}),
+    ...(route.trace ? { trace: route.trace } : {}),
+    ...(route.kind ? { kind: route.kind } : {}),
+    ...(route.base ? { base: route.base } : {}),
+    ...(route.head ? { head: route.head } : {}),
+  });
 }
 
 export const hrefProject = (id: string) => `#/projects/${enc(id)}`;
-export const hrefLens = (id: string, lensId: string, scope?: string) => hrefView(id, lensId, { ...(scope ? { scope } : {}) });
-export const hrefReview = (id: string) => hrefView(id, "review");
-export const hrefCompare = (id: string, base?: string, head?: string) => hrefView(id, "compare", { ...(base ? { base } : {}), ...(head ? { head } : {}) });
 
 /**
  * A link to a file, optionally at a line (1-based). It opens the file in the code pane on the given tab, which is the flow
- * tab unless a page (such as Arch) passes its own, so the link keeps that tab. The file is the scope, as it was for the old
+ * tab unless a page (such as Packages) passes its own, so the link keeps that tab. The file is the scope, as it was for the old
  * Source tab, and the line opens the code pane there.
  */
 export const hrefFile = (id: string, path?: string, line?: number, tab = "flow") =>

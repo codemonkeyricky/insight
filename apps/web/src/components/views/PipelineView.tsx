@@ -8,7 +8,7 @@ import { PipelineSequences } from "./PipelineSequences";
 /**
  * The Pipeline view of the explorer scope: the processing stages of its extension points, drawn with the System view's diagram.
  * The model is computed in the page from the project model (api.getPipeline), like the System view's. The Show tests setting is
- * owned by the parent (ArchTab), which it shares with the Stages view.
+ * owned by the parent (PipelineTab), which it shares with the Stages view.
  */
 export function PipelineView({ id, scope, tests, onTests }: { id: string; scope: string; tests: boolean; onTests: (on: boolean) => void }) {
   const [done, setDone] = useState<{ key: string; pipeline?: PipelineModel; error?: string } | null>(null);
