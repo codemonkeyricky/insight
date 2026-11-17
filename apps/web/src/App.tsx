@@ -85,6 +85,7 @@ export function App() {
             line={route.line}
             fn={route.fn}
             trace={route.trace}
+            chain={route.chain}
             base={route.base}
             head={route.head}
             findingKind={route.kind}

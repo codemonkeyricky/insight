@@ -18,7 +18,7 @@ import type {
   ScopeFlow,
   SourceSlice,
 } from "./api";
-import type { CallerOptions, PipelineModel, SerializedModel, SystemModel, TierModel } from "@insight/model";
+import type { CallerOptions, PipelineModel, ProjectModel, SerializedModel, SystemModel, TierModel } from "@insight/model";
 import { buildFileFlow, calleeMapFromNodes, couplingIndex, type CouplingIndex } from "@insight/flow";
 import type { FlowFocus } from "./zoom/detailPref";
 import { callerGraphFor, pipelineFor, refsFor, scopeCallersFor, scopeExecFor, scopeFlowFor, stagesFor, systemFor, tiersFor, type CallerGraphPayload, type ScopeRefsPayload, type StagesPayload } from "./model/payloads";
@@ -290,6 +290,11 @@ export function makeStaticApi(baseFor: (projectId: string) => string | Promise<s
       if (problem) throw new ApiError(400, problem);
       const { snapshot, model } = await modelOf(id);
       return scopeExecFor(snapshot, model, scope, execOpts);
+    },
+    /** The project's model, for the Symbols tab: the same model the scope payloads are computed from. */
+    getSymbolModel: async (id: string): Promise<ProjectModel> => {
+      await checkProject(id);
+      return (await modelOf(id)).model;
     },
     /** The reverse references of a node, computed from the project's model the way the live server computes them. */
     getRefs: async (id: string, scope: string, fnId: string): Promise<ScopeRefsPayload> => {

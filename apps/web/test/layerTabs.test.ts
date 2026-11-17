@@ -6,13 +6,13 @@ import { hrefFile, hrefView, parseRoute, redirectFor } from "../src/router.js";
 const tabs = (tab: string, scope = "src") => layerLinks({ id: "p1", tab, scope });
 
 describe("the tab bar", () => {
-  it("is exactly Flow, System, Pipeline and Packages, in that order", () => {
-    expect(tabs("flow").map((l) => l.title)).toEqual(["Flow", "System", "Pipeline", "Packages"]);
-    expect(tabs("flow").map((l) => l.id)).toEqual(["flow", "system", "pipeline", "packages"]);
+  it("is exactly Flow, Symbols, System, Pipeline and Packages, in that order", () => {
+    expect(tabs("flow").map((l) => l.title)).toEqual(["Flow", "Symbols", "System", "Pipeline", "Packages"]);
+    expect(tabs("flow").map((l) => l.id)).toEqual(["flow", "symbols", "system", "pipeline", "packages"]);
   });
 
   it("marks only the current tab, for each of the four", () => {
-    for (const t of ["flow", "system", "pipeline", "packages"]) {
+    for (const t of ["flow", "symbols", "system", "pipeline", "packages"]) {
       expect(tabs(t).filter((l) => l.current).map((l) => l.id)).toEqual([t]);
     }
   });
@@ -20,6 +20,7 @@ describe("the tab bar", () => {
   it("links each tab to its view, keeping the scope", () => {
     expect(tabs("flow", "packages/core").map((l) => l.href)).toEqual([
       "#/projects/p1/view/flow?scope=packages%2Fcore",
+      "#/projects/p1/view/symbols?scope=packages%2Fcore",
       "#/projects/p1/view/system?scope=packages%2Fcore",
       "#/projects/p1/view/pipeline?scope=packages%2Fcore",
       "#/projects/p1/view/packages?scope=packages%2Fcore",
@@ -29,6 +30,7 @@ describe("the tab bar", () => {
   it("opens Flow for the bare project, and the page of each tab draws its own content", () => {
     expect(parseRoute("#/projects/p1")).toMatchObject({ tab: "flow", scope: "" });
     expect(contentOf("flow")).toBe("flow");
+    expect(contentOf("symbols")).toBe("symbols");
     expect(contentOf("system")).toBe("system");
     expect(contentOf("pipeline")).toBe("pipeline");
     expect(contentOf("packages")).toBe("packages");

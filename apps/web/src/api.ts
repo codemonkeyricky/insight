@@ -1,5 +1,5 @@
 import type { ExecFunctionRef, ExecModel, FileFlow, FileFlowSummary, SceneLayout, ScopeFlow } from "@insight/flow";
-import type { ArchModel, CallerOptions } from "@insight/model";
+import type { ArchModel, CallerOptions, ProjectModel } from "@insight/model";
 import { ApiError } from "./apiError";
 import type { PipelineModel, SerializedModel, SystemModel, TierModel } from "@insight/model";
 import { callerGraphFor, pipelineFor, refsFor, scopeCallersFor, scopeExecFor, scopeFlowFor, stagesFor, systemFor, tiersFor, type CallerGraphPayload, type ScopeRefsPayload, type StagesPayload } from "./model/payloads";
@@ -350,6 +350,8 @@ const liveApi = {
     liveModel(id).then(({ snapshot, model }) => scopeExecFor(snapshot, model, scope, opts)),
   // The reverse references of a node, computed from the project model (no request). The lists cover the whole project.
   getRefs: (id: string, scope: string, fnId: string): Promise<ScopeRefsPayload> => liveModel(id).then(({ snapshot, model }) => refsFor(snapshot, model, scope, fnId)),
+  // The project model itself, for the Symbols tab, which walks its relations on the page (no request).
+  getSymbolModel: (id: string): Promise<ProjectModel> => liveModel(id).then(({ model }) => model),
   // The bounded caller chain of a node, computed from the project model (no request), as /callers answers it.
   getCallerGraph: (id: string, scope: string, fnId: string, opts: CallerOptions = {}): Promise<CallerGraphPayload> =>
     liveModel(id).then(({ snapshot, model }) => callerGraphFor(snapshot, model, scope, fnId, opts)),

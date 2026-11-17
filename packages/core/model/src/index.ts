@@ -12,7 +12,7 @@ export {
   type ScopedDocument,
 } from "./scope.js";
 export { buildProjectModel, ROOT_DIR, type DirEntity, type FunctionEntity, type ProjectModel, type ProjectTree, type Rel, type RelKind } from "./model.js";
-export { INVOKING_HOWS } from "./refs-common.js";
+export { INVOKING_HOWS, anonymousOwned, ownerOf } from "./refs-common.js";
 export { refsOf, type RefRow, type Refs } from "./refs.js";
 export { callerGraph, CALLER_DEFAULTS, type CallerEdge, type CallerGraph, type CallerNode, type CallerOptions } from "./callers.js";
 export { scopeView, type ScopeKindName, type ScopeRel, type ScopeView } from "./view.js";
