@@ -133,9 +133,12 @@ export function SymbolsView({ id, scope, chain: chainParam }: Props) {
       for (let i = 0; i + 1 < chain.length; i++) {
         const row = els.current.get(`row:${i}:${chain[i + 1]}`);
         const box = els.current.get(`box:${i + 1}`);
-        if (row && box) {
+        // An open callers box sits between the row and the box it leads to, so the row's connector ends at that box instead.
+        const cb = callersAt === i + 1 ? els.current.get(`callers:${i + 1}`) : undefined;
+        const to = cb ?? box;
+        if (row && to) {
           const a = at(row);
-          const b = at(box);
+          const b = at(to);
           paths.push(curve({ right: a.right, y: a.y }, { left: b.left, y: b.top + 20 }));
         }
       }

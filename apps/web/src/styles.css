@@ -1335,6 +1335,8 @@ a.auth-chip { text-decoration: none; }
 /* The Symbols tab: a start list of exported functions, and a chain of boxes to its right (see components/symbols/SymbolsView.tsx). */
 .sh-stage-symbols { display: flex; flex-direction: column; overflow: hidden; }
 .sym { flex: 1 1 auto; min-height: 0; display: flex; }
+/* The global button chrome (a glass highlight and blur) reads as a grey gloss on these rows: the view draws its own states. */
+.sym button { box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
 .sym-list { flex: 0 0 240px; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--hair); background: var(--panel); }
 .sym-filter { padding: 10px 10px 6px; }
 .sym-filter-input { width: 100%; box-sizing: border-box; font: inherit; font-size: var(--t-sm); color: var(--fg); background: var(--box); border: 1px solid var(--hair); border-radius: var(--r-sm); padding: 5px 8px; }
