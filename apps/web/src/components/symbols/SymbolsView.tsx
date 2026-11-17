@@ -135,15 +135,13 @@ interface StartListProps {
   headId: string | undefined;
   onFilter: (query: string) => void;
   onPick: (id: string) => void;
-  /** True when the last press was a drag, so the click that ends it picks nothing. */
-  moved: () => boolean;
 }
 
 /**
  * The start list. Memoized: a camera change never re-renders it, and its props are stable (a filter keystroke or a new head is the
  * only change that reaches it).
  */
-const StartList = memo(function StartList({ total, matches, groups, filter, headId, onFilter, onPick, moved }: StartListProps) {
+const StartList = memo(function StartList({ total, matches, groups, filter, headId, onFilter, onPick }: StartListProps) {
   return (
     <aside className="sym-list" aria-label="Exported functions">
       <div className="sym-filter">
@@ -168,9 +166,7 @@ const StartList = memo(function StartList({ total, matches, groups, filter, head
                   type="button"
                   className="sym-start"
                   aria-current={headId === s.id ? "true" : undefined}
-                  onClick={() => {
-                    if (!moved()) onPick(s.id);
-                  }}
+                  onClick={() => onPick(s.id)}
                 >
                   {displayName(s.name, s.id)}
                 </button>
@@ -212,6 +208,18 @@ function Connector({ d, flow }: { d: string; flow: boolean }) {
 function boxIn(el: HTMLElement, track: HTMLElement): Rect {
   const o = offsetWithin(el, track);
   return { x: o.x, y: o.y, w: el.offsetWidth, h: el.offsetHeight };
+}
+
+/**
+ * Whether the element shows a focus ring, as keyboard focus does. A mouse click focuses a button too, without one. A browser without
+ * :focus-visible counts every focus, as it did before.
+ */
+function isKeyboardFocus(el: Element): boolean {
+  try {
+    return el.matches(":focus-visible");
+  } catch {
+    return true;
+  }
 }
 
 /** Writes the camera to the world layer. The world's transform is the only thing a camera change touches. */
@@ -441,9 +449,11 @@ export function SymbolsView({ id, scope, chain: chainParam }: Props) {
       pin();
       const track = trackRef.current;
       const target = e.target;
-      if (track === null || !(target instanceof Element)) return;
-      const box = target.closest<HTMLElement>(".sym-box");
-      if (box !== null && track.contains(box)) revealRef.current(boxIn(box, track));
+      // Only keyboard focus moves the camera, and only to the focused element itself (a row, a button): a tall box is never fully
+      // visible, so revealing the whole box would pull the camera back to its top under a mouse click.
+      if (track === null || !(target instanceof HTMLElement) || !track.contains(target) || !isKeyboardFocus(target)) return;
+      const o = offsetWithin(target, track);
+      revealRef.current({ x: o.x, y: o.y, w: target.offsetWidth, h: target.offsetHeight });
     };
     canvas.addEventListener("focusin", onFocus);
     canvas.addEventListener("scroll", pin);
@@ -659,7 +669,6 @@ export function SymbolsView({ id, scope, chain: chainParam }: Props) {
         headId={chain[0]}
         onFilter={setFilter}
         onPick={pickStart}
-        moved={pz.moved}
       />
       <div
         className={`sym-canvas${pz.expanded ? " expanded" : ""}`}

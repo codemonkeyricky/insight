@@ -222,15 +222,50 @@ describe("usePanZoom auto-fit", () => {
 });
 
 describe("usePanZoom drag and clicks", () => {
-  it("a drag pans the camera; moved() is true until the click that ends it", () => {
+  it("a drag pans the camera; moved() is true until the next press", () => {
     const { pz, stage, button } = setup({ autoFit: false });
     pointer("pointerdown", stage, 0, 0);
     pointer("pointermove", stage, 10, 0);
     expect(pz().getCam().x).toBe(10);
     pointer("pointerup", stage, 10, 0);
     expect(pz().moved()).toBe(true);
+    // The click that ends the drag still reads the flag; the next press clears it.
     fireEvent.click(button);
+    expect(pz().moved()).toBe(true);
+    pointer("pointerdown", button, 0, 0);
     expect(pz().moved()).toBe(false);
+  });
+
+  it("a touch drag makes no click, and the next press anywhere clears moved()", () => {
+    const { pz, stage } = setup({ autoFit: false });
+    pointer("pointerdown", stage, 0, 0);
+    pointer("pointermove", stage, 40, 0);
+    pointer("pointerup", stage, 40, 0);
+    expect(pz().moved()).toBe(true);
+    pointer("pointerdown", document.body, 0, 0);
+    expect(pz().moved()).toBe(false);
+  });
+
+  it("the window press listener is added once for the hook's life, and removed on unmount", () => {
+    const add = vi.spyOn(window, "addEventListener");
+    const remove = vi.spyOn(window, "removeEventListener");
+    try {
+      const { stage } = setup({ autoFit: false });
+      for (let i = 0; i < 5; i++) {
+        pointer("pointerdown", stage, 0, 0);
+        pointer("pointermove", stage, 20, 0);
+        pointer("pointerup", stage, 20, 0);
+      }
+      const added = add.mock.calls.filter((c) => c[0] === "pointerdown");
+      expect(added.length).toBe(1);
+      cleanup();
+      const removed = remove.mock.calls.filter((c) => c[0] === "pointerdown");
+      expect(removed.length).toBe(1);
+      expect(removed[0]?.[1]).toBe(added[0]?.[1]);
+    } finally {
+      add.mockRestore();
+      remove.mockRestore();
+    }
   });
 
   it("a press without a move is not a drag, and a press on a button does not pan", () => {

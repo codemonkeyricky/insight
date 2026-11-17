@@ -436,6 +436,76 @@ describe("Symbols tab camera motion", () => {
     settle();
     expect(sl).toBe(0);
     expect(st).toBe(0);
-    expect(worldCam().x).toBe(-220);
+    // The focused title is what is revealed, not the box: its left edge is at 696 px in the track (zero width in this stub), and
+    // it is kept 24 px from the stage's right edge: 800 - 24 - 696 = 80.
+    expect(worldCam()).toEqual({ x: 80, y: 48, k: 1 });
+  });
+
+  it("a mouse click's focus (no focus ring) does not move the camera", async () => {
+    getSymbolModel.mockResolvedValue(model());
+    await ready([id(F, "A"), id(G, "B"), id(G, "D")]);
+    const canvas = document.querySelector(".sym-canvas") as HTMLElement;
+    settle();
+    pointerEv("pointerdown", canvas, 0, 0);
+    pointerEv("pointermove", canvas, 300, 0);
+    pointerEv("pointerup", canvas, 300, 0);
+    expect(worldCam().x).toBe(300);
+    const title = (box("D") as HTMLElement).querySelector(".sym-title") as HTMLElement;
+    // A focus with no focus ring, as a mouse click gives a button: :focus-visible does not match it.
+    const real = Element.prototype.matches;
+    Element.prototype.matches = function (this: Element, sel: string) {
+      return sel === ":focus-visible" ? false : real.call(this, sel);
+    };
+    try {
+      act(() => title.focus());
+    } finally {
+      Element.prototype.matches = real;
+    }
+    settle();
+    expect(worldCam()).toEqual({ x: 300, y: 48, k: 1 });
+  });
+
+  it("keyboard focus on a row below the stage, in a box taller than the stage, reveals that row and not the box's top", async () => {
+    getSymbolModel.mockResolvedValue(model());
+    // A's box is 1200 px tall, and its rows start at 700 px in the box: below the stage's 600 px, out of view.
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.classList.contains("sym-box") ? 1200 : this.classList.contains("sym-row") ? 24 : 0;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, "offsetTop", {
+      configurable: true,
+      get(this: HTMLElement) {
+        if (!this.classList.contains("sym-row")) return 0;
+        const rows = Array.from(this.closest(".sym-box")?.querySelectorAll(".sym-row") ?? []);
+        return 700 + 40 * Math.max(0, rows.indexOf(this));
+      },
+    });
+    await ready([id(F, "A")]);
+    settle();
+    const rows = Array.from((box("A") as HTMLElement).querySelectorAll<HTMLElement>(".sym-row"));
+    expect(rows.length).toBe(2);
+    // The second row (C, via H) sits at 740 px. Revealed, it keeps 24 px from the stage's bottom: y = 576 - 764 = -188. The top
+    // of the box stays out of view, so the camera is not at the box's top (y 48).
+    act(() => rows[1]?.focus());
+    settle();
+    expect(worldCam()).toEqual({ x: 0, y: -188, k: 1 });
+    expect(worldCam().y + 740).toBeGreaterThanOrEqual(48);
+    expect(worldCam().y + 764).toBeLessThanOrEqual(600 - 24);
+  });
+
+  it("the first tap on the start list after a touch drag opens the function", async () => {
+    getSymbolModel.mockResolvedValue(model());
+    await ready([]);
+    const canvas = document.querySelector(".sym-canvas") as HTMLElement;
+    // A touch pan: pointer events only, and no click follows them.
+    pointerEv("pointerdown", canvas, 0, 0);
+    pointerEv("pointermove", canvas, 60, 0);
+    pointerEv("pointerup", canvas, 60, 0);
+    const a = startList().getByRole("button", { name: "A" });
+    pointerEv("pointerdown", a, 0, 0);
+    fireEvent.click(a);
+    expect(box("A")).not.toBeNull();
   });
 });

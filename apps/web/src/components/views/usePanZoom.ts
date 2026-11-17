@@ -22,7 +22,9 @@ const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.m
  */
 export function fitBox(contentW: number, contentH: number, stageW: number, stageH: number, o: FitOpts): Camera {
   if (contentW <= 0 || contentH <= 0 || stageW <= 0 || stageH <= 0) return { k: 1, x: 0, y: 0 };
-  const k = clamp(Math.min((stageW - 2 * o.pad) / contentW, (stageH - 2 * o.pad) / contentH), o.fitMinK, o.maxK);
+  // The content sits at `top` and keeps `pad` below it, so the height that is left for it is the stage's less both.
+  const top = o.padTop ?? o.pad;
+  const k = clamp(Math.min((stageW - 2 * o.pad) / contentW, (stageH - top - o.pad) / contentH), o.fitMinK, o.maxK);
   const x = contentW * k > stageW ? o.pad : (stageW - contentW * k) / 2;
   const yTall = contentH * k > stageH;
   const yCentred = (stageH - contentH * k) / 2;
@@ -52,7 +54,7 @@ interface Drag {
  * Pan and zoom for a stage element, as the System view has them: the wheel zooms around the pointer, a drag pans, the + and −
  * buttons zoom around the centre, Fit refits the content (never below `fitMinK`, so text stays readable), and Expand fills the window
  * (Esc leaves). The stage's height is the room the window leaves, at least 60% of the window, or the whole window while expanded.
- * `moved()` tells a drag from a click: it is true from the drag's first 3 px until the click that follows it.
+ * `moved()` tells a drag from a click: it is true from the drag's first 3 px until the next press.
  *
  * The camera changes instantly on a wheel, a drag and an automatic fit. The buttons' Fit, + and −, and `animateTo` tween it over
  * 320 ms; a wheel, a press, an automatic fit or another tween stops a running tween. Under reduced motion every change is instant.
@@ -238,19 +240,21 @@ export function usePanZoom(stageEl: HTMLDivElement | null, content: { w: number;
     }
     if (d.moved) setCamera({ ...camRef.current, x: d.cx + dx, y: d.cy + dy });
   };
-  // The click that a drag ends with reads the flag, then clears it: a window listener runs after the element's own handlers. A press
-  // clears the flag too, so a drag that ends off the stage leaves nothing behind for the next click.
-  const clearMoved = () => {
-    movedRef.current = false;
-  };
+  // The click that a drag ends with reads the flag. A press clears it (see the window listener below).
   const onPointerUp = () => {
     const d = drag.current;
     drag.current = null;
-    if (d?.moved) {
-      movedRef.current = true;
-      window.addEventListener("click", clearMoved, { once: true });
-    }
+    if (d?.moved) movedRef.current = true;
   };
+  // The next press anywhere clears the flag. A touch drag makes no click, so this is what lets the first tap after it count. The
+  // listener is a window capture listener: it runs before the element's own handlers, and is added once for the hook's life.
+  useEffect(() => {
+    const clear = () => {
+      movedRef.current = false;
+    };
+    window.addEventListener("pointerdown", clear, true);
+    return () => window.removeEventListener("pointerdown", clear, true);
+  }, []);
 
   /** Sets the camera's x at once (no tween). The caller keeps a box where it was when the layout to its left changes. */
   const moveX = useCallback(
