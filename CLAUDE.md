@@ -4,7 +4,7 @@ Repo layout, apps and plugin rules: `README.md` and `docs/layout.md`. Hosted arc
 
 ## Deployment: system-insight.vercel.app
 
-**Master is deployed automatically by CI** (`.github/workflows/deploy-prod.yml`). The manual steps below are only for a hotfix redeploy or a rollback.
+**Master is deployed automatically by a local Claude Code hook** (see "Automatic deploys" below). The manual steps below are only for a hotfix redeploy or a rollback.
 
 Production is the **hosted build**: the static `apps/web` (`build:hosted`) plus one Vercel Function (`apps/hosted`). It is packaged locally and deployed **prebuilt**.
 
@@ -58,12 +58,18 @@ vercel rollback <previous-deployment-url> --scope richards-projects-fcf7a01b
 
 `vercel ls system-insight --scope richards-projects-fcf7a01b` lists past deployments. The domain `system-insight.vercel.app` is already attached to the project and does not need to be re-added.
 
-## CI deploys
+## Automatic deploys (local hooks)
 
-- Every pull request is deployed by `.github/workflows/pr-preview.yml` to https://system-insight-pr-<N>.vercel.app (Vercel project `system-insight-pr`). Each push redeploys it; the alias is removed when the PR closes.
-- Every push to `master` is deployed to production, https://system-insight.vercel.app (project `system-insight`), by `.github/workflows/deploy-prod.yml`.
-- The staging project `system-insight-staging` still exists but is not deployed to anymore.
-- Both workflows need the repo secret `VERCEL_TOKEN`.
+GitHub Actions deploys were disabled on 2026-11-17 to save Actions credit. `.github/workflows/deploy-prod.yml` and `pr-preview.yml` are kept but disabled. Deploys now run on the maintainer's machine:
+
+- A Claude Code hook, `~/.claude/hooks/deploy-trigger.py`, runs after `git push` and `gh pr create|merge|close|reopen|ready`, and at session start. It starts `~/.claude/hooks/deploy-reconcile.py` in the background.
+- The reconciler builds from a clean `git archive` of the commit, the same way as "Deploy steps" above (`pnpm install`, `scripts/build-vercel-hosted.mjs`, `vercel deploy --prebuilt --archive=tgz`). It then checks the live bundle and `/api/health`:
+  - `origin/master` is deployed to production, https://system-insight.vercel.app (project `system-insight`).
+  - Every open same-repo PR head is deployed to https://system-insight-pr-<N>.vercel.app (project `system-insight-pr`), with a sticky `<!-- pr-preview -->` PR comment. The alias is removed when the PR closes.
+- Pushes or merges made outside Claude Code (a plain terminal, github.com) deploy at the next Claude Code session start. Or run the reconciler by hand: `python3 -I ~/.claude/hooks/deploy-reconcile.py --repo insight`. Add `--dry-run` to only print the plan, `--force-prod` to redeploy master, or `--retry-failed` after a failed deploy.
+- State and logs are in `~/.local/state/deploy-hooks/` (`insight.json`, `insight.log`, `events.jsonl`). Kill switch: `DEPLOY_HOOKS=0`.
+- Previews share production's KV storage, including its 25 indexes/day cap. GitHub sign-in does not work on previews.
+- The staging project `system-insight-staging` still exists but is not deployed to anymore. The repo secret `VERCEL_TOKEN` is no longer used.
 
 ## Local server
 
