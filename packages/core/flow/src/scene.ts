@@ -57,7 +57,7 @@ export interface SceneNode {
    */
   unguarded?: string[];
   /**
-   * A card (see unrooted.ts) whose function shares these sync resources with threads it starts: a sync edge whose two ends
+   * A card (see unrooted.ts) whose function shares these sync resources with threads it reaches: a sync edge whose two ends
    * both land on this card, which the renderer cannot draw as an edge, so the resources are kept here. The map draws the
    * `⇆ N` badge on the card.
    */

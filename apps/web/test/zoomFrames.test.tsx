@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { BoxShape } from "../src/components/zoom/ZoomMap";
+import { BoxShape, isMoreCard } from "../src/components/zoom/ZoomMap";
 import type { MapNode } from "../src/zoom/source";
 import type { PlacedItem } from "@insight/flow";
 
@@ -72,7 +72,7 @@ describe("ZoomMap boxes", () => {
     );
     expect(html).toContain("zm-sync-self");
     expect(html).toContain("⇆ 1</text>");
-    expect(html).toContain("<title>main · Shares lock a with threads it starts</title>");
+    expect(html).toContain("<title>main · Shares lock a between threads it reaches</title>");
   });
 
   it("counts every self-sync resource and lists each by kind and name in the tooltip", () => {
@@ -88,7 +88,7 @@ describe("ZoomMap boxes", () => {
       />,
     );
     expect(html).toContain("⇆ 2</text>");
-    expect(html).toContain("Shares lock a, channel q with threads it starts");
+    expect(html).toContain("Shares lock a, channel q between threads it reaches");
   });
 
   it("draws no self-sync badge on a card without one", () => {
@@ -96,7 +96,7 @@ describe("ZoomMap boxes", () => {
       <BoxShape item={box("main", 0, 0, 300, 60)} node={node("main", "function", "main", { ref: "src/m.ts#main" })} line="thread" k={1} onOpen={() => undefined} chartOpen={false} card />,
     );
     expect(html).not.toContain("zm-sync-self");
-    expect(html).not.toContain("threads it starts");
+    expect(html).not.toContain("threads it reaches");
   });
 
   it("N2: a card carrying a thread's unguarded names draws the warning badge and its tooltip", () => {
@@ -115,5 +115,30 @@ describe("ZoomMap boxes", () => {
     expect(html).toContain("zm-warn");
     expect(html).toContain("unguarded shared state: counter");
     expect(html).not.toContain("zm-sync-self");
+  });
+});
+
+describe("the flat grid's card names", () => {
+  const card = (n: MapNode) => (
+    <BoxShape item={box(n.id, 0, 0, 240, 56)} node={n} line="thread" k={1} onOpen={() => undefined} chartOpen={false} card />
+  );
+
+  it("draws a same-name card's name alone, with its file stem on a second line", () => {
+    const html = svg(card(node("main", "function", "main", { ref: "apps/web/main.tsx#(module)", shownName: "main · web" })));
+    expect(html).toContain('class="zm-card-sub"');
+    expect(html).toContain(">web</text>");
+    expect(html).toContain("ƒ</tspan> main</text>");
+    expect(html).not.toContain("main · web</text>");
+  });
+
+  it("draws no stem line on a card whose name is unique", () => {
+    const html = svg(card(node("solo", "function", "solo", { ref: "src/solo.ts#solo" })));
+    expect(html).not.toContain("zm-card-sub");
+  });
+
+  it("opens the more card by its kind, not its id: a function named more is not one", () => {
+    expect(isMoreCard({ kind: "more" })).toBe(true);
+    expect(isMoreCard({ kind: "function" })).toBe(false);
+    expect(isMoreCard(undefined)).toBe(false);
   });
 });

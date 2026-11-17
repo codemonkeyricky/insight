@@ -2,6 +2,7 @@
 // leaves room the map's own controls take (the title chip and the key plan at the bottom right, the Show button at the top
 // left), so no card sits under them at the default fit. Pure, so it is unit tested.
 import type { Scene, SceneLayout } from "./scene.js";
+import { displayName } from "./names.js";
 import type { ContainerLayout, Size, Slot } from "./zoom-layout.js";
 
 /** A card's height: one name line and one file line. */
@@ -12,6 +13,8 @@ export const CARD_MAX_W = 320;
 /** The width of a monospace character at the card's name size (12 px), and the card's inner padding. */
 const CHAR_W = 8;
 const CARD_PAD_W = 28;
+/** The room a card keeps for its Callers button at its left (the button is about 78 px wide, and the name starts past it). */
+const CARD_CALLERS_W = 52;
 /** The gap between cards, both ways. */
 export const CARD_GAP = 12;
 /** The grid's width: it wraps here, so the grid fits a 1600 px window's map at 1x. */
@@ -21,9 +24,9 @@ export const CARD_PAD_TOP = 64;
 export const CARD_PAD_BOTTOM = 170;
 export const CARD_PAD_SIDE = 16;
 
-/** A card's width for a name: the name's width, between CARD_MIN_W and CARD_MAX_W. */
+/** A card's width for a name: the name's width plus the Callers button's room, between CARD_MIN_W and CARD_MAX_W. */
 export function cardWidth(label: string): number {
-  const w = Math.ceil(label.length * CHAR_W) + CARD_PAD_W;
+  const w = Math.ceil(label.length * CHAR_W) + CARD_PAD_W + CARD_CALLERS_W;
   return Math.min(CARD_MAX_W, Math.max(CARD_MIN_W, w));
 }
 
@@ -50,7 +53,7 @@ export function gridRootsLayout(scene: Scene, footprint?: Footprint): SceneLayou
   let width = 0;
   for (const id of kids) {
     const n = scene.nodes.get(id);
-    const w = cardWidth(n?.label ?? id);
+    const w = cardWidth(n === undefined ? id : (n.shownName ?? displayName(n.label, n.ref)));
     const room = footprint?.get(id);
     const left = room?.left ?? 0;
     const outerW = left + w + (room?.w ?? 0);

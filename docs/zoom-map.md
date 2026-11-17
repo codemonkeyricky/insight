@@ -60,8 +60,10 @@ The Flow tab draws the execution canvas of the scope as one flat grid of cards (
   joined by a dotted `sync` edge; a channel joins its sender's card to its receiver's card with a solid one. A sync site
   whose two ends land on one card (a function that shares a lock with a thread it starts, say) draws no edge: the card
   carries a `⇆ N` self-sync badge instead, with N the number of shared resources. Its tooltip names them, such as
-  "Shares lock a with threads it starts". A card whose reach holds a function of a thread with unguarded shared state
-  carries that thread's `⚠` badge, since the thread's own box is not drawn (`unguardedScene` in `unrooted.ts`).
+  "Shares lock a between threads it reaches". A card that holds an unguarded write of shared state (it is the card nearest
+  the function that makes the write, by `cardOf`) carries a `⚠` badge and names the variables in its tooltip; a card that
+  only reaches that write does not (`unrootedScene` in `unrooted.ts`). A card whose name another card shares draws its
+  file's stem on a second line under the name (the `zm-card-sub` line, such as "web" under "main"), so the two read apart.
 - Labels fit their box's on-screen width and drop out when too small (`apps/web/src/zoom/lod.ts`). A gesture or Enter
   over a gap opens the nearest box within 60 px. Only a click, Enter or a link opens a box; a gesture only moves the camera.
 - Layouts: the client does not read a saved execution layout. `ExecStore` lays the flat grid out in the browser

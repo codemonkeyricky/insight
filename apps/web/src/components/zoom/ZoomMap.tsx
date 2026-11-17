@@ -7,7 +7,7 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as KeyEvent, type PointerEvent as PointerEv, type ReactNode } from "react";
 import { select } from "d3-selection";
 import { zoom, zoomIdentity, type D3ZoomEvent, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
-import { CHART_FIT_MAX_K, CHART_HEAD, MORE_SUFFIX, ZOOM_SIZE, fitCamera, fitChartCamera, visibleWorld, type Camera, type FlowNode, type FlowSpan, type FunctionFlow, type PlacedItem, type Rect } from "@insight/flow";
+import { CHART_FIT_MAX_K, CHART_HEAD, ZOOM_SIZE, fitCamera, fitChartCamera, visibleWorld, type Camera, type FlowNode, type FlowSpan, type FunctionFlow, type PlacedItem, type Rect } from "@insight/flow";
 import { isPostStep, nameOfId, runtimeLabel, stepRuntime } from "../../flowTargets";
 import { hrefView } from "../../router";
 import { CHART_MIN_PX } from "../../zoom/chart";
@@ -775,7 +775,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   /** A click on a "+N more" card shows the rest of its thread's cards in place. Undefined when `nodeId` is another box. */
   const expandMore = (nodeId: string): boolean => {
     const b = buildRef.current;
-    if (!b || !source.expandMore || !nodeId.endsWith(MORE_SUFFIX)) return false;
+    if (!b || !source.expandMore || !isMoreCard(b.node(nodeId))) return false;
     void source.expandMore(b, nodeId).then(() => show(b.focus, { animate: false, writeUrl: true }));
     return true;
   };
@@ -816,7 +816,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   const boxDoubleClick = (nodeId: string) => {
     const b = buildRef.current;
     // A "+N more" card's clicks already showed the rest of its cards.
-    if (!b || nodeId.endsWith(MORE_SUFFIX) || touchPointerRef.current) return;
+    if (!b || isMoreCard(b.node(nodeId)) || touchPointerRef.current) return;
     stageRef.current?.focus({ preventScroll: true });
     const focus = source.focusOf?.(b, nodeId) ?? nodeId;
     const action = boxAction("dblclick", { hasChart: b.node(nodeId)?.chart !== undefined, open: anchoredTo(expRef.current, nodeId) !== undefined });
@@ -1966,14 +1966,17 @@ export function BoxShape({
 }) {
   const { rect } = item;
   // The function's display name on the map (the full name stays in the tooltip). A card whose name another card shares
-  // shows its file's stem after it (see unrootedScene), so the two read apart.
-  const shown = node.shownName ?? displayName(node.label, node.ref);
+  // shows its file's stem on a second line under the name (see unrootedScene), so the two read apart. `shown` is the full
+  // name with that stem, for the Callers button's label.
+  const base = displayName(node.label, node.ref);
+  const shown = node.shownName ?? base;
+  const subTag = node.shownName !== undefined && node.shownName.startsWith(`${base} · `) ? node.shownName.slice(base.length + 3) : undefined;
   // A thread box carries a badge when its code writes unguarded shared state (see scene.ts).
   const unguarded = node.unguarded !== undefined && node.unguarded.length > 0;
   const unguardedTitle = unguarded ? ` · ⚠ unguarded shared state: ${node.unguarded?.join(", ")}` : "";
   // A card whose function shares a lock or channel with threads it starts carries a self-sync badge (see unrootedScene).
   const selfSync = node.syncSelf !== undefined && node.syncSelf.length > 0 ? node.syncSelf : undefined;
-  const selfSyncTitle = selfSync ? ` · Shares ${selfSync.map((r) => `${r.kind} ${r.name}`).join(", ")} with threads it starts` : "";
+  const selfSyncTitle = selfSync ? ` · Shares ${selfSync.map((r) => `${r.kind} ${r.name}`).join(", ")} between threads it reaches` : "";
   // The mid tier's name is 10-13 px on screen (the zoom's inverse scales it): its characters are measured at that size.
   const fontPx = small ? Math.min(13, Math.max(10, Math.round(rect.h * k * 0.42))) : 0;
   const label = bare ? null : small ? fitLabel(shown, labelChars(rect.w * k, fontPx * 0.6, 10)) : fitLabel(shown, labelChars(rect.w * k));
@@ -2011,11 +2014,14 @@ export function BoxShape({
     // The name's font is 13 px on screen until 11 world units grow past it (above about 1.2×), and a character takes about
     // 0.6 of the font: the fit follows the font as it grows with the zoom.
     const charPx = Math.max(8, 6.8 * k);
-    // The name starts 12 units in (after the chip, when there is one) and keeps 12 clear of the card's right edge.
-    const nameIn = (room: number) => fitLabel(shown, Math.max(1, labelChars((rect.w - room) * k, charPx, 20) - 2));
+    // The name starts 12 units in (after the chip, when there is one) and keeps 12 clear of the card's right edge. A card
+    // with a stem line draws the bare name on its first line, and the stem on a second line under it, at the same x.
+    const nameIn = (room: number) => fitLabel(base, Math.max(1, labelChars((rect.w - room) * k, charPx, 20) - 2));
     const fullName = nameIn(showCallers ? CALLERS_BTN_W + 26 : 0);
-    const compactCallers = showCallers && (fullName !== shown || k < FULL_K);
+    const compactCallers = showCallers && (fullName !== base || k < FULL_K);
     const name = compactCallers ? nameIn(CALLERS_COMPACT_W + 26) : fullName;
+    const textX = rect.x + 12 + (showCallers ? (compactCallers ? CALLERS_COMPACT_W : CALLERS_BTN_W) - 4 + 6 : 0);
+    const stem = subTag !== undefined ? fitLabel(subTag, Math.max(1, labelChars((rect.x + rect.w - 12 - textX) * k, charPx * 0.9, 20))) : null;
     return (
       <g className={`zm-box zm-${node.kind} zm-card ${lineClass(line)}${holdsChart ? " zm-has-chart" : ""}${chartOpen ? " expanded" : ""}${unguarded ? " zm-unguarded" : ""}`} data-sx={rect.x} data-fid={item.id} onClick={() => onOpen(item.id)} onDoubleClick={onDoubleOpen ? () => onDoubleOpen(item.id) : undefined}>
         <title>{`${node.detail !== undefined ? `${node.label} (${node.detail})` : node.title || node.label}${unguardedTitle}${selfSyncTitle}`}</title>
@@ -2029,9 +2035,14 @@ export function BoxShape({
             </text>
           )}
           {name !== null && (
-            <text x={rect.x + 12 + (showCallers ? (compactCallers ? CALLERS_COMPACT_W : CALLERS_BTN_W) - 4 + 6 : 0)} y={rect.y + rect.h / 2} dominantBaseline="central" className="zm-label">
+            <text x={textX} y={stem !== null ? rect.y + rect.h / 2 - 8 : rect.y + rect.h / 2} dominantBaseline="central" className="zm-label">
               <tspan className="zm-card-glyph">ƒ</tspan>{" "}{name}
               {unguarded && <tspan className="zm-warn">{" ⚠"}</tspan>}
+            </text>
+          )}
+          {stem !== null && (
+            <text x={textX} y={rect.y + rect.h / 2 + 12} dominantBaseline="central" className="zm-card-sub">
+              {stem}
             </text>
           )}
         </g>
@@ -2064,6 +2075,11 @@ export function BoxShape({
       )}
     </g>
   );
+}
+
+/** Whether a map node is the grid's "+N more" card. Its id is the project's plus `#more`, but a function's id can end so too. */
+export function isMoreCard(node: { kind: string } | undefined): boolean {
+  return node?.kind === "more";
 }
 
 /**

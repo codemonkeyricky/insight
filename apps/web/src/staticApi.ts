@@ -20,7 +20,6 @@ import type {
   Project,
   Review,
   ReviewStale,
-  SceneLayout,
   ScopeFlow,
   ScopeLensRow,
   ScopeLenses,

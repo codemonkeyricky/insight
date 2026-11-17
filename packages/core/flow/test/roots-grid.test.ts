@@ -11,6 +11,10 @@ function flat(labels: string[]): Scene {
 }
 
 describe("cardWidth", () => {
+  it("leaves room for the Callers button, 52 px beyond the name", () => {
+    expect(cardWidth("settleChains")).toBe("settleChains".length * 8 + 28 + 52);
+  });
+
   it("fits the name between the minimum and the maximum", () => {
     expect(cardWidth("ab")).toBe(CARD_MIN_W);
     expect(cardWidth("a".repeat(60))).toBe(CARD_MAX_W);
@@ -18,6 +22,17 @@ describe("cardWidth", () => {
     expect(mid).toBeGreaterThanOrEqual(CARD_MIN_W);
     expect(mid).toBeLessThanOrEqual(CARD_MAX_W);
     expect(mid).toBeGreaterThanOrEqual("settleChains".length * 7.2 + 26);
+  });
+});
+
+describe("gridRootsLayout: the shown name sizes a card", () => {
+  it("a card with a stem line is as wide as its shown name, which carries the stem", () => {
+    const sc = flat(["main"]);
+    const n = sc.nodes.get("f0") as SceneNode;
+    sc.nodes.set("f0", { ...n, shownName: "main · triaxial-tourbillon" });
+    const slot = gridRootsLayout(sc).containers[sc.root]?.slots[0];
+    expect(slot?.w).toBe(cardWidth("main · triaxial-tourbillon"));
+    expect(slot?.w).toBeGreaterThan(cardWidth("main"));
   });
 });
 

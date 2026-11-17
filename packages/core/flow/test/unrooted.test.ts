@@ -238,6 +238,27 @@ describe("sync edges in the flat grid", () => {
     expect(card?.syncSelf).toEqual([{ name: "a", kind: "lock" }]);
   });
 
+  it("(i) two self-sync edges on one card merge: a resource both edges share is listed once on the card", () => {
+    // main takes lock a and spawns two threads that take a too: two sync edges join main to itself, and both carry a.
+    const nodes = [
+      fnNode("src/m.ts", "main", 0),
+      lockOf("src/m.ts", 1, "src/m.ts#main", "a"),
+      spawnNode("src/m.ts", 3, "src/m.ts#main"),
+      spawnNode("src/m.ts", 5, "src/m.ts#main"),
+      fnNode("src/w.ts", "w1", 0),
+      lockOf("src/w.ts", 1, "src/w.ts#w1", "a"),
+      fnNode("src/w.ts", "w2", 10),
+      lockOf("src/w.ts", 11, "src/w.ts#w2", "a"),
+    ];
+    const m = execModel(nodes, [spawnEdge("src/m.ts", 3, "src/w.ts#w1"), spawnEdge("src/m.ts", 5, "src/w.ts#w2")], "src");
+    // w1 and w2 also share a with each other, so three sync edges end up joining main to itself, all carrying a.
+    const flat = unrootedScene(buildExecScene(m), m);
+    expect(refsOf(flat)).toEqual(["src/m.ts#main"]);
+    expect(syncOf(flat)).toEqual([]);
+    const card = [...flat.nodes.values()].find((n) => n.kind === "function");
+    expect(card?.syncSelf).toEqual([{ name: "a", kind: "lock" }]);
+  });
+
   it("(i) a card with no self-sync edge carries no syncSelf", () => {
     const nodes = [
       fnNode("src/m.ts", "main", 0),
@@ -301,7 +322,7 @@ describe("sync edges in the flat grid", () => {
 });
 
 describe("unguarded threads in the flat grid", () => {
-  it("N2: a card whose reach holds a function of a thread with unguarded shared state carries that thread's names; an unrelated card does not", () => {
+  it("N2: the card nearest an unguarded write carries that write's names, even when the write sits in a thread it only reaches; an unrelated card does not", () => {
     const m = model({
       functions: [fn("main", 1), fn("lone", 2), fn("w", 3, { unguardedWrites: ["counter"] })],
       threads: [
@@ -347,6 +368,19 @@ describe("unguarded threads in the flat grid", () => {
     const card = (ref: string) => [...flat.nodes.values()].find((n) => n.kind === "function" && n.ref === ref);
     expect(card("main")?.unguarded).toEqual(["counter"]);
     expect(card("lone")?.unguarded).toBeUndefined();
+  });
+});
+
+describe("unguarded writes outside the scope", () => {
+  it("an unguarded write in a function outside the scope badges no card", () => {
+    // `out` is not in scope, so the thread reaches its write but no card holds it: no card is badged.
+    const m = model({
+      functions: [fn("main", 1), fn("out", 2, { inScope: false, unguardedWrites: ["counter"] })],
+      threads: [thread("main", ["main"], ["main", "out"])],
+    });
+    const flat = unrootedScene(buildExecScene(m), m);
+    expect(refsOf(flat)).toEqual(["main"]);
+    expect([...flat.nodes.values()].some((n) => n.unguarded !== undefined)).toBe(false);
   });
 });
 
