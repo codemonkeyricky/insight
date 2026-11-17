@@ -50,6 +50,19 @@ describe("revealPan", () => {
   });
 });
 
+describe("revealPan top margin", () => {
+  it("keeps a separate top margin above the box, so a control over the stage's top stays clear", () => {
+    // A box at the very top of the stage: with the default margin it is pushed down by 24 px; with a 48 px top it is pushed by 48.
+    const box = { x: 0, y: 0, w: 100, h: 100 };
+    const stage = { w: 800, h: 600 };
+    expect(revealPan({ k: 1, x: 0, y: 0 }, box, stage).y).toBe(24);
+    expect(revealPan({ k: 1, x: 0, y: 0 }, box, stage, 24, 48).y).toBe(48);
+    // A box already clear of both margins (24 px at the sides, 48 px at the top) does not move.
+    const clear = { k: 1, x: 24, y: 48 };
+    expect(revealPan(clear, box, stage, 24, 48)).toBe(clear);
+  });
+});
+
 describe("cubicBezier and the camera easing", () => {
   it("starts at 0 and ends at 1", () => {
     expect(EASE_OUT(0)).toBe(0);

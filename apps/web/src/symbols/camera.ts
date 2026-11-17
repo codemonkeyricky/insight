@@ -30,26 +30,27 @@ export const REVEAL_MARGIN = 24;
 export const TWEEN_MS = 320;
 
 /**
- * The offset along one axis that shows a box (plus `margin`) at the current scale. A box already fully visible keeps the offset.
- * A box that is off one edge moves by the least amount that brings it in. A box too big for the stage (with its margin) is
- * aligned to the leading edge at `margin`, so its start is never the part that is lost.
+ * The offset along one axis that shows a box at the current scale, with `lead` px kept before its start and `trail` px kept
+ * after its end. A box already fully visible keeps the offset. A box that is off one edge moves by the least amount that brings
+ * it in. A box too big for the stage (with its margins) is aligned to the leading edge at `lead`, so its start is never lost.
  */
-function shiftAxis(start: number, len: number, offset: number, k: number, size: number, margin: number): number {
+function shiftAxis(start: number, len: number, offset: number, k: number, size: number, lead: number, trail: number): number {
   const s0 = start * k + offset;
   const s1 = s0 + len * k;
-  if (s0 - margin >= 0 && s1 + margin <= size) return offset;
-  if (len * k + 2 * margin > size) return margin - start * k;
-  if (s0 - margin < 0) return offset + (margin - s0);
-  return offset + (size - margin - s1);
+  if (s0 - lead >= 0 && s1 + trail <= size) return offset;
+  if (len * k + lead + trail > size) return lead - start * k;
+  if (s0 - lead < 0) return offset + (lead - s0);
+  return offset + (size - trail - s1);
 }
 
 /**
- * The camera that shows `box` on a stage of `stage` px. Only the translation changes: the scale is never altered. Returns `cam`
- * itself when the box (with its margin) is already visible, so a caller can tell that nothing needs to move.
+ * The camera that shows `box` on a stage of `stage` px. Only the translation changes: the scale is never altered. `margin` is kept
+ * on the sides and below; `top` (default `margin`) is kept above, so a control laid over the top of the stage stays clear of the box.
+ * Returns `cam` itself when the box (with its margins) is already visible, so a caller can tell that nothing needs to move.
  */
-export function revealPan(cam: Camera, box: Rect, stage: Size, margin: number = REVEAL_MARGIN): Camera {
-  const x = shiftAxis(box.x, box.w, cam.x, cam.k, stage.w, margin);
-  const y = shiftAxis(box.y, box.h, cam.y, cam.k, stage.h, margin);
+export function revealPan(cam: Camera, box: Rect, stage: Size, margin: number = REVEAL_MARGIN, top: number = margin): Camera {
+  const x = shiftAxis(box.x, box.w, cam.x, cam.k, stage.w, margin, margin);
+  const y = shiftAxis(box.y, box.h, cam.y, cam.k, stage.h, top, margin);
   return x === cam.x && y === cam.y ? cam : { k: cam.k, x, y };
 }
 

@@ -2,8 +2,8 @@
 // The Symbols tab's chain: a start list opens a box, a callee opens the box to its right and drops the old tail, and the
 // Callers chip opens the callers box, whose caller becomes the new head of the chain. The chain lives in the URL, one `chain=`
 // value per id.
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { buildProjectModel, type ProjectModel } from "@insight/model";
 import { SymbolsView } from "../src/components/symbols/SymbolsView";
 
@@ -225,5 +225,217 @@ describe("Symbols tab camera", () => {
     expect(world.style.transform).toContain("scale(");
     // The toolbar sits outside the scaled world.
     expect(world.contains(canvas.querySelector(".sysv-zoom"))).toBe(false);
+  });
+});
+
+/*
+ * The camera's motion. jsdom has no layout, so the stage is stubbed: a stage of 800 by 600 px, each column at 32 + 332 n px in the
+ * track (its padding plus its place), each box 300 by 200 px. Frames run by hand (settle), so each tween is exact.
+ */
+describe("Symbols tab camera motion", () => {
+  let queue = new Map<number, FrameRequestCallback>();
+  let now = 0;
+  let nextId = 1;
+  function step(ms: number) {
+    now += ms;
+    for (const [id, cb] of [...queue]) {
+      if (!queue.has(id)) continue;
+      queue.delete(id);
+      cb(now);
+    }
+  }
+  function settle() {
+    act(() => {
+      for (let i = 0; i < 200 && queue.size > 0; i++) step(16);
+    });
+  }
+  function setReducedMotion(reduced: boolean) {
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: (query: string) => ({ matches: reduced, media: query, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, onchange: null, dispatchEvent: () => false }),
+    });
+  }
+  /** Records every scrollIntoView call. Opening a box moves the camera; nothing may scroll the page or the stage. */
+  function scrollSpy() {
+    const calls: Element[] = [];
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element) {
+      calls.push(this);
+    };
+    return { calls, restore: () => (Element.prototype.scrollIntoView = original) };
+  }
+  /** A pointer event with coordinates (jsdom has no PointerEvent). */
+  function pointerEv(type: "pointerdown" | "pointermove" | "pointerup", target: Element, x: number, y: number) {
+    const ev = new Event(type, { bubbles: true, cancelable: true });
+    Object.assign(ev, { clientX: x, clientY: y, button: 0, pointerId: 1 });
+    act(() => {
+      target.dispatchEvent(ev);
+    });
+  }
+  /** The camera as the world layer holds it: the transform writeCam writes. */
+  function worldCam() {
+    const world = document.querySelector(".sym-world") as HTMLElement;
+    const m = /translate\((-?[\d.]+)px, (-?[\d.]+)px\) scale\(([\d.]+)\)/.exec(world.style.transform);
+    if (m === null) throw new Error(`no camera in "${world.style.transform}"`);
+    return { x: Number(m[1]), y: Number(m[2]), k: Number(m[3]) };
+  }
+  const columns = (cls = "") => document.querySelectorAll(`.sym-column${cls}`).length;
+
+  beforeEach(() => {
+    queue = new Map();
+    now = 0;
+    nextId = 1;
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      const id = nextId++;
+      queue.set(id, cb);
+      return id;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => {
+      queue.delete(id);
+    });
+    const indexOfColumn = (el: Element) =>
+      el.parentElement === null ? 0 : Array.from(el.parentElement.children).filter((c) => c.classList.contains("sym-column")).indexOf(el);
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => 800 });
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", { configurable: true, get: () => 600 });
+    Object.defineProperty(HTMLElement.prototype, "offsetLeft", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.classList.contains("sym-column") ? 32 + indexOfColumn(this) * 332 : 0;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, "offsetTop", { configurable: true, get: () => 0 });
+    Object.defineProperty(HTMLElement.prototype, "offsetWidth", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.classList.contains("sym-box") || this.classList.contains("sym-column") ? 300 : 0;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.classList.contains("sym-box") ? 200 : 0;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, "offsetParent", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.parentElement;
+      },
+    });
+    setReducedMotion(false);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+    delete (window as unknown as { matchMedia?: unknown }).matchMedia;
+  });
+
+  it("opening a box that is off screen moves the camera to show it, and scrolls nothing", async () => {
+    getSymbolModel.mockResolvedValue(model());
+    const scroll = scrollSpy();
+    try {
+      await ready([id(F, "A"), id(G, "B")]);
+      fireEvent.click(within(box("B") as HTMLElement).getByRole("button", { name: /^D/ }));
+      settle();
+      // D is the third column: at the start its box spans x 696 to 996, so the camera moves it left by 220 to leave 24 px at the right.
+      // The top stays at the band the toolbar keeps (48 px).
+      expect(worldCam()).toEqual({ x: -220, y: 48, k: 1 });
+      expect(scroll.calls).toEqual([]);
+    } finally {
+      scroll.restore();
+    }
+  });
+
+  it("under reduced motion the same reveal lands at once, with no frame to run", async () => {
+    getSymbolModel.mockResolvedValue(model());
+    setReducedMotion(true);
+    await ready([id(F, "A"), id(G, "B")]);
+    fireEvent.click(within(box("B") as HTMLElement).getByRole("button", { name: /^D/ }));
+    expect(worldCam().x).toBe(-220);
+    expect(queue.size).toBe(0);
+  });
+
+  it("a caller picked from the head prepends a box, and the old head keeps its place on screen", async () => {
+    getSymbolModel.mockResolvedValue(model());
+    await ready([id(G, "B"), id(G, "D")]);
+    const canvas = document.querySelector(".sym-canvas") as HTMLElement;
+    // Pan right by 400 px, so the caller opened on the left has room on screen (its place is then not off the edge).
+    pointerEv("pointerdown", canvas, 0, 0);
+    pointerEv("pointermove", canvas, 400, 0);
+    pointerEv("pointerup", canvas, 400, 0);
+    expect(worldCam().x).toBe(400);
+    // Open B's callers, then pick A from them. Each click is preceded by its press, as a real click is.
+    const chip = within(box("B") as HTMLElement).getByRole("button", { name: "Callers 1" });
+    pointerEv("pointerdown", chip, 400, 0);
+    fireEvent.click(chip);
+    const a = within(screen.getByRole("region", { name: "Callers of B" })).getByRole("button", { name: /^A/ });
+    pointerEv("pointerdown", a, 400, 0);
+    fireEvent.click(a);
+    settle();
+    // B is now the second column, at 364 px in the track. It is where it was on screen (32 + 400 = 432); A is left of it, on screen.
+    expect(worldCam().x + 364).toBe(432);
+    expect(worldCam().x + 32).toBe(100);
+  });
+
+  it("a box that leaves stays in place for 180 ms, then is removed", async () => {
+    getSymbolModel.mockResolvedValue(model());
+    await ready([id(F, "A"), id(G, "B"), id(G, "D")]);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    // Picking A's callee B closes the boxes right of B: B and D leave.
+    fireEvent.click(within(box("A") as HTMLElement).getByRole("button", { name: /^B/ }));
+    expect(columns(".sym-leaving")).toBe(2);
+    act(() => vi.advanceTimersByTime(170));
+    expect(columns(".sym-leaving")).toBe(2);
+    act(() => vi.advanceTimersByTime(20));
+    expect(columns(".sym-leaving")).toBe(0);
+  });
+
+  it("under reduced motion a box that leaves is removed at once", async () => {
+    getSymbolModel.mockResolvedValue(model());
+    setReducedMotion(true);
+    await ready([id(F, "A"), id(G, "B"), id(G, "D")]);
+    fireEvent.click(within(box("A") as HTMLElement).getByRole("button", { name: /^B/ }));
+    expect(columns(".sym-leaving")).toBe(0);
+  });
+
+  it("four quick clicks on one row leave ghosts with unique keys, and React warns about no duplicate key", async () => {
+    getSymbolModel.mockResolvedValue(model());
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await ready([id(F, "A")]);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const row = () => within(box("A") as HTMLElement).getByRole("button", { name: /^B/ });
+      // Open, close, open, close: B's column leaves twice, and both ghosts are still in place.
+      for (let i = 0; i < 4; i++) fireEvent.click(row());
+      expect(columns(".sym-leaving")).toBe(2);
+      const dup = errors.mock.calls.filter((c) => /same key|unique "key"|duplicate key/i.test(String(c[0])));
+      expect(dup).toEqual([]);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it("keyboard focus into an off-screen box reveals it, and holds the stage's own scroll at 0", async () => {
+    getSymbolModel.mockResolvedValue(model());
+    await ready([id(F, "A"), id(G, "B"), id(G, "D")]);
+    const canvas = document.querySelector(".sym-canvas") as HTMLElement;
+    // The stage is overflow hidden: its scroll is held in a plain property here, so the test can see the reset.
+    let sl = 50;
+    let st = 20;
+    Object.defineProperty(canvas, "scrollLeft", { configurable: true, get: () => sl, set: (v: number) => (sl = v) });
+    Object.defineProperty(canvas, "scrollTop", { configurable: true, get: () => st, set: (v: number) => (st = v) });
+    // The mount's reveal already shows D. Pan away from it by 300 px first, so only the focus can bring D back on screen.
+    settle();
+    pointerEv("pointerdown", canvas, 0, 0);
+    pointerEv("pointermove", canvas, 300, 0);
+    pointerEv("pointerup", canvas, 300, 0);
+    expect(worldCam().x).toBe(300);
+    const title = (box("D") as HTMLElement).querySelector(".sym-title") as HTMLElement;
+    act(() => title.focus());
+    settle();
+    expect(sl).toBe(0);
+    expect(st).toBe(0);
+    expect(worldCam().x).toBe(-220);
   });
 });

@@ -6,15 +6,16 @@
 //
 // The boxes sit on a pan and zoom stage (usePanZoom). The camera follows the openings: a box that opens off screen is revealed
 // with a tween, and a box whose left neighbour changes (a caller prepended, a callers box opened or closed) keeps its place on
-// screen, so nothing jumps under the reader. A box that leaves is kept for a moment in place, fading out.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+// screen, so nothing jumps under the reader. A box that leaves is kept for a moment in place, fading out. A camera change writes
+// the world's transform directly, so a drag or a tween frame does not re-render the view.
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction } from "react";
 import type { ProjectModel } from "@insight/model";
 import { api } from "../../api";
 import { fileTarget, useCodeTarget } from "../../codeTarget";
 import { hrefView } from "../../router";
 import { displayName } from "../../zoom/names";
 import { exportedCallees, exportedCallers, exportedFunctions, isExportedFunction, type ExportedSymbol, type SymbolLink } from "../../symbols/graph";
-import { columnKeys, prefersReducedMotion, type Rect } from "../../symbols/camera";
+import { columnKeys, prefersReducedMotion, type Camera, type Rect } from "../../symbols/camera";
 import { connectorPath, offsetWithin } from "../../symbols/connectors";
 import { usePanZoom } from "../views/usePanZoom";
 
@@ -23,6 +24,12 @@ const KEY_SEP = "\u0000";
 
 /** How long a box that left stays in place, fading out, before it is dropped. Matches the leave animation (160 ms) plus a margin. */
 const GHOST_MS = 180;
+
+/**
+ * Px at the top of the stage kept clear for the zoom toolbar, which sits over the stage's top right corner (8 px from the top, about
+ * 32 px tall). A fit, a reveal and the first camera all keep the boxes below it, with 8 px to spare.
+ */
+const TOOLBAR_BAND = 48;
 
 interface Props {
   id: string;
@@ -86,9 +93,12 @@ interface ColView {
   selected: string | undefined;
 }
 
-/** A column (or a callers box) that left the chain, kept for GHOST_MS at its last place. `left` is its place in the track. */
+/**
+ * A column (or a callers box) that left, kept for GHOST_MS at its last place. `token` is unique for the life of the view, so
+ * two ghosts of the same column (it opened and closed twice) are two elements with two keys. `left` is the column's place in the track.
+ */
 interface Ghost {
-  id: string;
+  token: number;
   view: ColView;
   left: number;
 }
@@ -100,11 +110,78 @@ interface Link {
   flow: boolean;
 }
 
-/** The box that is anchored on screen across a layout change, and where it sat. */
+/**
+ * The box that stays on screen across a layout change: its place in the chain after the change (`index`), and the screen x it had
+ * before the change. A caller picked from the head moves the head to index 1 (the caller becomes index 0), so the anchor is 1.
+ */
 interface Anchor {
-  key: string;
+  index: number;
   screenX: number;
 }
+
+interface StartGroup {
+  file: string;
+  items: ExportedSymbol[];
+}
+
+interface StartListProps {
+  /** The exported functions of the scope, before the filter. */
+  total: number;
+  /** The exported functions the filter keeps. */
+  matches: number;
+  groups: StartGroup[];
+  filter: string;
+  /** The id at the head of the chain, which the list marks. */
+  headId: string | undefined;
+  onFilter: (query: string) => void;
+  onPick: (id: string) => void;
+  /** True when the last press was a drag, so the click that ends it picks nothing. */
+  moved: () => boolean;
+}
+
+/**
+ * The start list. Memoized: a camera change never re-renders it, and its props are stable (a filter keystroke or a new head is the
+ * only change that reaches it).
+ */
+const StartList = memo(function StartList({ total, matches, groups, filter, headId, onFilter, onPick, moved }: StartListProps) {
+  return (
+    <aside className="sym-list" aria-label="Exported functions">
+      <div className="sym-filter">
+        <input
+          type="search"
+          className="sym-filter-input"
+          placeholder="Filter functions"
+          aria-label="Filter exported functions"
+          value={filter}
+          onChange={(e) => onFilter(e.target.value)}
+        />
+      </div>
+      {total === 0 && <p className="muted small sym-none">No exported functions in this scope</p>}
+      {total > 0 && matches === 0 && <p className="muted small sym-none">No function matches “{filter}”</p>}
+      {groups.map((g) => (
+        <section key={g.file} className="sym-group">
+          <h3 className="sym-file">{g.file}</h3>
+          <ul className="sym-starts">
+            {g.items.map((s) => (
+              <li key={s.id}>
+                <button
+                  type="button"
+                  className="sym-start"
+                  aria-current={headId === s.id ? "true" : undefined}
+                  onClick={() => {
+                    if (!moved()) onPick(s.id);
+                  }}
+                >
+                  {displayName(s.name, s.id)}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ))}
+    </aside>
+  );
+});
 
 /** A connector: a stroke that draws on when it first mounts, and carries an ambient flow when it is a chain connector. */
 function Connector({ d, flow }: { d: string; flow: boolean }) {
@@ -137,6 +214,11 @@ function boxIn(el: HTMLElement, track: HTMLElement): Rect {
   return { x: o.x, y: o.y, w: el.offsetWidth, h: el.offsetHeight };
 }
 
+/** Writes the camera to the world layer. The world's transform is the only thing a camera change touches. */
+function writeCam(el: HTMLElement, c: Camera) {
+  el.style.transform = `translate(${c.x}px, ${c.y}px) scale(${c.k})`;
+}
+
 export function SymbolsView({ id, scope, chain: chainParam }: Props) {
   const { showCode } = useCodeTarget();
   const [loaded, setLoaded] = useState<{ key: string; model?: ProjectModel; error?: string }>();
@@ -154,6 +236,7 @@ export function SymbolsView({ id, scope, chain: chainParam }: Props) {
   const els = useRef(new Map<string, HTMLElement>());
   const colEls = useRef(new Map<string, HTMLElement>());
   const trackRef = useRef<HTMLDivElement>(null);
+  const worldRef = useRef<HTMLDivElement>(null);
   const prevViews = useRef(new Map<string, ColView>());
   const prevLeft = useRef(new Map<string, number>());
   const anchor = useRef<Anchor | null>(null);
@@ -162,14 +245,22 @@ export function SymbolsView({ id, scope, chain: chainParam }: Props) {
   const prevLast = useRef("");
   const prevCallersAt = useRef<number | null>(null);
   const timers = useRef(new Set<number>());
+  const ghostSeq = useRef(0);
 
+  const writeWorld = useCallback((c: Camera) => {
+    if (worldRef.current !== null) writeCam(worldRef.current, c);
+  }, []);
   const pz = usePanZoom(canvasEl, content, {
     autoFit: false,
     fitMinK: 0.4,
     maxK: 1,
+    bandTop: TOOLBAR_BAND,
     height: canvasH > 0 ? canvasH : undefined,
+    applyTo: writeWorld,
   });
-  const cam = pz.cam;
+  // The latest reveal, for the focus handler, which is bound once per stage.
+  const revealRef = useRef(pz.revealBox);
+  revealRef.current = pz.revealBox;
 
   useEffect(() => {
     let cancelled = false;
@@ -215,6 +306,15 @@ export function SymbolsView({ id, scope, chain: chainParam }: Props) {
   const chain = useMemo(() => (model === undefined ? [] : validChain(model, raw)), [model, raw]);
   const symbols = useMemo(() => (model === undefined ? [] : exportedFunctions(model, scope)), [model, scope]);
   const shown = useMemo(() => filterSymbols(symbols, filter), [symbols, filter]);
+  const groups = useMemo(() => {
+    const out: StartGroup[] = [];
+    for (const s of shown) {
+      const last = out[out.length - 1];
+      if (last !== undefined && last.file === s.file) last.items.push(s);
+      else out.push({ file: s.file, items: [s] });
+    }
+    return out;
+  }, [shown]);
   const callersAt = useMemo(() => {
     if (callersOf === null) return null;
     const at = chain.indexOf(callersOf);
@@ -240,17 +340,34 @@ export function SymbolsView({ id, scope, chain: chainParam }: Props) {
   }, [model, graph, chain, keys, callersAt]);
 
   // Moves the chain: the state, and the URL that names it (so the chain survives a reload).
-  const go = (next: string[]) => {
-    setRaw(next);
-    setCallersOf(null);
-    const href = hrefView(id, "symbols", { scope, ...(next.length > 0 ? { chain: next } : {}) });
-    if (window.location.hash !== href) window.location.hash = href;
-  };
+  const go = useCallback(
+    (next: string[]) => {
+      setRaw(next);
+      setCallersOf(null);
+      const href = hrefView(id, "symbols", { scope, ...(next.length > 0 ? { chain: next } : {}) });
+      if (window.location.hash !== href) window.location.hash = href;
+    },
+    [id, scope],
+  );
+  const pickStart = useCallback((sid: string) => go([sid]), [go]);
 
   const chainKey = chain.join(KEY_SEP);
 
+  // A new project or model: nothing from the old one is kept (no ghost, no remembered place of a column).
+  useLayoutEffect(() => {
+    prevViews.current = new Map();
+    prevLeft.current.clear();
+    anchor.current = null;
+    timers.current.forEach((t) => window.clearTimeout(t));
+    timers.current.clear();
+    setGhosts([]);
+    setGhostCallers([]);
+    prevLast.current = "";
+    prevCallersAt.current = null;
+  }, [model]);
+
   // Connectors: from the row that opened the next box to that box, and from the open callers box to the box it leads to. They
-  // are computed in the track's unscaled coordinates, so they do not depend on the camera.
+  // are computed in the track's unscaled coordinates, so they do not depend on the camera. Runs on a layout change only.
   useLayoutEffect(() => {
     const draw = () => {
       const track = trackRef.current;
@@ -298,7 +415,7 @@ export function SymbolsView({ id, scope, chain: chainParam }: Props) {
       window.removeEventListener("resize", draw);
       observer?.disconnect();
     };
-  }, [chainKey, callersAt, model, filter]);
+  }, [chain, keys, callersAt, model]);
 
   // The stage's height, for Fit.
   useLayoutEffect(() => {
@@ -311,48 +428,73 @@ export function SymbolsView({ id, scope, chain: chainParam }: Props) {
     return () => observer.disconnect();
   }, [canvasEl]);
 
-  // Runs after every commit, before paint: the boxes that left are kept in place, the anchored box keeps its screen place, and
-  // the camera follows what opened. Declared before the early returns so the hooks run in the same order every render.
+  // Keyboard focus into the stage: the stage is overflow hidden, so the browser would scroll it. Its scroll is held at 0, and the
+  // box that took the focus is revealed with the camera instead.
+  useLayoutEffect(() => {
+    const canvas = canvasEl;
+    if (canvas === null) return;
+    const pin = () => {
+      if (canvas.scrollLeft !== 0) canvas.scrollLeft = 0;
+      if (canvas.scrollTop !== 0) canvas.scrollTop = 0;
+    };
+    const onFocus = (e: FocusEvent) => {
+      pin();
+      const track = trackRef.current;
+      const target = e.target;
+      if (track === null || !(target instanceof Element)) return;
+      const box = target.closest<HTMLElement>(".sym-box");
+      if (box !== null && track.contains(box)) revealRef.current(boxIn(box, track));
+    };
+    canvas.addEventListener("focusin", onFocus);
+    canvas.addEventListener("scroll", pin);
+    return () => {
+      canvas.removeEventListener("focusin", onFocus);
+      canvas.removeEventListener("scroll", pin);
+    };
+  }, [canvasEl]);
+
+  // The camera's first write, once the world exists (the world is drawn when the model has loaded).
+  const ready = model !== undefined;
+  const getCam = pz.getCam;
+  useLayoutEffect(() => {
+    if (ready) writeWorld(getCam());
+  }, [ready, writeWorld, getCam]);
+
+  // Runs after every layout change, before paint: the boxes that left are kept in place, the anchored box keeps its screen place,
+  // and the camera follows what opened. A camera change does not come here, so a drag or a tween frame reads no layout.
   useLayoutEffect(() => {
     const cur = new Map(views.map((v) => [v.key, v] as const));
+    const dropLater = (set: Dispatch<SetStateAction<Ghost[]>>, token: number) => {
+      const t = window.setTimeout(() => {
+        timers.current.delete(t);
+        set((list) => list.filter((x) => x.token !== token));
+      }, GHOST_MS);
+      timers.current.add(t);
+    };
     if (!prefersReducedMotion()) {
       const cols: Ghost[] = [];
       const cals: Ghost[] = [];
       for (const [key, prev] of prevViews.current) {
         const now = cur.get(key);
-        if (now === undefined) cols.push({ id: key, view: prev, left: prevLeft.current.get(key) ?? 0 });
-        else if (prev.callersOpen && !now.callersOpen) cals.push({ id: key, view: prev, left: 0 });
+        if (now === undefined) cols.push({ token: ++ghostSeq.current, view: prev, left: prevLeft.current.get(key) ?? 0 });
+        else if (prev.callersOpen && !now.callersOpen) cals.push({ token: ++ghostSeq.current, view: prev, left: 0 });
       }
       if (cols.length > 0) setGhosts((g) => [...g, ...cols]);
       if (cals.length > 0) setGhostCallers((g) => [...g, ...cals]);
-      for (const g of cols) {
-        const t = window.setTimeout(() => {
-          timers.current.delete(t);
-          setGhosts((list) => list.filter((x) => x.id !== g.id));
-        }, GHOST_MS);
-        timers.current.add(t);
-      }
-      for (const g of cals) {
-        const t = window.setTimeout(() => {
-          timers.current.delete(t);
-          setGhostCallers((list) => list.filter((x) => x.id !== g.id));
-        }, GHOST_MS);
-        timers.current.add(t);
-      }
+      for (const g of cols) dropLater(setGhosts, g.token);
+      for (const g of cals) dropLater(setGhostCallers, g.token);
     }
     for (const [key, el] of colEls.current) prevLeft.current.set(key, el.offsetLeft);
+    // A column that is gone keeps no place: its ghost, if any, has its left already.
+    for (const key of [...prevLeft.current.keys()]) if (!cur.has(key)) prevLeft.current.delete(key);
     prevViews.current = cur;
 
     const track = trackRef.current;
     const a = anchor.current;
     anchor.current = null;
     if (a !== null && track !== null) {
-      const idx = keys.indexOf(a.key);
-      const el = idx >= 0 ? els.current.get(`box:${idx}`) : undefined;
-      if (el) {
-        const wx = offsetWithin(el, track).x;
-        pz.moveX(a.screenX - wx * pz.getCam().k);
-      }
+      const el = els.current.get(`box:${a.index}`);
+      if (el !== undefined) pz.moveX(a.screenX - offsetWithin(el, track).x * pz.getCam().k);
     }
 
     const lastKey = keys[chain.length - 1] ?? "";
@@ -365,19 +507,21 @@ export function SymbolsView({ id, scope, chain: chainParam }: Props) {
     prevCallersAt.current = callersAt;
     const reveal = target !== undefined ? els.current.get(target) : undefined;
     if (reveal !== undefined && track !== null) pz.revealBox(boxIn(reveal, track));
-  });
+  }, [views, callersAt, chain, keys]);
 
   if (error !== undefined) return <p className="error" role="alert">{error}</p>;
   if (model === undefined || graph === undefined) return <p className="muted small">Loading symbols</p>;
 
-  /** Records where the box at chain position `i` is on screen, so the layout change that follows can keep it there. */
-  const anchorAt = (i: number) => {
+  /**
+   * Records where the box at chain position `i` is on screen, and the index it will have after the change that follows (the
+   * layout change keeps that box where it was on screen).
+   */
+  const anchorAt = (i: number, index: number) => {
     const track = trackRef.current;
     const el = els.current.get(`box:${i}`);
-    const key = keys[i];
-    if (track === null || el === undefined || key === undefined) return;
+    if (track === null || el === undefined) return;
     const c = pz.getCam();
-    anchor.current = { key, screenX: offsetWithin(el, track).x * c.k + c.x };
+    anchor.current = { index, screenX: offsetWithin(el, track).x * c.k + c.x };
   };
   const pickCallee = (i: number, calleeId: string) => {
     const kept = chain.slice(0, i + 1);
@@ -385,13 +529,14 @@ export function SymbolsView({ id, scope, chain: chainParam }: Props) {
     go(chain[i + 1] === calleeId ? kept : [...kept, calleeId]);
   };
   const pickCaller = (i: number, callerId: string) => {
-    // The caller becomes the new head; the boxes right of the box it calls stay as they were. The box it calls keeps its place.
-    anchorAt(i);
+    // The caller becomes the new head; the boxes right of the box it calls stay as they were. The box it calls (chain[i]) is at
+    // index 1 of the new chain, and keeps its place.
+    anchorAt(i, 1);
     headPending.current = true;
     go([callerId, ...chain.slice(i)]);
   };
   const toggleCallers = (i: number, fnId: string) => {
-    anchorAt(i);
+    anchorAt(i, i);
     setCallersOf(callersAt === i ? null : fnId);
   };
   /** A click that ends a drag opens nothing. */
@@ -403,13 +548,6 @@ export function SymbolsView({ id, scope, chain: chainParam }: Props) {
     const line = model.functionById.get(v.fnId)?.span?.start[0];
     if (fn !== undefined) showCode(fileTarget(fn.file, line !== undefined ? line + 1 : undefined));
   };
-
-  const groups: Array<{ file: string; items: ExportedSymbol[] }> = [];
-  for (const s of shown) {
-    const last = groups[groups.length - 1];
-    if (last !== undefined && last.file === s.file) last.items.push(s);
-    else groups.push({ file: s.file, items: [s] });
-  }
 
   const reg = (key: string) => (el: HTMLElement | null) => {
     if (el) els.current.set(key, el);
@@ -456,12 +594,15 @@ export function SymbolsView({ id, scope, chain: chainParam }: Props) {
     </section>
   );
 
-  /** One column: its callers box (when open, or leaving), and its function box. */
-  const column = (v: ColView, live: boolean, left?: number) => {
-    const leavingCallers = live && !v.callersOpen ? ghostCallers.find((g) => g.id === v.key) : undefined;
+  /**
+   * One column: its callers box (when open, or leaving), and its function box. A ghost (`live` false) is drawn at `left` under
+   * its unique `token`, and is inert.
+   */
+  const column = (v: ColView, live: boolean, token = 0, left = 0) => {
+    const leavingCallers = live && !v.callersOpen ? ghostCallers.find((g) => g.view.key === v.key) : undefined;
     return (
       <div
-        key={live ? v.key : `ghost:${v.key}`}
+        key={live ? v.key : `ghost:${token}`}
         className={live ? "sym-column" : "sym-column sym-leaving"}
         style={live ? undefined : { left }}
         aria-hidden={live ? undefined : true}
@@ -510,39 +651,16 @@ export function SymbolsView({ id, scope, chain: chainParam }: Props) {
 
   return (
     <div className="sym">
-      <aside className="sym-list" aria-label="Exported functions">
-        <div className="sym-filter">
-          <input
-            type="search"
-            className="sym-filter-input"
-            placeholder="Filter functions"
-            aria-label="Filter exported functions"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-          />
-        </div>
-        {symbols.length === 0 && <p className="muted small sym-none">No exported functions in this scope</p>}
-        {symbols.length > 0 && shown.length === 0 && <p className="muted small sym-none">No function matches “{filter}”</p>}
-        {groups.map((g) => (
-          <section key={g.file} className="sym-group">
-            <h3 className="sym-file">{g.file}</h3>
-            <ul className="sym-starts">
-              {g.items.map((s) => (
-                <li key={s.id}>
-                  <button
-                    type="button"
-                    className="sym-start"
-                    aria-current={chain[0] === s.id ? "true" : undefined}
-                    onClick={guard(() => go([s.id]))}
-                  >
-                    {displayName(s.name, s.id)}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ))}
-      </aside>
+      <StartList
+        total={symbols.length}
+        matches={shown.length}
+        groups={groups}
+        filter={filter}
+        headId={chain[0]}
+        onFilter={setFilter}
+        onPick={pickStart}
+        moved={pz.moved}
+      />
       <div
         className={`sym-canvas${pz.expanded ? " expanded" : ""}`}
         ref={setCanvasEl}
@@ -567,21 +685,20 @@ export function SymbolsView({ id, scope, chain: chainParam }: Props) {
             </button>
           </span>
         </div>
-        {chain.length === 0 ? (
-          <p className="muted small sym-empty">Pick an exported function on the left to open its calls.</p>
-        ) : (
-          <div className="sym-world" style={{ transform: `translate(${cam.x}px, ${cam.y}px) scale(${cam.k})` }}>
+        {chain.length === 0 && <p className="muted small sym-empty">Pick an exported function on the left to open its calls.</p>}
+        <div className="sym-world" ref={worldRef}>
+          {chain.length > 0 && (
             <div className="sym-track" ref={trackRef}>
               {views.map((v) => column(v, true))}
-              {ghosts.map((g) => column(g.view, false, g.left))}
+              {ghosts.map((g) => column(g.view, false, g.token, g.left))}
               <svg className="sym-links" aria-hidden="true">
                 {links.map((l) => (
                   <Connector key={l.key} d={l.d} flow={l.flow} />
                 ))}
               </svg>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );
