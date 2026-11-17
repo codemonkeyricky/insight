@@ -116,7 +116,7 @@ export type StepRuntime = "same" | "thread" | "process";
 /**
  * Where the callee of a step runs. A spawn step starts a thread or a process, and a message step (`post ▸ receiver`)
  * hands the message to a handler on another thread; every other step (a plain call, an await, a handler the code
- * installs) runs the callee on the caller's thread, so its chart can nest in the caller's.
+ * installs) runs the callee on the caller's thread, so its chart opens as a box beside the step.
  */
 export function stepRuntime(node: Pick<FlowNode, "role" | "label" | "title">): StepRuntime {
   if (node.role === "spawn") {

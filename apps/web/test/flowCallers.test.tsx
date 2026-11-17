@@ -1,8 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { CHART_PAD, layoutFunction, relayout, type FunctionFlow, type Rect } from "@insight/flow";
+import { CHART_PAD, layoutFunction, type FunctionFlow, type Rect } from "@insight/flow";
 import type { RefRow } from "@insight/model";
-import { FlowChart } from "../src/components/FlowChart";
 import { ExpansionShape } from "../src/components/zoom/Expansion";
 import { BoxShape } from "../src/components/zoom/ZoomMap";
 import { callersKey as keyOf, isCallersKey, kindBadge, mergeCallers, refOfCallersKey, valueRefCount } from "../src/zoom/callers";
@@ -301,7 +300,7 @@ describe("resizing a callers box", () => {
 });
 
 describe("callers buttons in the rendered chart", () => {
-  it("a side expansion's header and a nested frame's header carry a .zm-callers-btn with its aria-label", () => {
+  it("a side expansion's header carries a .zm-callers-btn with its aria-label", () => {
     const side = renderToStaticMarkup(
       <svg>
         <ExpansionShape
@@ -320,15 +319,6 @@ describe("callers buttons in the rendered chart", () => {
     expect(side).toContain("zm-callers-btn");
     expect(side).toContain('aria-label="Show callers of A"');
     expect(side).toContain('tabindex="0"');
-
-    const leaf = layoutFunction({ id: "f#leaf", name: "leaf", async: false, items: [{ t: "step", role: "call", label: "a()" }] });
-    const root = layoutFunction({ id: "f#root", name: "root", async: false, items: [{ t: "step", role: "call", label: "leaf()", target: "f#leaf" }] });
-    const nodeId = root.nodes.find((n) => n.label === "leaf()")!.id;
-    const nested = relayout(root, new Map([[nodeId, { flow: leaf }]]));
-    const html = renderToStaticMarkup(<FlowChart id="p" fn={nested} scope="" onCallers={() => {}} />);
-    expect(html).toContain("zm-callers-btn");
-    expect(html).toContain('aria-label="Show callers of leaf"');
-    expect(html).not.toContain("zm-callers-btn is-open");
     expect(HEADER_STEP).toBe("@header");
   });
 });
@@ -525,19 +515,6 @@ describe("a callers box on a nested frame", () => {
     expect(folded.some((e) => e.fnId === "f#root")).toBe(true);
   });
 
-  it("cuts a long frame label to the room left of the Callers button, and keeps it whole without one", () => {
-    // A frame's header names its callee.
-    const long = "aVeryLongCalleeNameThatRunsUnderTheButton";
-    const leaf = layoutFunction({ id: "f#leaf", name: long, async: false, items: [{ t: "step", role: "call", label: "a()" }] });
-    const root = layoutFunction({ id: "f#root", name: "root", async: false, items: [{ t: "step", role: "call", label: "leaf()", target: "f#leaf" }] });
-    const nodeId = root.nodes.find((n) => n.label === "leaf()")!.id;
-    const nested = relayout(root, new Map([[nodeId, { flow: leaf }]]));
-    const labelOf = (html: string) => html.match(/flow-nest-label">([^<]*)<\/text>/)?.[1];
-    const cut = labelOf(renderToStaticMarkup(<FlowChart id="p" fn={nested} scope="" onCallers={() => {}} />));
-    expect(cut).toMatch(/…$/);
-    expect(cut!.length).toBeLessThan(long.length);
-    expect(labelOf(renderToStaticMarkup(<FlowChart id="p" fn={nested} scope="" />))).toBe(long);
-  });
 });
 
 describe("the Callers chip on a roots-only card", () => {

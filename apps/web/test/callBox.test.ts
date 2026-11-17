@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { layoutFunction, type FunctionFlow, type FlowNode, type Rect } from "@insight/flow";
-import { EXPAND_GAP, calleeAt, calloutOf, closeExpansion, contentOrigin, openExpansion, type Expansion, type ExpandAnchor } from "../src/zoom/expand.js";
+import { EXPAND_GAP, calleeAt, calloutOf, closeExpansion, contentOrigin, openExpansion, openStepsOf, type Expansion, type ExpandAnchor } from "../src/zoom/expand.js";
 import { stepAction, type StepContext } from "../src/zoom/stepAction.js";
 
 // A call row opens its callee as a separate box to the right of the box that holds the row (ZoomMap openStep, which
@@ -92,5 +92,17 @@ describe("two rows of one box", () => {
     for (let i = 0; i < both.length; i++) for (let j = i + 1; j < both.length; j++) expect(overlaps(both[i]!, both[j]!)).toBe(false);
     expect(calleeAt(both, "f#root2", rowOf(sib, "mid()").id)).toBeUndefined();
     expect(calleeAt(both, "f#root2", rowOf(sib, "other()").id)).toBeDefined();
+  });
+});
+
+describe("openStepsOf", () => {
+  it("maps each chart to the ids of its steps with a box open from them, and skips callers boxes", () => {
+    const list = openExpansion([], "f#root", { kind: "box", nodeId: "b", rect: box }, root, view);
+    const row = rowOf(root, "mid()");
+    const withMid = openExpansion(list, "f#mid", stepOf("f#root", row), mid, view);
+    const steps = openStepsOf(withMid);
+    expect([...(steps.get("f#root") ?? [])]).toEqual([row.id]);
+    expect(steps.has("f#mid")).toBe(false);
+    expect(openStepsOf([]).size).toBe(0);
   });
 });

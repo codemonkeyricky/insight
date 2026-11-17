@@ -31,7 +31,7 @@ export function stepAction(node: Pick<FlowNode, "shape" | "handler" | "foldId">,
   if (gesture === "click") return ctx.selectable === false ? "none" : "select";
   // A `⋯ n local` fold row opens to show the rows it folds (the coupling view).
   if (node.foldId !== undefined) return "unfold";
-  if (node.shape === "nest" || node.shape === "fork") return "fold";
+  if (node.shape === "fork") return "fold";
   if (!ctx.hasCallee) return "none";
   // A handler (`ctx.onmessage = (e) => …`) is how a worker processes its messages: it opens, even as a folded lambda.
   if (node.handler !== true && ctx.isLambda) return "lambda";

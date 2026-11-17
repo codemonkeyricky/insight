@@ -11,7 +11,7 @@ import { CARD_CALLERS_ROOM, CARD_CHAR_W, CARD_GLYPH_CHARS, CARD_NAME_PAD, CHART_
 import { isPostStep, nameOfId, runtimeLabel, stepRuntime } from "../../flowTargets";
 import { hrefView } from "../../router";
 import { CHART_MIN_PX } from "../../zoom/chart";
-import { anchoredTo, calleeAt, CALLERS_CAP, callerRowRect, callersAt, chainHas, hangCallersFrom, hangsFromCallers, expandCamera, headerAnchor, isInPlace, calloutOf, closeExpansion, footprintOf, loadFunctionChart, NARROW_VIEW_PX, openExpansion, ownerOf, REVEAL_MIN_K, refresh, refusedCallersPlan, resizeCallers, revealCamera, rootBoxOf, sameFootprint, sceneCamera, setInline, SLOT_PAD, shiftAt, stepRect, stillOpen, syncCallerRows, toggleCallers, toggleFold, type Expansion, type ExpandAnchor } from "../../zoom/expand";
+import { anchoredTo, calleeAt, openStepsOf, CALLERS_CAP, callerRowRect, callersAt, chainHas, hangCallersFrom, hangsFromCallers, expandCamera, headerAnchor, isInPlace, calloutOf, closeExpansion, footprintOf, loadFunctionChart, NARROW_VIEW_PX, openExpansion, ownerOf, REVEAL_MIN_K, refresh, refusedCallersPlan, resizeCallers, revealCamera, rootBoxOf, sameFootprint, sceneCamera, setInline, SLOT_PAD, shiftAt, stepRect, stillOpen, syncCallerRows, toggleCallers, toggleFold, type Expansion, type ExpandAnchor } from "../../zoom/expand";
 import { callersKey, isCallersKey, refOfCallersKey, type CallerRow } from "../../zoom/callers";
 import { LatestLoad } from "../../zoom/latestLoad";
 import { CallersBox } from "./CallersBox";
@@ -671,6 +671,46 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   const revealOf = (from: Camera, e: Expansion, minPx = CHART_MIN_PX): Camera =>
     revealRect(from, { x: e.x, y: e.y, w: e.w, h: e.h }, minPx / Math.max(e.chart.width, 1));
 
+  /**
+   * The camera after a box opens from a call step (openStep). The least move (revealOf) is taken when it already shows the
+   * whole chain: the root card the chain starts at, every box from it to the new one. Otherwise the chain is fitted to the room
+   * (panned, or zoomed out to fit, never zoomed in, not below REVEAL_MIN_K). A chain still too wide for that at the smallest
+   * scale keeps the new box and the box it hangs from in view.
+   */
+  const revealChain = (b: MapBuild, list: readonly Expansion[], opened: Expansion): Camera => {
+    const from = cameraRef.current;
+    const minimal = revealOf(from, opened, 0);
+    const room = roomOf();
+    const stage = { x: leftRef.current, y: TOP_RESERVE, w: room.width, h: room.height };
+    const shows = (c: Camera, r: Rect): boolean => {
+      const x = r.x * c.k + c.x;
+      const y = r.y * c.k + c.y;
+      return x >= stage.x && y >= stage.y && x + r.w * c.k <= stage.x + stage.w && y + r.h * c.k <= stage.y + stage.h;
+    };
+    // The chain from the new box up to the card it starts at: each box, then the one it hangs from.
+    const chain: Expansion[] = [];
+    for (let cur: Expansion | undefined = opened; cur !== undefined && chain.length <= list.length; ) {
+      chain.push(cur);
+      if (cur.anchor.kind !== "step") break;
+      const parentId: string = cur.anchor.fnId;
+      cur = list.find((x) => x.fnId === parentId);
+    }
+    // A box's head stands for the box: a tall chart needs only its header in view.
+    const head = (e: Expansion): Rect => ({ x: e.x, y: e.y, w: e.w, h: Math.min(e.h, room.height) });
+    const rootId = rootBoxOf(list, opened);
+    const rootRect = rootId === undefined ? undefined : b.placed.rects.get(rootId);
+    const whole = chain.reduce((r, e) => union(r, head(e)), head(opened));
+    const all = rootRect === undefined ? whole : union(whole, rootRect);
+    if (shows(minimal, all)) return minimal;
+    const fit = fitCamera(all, room, { minK: REVEAL_MIN_K, maxK: from.k });
+    const fitted = { ...fit, x: fit.x + leftRef.current, y: fit.y + TOP_RESERVE };
+    if (shows(fitted, all)) return fitted;
+    // Too wide for the room at the smallest scale: the new box and the box it hangs from stay in view.
+    const caller = chain[1];
+    const pair = caller === undefined ? head(opened) : union(head(caller), head(opened));
+    return revealRect(from, pair, 0);
+  };
+
   /** The expansions as the build places them: the boxes they hang from, in the build's layout, placed on the current view. */
   const placeAll = (b: MapBuild, list: readonly Expansion[]): Expansion[] => refresh(list, (nodeId) => b.placed.rects.get(nodeId), placeView(b));
 
@@ -856,7 +896,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     // The new detail is panned into view when it is off the stage (the camera zooms only for a detail too narrow to read).
     // It is read from the placed list: setExp may have laid the build out again (see there).
     const opened = expRef.current.find((e) => e.fnId === callee);
-    if (opened !== undefined) moveTo(revealOf(cameraRef.current, opened, 0), true);
+    if (opened !== undefined) moveTo(revealChain(cur, expRef.current, opened), true);
     // The code pane follows the chain: the callee is the last function clicked.
     if (opened !== undefined) void selectFunction(callee);
   };
@@ -1012,38 +1052,53 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   };
 
   /**
-   * Opens or folds a step: a call on the caller's thread nests in the step; one on another thread or in another process opens
-   * as a parallel line under its step; a nest header folds; a lambda is highlighted. Returns whether the step took the gesture.
+   * Closes an expansion and every expansion chained from it, and moves the selection back as Escape does: a box that hangs
+   * from the selected box selects its parent (the map goes up a level), and a selected callee returns the selection to the
+   * expansion it hangs from. A callers box is no detail of the selection, so it closes alone.
+   */
+  const closeBox = (e: Expansion) => {
+    const b = buildRef.current;
+    const parent = b?.node(b.nodeId)?.parent;
+    const selectedRef = offMapRef.current?.selected.ref ?? b?.node(b.nodeId)?.ref;
+    setExp(closeExpansion(expRef.current, e.fnId));
+    if (!b) return;
+    if (e.kind !== "callers" && e.anchor.kind === "box" && e.anchor.nodeId === b.nodeId && parent !== undefined) {
+      void show(source.focusOf?.(b, parent) ?? parent, { animate: true, writeUrl: true });
+    } else if (e.anchor.kind === "step" && selectedRef === e.fnId) {
+      // A chart opened from a callers box returns the selection to the function whose callers they are.
+      void selectFunction(refOfCallersKey(e.anchor.fnId));
+    }
+  };
+
+  /**
+   * Opens or folds a step. A callee box already open from the row closes instead, with every box chained from it, whatever
+   * the row would open: the chevron shows that state (▾), so the chevron always does what it shows. Otherwise a call on the
+   * caller's thread opens its callee as a box beside the step (openStep). A call on another thread or in another process opens
+   * as a parallel line under its step (inlineStep), or as a box beside it when the line cannot be drawn. A fork row folds, and
+   * a lambda is highlighted. Returns whether the step took the gesture.
    */
   const chartOpen = (fnId: string, node: FlowNode): boolean => {
     stageRef.current?.focus({ preventScroll: true });
+    const open = calleeAt(expRef.current, fnId, node.id);
+    if (open !== undefined) {
+      closeBox(open);
+      return true;
+    }
     const action = stepAction(node, "open", stepContext(fnId, node));
     if (action === "unfold") {
       void unfoldStep(fnId, node);
       return true;
     }
     const callee = node.target ?? "";
-    if (action === "fold") void inlineStep(fnId, node, callee);
+    if (action === "fold") foldLine(fnId, node);
     else if (action === "lambda") void highlightLambda(fnId, node, callee);
-    else if (action === "box") toggleCalleeBox(fnId, node, callee);
+    else if (action === "box") void openStep(fnId, node, callee);
     else if (action === "fork") {
+      // A fork gesture is never on the caller's thread (stepAction), so the runtime is a thread or a process.
       const kind = stepRuntime(node);
-      void inlineStep(fnId, node, callee, kind === "same" ? undefined : kind);
+      if (kind !== "same") void inlineStep(fnId, node, callee, kind);
     }
     return action !== "none";
-  };
-
-  /**
-   * A call on the caller's thread opens its callee in a box to the right of the step (openStep). The row's box already open
-   * from this step closes instead, with every box chained from it (closeExpansion). The chevron shows that open state.
-   */
-  const toggleCalleeBox = (fnId: string, node: FlowNode, callee: string) => {
-    const open = calleeAt(expRef.current, fnId, node.id);
-    if (open !== undefined) {
-      setExp(closeExpansion(expRef.current, open.fnId));
-      return;
-    }
-    void openStep(fnId, node, callee);
   };
 
   /**
@@ -1082,28 +1137,31 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     setExp(toggleFold(placeAll(cur, expRef.current), fnId, foldId, chartSource, placeView(cur), flow.coupling, finish));
   };
 
-  /**
-   * Nests a call step's callee in the step, inside the same box: the step grows into a frame holding the callee's chart, the
-   * box grows to fit, and the grid makes room (setExp). A callee that cannot nest (it is already in the chain, the
-   * chart would be too large, or the chart has no pre-layout steps) opens beside the step instead. A click on a frame
-   * folds it back, with every call nested in it.
-   */
-  const inlineStep = async (fnId: string, node: FlowNode, callee: string, runtimeKind?: "thread" | "process") => {
+  /** Folds a parallel line back: the step's line closes and its rows go with it (setInline, no callee). */
+  const foldLine = (fnId: string, node: FlowNode) => {
     const b = buildRef.current;
     if (!b) return;
-    if (node.shape === "nest" || node.shape === "fork") {
-      setExp(setInline(placeAll(b, expRef.current), fnId, node.id, undefined, placeView(b)));
-      return;
-    }
+    setExp(setInline(placeAll(b, expRef.current), fnId, node.id, undefined, placeView(b)));
+  };
+
+  /**
+   * Opens a call on another thread or in another process as a parallel line under its step: the callee's rows run on a new
+   * lane, labelled by its runtime (setInline). A callee that cannot be drawn as a line (it is already in the chain, its chart
+   * is too large, or it has no pre-layout steps) opens as a box beside the step instead (openStep). The camera moves to the
+   * line's frame, and the callee is selected.
+   */
+  const inlineStep = async (fnId: string, node: FlowNode, callee: string, runtimeKind: "thread" | "process") => {
+    const b = buildRef.current;
+    if (!b) return;
     // A later click on this chart (another step, or its Callers button) supersedes this load: the click made last wins.
     const token = loadsRef.current.start(fnId);
     const chart = await loadChart(callee);
     if (chart === undefined || !loadsRef.current.isLatest(fnId, token)) return;
     const list = placeAll(b, expRef.current);
-    const runtime = runtimeKind === undefined ? undefined : { kind: runtimeKind, label: runtimeLabel(runtimeKind, callee, displayName(chart.name, chart.id)) };
+    const runtime = { kind: runtimeKind, label: runtimeLabel(runtimeKind, callee, displayName(chart.name, chart.id)) };
     const next = setInline(list, fnId, node.id, chart, placeView(b), runtime);
     if (next === list) {
-      if (chart.items === undefined || runtime !== undefined) void openStep(fnId, node, callee, runtimeKind, token);
+      void openStep(fnId, node, callee, runtimeKind, token);
       return;
     }
     setExp(next);
@@ -1149,8 +1207,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     const root = chain[0];
     const last = chain[chain.length - 1];
     if (!b || root === undefined || last === undefined || chain.length < 2) return;
-    // Each hop opens in turn. A callee on the caller's thread nests in the caller's box (the next hop is looked for inside
-    // the frame); one on another thread or in another process opens its own box, and the chain goes on from there.
+    // Each hop opens in turn: a callee on the caller's thread opens its box beside the step, and one on another thread or in
+    // another process opens its own box, and the chain goes on from there.
     let owner = root;
     let done = true;
     for (let i = 0; i + 1 < chain.length; i++) {
@@ -1413,26 +1471,15 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
         break;
       case "Escape": {
         if (!b) break;
-        const list = expRef.current;
-        const last = list[list.length - 1];
-        const parent = b.node(b.nodeId)?.parent;
+        const last = expRef.current[expRef.current.length - 1];
         if (last === undefined) {
           // Nothing is expanded: Escape goes up one level.
+          const parent = b.node(b.nodeId)?.parent;
           if (parent !== undefined) void show(source.focusOf?.(b, parent) ?? parent, { animate: true, writeUrl: true });
           break;
         }
-        // Escape closes the last expansion (and any chained from it). When it hangs from the selected box, the selection
-        // moves to the box's parent; a container selects nothing, so the source panel closes with it. When the selected
-        // function is the callee of a chained expansion, the selection returns to the expansion it hangs from.
-        const selectedRef = offMapRef.current?.selected.ref ?? b.node(b.nodeId)?.ref;
-        setExp(closeExpansion(list, last.fnId));
-        // A callers box is no detail of the selection: it closes alone, and the map does not go up a level.
-        if (last.kind !== "callers" && last.anchor.kind === "box" && last.anchor.nodeId === b.nodeId && parent !== undefined) {
-          void show(source.focusOf?.(b, parent) ?? parent, { animate: true, writeUrl: true });
-        } else if (last.anchor.kind === "step" && selectedRef === last.fnId) {
-          // A chart opened from a callers box returns the selection to the function whose callers they are.
-          void selectFunction(refOfCallersKey(last.anchor.fnId));
-        }
+        // Escape closes the last expansion (and any chained from it), as a box's close does (closeBox).
+        closeBox(last);
         break;
       }
       case "Enter": {
@@ -1589,6 +1636,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   };
   /** The functions with an expansion open, by id: their boxes are drawn as expanded. */
   const expandedFns = new Set(expansions.map((e) => e.fnId));
+  /** The call rows with a callee box open from them, by their chart: one set per render, read by each row. */
+  const calleeOpen = openStepsOf(expansions);
   /** The cards an expansion replaces in their slots: they are not drawn under it. */
   const grownCards = new Set(expansions.flatMap((e) => (e.anchor.kind === "box" && e.anchor.inPlace === true ? [e.anchor.nodeId] : [])));
   // A chain box whose function is a dispatch target of its thread is an async box: it gets a dashed frame.
@@ -1756,7 +1805,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
                         expansion={e}
                         k={labelScale}
                         inChain={(fnId) => chainHas(expansions, e.fnId, fnId)}
-                        onClose={() => setExp(closeExpansion(expRef.current, e.fnId))}
+                        onClose={() => closeBox(e)}
                         onOpen={(row, index) => void openCallerChart(refOfCallersKey(e.fnId), row, index)}
                         onSelect={(row) => {
                           // A function row selects its function; a module row opens its file at the line in the code pane.
@@ -1776,14 +1825,10 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
                         onNodeClick={(n) => chartStep(e.fnId, n)}
                         onNodeOpen={(n) => chartOpen(e.fnId, n)}
                         onSelect={() => void selectFunction(e.fnId)}
-                        onClose={() => setExp(closeExpansion(expRef.current, e.fnId))}
+                        onClose={() => closeBox(e)}
                         onCallers={() => toggleCallersOf(e.fnId, headerAnchor(e))}
                         callersOpen={callersAt(expansions, e.fnId, headerAnchor(e))}
-                        onNodeCallers={(n) => {
-                          if (n.target !== undefined) toggleCallersOf(n.target, { kind: "step", fnId: e.fnId, stepId: n.id, rect: { x: n.x, y: n.y, w: n.w, h: n.h } });
-                        }}
-                        callersOpenOf={(n) => n.target !== undefined && callersAt(expansions, n.target, { kind: "step", fnId: e.fnId, stepId: n.id })}
-                        openOf={(n) => calleeAt(expansions, e.fnId, n.id) !== undefined}
+                        openOf={(n) => calleeOpen.get(e.fnId)?.has(n.id) === true}
                         motion={motion}
                         runsOn={view !== undefined ? source.runsOn?.(view, e.fnId) : undefined}
                       />

@@ -736,6 +736,21 @@ export function calleeAt(list: readonly Expansion[], fnId: string, stepId: strin
   return list.find((e) => e.kind !== "callers" && e.anchor.kind === "step" && e.anchor.fnId === fnId && e.anchor.stepId === stepId);
 }
 
+/**
+ * The callee boxes open from each call step, by the step's chart: `fnId` → the ids of its steps that have a box open from them
+ * (see calleeAt). Built once per render, so each row asks a set instead of scanning the expansions.
+ */
+export function openStepsOf(list: readonly Expansion[]): ReadonlyMap<string, ReadonlySet<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const e of list) {
+    if (e.kind === "callers" || e.anchor.kind !== "step" || e.anchor.stepId === undefined) continue;
+    const steps = out.get(e.anchor.fnId) ?? new Set<string>();
+    steps.add(e.anchor.stepId);
+    out.set(e.anchor.fnId, steps);
+  }
+  return out;
+}
+
 /** The inset of a callout's expansion-side edge from the expansion's top and bottom: it meets the box inside its rounded corners. */
 export const CALLOUT_INSET = 12;
 

@@ -19,7 +19,7 @@ describe("stepAction click", () => {
 
 describe("stepAction open", () => {
   it("opens a same-thread call in a box to the right of the step", () => expect(stepAction(call, "open", ctx())).toBe("box"));
-  it("folds a nest header", () => expect(stepAction({ shape: "nest" }, "open", ctx({ hasCallee: false }))).toBe("fold"));
+  it("folds a fork row (a parallel line)", () => expect(stepAction({ shape: "fork" }, "open", ctx({ hasCallee: false }))).toBe("fold"));
   it("folds a fork row", () => expect(stepAction({ shape: "fork" }, "open", ctx({ runtime: "thread" }))).toBe("fold"));
   it("opens a parallel line for a thread or process step", () => {
     expect(stepAction(call, "open", ctx({ runtime: "thread" }))).toBe("fork");

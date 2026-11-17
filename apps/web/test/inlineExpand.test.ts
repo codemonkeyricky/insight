@@ -66,3 +66,26 @@ describe("a spawn opened as a parallel line", () => {
     expect(closed.find((x) => x.fnId === "f#r")!.chart.nodes.length).toBe(root.nodes.length);
   });
 });
+
+describe("a box opened from a later row of a parallel line", () => {
+  const leaf = make("f#leaf", [call("a()", "f#other")]);
+  const a = make("f#a", [call("spawn thread · leaf", "f#leaf", "spawn"), call("x()")]);
+  const root = make("f#root", [call("spawn thread · a", "f#a", "spawn")]);
+  const outer = idOf(root, "spawn thread · a");
+  const open = () => openExpansion([], "f#root", { kind: "box", nodeId: "b", rect: box }, root, view);
+
+  it("moves down with the growing line, and closes when its line folds away", () => {
+    const nested = setInline(open(), "f#root", outer, a, view, { kind: "thread", label: "Thread · a" });
+    const stepId = `${outer}/${idOf(a, "x()")}`;
+    const node = nested[0]!.chart.nodes.find((n) => n.id === stepId)!;
+    const side = openExpansion(nested, "f#side", { kind: "step", fnId: "f#root", stepId, rect: { x: node.x, y: node.y, w: node.w, h: node.h } }, make("f#side", [call("s()")]), view);
+    expect(side).toHaveLength(2);
+    const before = side.find((e) => e.fnId === "f#side")!;
+    // The line's first row grows a line of its own, which pushes the row x() (and the box from it) down.
+    const grown = setInline(side, "f#root", `${outer}/${idOf(a, "spawn thread · leaf")}`, leaf, view, { kind: "thread", label: "Thread · leaf" });
+    const moved = grown.find((e) => e.fnId === "f#side")!;
+    expect(moved.y).toBeGreaterThan(before.y);
+    const folded = setInline(grown, "f#root", outer, undefined, view);
+    expect(folded.map((e) => e.fnId)).toEqual(["f#root"]);
+  });
+});
