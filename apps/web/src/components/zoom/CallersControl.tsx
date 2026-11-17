@@ -2,13 +2,14 @@
 // chart box, a nested frame, or a grid card, and it never selects or toggles the box it is in (a click stops there).
 // It is a keyboard control too: Tab reaches it, Enter or Space presses it. Its look follows the close × and the chevron: the
 // same hairline and fill tokens (see styles.css).
+import { CARD_CALLERS_W } from "@insight/flow";
 import { keyActivates } from "./keys";
 
 /** The button's size, in world units (its text is kept readable by the label's own size rule in styles.css). */
 export const CALLERS_BTN_W = 78;
 export const CALLERS_BTN_H = 22;
 /** The compact button's width: the ◂ alone, for a card whose name needs the room, or a map zoomed out (see FULL_K). */
-export const CALLERS_COMPACT_W = 26;
+export const CALLERS_COMPACT_W = CARD_CALLERS_W;
 
 /**
  * The label keeps its size on screen (11 px) while the pill zooms with the map, so a zoomed-out pill is too small for it:

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { BoxShape, isMoreCard } from "../src/components/zoom/ZoomMap";
 import type { MapNode } from "../src/zoom/source";
-import type { PlacedItem } from "@insight/flow";
+import { cardWidth, type PlacedItem } from "@insight/flow";
 
 // The boxes of the flat grid: a card, an external command's chip, and a card's badges. The Flow canvas draws no runtime frames
 // (thread, group, process), so none is tested here. The map builds its items in an effect, so a box is rendered on its own,
@@ -140,5 +140,74 @@ describe("the flat grid's card names", () => {
     expect(isMoreCard({ kind: "more" })).toBe(true);
     expect(isMoreCard({ kind: "function" })).toBe(false);
     expect(isMoreCard(undefined)).toBe(false);
+  });
+});
+
+describe("the flat grid's card fits", () => {
+  // A card drawn at the width cardWidth gives its name, at 1x, with its Callers button: the whole name shows, no "…".
+  it.each([["a"], ["settle"], ["settleChains"], ["bodyCountOfTheActuatorChain"], ["linkPlateLongNameHere"]])("shows the whole name %s at 1x", (name) => {
+    const html = svg(
+      <BoxShape
+        item={box("fn", 0, 0, cardWidth(name), 56)}
+        node={node("fn", "function", name, { ref: `src/x.ts#${name}` })}
+        line="thread"
+        k={1}
+        onOpen={() => undefined}
+        onCallers={() => undefined}
+        chartOpen={false}
+        card
+      />,
+    );
+    expect(html).toContain(`ƒ</tspan> ${name}</text>`);
+    expect(html).toContain("zm-callers-btn");
+    expect(html).not.toContain("…");
+  });
+
+  it("shows a more card's whole name at its own width, with no Callers button", () => {
+    const name = "+12 more";
+    const html = svg(
+      <BoxShape item={box("p#more", 0, 0, cardWidth(name, false), 56)} node={node("p#more", "more", name)} line="thread" k={1} onOpen={() => undefined} chartOpen={false} card />,
+    );
+    expect(html).toContain(`ƒ</tspan> ${name}</text>`);
+    expect(html).not.toContain("…");
+  });
+
+  it("keeps the stem line clear of the self-sync badge: a stem under the badge is cut short", () => {
+    // At 320 wide the stem's room is 38 characters plain and 33 under the badge, so a 36-character stem fits plain only.
+    const stem = "abcdefghijklmnopqrstuvwxyz0123456789";
+    const draw = (syncSelf?: MapNode["syncSelf"]) =>
+      svg(
+        <BoxShape
+          item={box("main", 0, 0, 320, 56)}
+          node={node("main", "function", "main", { ref: "src/m.ts#main", shownName: `main · ${stem}`, syncSelf })}
+          line="thread"
+          k={1}
+          onOpen={() => undefined}
+          chartOpen={false}
+          card
+        />,
+      );
+    const subOf = (html: string) => /class="zm-card-sub"[^>]*>([^<]*)</.exec(html)?.[1] ?? "";
+    const plain = subOf(draw());
+    const badged = subOf(draw([{ name: "a", kind: "lock" }]));
+    expect(plain).toBe(stem);
+    expect(badged.length).toBeLessThan(plain.length);
+    expect(badged.endsWith("…")).toBe(true);
+  });
+
+  it("opens a function card whose id ends in #more, and does not treat it as the more card", () => {
+    const clicks: string[] = [];
+    const el = BoxShape({
+      item: box("pkg/mod.ts#more", 0, 0, 240, 56),
+      node: node("pkg/mod.ts#more", "function", "more", { ref: "pkg/mod.ts#more" }),
+      line: "thread",
+      k: 1,
+      onOpen: (id) => clicks.push(id),
+      chartOpen: false,
+      card: true,
+    }) as React.ReactElement<{ onClick?: () => void }>;
+    el.props.onClick?.();
+    expect(clicks).toEqual(["pkg/mod.ts#more"]);
+    expect(isMoreCard({ kind: "function" })).toBe(false);
   });
 });

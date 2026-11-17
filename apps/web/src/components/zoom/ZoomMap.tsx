@@ -7,7 +7,7 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as KeyEvent, type PointerEvent as PointerEv, type ReactNode } from "react";
 import { select } from "d3-selection";
 import { zoom, zoomIdentity, type D3ZoomEvent, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
-import { CHART_FIT_MAX_K, CHART_HEAD, ZOOM_SIZE, fitCamera, fitChartCamera, visibleWorld, type Camera, type FlowNode, type FlowSpan, type FunctionFlow, type PlacedItem, type Rect } from "@insight/flow";
+import { CARD_CALLERS_ROOM, CARD_CHAR_W, CARD_GLYPH_CHARS, CARD_NAME_PAD, CHART_FIT_MAX_K, CHART_HEAD, ZOOM_SIZE, fitCamera, fitChartCamera, visibleWorld, type Camera, type FlowNode, type FlowSpan, type FunctionFlow, type PlacedItem, type Rect } from "@insight/flow";
 import { isPostStep, nameOfId, runtimeLabel, stepRuntime } from "../../flowTargets";
 import { hrefView } from "../../router";
 import { CHART_MIN_PX } from "../../zoom/chart";
@@ -16,7 +16,7 @@ import { callersKey, isCallersKey, refOfCallersKey, type CallerRow } from "../..
 import { LatestLoad } from "../../zoom/latestLoad";
 import { CallersBox } from "./CallersBox";
 import { fileTarget, useCodeTarget } from "../../codeTarget";
-import { CALLERS_BTN_H, CALLERS_BTN_W, CALLERS_COMPACT_W, CallersButton, FULL_K, GLYPH_K } from "./CallersControl";
+import { CALLERS_BTN_H, CALLERS_COMPACT_W, CallersButton, GLYPH_K } from "./CallersControl";
 import { calloutD } from "../../zoom/connector";
 import { popDelay } from "../../zoom/pop";
 import { displayName } from "../../zoom/names";
@@ -2008,20 +2008,20 @@ export function BoxShape({
   if (card && !small && !bare) {
     // A card: its name alone, centred vertically, fitted to the card's width on screen.
     // Two characters of the budget go to the leading function glyph (ƒ), so the name stays inside the card.
-    // A card tall enough for it takes a Callers button at its left, and its name keeps clear of the button. The name
-    // comes first: when it would not fit whole beside the full button, the button is compact (the ◂ alone).
+    // A card tall enough for it takes a compact Callers button (the ◂ alone) at its left, and its name keeps clear of it.
+    // The name's budget is the card's width less the button's room, the padding and the ƒ glyph (the constants are shared
+    // with roots-grid.ts's cardWidth, which sizes the card so a name fits whole at 1x).
     const showCallers = onCallers !== undefined && rect.h >= CALLERS_BTN_H + 12 && k >= GLYPH_K;
     // The name's font is 13 px on screen until 11 world units grow past it (above about 1.2×), and a character takes about
     // 0.6 of the font: the fit follows the font as it grows with the zoom.
-    const charPx = Math.max(8, 6.8 * k);
+    const charPx = Math.max(CARD_CHAR_W, 6.8 * k);
     // The name starts 12 units in (after the chip, when there is one) and keeps 12 clear of the card's right edge. A card
     // with a stem line draws the bare name on its first line, and the stem on a second line under it, at the same x.
-    const nameIn = (room: number) => fitLabel(base, Math.max(1, labelChars((rect.w - room) * k, charPx, 20) - 2));
-    const fullName = nameIn(showCallers ? CALLERS_BTN_W + 26 : 0);
-    const compactCallers = showCallers && (fullName !== base || k < FULL_K);
-    const name = compactCallers ? nameIn(CALLERS_COMPACT_W + 26) : fullName;
-    const textX = rect.x + 12 + (showCallers ? (compactCallers ? CALLERS_COMPACT_W : CALLERS_BTN_W) - 4 + 6 : 0);
-    const stem = subTag !== undefined ? fitLabel(subTag, Math.max(1, labelChars((rect.x + rect.w - 12 - textX) * k, charPx * 0.9, 20))) : null;
+    const name = fitLabel(base, Math.max(1, labelChars((rect.w - (showCallers ? CARD_CALLERS_ROOM : 0)) * k, charPx, CARD_NAME_PAD) - CARD_GLYPH_CHARS));
+    const textX = rect.x + 12 + (showCallers ? CALLERS_COMPACT_W - 4 + 6 : 0);
+    // The stem line keeps clear of the self-sync badge at the card's bottom right (about charPx a character, 10 px to its left).
+    const badgePx = selfSync !== undefined ? `⇆ ${selfSync.length}`.length * charPx + 10 : 0;
+    const stem = subTag !== undefined ? fitLabel(subTag, Math.max(1, labelChars((rect.x + rect.w - 12 - textX) * k - badgePx, charPx * 0.9, CARD_NAME_PAD))) : null;
     return (
       <g className={`zm-box zm-${node.kind} zm-card ${lineClass(line)}${holdsChart ? " zm-has-chart" : ""}${chartOpen ? " expanded" : ""}${unguarded ? " zm-unguarded" : ""}`} data-sx={rect.x} data-fid={item.id} onClick={() => onOpen(item.id)} onDoubleClick={onDoubleOpen ? () => onDoubleOpen(item.id) : undefined}>
         <title>{`${node.detail !== undefined ? `${node.label} (${node.detail})` : node.title || node.label}${unguardedTitle}${selfSyncTitle}`}</title>
@@ -2047,7 +2047,7 @@ export function BoxShape({
           )}
         </g>
         {showCallers && (
-          <CallersButton x={rect.x + 8} y={rect.y + 6} name={shown} open={callersOpen} onClick={onCallers} k={k} compact={compactCallers} />
+          <CallersButton x={rect.x + 8} y={rect.y + 6} name={shown} open={callersOpen} onClick={onCallers} k={k} compact />
         )}
       </g>
     );
