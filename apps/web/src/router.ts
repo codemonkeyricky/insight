@@ -21,8 +21,8 @@ export type Route =
       trace?: string;
       /** The flow tab with the findings layer on, drawing only the findings of this kind (`kind=`). */
       kind?: string;
-      /** The Symbols tab's chain of exported functions, as their ids joined by commas (`chain=`). */
-      chain?: string;
+      /** The Symbols tab's chain of exported functions, one id per `chain=` value. */
+      chain?: string[];
       base?: string;
       head?: string;
     }
@@ -38,8 +38,8 @@ export interface ViewOptions {
   trace?: string;
   /** The findings layer of the flow tab, for one kind of finding. Written as `kind=`. */
   kind?: string;
-  /** The Symbols tab's chain of exported functions, as their ids joined by commas. Written as `chain=`. */
-  chain?: string;
+  /** The Symbols tab's chain of exported functions, one id per `chain=` value (repeated, so an id may hold a comma). */
+  chain?: string[];
   base?: string;
   head?: string;
 }
@@ -78,7 +78,7 @@ export function parseRoute(hash: string): Route {
       ...opt("fn", query.get("fn")),
       ...opt("trace", query.get("trace")),
       ...opt("kind", query.get("kind")),
-      ...opt("chain", query.get("chain")),
+      ...(query.getAll("chain").some((c) => c.length > 0) ? { chain: query.getAll("chain").filter((c) => c.length > 0) } : {}),
       ...opt("base", query.get("base")),
       ...opt("head", query.get("head")),
     };
@@ -126,7 +126,7 @@ export function hrefView(id: string, tab: string, opts: ViewOptions = {}): strin
   if (opts.fn) params.set("fn", opts.fn);
   if (opts.trace) params.set("trace", opts.trace);
   if (opts.kind) params.set("kind", opts.kind);
-  if (opts.chain) params.set("chain", opts.chain);
+  for (const c of opts.chain ?? []) params.append("chain", c);
   if (opts.base) params.set("base", opts.base);
   if (opts.head) params.set("head", opts.head);
   const qs = params.toString();

@@ -1,8 +1,9 @@
 // The exported-function call graph of the Symbols tab. Pure: it reads a ProjectModel and answers, for one exported function,
 // the exported functions it reaches (its callees) or the exported functions that reach it (its callers). An internal (not
 // exported) function is a helper: the walk follows through it and stops at the first exported function on each path.
-// Lambdas fold into their owner, as refsOf does, and a candidate (an interface-dispatch set) marks the link as a maybe.
-import type { ProjectModel } from "@insight/model";
+// Lambdas fold into their owner, as refsOf does, and a spawned thread or process folds into the function that starts it.
+// A maybe link is an interface-dispatch candidate, or a reference that does not invoke its target (a value, a closure).
+import { anonymousOwned, INVOKING_HOWS, ownerOf, type ProjectModel, type Rel } from "@insight/model";
 import { inScope } from "../router";
 
 /** How far a walk goes, in calls: a path longer than this (through helpers) is not followed. */
@@ -17,7 +18,7 @@ export interface ExportedSymbol {
 
 /**
  * One exported function a function reaches (a callee) or is reached by (a caller). `via` is the first helper on the shortest
- * path, when the path goes through one; `candidate` is true only when every path to it is a candidate (a maybe).
+ * path, when the path goes through one; `candidate` is true only when every path to it is a maybe.
  */
 export interface SymbolLink extends ExportedSymbol {
   via?: string;
@@ -33,6 +34,18 @@ export function isExportedFunction(model: ProjectModel, id: string): boolean {
 /** Whether a function is a function of the project that can be walked: a known function that is not an external stub. */
 function isWalkable(model: ProjectModel, id: string): boolean {
   return model.functionById.has(id) && model.byId.get(id)?.attrs.external !== true;
+}
+
+/**
+ * Whether a relation is a maybe: an interface-dispatch candidate, or a reference that does not invoke its target (the function
+ * is passed around as a value, not called). The same rule as the caller chain's "possible" (callers.ts).
+ */
+function isMaybe(rel: Rel): boolean {
+  return rel.candidate || (rel.kind === "reference" && !INVOKING_HOWS.has(rel.how ?? ""));
+}
+
+function isSpawnKind(kind: string): boolean {
+  return kind === "concurrency.spawn-thread" || kind === "concurrency.spawn-process";
 }
 
 /** The exported functions of a scope (the whole project for the empty scope), in file then line order. */
@@ -66,13 +79,35 @@ interface Neighbour {
   candidate: boolean;
 }
 
-/** The functions `src` calls: its own relations and those of the lambdas it owns, with a lambda callee folded into its owner. */
+/** The spawn nodes each function starts: a spawn is a node of the body it sits in, so it folds into the owner (memoized per model). */
+const spawnMemo = new WeakMap<ProjectModel, Map<string, string[]>>();
+function spawnsBy(model: ProjectModel): Map<string, string[]> {
+  const hit = spawnMemo.get(model);
+  if (hit) return hit;
+  const by = new Map<string, string[]>();
+  for (const from of model.out.keys()) {
+    const node = model.byId.get(from);
+    if (node === undefined || !isSpawnKind(node.kind) || node.parent === undefined) continue;
+    const owner = ownerOf(model.byId, node.parent);
+    const list = by.get(owner);
+    if (list) list.push(from);
+    else by.set(owner, [from]);
+  }
+  spawnMemo.set(model, by);
+  return by;
+}
+
+/**
+ * The functions `src` calls: its own relations, those of the lambdas it owns, and those of the threads and processes it starts
+ * (a spawned target is a callee of the function that starts it). A callee folds into its owner.
+ */
 function calleeNeighbours(model: ProjectModel, src: string): Neighbour[] {
   const out: Neighbour[] = [];
-  for (const from of [src, ...(ownedBy(model).get(src) ?? [])]) {
+  const froms = [src, ...(anonymousOwned(model).get(src) ?? []), ...(spawnsBy(model).get(src) ?? [])];
+  for (const from of froms) {
     for (const rel of model.out.get(from) ?? []) {
-      const next = ownerOf(model, rel.to);
-      if (isWalkable(model, next)) out.push({ next, candidate: rel.candidate });
+      const next = ownerOf(model.byId, rel.to);
+      if (isWalkable(model, next)) out.push({ next, candidate: isMaybe(rel) });
     }
   }
   return out;
@@ -83,9 +118,9 @@ function callerNeighbours(model: ProjectModel, dst: string): Neighbour[] {
   const out: Neighbour[] = [];
   for (const rel of model.in.get(dst) ?? []) {
     const from = model.byId.get(rel.from);
-    const spawned = from !== undefined && (from.kind === "concurrency.spawn-thread" || from.kind === "concurrency.spawn-process") && from.parent !== undefined;
-    const next = ownerOf(model, spawned ? (from.parent as string) : rel.from);
-    if (isWalkable(model, next)) out.push({ next, candidate: rel.candidate });
+    const spawned = from !== undefined && isSpawnKind(from.kind) && from.parent !== undefined;
+    const next = ownerOf(model.byId, spawned ? (from.parent as string) : rel.from);
+    if (isWalkable(model, next)) out.push({ next, candidate: isMaybe(rel) });
   }
   return out;
 }
@@ -98,13 +133,15 @@ interface Frame {
 }
 
 /**
- * Breadth-first walk from `start`. Each exported function reached is a link; each helper is expanded once per candidate state,
- * so a cycle ends and the shortest path to every helper is the one followed. A link keeps the first path's `via`, and is a
- * maybe only while every path to it is a candidate path.
+ * Breadth-first walk from `start`. Each exported function reached is a link; each helper is expanded once per maybe state, so a
+ * cycle ends and the shortest path to every helper is the one followed. A helper already walked as a sure call is not walked
+ * again as a maybe. A link keeps the first path's `via`, except that a sure path found after a maybe one takes its `via`; a link
+ * is a maybe only while every path to it is a maybe path.
  */
 function walk(model: ProjectModel, start: string, neighbours: (id: string) => Neighbour[]): SymbolLink[] {
   const found = new Map<string, SymbolLink>();
   const expanded = new Set<string>();
+  const stateKey = (id: string, cand: boolean) => `${id}\0${cand ? 1 : 0}`;
   let level: Frame[] = [{ id: start, candidate: false }];
   for (let depth = 0; depth < SYMBOLS_MAX_DEPTH && level.length > 0; depth++) {
     const next: Frame[] = [];
@@ -118,12 +155,17 @@ function walk(model: ProjectModel, start: string, neighbours: (id: string) => Ne
             const fn = model.functionById.get(to);
             if (fn === undefined) continue;
             found.set(to, { id: to, name: fn.name, file: fn.file, ...(frame.via !== undefined ? { via: frame.via } : {}), candidate: cand });
-          } else if (!cand) {
+          } else if (hit.candidate && !cand) {
+            // A sure path found after a maybe one: the link is sure, and it names the sure path's helper.
             hit.candidate = false;
+            if (frame.via !== undefined) hit.via = frame.via;
+            else delete hit.via;
           }
           continue;
         }
-        const state = `${to}\0${cand ? 1 : 0}`;
+        // A helper walked as a sure call reaches everything its maybe walk would, so it is not walked again as a maybe.
+        if (cand && expanded.has(stateKey(to, false))) continue;
+        const state = stateKey(to, cand);
         if (expanded.has(state)) continue;
         expanded.add(state);
         const fn = model.functionById.get(to);
@@ -138,34 +180,4 @@ function walk(model: ProjectModel, start: string, neighbours: (id: string) => Ne
 
 function cmpName(a: SymbolLink, b: SymbolLink): number {
   return a.name < b.name ? -1 : a.name > b.name ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-}
-
-/** The named function an anonymous function folds into, walking up through anonymous parents (as refs-common's ownerOf). */
-function ownerOf(model: ProjectModel, id: string): string {
-  let cur = id;
-  for (let depth = 0; depth < 1000; depth++) {
-    const node = model.byId.get(cur);
-    if (!node || node.kind !== "structure.function" || node.attrs.anonymous !== true || node.parent === undefined) return cur;
-    cur = node.parent;
-  }
-  return cur;
-}
-
-const ownedMemo = new WeakMap<ProjectModel, Map<string, string[]>>();
-
-/** The anonymous functions each owner holds, directly or through other anonymous functions. Memoized per model. */
-function ownedBy(model: ProjectModel): Map<string, string[]> {
-  const hit = ownedMemo.get(model);
-  if (hit) return hit;
-  const owned = new Map<string, string[]>();
-  for (const fn of model.functions) {
-    if (!fn.anonymous) continue;
-    const owner = ownerOf(model, fn.id);
-    if (owner === fn.id) continue;
-    const list = owned.get(owner);
-    if (list) list.push(fn.id);
-    else owned.set(owner, [fn.id]);
-  }
-  ownedMemo.set(model, owned);
-  return owned;
 }

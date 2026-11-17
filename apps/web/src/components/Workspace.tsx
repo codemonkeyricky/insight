@@ -40,8 +40,8 @@ export interface WorkspaceProps {
   head?: string;
   /** The flow tab's findings layer, drawing only the findings of this kind. */
   findingKind?: string;
-  /** The Symbols tab's chain of exported functions, as their ids joined by commas. */
-  chain?: string;
+  /** The Symbols tab's chain of exported functions, one id per `chain=` value. */
+  chain?: string[];
 }
 
 interface Loaded {
@@ -287,9 +287,14 @@ export function Workspace({ id, tab, scope, line, fn, trace, base, head, finding
           {noSnapshot ? (
             <FirstIndex name={p.name} run={run} running={run.running || p.status === "indexing"} />
           ) : content === "symbols" ? (
-            <div className="sh-stage sh-stage-symbols">
-              <SymbolsView id={id} scope={scope} chain={chain} />
-            </div>
+            scopeKind(scope, files) === "missing" ? (
+              <p className="muted">Nothing at this path in the snapshot.</p>
+            ) : (
+              // Keyed by the snapshot and tab, so a re-index remounts the view and its model loads again.
+              <div key={viewKey} className="sh-stage sh-stage-symbols">
+                <SymbolsView id={id} scope={scope} chain={chain} />
+              </div>
+            )
           ) : content === "flow" ? (
             <div className="sh-stage sh-stage-flow">
               {error && <p className="error" role="alert">{error}</p>}

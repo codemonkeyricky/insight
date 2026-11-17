@@ -2,7 +2,7 @@
 // scope; picking one opens its box as the head of a chain. A box lists the exported functions it calls (through internal
 // helpers); picking one opens that callee's box to the right and drops whatever was right of the box. A "Callers" chip opens a
 // box to the left that lists who calls the function, and picking a caller makes it the new head of the chain. The chain is
-// kept in the URL (`chain=`), so a reload or a shared link opens the same boxes.
+// kept in the URL (repeated `chain=` params), so a reload or a shared link opens the same boxes.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ProjectModel } from "@insight/model";
 import { api } from "../../api";
@@ -14,22 +14,31 @@ import { exportedCallees, exportedCallers, exportedFunctions, isExportedFunction
 /** The gap between two columns, where the connector runs. */
 const CONNECTOR_GAP = 72;
 
+/** Separates the ids of a chain when it is kept as one string (a dependency key). No id holds a NUL. */
+const KEY_SEP = "\u0000";
+
 interface Props {
   id: string;
   scope: string;
-  /** The chain as the URL holds it: function ids joined by commas. */
-  chain?: string;
+  /** The chain as the URL holds it: one `chain=` value per function id. */
+  chain?: string[];
 }
 
-/** The ids a `chain=` value names, in order. */
-export function parseChain(raw: string | undefined): string[] {
-  return raw ? raw.split(",").filter((s) => s.length > 0) : [];
+/**
+ * The ids a chain names. The URL holds one `chain=` value per id; an older link holds them joined by commas in one value, and is
+ * read as ids only when every part is a known exported function (checked by the caller, which has the model). Otherwise the value
+ * is kept as it is, so validChain drops it.
+ */
+function legacyIds(model: ProjectModel, raw: string[]): string[] {
+  if (raw.length !== 1 || isExportedFunction(model, raw[0] as string) || !(raw[0] as string).includes(",")) return raw;
+  const parts = (raw[0] as string).split(",").filter((s) => s.length > 0);
+  return parts.length > 0 && parts.every((p) => isExportedFunction(model, p)) ? parts : raw;
 }
 
 /** The chain up to its first id that is not an exported function of the project. A stale or edited link keeps what it can. */
-export function validChain(model: ProjectModel, ids: string[]): string[] {
+export function validChain(model: ProjectModel, raw: string[]): string[] {
   const out: string[] = [];
-  for (const id of ids) {
+  for (const id of legacyIds(model, raw)) {
     if (!isExportedFunction(model, id)) break;
     out.push(id);
   }
@@ -56,20 +65,26 @@ function memoBy(f: (id: string) => SymbolLink[]): (id: string) => SymbolLink[] {
   };
 }
 
-/** Scrolls an element into view on the inline axis; a reader who asks for reduced motion gets no animation. */
+/**
+ * Scrolls the column a box sits in into view (the callers box and the box it leads to are one column), so both show when they
+ * fit. A reader who asks for reduced motion gets no animation.
+ */
 function reveal(el: HTMLElement | undefined) {
-  if (el === undefined || typeof el.scrollIntoView !== "function") return;
+  const target: HTMLElement | null | undefined = el?.closest<HTMLElement>(".sym-column") ?? el;
+  if (target === null || target === undefined || typeof target.scrollIntoView !== "function") return;
   const reduce = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
-  el.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "nearest", inline: "end" });
+  target.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "nearest", inline: "nearest" });
 }
 
 export function SymbolsView({ id, scope, chain: chainParam }: Props) {
   const { showCode } = useCodeTarget();
   const [loaded, setLoaded] = useState<{ key: string; model?: ProjectModel; error?: string }>();
-  const [raw, setRaw] = useState<string[]>(() => parseChain(chainParam));
-  // The box whose callers are open (its index in the chain), or none.
-  const [callersAt, setCallersAt] = useState<number | null>(null);
+  const [raw, setRaw] = useState<string[]>(() => chainParam ?? []);
+  // The function whose callers box is open, by id, so the box stays on that function whatever the chain becomes.
+  const [callersOf, setCallersOf] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
+  // Set when a caller is picked: the new head box is revealed once the chain has moved.
+  const revealHead = useRef(false);
   // The elements the connectors and the reveal read, by their place in the chain.
   const els = useRef(new Map<string, HTMLElement>());
   const trackRef = useRef<HTMLDivElement>(null);
@@ -90,10 +105,13 @@ export function SymbolsView({ id, scope, chain: chainParam }: Props) {
     };
   }, [id]);
 
-  // The URL is the source of the chain: a change of `chain=` (a link, Back, or the write below) replaces what the view holds.
+  // The URL is the source of the chain: a change of `chain=` (a link, Back, or the write in go) replaces what the view holds,
+  // and closes an open callers box, since the chain it was open on has moved.
+  const chainUrl = (chainParam ?? []).join(KEY_SEP);
   useEffect(() => {
-    setRaw(parseChain(chainParam));
-  }, [chainParam]);
+    setRaw(chainUrl === "" ? [] : chainUrl.split(KEY_SEP));
+    setCallersOf(null);
+  }, [chainUrl]);
 
   const model = loaded?.key === id ? loaded.model : undefined;
   const error = loaded?.key === id ? loaded.error : undefined;
@@ -107,16 +125,21 @@ export function SymbolsView({ id, scope, chain: chainParam }: Props) {
   const chain = useMemo(() => (model === undefined ? [] : validChain(model, raw)), [model, raw]);
   const symbols = useMemo(() => (model === undefined ? [] : exportedFunctions(model, scope)), [model, scope]);
   const shown = useMemo(() => filterSymbols(symbols, filter), [symbols, filter]);
+  const callersAt = useMemo(() => {
+    if (callersOf === null) return null;
+    const at = chain.indexOf(callersOf);
+    return at >= 0 ? at : null;
+  }, [callersOf, chain]);
 
   // Moves the chain: the state, and the URL that names it (so the chain survives a reload).
   const go = (next: string[]) => {
     setRaw(next);
-    setCallersAt(null);
-    const href = hrefView(id, "symbols", { scope, ...(next.length > 0 ? { chain: next.join(",") } : {}) });
+    setCallersOf(null);
+    const href = hrefView(id, "symbols", { scope, ...(next.length > 0 ? { chain: next } : {}) });
     if (window.location.hash !== href) window.location.hash = href;
   };
 
-  const chainKey = chain.join("\0");
+  const chainKey = chain.join(KEY_SEP);
   // Connectors: from the row that opened the next box to that box, and from the open callers box to the box it leads to.
   useLayoutEffect(() => {
     const draw = () => {
@@ -155,7 +178,14 @@ export function SymbolsView({ id, scope, chain: chainParam }: Props) {
     };
     draw();
     window.addEventListener("resize", draw);
-    return () => window.removeEventListener("resize", draw);
+    // The track resizes with its content and the viewport, not only with the window; a resize observer follows both.
+    const track = trackRef.current;
+    const observer = track !== null && typeof ResizeObserver !== "undefined" ? new ResizeObserver(draw) : null;
+    if (track !== null) observer?.observe(track);
+    return () => {
+      window.removeEventListener("resize", draw);
+      observer?.disconnect();
+    };
   }, [chainKey, callersAt, model, filter]);
 
   // A box that opens (the chain's new last box, or a callers box) comes into view.
@@ -166,6 +196,12 @@ export function SymbolsView({ id, scope, chain: chainParam }: Props) {
   useEffect(() => {
     if (callersAt !== null) reveal(els.current.get(`callers:${callersAt}`));
   }, [callersAt]);
+  // A caller prepended as the new head comes into view (the chain's first box), once the chain has moved.
+  useEffect(() => {
+    if (!revealHead.current) return;
+    revealHead.current = false;
+    reveal(els.current.get("box:0"));
+  });
 
   if (error !== undefined) return <p className="error" role="alert">{error}</p>;
   if (model === undefined || graph === undefined) return <p className="muted small">Loading symbols</p>;
@@ -177,6 +213,7 @@ export function SymbolsView({ id, scope, chain: chainParam }: Props) {
   };
   const pickCaller = (i: number, callerId: string) => {
     // The caller becomes the new head; the boxes right of the box it calls stay as they were.
+    revealHead.current = true;
     go([callerId, ...chain.slice(i)]);
   };
 
@@ -245,7 +282,7 @@ export function SymbolsView({ id, scope, chain: chainParam }: Props) {
                     <section className="sym-box sym-callers" aria-label={`Callers of ${name}`} ref={reg(`callers:${i}`)}>
                       <header className="sym-head">
                         <span className="sym-callers-title">Callers of {name}</span>
-                        <button type="button" className="sym-close" aria-label={`Close the callers of ${name}`} onClick={() => setCallersAt(null)}>
+                        <button type="button" className="sym-close" aria-label={`Close the callers of ${name}`} onClick={() => setCallersOf(null)}>
                           ×
                         </button>
                       </header>
@@ -284,7 +321,7 @@ export function SymbolsView({ id, scope, chain: chainParam }: Props) {
                         type="button"
                         className="sym-chip"
                         aria-expanded={callersOpen}
-                        onClick={() => setCallersAt(callersOpen ? null : i)}
+                        onClick={() => setCallersOf(callersOpen ? null : fnId)}
                       >
                         Callers {callers.length}
                       </button>

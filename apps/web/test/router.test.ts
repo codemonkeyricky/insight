@@ -193,7 +193,8 @@ describe("hash router", () => {
   });
 
   it("parses the symbols tab as a view, with its scope and its chain, and writes the chain back", () => {
-    const chain = "src/a.ts#A,src/b.ts#B";
+    // One chain= value per id, so an id that holds a comma survives the round trip.
+    const chain = ["src/a,x.ts#A", "src/b.ts#B"];
     expect(parseRoute("#/projects/p1/view/symbols")).toEqual({ name: "workspace", id: "p1", tab: "symbols", scope: "" });
     expect(parseRoute(hrefView("p1", "symbols", { scope: "src", chain }))).toEqual({
       name: "workspace",
@@ -203,7 +204,7 @@ describe("hash router", () => {
       chain,
     });
     expect(hrefView("p1", "symbols", { scope: "src", chain })).toBe(
-      "#/projects/p1/view/symbols?scope=src&chain=src%2Fa.ts%23A%2Csrc%2Fb.ts%23B",
+      "#/projects/p1/view/symbols?scope=src&chain=src%2Fa%2Cx.ts%23A&chain=src%2Fb.ts%23B",
     );
     expect(hrefView("p1", "symbols")).toBe("#/projects/p1/view/symbols");
   });

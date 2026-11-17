@@ -58,9 +58,15 @@ const id = (file: string, name: string) => `${file}#${name}`;
 /** Builds a model from the functions and the call edges given. Files A, B, C, X, Y and EXT are always present. */
 function modelOf(fns: FnOpts[], calls: Array<[string, string | string[]]>): ProjectModel {
   const nodes = [A, B, C, X, Y, EXT].map(fileNode);
+  return modelRaw(fns, [], calls.map(([from, to]) => callEdge(from, to)));
+}
+
+/** A model from the functions, any extra nodes (a spawn), and raw edges (a reference, a spawn). Files A, B, C, X, Y, EXT are always present. */
+function modelRaw(fns: FnOpts[], extraNodes: unknown[], edges: unknown[]): ProjectModel {
+  const nodes = [A, B, C, X, Y, EXT].map(fileNode);
   const doc = {
-    nodes: [...nodes, ...fns.map(fnNode)],
-    edges: calls.map(([from, to]) => callEdge(from, to)),
+    nodes: [...nodes, ...fns.map(fnNode), ...extraNodes],
+    edges,
     findings: [],
   } as unknown as Doc;
   return buildProjectModel(doc);
@@ -335,5 +341,89 @@ describe("exported callers", () => {
       [[id(B, "B"), [id(A, "A")]]],
     );
     expect(exportedCallers(m, id(A, "A"))).toEqual([{ id: id(B, "B"), name: "B", file: B, candidate: true }]);
+  });
+});
+
+const spanAt = { file: A, start: [5, 2] as [number, number], end: [5, 8] as [number, number] };
+const refEdge = (from: string, to: string, how: string) => ({ from, to, facet: "calls", kind: "calls.reference", attrs: { how }, span: spanAt, provenance: P });
+const spawnNode = (sid: string, parent: string) => ({
+  id: sid,
+  facet: "concurrency",
+  kind: "concurrency.spawn-thread",
+  parent,
+  attrs: { api: "thread" },
+  span: spanAt,
+  provenance: P,
+});
+const spawnEdge = (from: string, to: string) => ({ from, to, facet: "concurrency", kind: "concurrency.spawns", span: spanAt, provenance: P });
+
+describe("maybe links from references", () => {
+  it("a reference that does not invoke its target is a maybe; an invoking reference (handler) is a sure call", () => {
+    const m = modelRaw(
+      [
+        { file: A, name: "A", exported: true },
+        { file: B, name: "B", exported: true },
+        { file: C, name: "C", exported: true },
+      ],
+      [],
+      [refEdge(id(A, "A"), id(B, "B"), "value"), refEdge(id(A, "A"), id(C, "C"), "handler")],
+    );
+    expect(exportedCallees(m, id(A, "A")).map((l) => [l.name, l.candidate])).toEqual([
+      ["B", true],
+      ["C", false],
+    ]);
+    expect(exportedCallers(m, id(B, "B"))).toEqual([{ id: id(A, "A"), name: "A", file: A, candidate: true }]);
+  });
+});
+
+describe("spawned targets", () => {
+  it("a spawned target is a callee of the function that starts the thread, and that function is its caller", () => {
+    const sid = `${id(A, "A")}#spawn:0`;
+    const m = modelRaw(
+      [
+        { file: A, name: "A", exported: true },
+        { file: B, name: "B", exported: true },
+      ],
+      [spawnNode(sid, id(A, "A"))],
+      [spawnEdge(sid, id(B, "B"))],
+    );
+    expect(exportedCallees(m, id(A, "A"))).toEqual([{ id: id(B, "B"), name: "B", file: B, candidate: false }]);
+    expect(exportedCallers(m, id(B, "B"))).toEqual([{ id: id(A, "A"), name: "A", file: A, candidate: false }]);
+  });
+
+  it("a thread started from a lambda is folded into the function that owns the lambda, both ways", () => {
+    const lam = `${id(A, "A")}#<lambda:cb>`;
+    const sid = `${lam}#spawn:0`;
+    const m = modelRaw(
+      [
+        { file: A, name: "A", exported: true },
+        { file: A, name: "cb", anonymous: true, parent: id(A, "A") },
+        { file: B, name: "B", exported: true },
+      ],
+      [spawnNode(sid, lam)],
+      [spawnEdge(sid, id(B, "B"))],
+    );
+    expect(exportedCallees(m, id(A, "A")).map((l) => l.name)).toEqual(["B"]);
+    expect(exportedCallers(m, id(B, "B")).map((l) => l.name)).toEqual(["A"]);
+  });
+});
+
+describe("the via of a link", () => {
+  it("a sure path found after a maybe one takes the sure path's helper as its via", () => {
+    const m = modelOf(
+      [
+        { file: A, name: "A", exported: true },
+        { file: A, name: "H1" },
+        { file: A, name: "H2" },
+        { file: X, name: "X", exported: true },
+      ],
+      [
+        [id(A, "A"), [id(A, "H1")]],
+        [id(A, "A"), id(A, "H2")],
+        [id(A, "H1"), id(X, "X")],
+        [id(A, "H2"), id(X, "X")],
+      ],
+    );
+    expect(exportedCallees(m, id(A, "A"))).toEqual([{ id: id(X, "X"), name: "X", file: X, via: "H2", candidate: false }]);
   });
 });
