@@ -11,7 +11,7 @@ import { CARD_CALLERS_ROOM, CARD_CHAR_W, CARD_GLYPH_CHARS, CARD_NAME_PAD, CHART_
 import { isPostStep, nameOfId, runtimeLabel, stepRuntime } from "../../flowTargets";
 import { hrefView } from "../../router";
 import { CHART_MIN_PX } from "../../zoom/chart";
-import { anchoredTo, CALLERS_CAP, callerRowRect, callersAt, chainHas, hangCallersFrom, hangsFromCallers, expandCamera, headerAnchor, isInPlace, calloutOf, closeExpansion, footprintOf, isNested, loadFunctionChart, NARROW_VIEW_PX, openExpansion, ownerOf, REVEAL_MIN_K, refresh, refusedCallersPlan, resizeCallers, revealCamera, rootBoxOf, sameFootprint, sceneCamera, setInline, SLOT_PAD, shiftAt, stepRect, stillOpen, syncCallerRows, toggleCallers, toggleFold, type Expansion, type ExpandAnchor } from "../../zoom/expand";
+import { anchoredTo, calleeAt, CALLERS_CAP, callerRowRect, callersAt, chainHas, hangCallersFrom, hangsFromCallers, expandCamera, headerAnchor, isInPlace, calloutOf, closeExpansion, footprintOf, loadFunctionChart, NARROW_VIEW_PX, openExpansion, ownerOf, REVEAL_MIN_K, refresh, refusedCallersPlan, resizeCallers, revealCamera, rootBoxOf, sameFootprint, sceneCamera, setInline, SLOT_PAD, shiftAt, stepRect, stillOpen, syncCallerRows, toggleCallers, toggleFold, type Expansion, type ExpandAnchor } from "../../zoom/expand";
 import { callersKey, isCallersKey, refOfCallersKey, type CallerRow } from "../../zoom/callers";
 import { LatestLoad } from "../../zoom/latestLoad";
 import { CallersBox } from "./CallersBox";
@@ -1025,12 +1025,25 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     const callee = node.target ?? "";
     if (action === "fold") void inlineStep(fnId, node, callee);
     else if (action === "lambda") void highlightLambda(fnId, node, callee);
-    else if (action === "inline") void inlineStep(fnId, node, callee);
+    else if (action === "box") toggleCalleeBox(fnId, node, callee);
     else if (action === "fork") {
       const kind = stepRuntime(node);
       void inlineStep(fnId, node, callee, kind === "same" ? undefined : kind);
     }
     return action !== "none";
+  };
+
+  /**
+   * A call on the caller's thread opens its callee in a box to the right of the step (openStep). The row's box already open
+   * from this step closes instead, with every box chained from it (closeExpansion). The chevron shows that open state.
+   */
+  const toggleCalleeBox = (fnId: string, node: FlowNode, callee: string) => {
+    const open = calleeAt(expRef.current, fnId, node.id);
+    if (open !== undefined) {
+      setExp(closeExpansion(expRef.current, open.fnId));
+      return;
+    }
+    void openStep(fnId, node, callee);
   };
 
   /**
@@ -1139,27 +1152,21 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     // Each hop opens in turn. A callee on the caller's thread nests in the caller's box (the next hop is looked for inside
     // the frame); one on another thread or in another process opens its own box, and the chain goes on from there.
     let owner = root;
-    let prefix = "";
     let done = true;
     for (let i = 0; i + 1 < chain.length; i++) {
       const callee = chain[i + 1];
       if (callee === undefined) break;
       const exp = expRef.current.find((e) => e.fnId === owner);
-      const depth = prefix === "" ? 0 : prefix.split("/").length - 1;
-      const node = exp?.chart.nodes.find((n) => n.target === callee && n.id.startsWith(prefix) && n.id.split("/").length === depth + 1);
+      const node = exp?.chart.nodes.find((n) => n.target === callee && n.id.split("/").length === 1);
       if (exp === undefined || node === undefined) {
         done = false;
         break;
       }
+      // A callee on the caller's thread opens its box beside the step, as a click does; another thread or process opens its own.
       const kind = stepRuntime(node);
-      if (kind === "same") await inlineStep(owner, node, callee);
-      else await openStep(owner, node, callee, kind);
-      const after = expRef.current.find((e) => e.fnId === owner);
-      if (kind === "same" && after !== undefined && isNested(after, node.id)) {
-        prefix = `${node.id}/`;
-      } else if (expRef.current.some((e) => e.fnId === callee && e.anchor.kind === "step")) {
+      await openStep(owner, node, callee, kind === "same" ? undefined : kind);
+      if (expRef.current.some((e) => e.fnId === callee && e.anchor.kind === "step")) {
         owner = callee;
-        prefix = "";
       } else {
         done = false;
         break;
@@ -1776,6 +1783,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
                           if (n.target !== undefined) toggleCallersOf(n.target, { kind: "step", fnId: e.fnId, stepId: n.id, rect: { x: n.x, y: n.y, w: n.w, h: n.h } });
                         }}
                         callersOpenOf={(n) => n.target !== undefined && callersAt(expansions, n.target, { kind: "step", fnId: e.fnId, stepId: n.id })}
+                        openOf={(n) => calleeAt(expansions, e.fnId, n.id) !== undefined}
                         motion={motion}
                         runsOn={view !== undefined ? source.runsOn?.(view, e.fnId) : undefined}
                       />

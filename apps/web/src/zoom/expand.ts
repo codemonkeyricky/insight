@@ -728,6 +728,14 @@ export function anchoredTo(list: readonly Expansion[], nodeId: string): Expansio
   return list.find((e) => e.kind !== "callers" && e.anchor.kind === "box" && e.anchor.nodeId === nodeId);
 }
 
+/**
+ * The box of a callee opened from the call step `stepId` of `fnId`'s chart, if one is open there. A call row's chevron shows
+ * the open state from it, and a second click on the row closes that box with every box chained from it.
+ */
+export function calleeAt(list: readonly Expansion[], fnId: string, stepId: string): Expansion | undefined {
+  return list.find((e) => e.kind !== "callers" && e.anchor.kind === "step" && e.anchor.fnId === fnId && e.anchor.stepId === stepId);
+}
+
 /** The inset of a callout's expansion-side edge from the expansion's top and bottom: it meets the box inside its rounded corners. */
 export const CALLOUT_INSET = 12;
 

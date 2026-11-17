@@ -33,7 +33,7 @@ const CHEV_INSET = 6;
  * flow along the edge paths (see zoom/flowToken.ts). Motion is off under reduced motion, while the page is hidden, and
  * while the chart is off screen (see zoom/flowMotion.ts). The token runs on the most recently opened charts only.
  */
-export function FlowChart({ id, fn, scope, onNodeClick, onNodeOpen, onCallers, callersOpenOf, k = 1, selectedId, motion = true }: { id: string; fn: FunctionFlow; scope: string; onNodeClick?: FlowNodeClick; onNodeOpen?: FlowNodeOpen; onCallers?: FlowNodeCallers; callersOpenOf?: (node: FlowNode) => boolean; /** The map's label scale, for the frames' Callers buttons (see CallersButton). */ k?: number; selectedId?: string; motion?: boolean }) {
+export function FlowChart({ id, fn, scope, onNodeClick, onNodeOpen, onCallers, callersOpenOf, openOf, k = 1, selectedId, motion = true }: { id: string; fn: FunctionFlow; scope: string; onNodeClick?: FlowNodeClick; onNodeOpen?: FlowNodeOpen; onCallers?: FlowNodeCallers; callersOpenOf?: (node: FlowNode) => boolean; /** Whether a call row's callee box is open from it: its chevron shows ▾. */ openOf?: (node: FlowNode) => boolean; /** The map's label scale, for the frames' Callers buttons (see CallersButton). */ k?: number; selectedId?: string; motion?: boolean }) {
   const uid = useId();
   const key = uid.replace(/[^a-zA-Z0-9]/g, "");
   const glow = `glow-${key}`;
@@ -81,7 +81,7 @@ export function FlowChart({ id, fn, scope, onNodeClick, onNodeOpen, onCallers, c
       </g>
       <g>
         {fn.nodes.filter((n) => !isNest(n)).map((n) => (
-          <Node key={n.id} id={id} node={n} fnId={fn.id} scope={scope} width={fn.width} onNodeClick={onNodeClick} onNodeOpen={onNodeOpen} selected={n.id === selectedId} delay={nodeDelay.get(n.id) ?? 140} />
+          <Node key={n.id} id={id} node={n} fnId={fn.id} scope={scope} width={fn.width} onNodeClick={onNodeClick} onNodeOpen={onNodeOpen} open={openOf?.(n) ?? false} selected={n.id === selectedId} delay={nodeDelay.get(n.id) ?? 140} />
         ))}
       </g>
       {tokenActive && (
@@ -296,7 +296,7 @@ function FoldRow({ node, width, onNodeClick, onNodeOpen, selected, delay }: { no
   );
 }
 
-function Node({ id, node, fnId, scope, width, onNodeClick, onNodeOpen, selected, delay }: { id: string; node: FlowNode; fnId: string; scope: string; width: number; onNodeClick?: FlowNodeClick; onNodeOpen?: FlowNodeOpen; selected: boolean; delay: number }) {
+function Node({ id, node, fnId, scope, width, onNodeClick, onNodeOpen, open: calleeOpen, selected, delay }: { id: string; node: FlowNode; fnId: string; scope: string; width: number; onNodeClick?: FlowNodeClick; onNodeOpen?: FlowNodeOpen; /** The callee's box is open from this row. */ open?: boolean; selected: boolean; delay: number }) {
   if (node.foldId !== undefined) return <FoldRow node={node} width={width} onNodeClick={onNodeClick} onNodeOpen={onNodeOpen} selected={selected} delay={delay} />;
   const { shape } = node;
   const [cx, cy] = station(node);
@@ -317,7 +317,7 @@ function Node({ id, node, fnId, scope, width, onNodeClick, onNodeOpen, selected,
         {node.unguarded && <tspan className="flow-warn">{" ⚠"}</tspan>}
         {outside && <tspan className="flow-mark">{" ↗"}</tspan>}
       </text>
-      {inside && <Chevron node={node} x={width - 4 - CHEV_INSET - CHEV_HIT / 2} y={node.y} fold={shape === "fork"} onNodeOpen={onNodeOpen} />}
+      {inside && <Chevron node={node} x={width - 4 - CHEV_INSET - CHEV_HIT / 2} y={node.y} fold={shape === "fork" || calleeOpen === true} onNodeOpen={onNodeOpen} />}
     </>
   );
   const cp = couplingClassOf(node);

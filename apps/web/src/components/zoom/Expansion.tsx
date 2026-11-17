@@ -39,6 +39,8 @@ interface Props {
   onNodeCallers?: FlowNodeCallers;
   /** Whether the callers box of a nested frame's callee is open. */
   callersOpenOf?: (node: FlowNode) => boolean;
+  /** Whether a call row's callee box is open from it (the chevron shows ▾, see FlowChart openOf). */
+  openOf?: (node: FlowNode) => boolean;
   /** Whether the chart's edges march and pulse (the Flow motion choice; see FlowChart). */
   motion?: boolean;
   /** The threads the function runs on, for the tooltip: "Main thread, Worker". Absent when not known. */
@@ -77,7 +79,7 @@ export function CalloutShape({ ends, closing = false, reduced = false }: { ends:
   );
 }
 
-export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClick, onNodeOpen, onSelect, onClose, onCallers, callersOpen = false, onNodeCallers, callersOpenOf, motion = true, runsOn }: Props) {
+export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClick, onNodeOpen, onSelect, onClose, onCallers, callersOpen = false, onNodeCallers, callersOpenOf, openOf, motion = true, runsOn }: Props) {
   const { chart, x, y, w, h } = expansion;
   // The title is the function's display name; the tooltip and the accessible name keep the full name. The detail's letter
   // stays in the accessible name only.
@@ -130,7 +132,7 @@ export function ExpansionShape({ id, scope, expansion, k, selectedId, onNodeClic
       </g>
       {chartShown(chart.width * k) && (
         <g transform={`translate(${x + CHART_PAD} ${y + CHART_HEAD + CHART_PAD})`} onClick={(ev) => ev.stopPropagation()}>
-          <FlowChart id={id} fn={chart} scope={scope} onNodeClick={onNodeClick} onNodeOpen={onNodeOpen} onCallers={onNodeCallers} callersOpenOf={callersOpenOf} k={k} selectedId={selectedId} motion={motion} />
+          <FlowChart id={id} fn={chart} scope={scope} onNodeClick={onNodeClick} onNodeOpen={onNodeOpen} onCallers={onNodeCallers} callersOpenOf={callersOpenOf} openOf={openOf} k={k} selectedId={selectedId} motion={motion} />
         </g>
       )}
     </g>

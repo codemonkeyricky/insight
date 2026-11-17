@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { layoutFunction, type FunctionFlow, type Rect } from "@insight/flow";
-import { isNested, openExpansion, ownerOf, setInline } from "../src/zoom/expand.js";
+import { isNested, openExpansion, setInline } from "../src/zoom/expand.js";
 import { runtimeLabel, stepRuntime } from "../src/flowTargets.js";
+
+// Same-thread calls no longer nest in their step: they open a box to the right (see callBox.test.ts). What is left of the
+// nesting machinery is the parallel line a thread or process call draws (setInline with a runtime), and its own box.
 
 const call = (label: string, target?: string, role: "call" | "spawn" = "call") => ({ t: "step" as const, role, label, ...(target ? { target } : {}) });
 const make = (id: string, items: ReturnType<typeof call>[]): FunctionFlow => layoutFunction({ id, name: id, async: false, items });
@@ -33,68 +36,9 @@ describe("runtimeLabel", () => {
   });
 });
 
-describe("inline expansion state", () => {
-  const leaf = make("f#leaf", [call("a()")]);
-  const mid = make("f#mid", [call("leaf()", "f#leaf"), call("x()")]);
+describe("a thread step's box", () => {
   const root = make("f#root", [call("mid()", "f#mid"), call("spawn thread · w", undefined, "spawn"), call("tail()")]);
   const open = () => openExpansion([], "f#root", { kind: "box", nodeId: "b", rect: box }, root, view);
-
-  it("nesting a callee grows the same box and adds no other", () => {
-    const list = open();
-    const next = setInline(list, "f#root", idOf(root, "mid()"), mid, view);
-    expect(next).toHaveLength(1);
-    expect(next[0]!.h).toBeGreaterThan(list[0]!.h);
-    expect(next[0]!.chart.height).toBeGreaterThan(root.height);
-    expect(isNested(next[0]!, idOf(root, "mid()"))).toBe(true);
-    expect(next[0]!.x).toBe(list[0]!.x);
-  });
-
-  it("nests again inside the frame, and folding the outer frame folds both", () => {
-    const outer = idOf(root, "mid()");
-    const one = setInline(open(), "f#root", outer, mid, view);
-    const innerId = `${outer}/${idOf(mid, "leaf()")}`;
-    const two = setInline(one, "f#root", innerId, leaf, view);
-    expect(two[0]!.chart.nodes.find((n) => n.id === innerId)?.shape).toBe("nest");
-    expect(two[0]!.h).toBeGreaterThan(one[0]!.h);
-    expect(ownerOf(two[0], `${innerId}/x`)).toBe("f#leaf");
-    expect(ownerOf(two[0], innerId)).toBe("f#mid");
-    const folded = setInline(two, "f#root", outer, undefined, view);
-    expect(folded[0]!.chart.nodes.some((n) => n.shape === "nest")).toBe(false);
-    expect(folded[0]!.h).toBe(open()[0]!.h);
-  });
-
-  it("folding only the inner frame keeps the outer one", () => {
-    const outer = idOf(root, "mid()");
-    const innerId = `${outer}/${idOf(mid, "leaf()")}`;
-    const two = setInline(setInline(open(), "f#root", outer, mid, view), "f#root", innerId, leaf, view);
-    const back = setInline(two, "f#root", innerId, undefined, view);
-    expect(isNested(back[0]!, outer)).toBe(true);
-    expect(isNested(back[0]!, innerId)).toBe(false);
-  });
-
-  it("folding a step that is not nested changes nothing", () => {
-    const list = open();
-    expect(setInline(list, "f#root", idOf(root, "mid()"), undefined, view)).toBe(list);
-  });
-
-  it("a callee already in the chain does not nest, so the list is unchanged", () => {
-    const list = open();
-    expect(setInline(list, "f#root", idOf(root, "mid()"), root, view)).toBe(list);
-  });
-
-  it("a box opened from a later step moves down with the growing chart, and closes when its step folds away", () => {
-    const outer = idOf(root, "mid()");
-    const nested = setInline(open(), "f#root", outer, mid, view);
-    const stepId = `${outer}/${idOf(mid, "x()")}`;
-    const node = nested[0]!.chart.nodes.find((n) => n.id === stepId)!;
-    const side = openExpansion(nested, "f#side", { kind: "step", fnId: "f#root", stepId, rect: { x: node.x, y: node.y, w: node.w, h: node.h } }, make("f#side", [call("s()")]), view);
-    expect(side).toHaveLength(2);
-    const grown = setInline(side, "f#root", `${outer}/${idOf(mid, "leaf()")}`, leaf, view);
-    const moved = grown.find((e) => e.fnId === "f#side")!;
-    expect(moved.anchor.kind === "step" && moved.anchor.rect.y).toBeGreaterThan(node.y);
-    const folded = setInline(grown, "f#root", outer, undefined, view);
-    expect(folded.map((e) => e.fnId)).toEqual(["f#root"]);
-  });
 
   it("a thread step still opens its own box, labelled by its runtime", () => {
     const list = open();
