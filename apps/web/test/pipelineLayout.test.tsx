@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { PipelineEdge, PipelineModel, PipelinePoint, SystemComponent } from "@insight/model";
-import { ARCH_MODE_KEY, readArchMode, writeArchMode } from "../src/arch/mode";
 import { layoutSystem } from "../src/arch/system-layout";
 import { hostCalls, pipelineRows, pipelineSystem, pipelineTitles } from "../src/arch/pipeline-layout";
 import { PipelineDiagram } from "../src/components/views/PipelineView";
 import { PipelineSummary } from "../src/components/views/PipelineSummary";
-import { ArchModeToggle } from "../src/components/views/ArchTab";
 
 const H = "packages/indexer";
 const BAZEL = "packages/bazel";
@@ -191,26 +189,5 @@ describe("pipeline empty state", () => {
     expect(html).toContain("Frontends ×3 · detect, extract");
     expect(html).toContain("Host · indexer");
     expect(html).toContain("Lenses ×2 · run");
-  });
-});
-
-describe("the Arch mode toggle with Pipeline", () => {
-  it("shows Pipeline and Packages in that order, without System", () => {
-    const html = renderToStaticMarkup(<ArchModeToggle mode="pipeline" onChange={() => {}} />);
-    const at = (s: string) => html.indexOf(s);
-    expect(html).not.toContain(">System<");
-    expect(at(">Pipeline<")).toBeGreaterThan(-1);
-    expect(at(">Pipeline<")).toBeLessThan(at(">Packages<"));
-    expect(html).toContain('aria-pressed="true">Pipeline<');
-  });
-
-  it("saves and restores the pipeline choice, and still defaults to Packages", () => {
-    const mem = new Map<string, string>();
-    const store = { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => void mem.set(k, v) };
-    writeArchMode("pipeline", store);
-    expect(mem.get(ARCH_MODE_KEY)).toBe("pipeline");
-    expect(readArchMode(store)).toBe("pipeline");
-    mem.set(ARCH_MODE_KEY, "nonsense");
-    expect(readArchMode(store)).toBe("packages");
   });
 });

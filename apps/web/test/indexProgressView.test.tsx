@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Project, RunProgress, SnapshotSummary } from "../src/api";
@@ -86,7 +86,7 @@ describe("IndexStrip", () => {
     expect(html).toContain("abcdef1");
   });
 
-  it("while running disables the button and offers the Log link", () => {
+  it("while running disables the button and has no Log link (the run log went with the Overview page)", () => {
     const html = renderToStaticMarkup(
       <IndexStrip
         id="p"
@@ -97,7 +97,7 @@ describe("IndexStrip", () => {
       />,
     );
     expect(html).toMatch(/<button[^>]*disabled[^>]*>Indexing<\/button>/);
-    expect(html).toContain("Log</a>");
+    expect(html).not.toContain("Log</a>");
     expect(html).toContain("idx-strip");
   });
 
@@ -117,14 +117,11 @@ describe("IndexStrip polish", () => {
     expect(html).not.toContain("muted");
   });
 
-  it("the Overview has no Re-index row or progress bar of its own, and the header badge is off that page", () => {
-    const overview = readFileSync(new URL("../src/pages/ProjectOverview.tsx", import.meta.url), "utf8");
-    expect(overview).not.toContain("Re-index");
-    expect(overview).not.toContain("components/IndexProgress");
-    expect(overview).not.toMatch(/<IndexProgress\b/);
-    expect(overview).toContain("Run log");
+  it("the workspace has no Overview page: the header badge is on the pages that remain", () => {
+    expect(existsSync(new URL("../src/pages/ProjectOverview.tsx", import.meta.url))).toBe(false);
     const workspace = readFileSync(new URL("../src/components/Workspace.tsx", import.meta.url), "utf8");
-    expect(workspace).toContain('content !== "overview" && <StatusBadge');
+    expect(workspace).toContain("<StatusBadge project={p} />");
+    expect(workspace).not.toContain("ProjectOverview");
   });
 });
 
