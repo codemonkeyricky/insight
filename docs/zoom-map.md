@@ -34,8 +34,12 @@ The Flow tab draws the execution canvas of the scope as one flat grid of cards (
   rows of one box never sit side by side: the box of the row opened later replaces the earlier one (see closeSiblings in
   `expand.ts`). Several expansions may be open at once, in a chain; each new one is last. A call on another thread or in
   another process draws its callee as a parallel line under its row, or opens a box beside it when the line cannot be drawn.
-  Escape closes the last expansion opened (and its chain), and when that expansion hangs from the selected box the
-  selection moves to the box's parent. With nothing expanded, Escape goes up one level.
+  Closing is the same for the × of a box, a row's chevron, and Escape, with one difference. The × (and the chevron) only
+  close: the box and the expansions chained from it go, and when the selected function was one of them, the selection (the
+  URL and the inspector with it) moves to the box they hung from: the caller's function, or the focus for the focus's own
+  box. The map does not move and the URL is not otherwise rewritten. Escape closes the last expansion opened (and its
+  chain) the same way, and when that expansion hangs from the focus it also takes the map up a level to the focus's parent,
+  with its URL. With nothing expanded, Escape goes up one level.
 - The camera moves only as far as it must to show a new expansion (`revealCamera`): it pans the least that brings the
   expansion into the stage, and zooms in only when the chart is narrower than 120 px on screen, at most 1.5 times the
   current scale, with the expansion's top-left corner kept where it was. Zooming never opens a box, and a box toggle
@@ -199,7 +203,7 @@ CFG is shown.
 - Open on click: a box opens when it is clicked, when Enter opens the item at the view centre, or when a link names it.
 - Animated focus: an Explorer or URL change moves the camera to the new focus.
 - Keyboard: `+` and `-` zoom, arrow keys pan, `Enter` opens the item at the view centre, and `Escape` collapses an
-  expanded function, then goes up one level.
+  expanded function, then goes up one level (the × of a box only closes it, see the expansions above).
 - A breadcrumb (`ZoomMap` draws it; the Flow tab's explorer trail is turned off with `ScopeNote trail={false}`).
 - A minimap, and a resolution meter that reads as text.
 - Dashed external stubs for calls that leave the open scope.

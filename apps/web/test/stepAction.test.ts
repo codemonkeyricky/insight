@@ -5,9 +5,8 @@ const ctx = (c: Partial<StepContext> = {}): StepContext => ({ hasCallee: true, i
 const call = { shape: "step" as const };
 
 describe("stepAction click", () => {
-  it("selects every row, calls and nest headers included", () => {
+  it("selects every row, calls included", () => {
     expect(stepAction(call, "click", ctx())).toBe("select");
-    expect(stepAction({ shape: "nest" }, "click", ctx())).toBe("select");
     expect(stepAction(call, "click", ctx({ runtime: "thread" }))).toBe("select");
     expect(stepAction(call, "click", ctx({ isLambda: true }))).toBe("select");
     expect(stepAction(call, "click", ctx({ hasCallee: false }))).toBe("select");
@@ -20,7 +19,6 @@ describe("stepAction click", () => {
 describe("stepAction open", () => {
   it("opens a same-thread call in a box to the right of the step", () => expect(stepAction(call, "open", ctx())).toBe("box"));
   it("folds a fork row (a parallel line)", () => expect(stepAction({ shape: "fork" }, "open", ctx({ hasCallee: false }))).toBe("fold"));
-  it("folds a fork row", () => expect(stepAction({ shape: "fork" }, "open", ctx({ runtime: "thread" }))).toBe("fold"));
   it("opens a parallel line for a thread or process step", () => {
     expect(stepAction(call, "open", ctx({ runtime: "thread" }))).toBe("fork");
     expect(stepAction(call, "open", ctx({ runtime: "process" }))).toBe("fork");

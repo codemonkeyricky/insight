@@ -29,7 +29,7 @@ describe("FlowChart line map", () => {
   const fn = flow();
   const html = render(fn);
 
-  it("renders one row per non-nest node with its label", () => {
+  it("renders one row per node with its label", () => {
     for (const n of fn.nodes) {
       expect(html).toContain(`data-node="${n.id}"`);
       expect(html).toContain(n.label.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"));

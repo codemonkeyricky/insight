@@ -11,7 +11,7 @@ import { CARD_CALLERS_ROOM, CARD_CHAR_W, CARD_GLYPH_CHARS, CARD_NAME_PAD, CHART_
 import { isPostStep, nameOfId, runtimeLabel, stepRuntime } from "../../flowTargets";
 import { hrefView } from "../../router";
 import { CHART_MIN_PX } from "../../zoom/chart";
-import { anchoredTo, calleeAt, openStepsOf, CALLERS_CAP, callerRowRect, callersAt, chainHas, hangCallersFrom, hangsFromCallers, expandCamera, headerAnchor, isInPlace, calloutOf, closeExpansion, footprintOf, loadFunctionChart, NARROW_VIEW_PX, openExpansion, ownerOf, REVEAL_MIN_K, refresh, refusedCallersPlan, resizeCallers, revealCamera, rootBoxOf, sameFootprint, sceneCamera, setInline, SLOT_PAD, shiftAt, stepRect, stillOpen, syncCallerRows, toggleCallers, toggleFold, type Expansion, type ExpandAnchor } from "../../zoom/expand";
+import { anchoredTo, boxHead, calleeAt, chainCamera, openStepsOf, CALLERS_CAP, callerRowRect, callersAt, chainHas, hangCallersFrom, hangsFromCallers, expandCamera, headerAnchor, isInPlace, calloutOf, closeExpansion, footprintOf, loadFunctionChart, NARROW_VIEW_PX, openExpansion, ownerOf, REVEAL_MIN_K, refresh, refusedCallersPlan, resizeCallers, revealCamera, rootBoxOf, sameFootprint, sceneCamera, setInline, SLOT_PAD, shiftAt, stepRect, stillOpen, syncCallerRows, toggleCallers, toggleFold, type Expansion, type ExpandAnchor } from "../../zoom/expand";
 import { callersKey, isCallersKey, refOfCallersKey, type CallerRow } from "../../zoom/callers";
 import { LatestLoad } from "../../zoom/latestLoad";
 import { CallersBox } from "./CallersBox";
@@ -605,8 +605,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     const room = roomOf();
     // The focus and the header of each open expansion are fitted together, so an opened detail is framed with its card. A
     // header is at most one room tall: a tall chart does not shrink the fit to an unreadable scale.
-    const head = (e: Expansion): Rect => ({ x: e.x, y: e.y, w: e.w, h: Math.min(e.h, room.height) });
-    const rect = list.reduce((r, e) => union(r, head(e)), focus);
+    const rect = list.reduce((r, e) => union(r, boxHead(e, room.height, cameraRef.current.k)), focus);
     // The focus's own expansion: fitted at a scale that keeps its boxes out of the far tier (never below it), then aligned so
     // its header sits at the room's top, inside the stage.
     const own = anchoredTo(list, b.nodeId);
@@ -614,7 +613,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
       const boxH = medianOf(b.placed.items.filter((i) => i.kind === "box").map((i) => i.rect.h));
       const minK = Math.max(CHART_MIN_PX / Math.max(rect.w, 1), boxH > 0 ? MID_TILE_PX / boxH : 0);
       const fitted = fitCamera(rect, room, { minK, maxK: Math.max(CHART_FIT_MAX_K, minK) });
-      const c = revealCamera(fitted, head(own), own.chart.width, room, 0);
+      const c = revealCamera(fitted, boxHead(own, room.height, cameraRef.current.k), own.chart.width, room, 0);
       return { ...c, x: c.x + leftRef.current, y: c.y + TOP_RESERVE };
     }
     const opens = b.placed.items.some((i) => i.id === b.nodeId && i.kind === "frame");
@@ -678,37 +677,11 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
    * scale keeps the new box and the box it hangs from in view.
    */
   const revealChain = (b: MapBuild, list: readonly Expansion[], opened: Expansion): Camera => {
-    const from = cameraRef.current;
-    const minimal = revealOf(from, opened, 0);
     const room = roomOf();
     const stage = { x: leftRef.current, y: TOP_RESERVE, w: room.width, h: room.height };
-    const shows = (c: Camera, r: Rect): boolean => {
-      const x = r.x * c.k + c.x;
-      const y = r.y * c.k + c.y;
-      return x >= stage.x && y >= stage.y && x + r.w * c.k <= stage.x + stage.w && y + r.h * c.k <= stage.y + stage.h;
-    };
-    // The chain from the new box up to the card it starts at: each box, then the one it hangs from.
-    const chain: Expansion[] = [];
-    for (let cur: Expansion | undefined = opened; cur !== undefined && chain.length <= list.length; ) {
-      chain.push(cur);
-      if (cur.anchor.kind !== "step") break;
-      const parentId: string = cur.anchor.fnId;
-      cur = list.find((x) => x.fnId === parentId);
-    }
-    // A box's head stands for the box: a tall chart needs only its header in view.
-    const head = (e: Expansion): Rect => ({ x: e.x, y: e.y, w: e.w, h: Math.min(e.h, room.height) });
     const rootId = rootBoxOf(list, opened);
     const rootRect = rootId === undefined ? undefined : b.placed.rects.get(rootId);
-    const whole = chain.reduce((r, e) => union(r, head(e)), head(opened));
-    const all = rootRect === undefined ? whole : union(whole, rootRect);
-    if (shows(minimal, all)) return minimal;
-    const fit = fitCamera(all, room, { minK: REVEAL_MIN_K, maxK: from.k });
-    const fitted = { ...fit, x: fit.x + leftRef.current, y: fit.y + TOP_RESERVE };
-    if (shows(fitted, all)) return fitted;
-    // Too wide for the room at the smallest scale: the new box and the box it hangs from stay in view.
-    const caller = chain[1];
-    const pair = caller === undefined ? head(opened) : union(head(caller), head(opened));
-    return revealRect(from, pair, 0);
+    return chainCamera(cameraRef.current, stage, list, opened, rootRect);
   };
 
   /** The expansions as the build places them: the boxes they hang from, in the build's layout, placed on the current view. */
@@ -894,9 +867,10 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
     }
     setExp(next);
     // The new detail is panned into view when it is off the stage (the camera zooms only for a detail too narrow to read).
-    // It is read from the placed list: setExp may have laid the build out again (see there).
+    // It is read from the placed list, and the build as it is now: setExp may have laid the build out again (see there), and
+    // the root box's rect is taken from that build.
     const opened = expRef.current.find((e) => e.fnId === callee);
-    if (opened !== undefined) moveTo(revealChain(cur, expRef.current, opened), true);
+    if (opened !== undefined) moveTo(revealChain(buildRef.current ?? cur, expRef.current, opened), true);
     // The code pane follows the chain: the callee is the last function clicked.
     if (opened !== undefined) void selectFunction(callee);
   };
@@ -1038,7 +1012,7 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
 
   /**
    * A single click on a step of an expansion's chart selects it: the step becomes the construct the source panel highlights
-   * (a call row and a nest header too: their call line), and the owning function is selected. Nothing opens or folds, and
+   * (a call row too: its call line), and the owning function is selected. Nothing opens or folds, and
    * the camera does not move. A step never navigates.
    */
   const chartStep = (fnId: string, node: FlowNode): boolean => {
@@ -1052,22 +1026,29 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
   };
 
   /**
-   * Closes an expansion and every expansion chained from it, and moves the selection back as Escape does: a box that hangs
-   * from the selected box selects its parent (the map goes up a level), and a selected callee returns the selection to the
-   * expansion it hangs from. A callers box is no detail of the selection, so it closes alone.
+   * Closes an expansion and every expansion chained from it. When the selected function is one of the boxes closed, the
+   * selection (with its URL and inspector) moves to the box the closed one hangs from: its caller, or the focus for the
+   * focus's own box. A callers box is no detail of the selection, so it closes alone. The × of a box and a row's chevron only
+   * close. `up` is Escape: a box that hangs from the focus also takes the map up a level, to the focus's parent (the URL
+   * follows it, see show).
    */
-  const closeBox = (e: Expansion) => {
+  const closeBox = (e: Expansion, up = false) => {
     const b = buildRef.current;
     const parent = b?.node(b.nodeId)?.parent;
     const selectedRef = offMapRef.current?.selected.ref ?? b?.node(b.nodeId)?.ref;
-    setExp(closeExpansion(expRef.current, e.fnId));
+    const kept = closeExpansion(expRef.current, e.fnId);
+    const keptIds = new Set(kept.map((x) => x.fnId));
+    const closed = expRef.current.filter((x) => !keptIds.has(x.fnId)).map((x) => x.fnId);
+    setExp(kept);
     if (!b) return;
-    if (e.kind !== "callers" && e.anchor.kind === "box" && e.anchor.nodeId === b.nodeId && parent !== undefined) {
+    if (up && e.kind !== "callers" && e.anchor.kind === "box" && e.anchor.nodeId === b.nodeId && parent !== undefined) {
       void show(source.focusOf?.(b, parent) ?? parent, { animate: true, writeUrl: true });
-    } else if (e.anchor.kind === "step" && selectedRef === e.fnId) {
-      // A chart opened from a callers box returns the selection to the function whose callers they are.
-      void selectFunction(refOfCallersKey(e.anchor.fnId));
+      return;
     }
+    if (e.kind === "callers" || selectedRef === undefined || !closed.includes(selectedRef)) return;
+    // A chart opened from a callers box returns the selection to the function whose callers they are.
+    const to = e.anchor.kind === "step" ? refOfCallersKey(e.anchor.fnId) : b.node(b.nodeId)?.ref;
+    if (to !== undefined) void selectFunction(to);
   };
 
   /**
@@ -1103,8 +1084,8 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
 
   /**
    * Opens a `⋯ n local` fold of a box's coupling chart: the fold is replaced by the rows it folds (and folds back when it is
-   * opened again). Only a fold of the box's own chart opens. A fold inside a nested callee's frame stays closed: it is drawn
-   * but inert, since its rows belong to the callee's chart. The toggle is toggleFold, computed from the expansions as they
+   * opened again). Only a fold of the box's own chart opens. A fold inside a parallel line's callee stays closed: it is drawn
+   * but inert, since its rows belong to that callee's line. The toggle is toggleFold, computed from the expansions as they
    * are after the loads: a later click on this chart supersedes the load, and a box closed meanwhile opens nothing.
    */
   const unfoldStep = async (fnId: string, node: FlowNode) => {
@@ -1478,8 +1459,9 @@ export function ZoomMap({ id, source, scope, fn, detail, charts, onSelect, onFoc
           if (parent !== undefined) void show(source.focusOf?.(b, parent) ?? parent, { animate: true, writeUrl: true });
           break;
         }
-        // Escape closes the last expansion (and any chained from it), as a box's close does (closeBox).
-        closeBox(last);
+        // Escape closes the last expansion (and any chained from it), and takes the map up a level when that box hangs from
+        // the focus (see closeBox). The × of a box only closes it.
+        closeBox(last, true);
         break;
       }
       case "Enter": {

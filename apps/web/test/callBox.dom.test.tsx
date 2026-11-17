@@ -169,3 +169,30 @@ describe("a call on another thread whose line cannot be drawn opens as a box bes
     expect(chevronState("spawn thread · x")).toBe("open");
   });
 });
+
+describe("closing a box moves the selection back to the box it hangs from", () => {
+  beforeEach(() => {
+    // F calls X; X calls Y; Y calls nothing.
+    chartOf = vi.fn(async (id: string) => (id === "F" ? chart("F", ["X"]) : id === "X" ? chart("X", ["Y"]) : chart(id)));
+  });
+
+  it("F -> X -> Y with Y selected: closing X from its row in F selects F", async () => {
+    const onSelect = vi.fn();
+    const selectedRef = () => onSelect.mock.calls.at(-1)?.[0]?.selected?.ref;
+    render(<ZoomMap id="p" source={source} scope="" charts={charts()} flat hint={false} onSelect={onSelect} />);
+    await waitFor(() => expect(document.querySelector('[data-fid="nF"]')).not.toBeNull());
+    fireEvent.doubleClick(document.querySelector('[data-fid="nF"]')!);
+    await waitFor(() => expect(chartBox("F")).toBeDefined());
+    fireEvent.click(chevron("x()")!);
+    await waitFor(() => expect(chartBox("X")).toBeDefined());
+    fireEvent.click(chevron("y()")!);
+    await waitFor(() => expect(chartBox("Y")).toBeDefined());
+    await waitFor(() => expect(selectedRef()).toBe("Y"));
+
+    fireEvent.click(chevron("x()")!);
+    await waitFor(() => expect(chartBox("X")).toBeUndefined());
+    await waitFor(() => expect(selectedRef()).toBe("F"));
+    expect(chartBox("Y")).toBeUndefined();
+    expect(chartBox("F")).toBeDefined();
+  });
+});

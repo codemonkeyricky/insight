@@ -499,15 +499,15 @@ describe("reflow of a header-hung box", () => {
   });
 });
 
-describe("a callers box on a nested frame", () => {
-  it("closes when its frame folds back to a plain step, since its button was the frame's (review 5)", () => {
+describe("a callers box on a parallel line's step", () => {
+  it("closes when its line folds back to a plain step, since its button was the line's (review 5)", () => {
     const leaf = layoutFunction({ id: "f#leaf", name: "leaf", async: false, items: [{ t: "step", role: "call", label: "a()" }] });
     const root = layoutFunction({ id: "f#root", name: "root", async: false, items: [{ t: "step", role: "call", label: "leaf()", target: "f#leaf" }] });
     const stepId = root.nodes.find((n) => n.label === "leaf()")!.id;
     const opened = openExpansion([], "f#root", boxAnchor, root, view);
-    const nested = setInline(opened, "f#root", stepId, leaf, view);
+    const nested = setInline(opened, "f#root", stepId, leaf, view, { kind: "thread", label: "Thread · leaf" });
     const frame = find(nested, "f#root").chart.nodes.find((n) => n.id === stepId)!;
-    expect(frame.shape).toBe("nest");
+    expect(frame.shape).toBe("fork");
     const withBox = openCallers(nested, "f#leaf", { kind: "step", fnId: "f#root", stepId, rect: { x: frame.x, y: frame.y, w: frame.w, h: frame.h } }, "leaf", 3, view);
     expect(withBox.some((e) => e.fnId === callersKey("f#leaf"))).toBe(true);
     const folded = setInline(withBox, "f#root", stepId, undefined, view);

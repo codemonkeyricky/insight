@@ -35,7 +35,6 @@ interface Props {
   onCallers?: () => void;
   /** Whether the callers box of the function is open (the button shows it). */
   callersOpen?: boolean;
-  /** Opens or closes the callers of a nested frame's callee (see FlowChart). */
   /** Whether a call row's callee box is open from it (the chevron shows ▾, see FlowChart openOf). */
   openOf?: (node: FlowNode) => boolean;
   /** Whether the chart's edges march and pulse (the Flow motion choice; see FlowChart). */
