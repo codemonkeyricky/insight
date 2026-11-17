@@ -37,6 +37,11 @@ export interface MapNode {
    */
   unguarded?: string[];
   /**
+   * A card whose display name another card in the grid shares: the name with its file's stem after it, drawn in place of
+   * the name. The label and the tooltip keep the full name.
+   */
+  shownName?: string;
+  /**
    * A card whose function shares sync resources with threads it starts (a self-sync: the edge would join the card to itself).
    * The card's `⇆ N` badge counts them, and its tooltip names them.
    */

@@ -303,7 +303,7 @@ describe("sync edges in the flat grid", () => {
 describe("unguarded threads in the flat grid", () => {
   it("N2: a card whose reach holds a function of a thread with unguarded shared state carries that thread's names; an unrelated card does not", () => {
     const m = model({
-      functions: [fn("main", 1), fn("lone", 2), fn("w", 3)],
+      functions: [fn("main", 1), fn("lone", 2), fn("w", 3, { unguardedWrites: ["counter"] })],
       threads: [
         thread("main", ["main", "lone"], ["main", "lone"]),
         { ...thread("t1", ["w"], ["w"], [], spawnedBy("main")), unguardedWrites: ["counter"] },
@@ -321,15 +321,62 @@ describe("unguarded threads in the flat grid", () => {
     expect([...flat.nodes.values()].some((n) => n.kind === "thread")).toBe(false);
   });
 
-  it("N2: a thread's own card carries the thread's names when the thread has no spawner in scope", () => {
+  it("N2: a thread with two cards, where only one card reaches the unguarded write, gets exactly one warning, on that card", () => {
+    // Both roots start the thread with no spawner in scope, so each is a card of its own; only `a` writes the shared state.
     const m = model({
-      functions: [fn("a", 1), fn("b", 2)],
-      threads: [thread("main", ["a"]), { ...thread("t1", ["b"]), unguardedWrites: ["q", "p"] }],
+      functions: [fn("a", 1, { unguardedWrites: ["p", "q"] }), fn("b", 2)],
+      threads: [{ ...thread("t1", ["a", "b"]), unguardedWrites: ["p", "q"] }],
     });
     const flat = unrootedScene(buildExecScene(m), m);
     const card = (ref: string) => [...flat.nodes.values()].find((n) => n.kind === "function" && n.ref === ref);
-    expect(card("b")?.unguarded).toEqual(["p", "q"]);
-    expect(card("a")?.unguarded).toBeUndefined();
+    expect(refsOf(flat).sort()).toEqual(["a", "b"]);
+    expect(card("a")?.unguarded).toEqual(["p", "q"]);
+    expect(card("b")?.unguarded).toBeUndefined();
+    expect([...flat.nodes.values()].filter((n) => n.kind === "function" && n.unguarded !== undefined)).toHaveLength(1);
+  });
+
+  it("N2: a write in a function that a card reaches is badged on the card cardOf maps it to, not on a card that only reaches the thread", () => {
+    // `w` is spawned by `main` and calls `helper`, which writes the shared state. `helper` maps to `main`'s card (its
+    // nearest card), not to the thread's own card, and `lone` reaches nothing of the thread.
+    const m = model({
+      functions: [fn("main", 1), fn("lone", 2), fn("w", 3), fn("helper", 4, { unguardedWrites: ["counter"] })],
+      threads: [thread("main", ["main", "lone"], ["main", "lone"]), { ...thread("t1", ["w"], ["w", "helper"], [], spawnedBy("main")), unguardedWrites: ["counter"] }],
+      calls: [["w", "helper"]],
+    });
+    const flat = unrootedScene(buildExecScene(m), m);
+    const card = (ref: string) => [...flat.nodes.values()].find((n) => n.kind === "function" && n.ref === ref);
+    expect(card("main")?.unguarded).toEqual(["counter"]);
+    expect(card("lone")?.unguarded).toBeUndefined();
+  });
+});
+
+describe("cards that share a display name", () => {
+  it("two cards named main in different files show the file stem after the name; the label and id keep the full name", () => {
+    const m = model({
+      functions: [fn("gp:main", 1, { name: "main", file: "src/guideplan.ts" }), fn("vf:main", 2, { name: "main", file: "src/verify.ts" }), fn("solo", 3)],
+      threads: [thread("main", ["gp:main", "vf:main", "solo"])],
+    });
+    const flat = unrootedScene(buildExecScene(m), m);
+    const card = (ref: string) => [...flat.nodes.values()].find((n) => n.kind === "function" && n.ref === ref);
+    expect(card("gp:main")?.label).toBe("main");
+    expect(card("vf:main")?.label).toBe("main");
+    expect(card("gp:main")?.shownName).toBe("main · guideplan");
+    expect(card("vf:main")?.shownName).toBe("main · verify");
+    expect(card("gp:main")?.ref).toBe("gp:main");
+    expect(card("solo")?.shownName).toBeUndefined();
+  });
+
+  it("two module entries that are both main.ts show their directory instead of the stem, which is the name itself", () => {
+    const m = model({
+      // A module entry is a card only when its top-level code calls out, so both are marked as calling out.
+      functions: [{ ...moduleOf("apps/web/main.tsx"), callsOut: true }, { ...moduleOf("poc/orrery/main.ts"), callsOut: true }, fn("solo", 3)],
+      threads: [thread("main", ["apps/web/main.tsx#(module)", "poc/orrery/main.ts#(module)", "solo"])],
+    });
+    const flat = unrootedScene(buildExecScene(m), m);
+    const card = (ref: string) => [...flat.nodes.values()].find((n) => n.kind === "function" && n.ref === ref);
+    expect(card("apps/web/main.tsx#(module)")?.shownName).toBe("main · web");
+    expect(card("poc/orrery/main.ts#(module)")?.shownName).toBe("main · orrery");
+    expect(card("solo")?.shownName).toBeUndefined();
   });
 });
 

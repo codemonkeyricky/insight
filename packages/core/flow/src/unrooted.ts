@@ -5,6 +5,7 @@
 // spawns something, in scope or out. Sync edges join the cards that reach their sites (see unrootedReach). Pure: the scene
 // and the model are read, never changed.
 import type { ExecModel } from "./exec-model.js";
+import { displayName, stemOf } from "./names.js";
 import { flattenRoots, keepScene, rewireEdges } from "./scene-filter.js";
 import { addSyncResources, type Scene, type SceneEdge, type SceneNode, type SceneSyncResource } from "./scene.js";
 
@@ -219,8 +220,9 @@ export function unrootedReach(model: ExecModel, drawn: ReadonlySet<string>): Unr
  * name order. A grid of more than MORE_AFTER cards shows its first MORE_KEEP and a "+N more" card, unless its root id is in
  * `expanded` (the grid is expanded). A sync edge joins the card that reaches its site (see unrootedReach). When both ends join
  * one card, the edge's resources are kept on that card as `syncSelf` (the renderer draws no self-edge). An edge with no card
- * at an end is dropped. A card whose reach holds a function of a thread with unguarded shared state carries that thread's
- * `unguarded` names, since the thread's own box is not drawn. The input is not changed.
+ * at an end is dropped. A card that holds an access site of unguarded shared state (the function that makes the write, mapped
+ * to its nearest card by cardOf) carries the variable names as `unguarded`; cards that only reach the thread do not. Cards
+ * whose display name another card shares carry `shownName`. The input is not changed.
  */
 export function unrootedScene(full: Scene, model: ExecModel, expanded: ReadonlySet<string> = new Set()): Scene {
   const drawn = new Set<string>();
@@ -268,36 +270,67 @@ export function unrootedScene(full: Scene, model: ExecModel, expanded: ReadonlyS
 
   const marks = new Map<string, { syncSelf?: SceneSyncResource[]; unguarded?: string[] }>();
   for (const [placement, resources] of selfSync) marks.set(placement, { syncSelf: resources });
-  for (const [card, names] of unguardedCards(full, reach)) {
+  for (const [card, names] of unguardedCards(model, reach)) {
     const placement = firstOf.get(card);
     if (placement === undefined) continue;
     marks.set(placement, { ...marks.get(placement), unguarded: names });
   }
 
   const flat = markCards(flattenRoots(keepScene({ ...full, edges }, keep), model), marks);
-  return withMore(flat, expanded);
+  return nameSharedCards(withMore(flat, expanded), model);
+}
+
+/** The base name of a file's directory: "poc/orrery/main.ts" -> "orrery". Empty for a file at the root. */
+function dirOf(file: string): string {
+  const parts = file.split("/");
+  return parts.length >= 2 ? (parts[parts.length - 2] ?? "") : "";
 }
 
 /**
- * The unguarded variables of each card: the union of the `unguarded` names of every thread whose functions the card reaches
- * (its own thread, or one it starts, or a dispatch target). Only the cards that reach such a thread get an entry, sorted by name.
+ * The cards of the grid whose display name another card shares get the name's file stem after it, as `shownName`: two
+ * functions both named `main` in guideplan.ts and verify.ts draw as "main · guideplan" and "main · verify". The scene's
+ * labels, tooltips and ids are unchanged.
  */
-function unguardedCards(full: Scene, reach: UnrootedReach): Map<string, string[]> {
-  const out = new Map<string, Set<string>>();
-  const reachOf = new Map<string, Set<string>>();
-  for (const t of full.nodes.values()) {
-    if (t.kind !== "thread" || t.unguarded === undefined || t.unguarded.length === 0) continue;
-    const own = new Set(functionsUnder(full, t.id));
-    for (const card of reach.cards) {
-      let r = reachOf.get(card);
-      if (r === undefined) reachOf.set(card, (r = new Set(reach.reachOf(card))));
-      let touches = false;
-      for (const f of own) if (r.has(f)) touches = true;
-      if (!touches) continue;
-      let names = out.get(card);
-      if (names === undefined) out.set(card, (names = new Set()));
-      for (const v of t.unguarded) names.add(v);
+function nameSharedCards(scene: Scene, model: ExecModel): Scene {
+  const fileOf = new Map(model.functions.map((f) => [f.id, f.file] as const));
+  const byName = new Map<string, SceneNode[]>();
+  for (const n of scene.nodes.values()) {
+    if (n.kind !== "function" || n.ref === undefined) continue;
+    const shown = displayName(n.label, n.ref);
+    const list = byName.get(shown);
+    if (list) list.push(n);
+    else byName.set(shown, [n]);
+  }
+  const nodes = new Map(scene.nodes);
+  for (const [shown, group] of byName) {
+    if (group.length < 2) continue;
+    for (const n of group) {
+      const file = fileOf.get(n.ref ?? "") ?? "";
+      // The file's stem. A file whose stem is the name itself (a `main.ts` entry) names its directory instead, so
+      // `main.ts` files in two directories still read apart.
+      let tag = file === "" ? "" : stemOf(file);
+      if (tag === shown) tag = dirOf(file);
+      if (tag === "" || tag === shown) continue;
+      nodes.set(n.id, { ...n, shownName: `${shown} · ${tag}` });
     }
+  }
+  return { ...scene, nodes };
+}
+
+/**
+ * The unguarded variables of each card: the access sites it holds. A function that writes unguarded shared state (its
+ * `unguardedWrites`) badges only the card that reaches it nearest (cardOf), not every card that reaches its thread. Only
+ * the cards that hold such a site get an entry, sorted by name.
+ */
+function unguardedCards(model: ExecModel, reach: UnrootedReach): Map<string, string[]> {
+  const out = new Map<string, Set<string>>();
+  for (const f of model.functions) {
+    if (f.unguardedWrites === undefined || f.unguardedWrites.length === 0) continue;
+    const card = reach.cardOf(f.id);
+    if (card === undefined) continue;
+    let names = out.get(card);
+    if (names === undefined) out.set(card, (names = new Set()));
+    for (const v of f.unguardedWrites) names.add(v);
   }
   return new Map([...out].map(([card, names]) => [card, [...names].sort()]));
 }

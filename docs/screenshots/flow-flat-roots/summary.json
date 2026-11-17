@@ -1,134 +1,123 @@
 {
+ "note": "Re-captured on the flat-roots follow-up (access-site ⚠ and shared-label names). Project cognition-master at snapshot 664a7677 (commit 73f7fa6). ⚠ = g.zm-card.zm-unguarded; ⇆ = .zm-sync-self.",
+ "before_unguarded_cards_previous_commit": {
+  "(root)": 23,
+  "core/physics": 8,
+  "core/pool": "not measured"
+ },
  "counts": [
   {
-   "run": "before",
-   "scope": "core/physics",
-   "viewport": "1800x1100",
-   "url": "http://127.0.0.1:4317/#/projects/aaaac4a7/view/flow?scope=core%2Fphysics",
-   "function": 19,
-   "uniqueFids": 19,
-   "more": [],
-   "bodyHasThreadWord": false,
-   "errors": []
-  },
-  {
-   "run": "before",
-   "scope": "core/physics",
-   "viewport": "1800x2400",
-   "url": "http://127.0.0.1:4317/#/projects/aaaac4a7/view/flow?scope=core%2Fphysics",
-   "function": 53,
-   "uniqueFids": 53,
-   "more": [
-    "+4 more (Click to show every root card of this thread)ƒ +4 more"
-   ],
-   "bodyHasThreadWord": false,
-   "errors": []
-  },
-  {
-   "run": "before",
-   "scope": "(root)",
-   "viewport": "1800x1100",
-   "url": "http://127.0.0.1:4317/#/projects/aaaac4a7/view/flow",
-   "function": 37,
-   "uniqueFids": 37,
-   "more": [
-    "+16 more (Click to show every root card of this thread)ƒ +16 more"
-   ],
-   "bodyHasThreadWord": true,
-   "errors": []
-  },
-  {
-   "run": "before",
-   "scope": "(root)",
-   "viewport": "1800x2400",
-   "url": "http://127.0.0.1:4317/#/projects/aaaac4a7/view/flow",
-   "function": 97,
-   "uniqueFids": 97,
-   "more": [
-    "+16 more (Click to show every root card of this thread)ƒ +16 more",
-    "+17 more (Click to show every root card of this thread)ƒ +17 more",
-    "+37 more (Click to show every root card of this thread)ƒ +37 more"
-   ],
-   "bodyHasThreadWord": true,
-   "errors": []
-  },
-  {
-   "run": "after",
-   "scope": "core/physics",
-   "viewport": "1800x1100",
-   "url": "http://127.0.0.1:4371/#/projects/12bd812c/view/flow?scope=core%2Fphysics",
-   "function": 24,
-   "uniqueFids": 24,
-   "more": [
-    "ƒ +12 more"
-   ],
-   "syncSelf": 0,
-   "unguardedCards": 8,
-   "bodyHasThreadWord": false,
-   "errors": []
-  },
-  {
-   "run": "after",
-   "scope": "core/physics",
-   "viewport": "1800x2400",
-   "url": "http://127.0.0.1:4371/#/projects/12bd812c/view/flow?scope=core%2Fphysics",
-   "function": 24,
-   "uniqueFids": 24,
-   "more": [
-    "ƒ +12 more"
-   ],
-   "syncSelf": 0,
-   "unguardedCards": 8,
-   "bodyHasThreadWord": false,
-   "errors": []
-  },
-  {
    "run": "after",
    "scope": "(root)",
    "viewport": "1800x1100",
-   "url": "http://127.0.0.1:4371/#/projects/12bd812c/view/flow",
-   "function": 24,
-   "uniqueFids": 24,
+   "url": "http://127.0.0.1:4371/#/projects/4efc194b/view/flow",
+   "cards": 24,
    "more": [
     "ƒ +9 more"
    ],
-   "syncSelf": 1,
-   "unguardedCards": 23,
-   "bodyHasThreadWord": false,
+   "warnBadges": 4,
+   "unguardedCards": 4,
+   "unguardedTitles": [
+    "App.tsx (top level · apps/web/ui/App.tsx:1)",
+    "checks.ts (top level · core/verify/checks.ts:6)",
+    "main.tsx (top level · apps/web/main.tsx:1)",
+    "progress.ts (top level · core/util/progress.ts:11)"
+   ],
+   "syncSelfBadges": 1,
+   "mainLabels": [
+    "main · o…",
+    "main · t…",
+    "main · w…"
+   ],
    "errors": []
   },
   {
    "run": "after",
    "scope": "(root)",
    "viewport": "1800x2400",
-   "url": "http://127.0.0.1:4371/#/projects/12bd812c/view/flow",
-   "function": 24,
-   "uniqueFids": 24,
+   "url": "http://127.0.0.1:4371/#/projects/4efc194b/view/flow",
+   "cards": 24,
    "more": [
     "ƒ +9 more"
    ],
-   "syncSelf": 1,
-   "unguardedCards": 23,
-   "bodyHasThreadWord": false,
+   "warnBadges": 4,
+   "unguardedCards": 4,
+   "unguardedTitles": [
+    "App.tsx (top level · apps/web/ui/App.tsx:1)",
+    "checks.ts (top level · core/verify/checks.ts:6)",
+    "main.tsx (top level · apps/web/main.tsx:1)",
+    "progress.ts (top level · core/util/progress.ts:11)"
+   ],
+   "syncSelfBadges": 1,
+   "mainLabels": [
+    "main · o…",
+    "main · t…",
+    "main · w…"
+   ],
    "errors": []
   },
   {
    "run": "after",
    "scope": "core/physics",
    "viewport": "1800x1100",
-   "url": "http://127.0.0.1:4371/#/projects/12bd812c/view/flow?scope=core%2Fphysics&fn=core%2Fphysics%2FcamAnalysis.ts%23analyseCam",
-   "function": 22,
-   "uniqueFids": 22,
+   "url": "http://127.0.0.1:4371/#/projects/4efc194b/view/flow?scope=core%2Fphysics",
+   "cards": 24,
+   "more": [
+    "ƒ +12 more"
+   ],
+   "warnBadges": 0,
+   "unguardedCards": 0,
+   "unguardedTitles": [],
+   "syncSelfBadges": 0,
+   "mainLabels": [],
+   "errors": []
+  },
+  {
+   "run": "after",
+   "scope": "core/physics",
+   "viewport": "1800x2400",
+   "url": "http://127.0.0.1:4371/#/projects/4efc194b/view/flow?scope=core%2Fphysics",
+   "cards": 24,
+   "more": [
+    "ƒ +12 more"
+   ],
+   "warnBadges": 0,
+   "unguardedCards": 0,
+   "unguardedTitles": [],
+   "syncSelfBadges": 0,
+   "mainLabels": [],
+   "errors": []
+  },
+  {
+   "run": "after",
+   "scope": "core/pool",
+   "viewport": "1800x1100",
+   "url": "http://127.0.0.1:4371/#/projects/4efc194b/view/flow?scope=core%2Fpool",
+   "cards": 4,
    "more": [],
-   "syncSelf": 0,
-   "unguardedCards": 8,
-   "bodyHasThreadWord": false,
+   "warnBadges": 1,
+   "unguardedCards": 1,
+   "unguardedTitles": [
+    "fitParallel (parallel.ts:119)"
+   ],
+   "syncSelfBadges": 1,
+   "mainLabels": [],
    "errors": []
   }
  ],
+ "main_labels_full": {
+  "apps/web/main.tsx#(module)": "main · web",
+  "poc/orrery/main.ts#(module)": "main · orrery",
+  "poc/triaxial-tourbillon/main.ts#(module)": "main · triaxial-tourbillon"
+ },
  "click": {
   "clickedLabel": "ƒ (first card)",
-  "hashAfterClick": "#/projects/12bd812c/view/flow?scope=core%2Fphysics&fn=core%2Fphysics%2FcamAnalysis.ts%23analyseCam",
+  "hash": "#/projects/4efc194b/view/flow?scope=core%2Fphysics&fn=core%2Fphysics%2FcamAnalysis.ts%23analyseCam",
+  "errors": []
+ },
+ "deeplink": {
+  "cards": 22,
+  "unguardedCards": 0,
   "errors": []
  },
  "system": {
@@ -137,11 +126,9 @@
  "errors": {},
  "selfSyncScope": {
   "scope": "core/pool",
-  "syncSelf": 1,
-  "badge": "⇆ 1",
+  "syncSelfBadges": 1,
+  "warnBadges": 1,
   "card": "fitParallel (parallel.ts:119)",
-  "title": "Shares channel MessageChannel@core/pool/pool.ts:44 with threads it starts",
-  "screenshot": "after-selfsync-core_pool-1800x1100.png",
-  "searchedScopes": "all 39 cognition scope directories; only core/pool has one"
+  "screenshot": "after-selfsync-core_pool-1800x1100.png"
  }
 }

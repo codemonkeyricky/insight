@@ -1965,8 +1965,9 @@ export function BoxShape({
   callersOpen?: boolean;
 }) {
   const { rect } = item;
-  // The function's display name on the map (the full name stays in the tooltip).
-  const shown = displayName(node.label, node.ref);
+  // The function's display name on the map (the full name stays in the tooltip). A card whose name another card shares
+  // shows its file's stem after it (see unrootedScene), so the two read apart.
+  const shown = node.shownName ?? displayName(node.label, node.ref);
   // A thread box carries a badge when its code writes unguarded shared state (see scene.ts).
   const unguarded = node.unguarded !== undefined && node.unguarded.length > 0;
   const unguardedTitle = unguarded ? ` · ⚠ unguarded shared state: ${node.unguarded?.join(", ")}` : "";

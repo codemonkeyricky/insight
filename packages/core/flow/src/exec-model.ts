@@ -74,6 +74,12 @@ export interface ExecFunctionRef {
    */
   callsOut?: true;
   /**
+   * The unguarded shared-state variables this function writes itself (`⚠ unguarded shared state`), as names, sorted: the
+   * access sites the flat grid badges (on the card that reaches this function nearest). Absent when it writes none. A
+   * module entry carries its top-level writes. The check is project-wide.
+   */
+  unguardedWrites?: string[];
+  /**
    * The width and height of the function's control-flow chart, in chart units. Absent when the IR has no chart for it
    * (no steps, or too many to chart). The canvas sizes the function's box to hold the chart.
    */
@@ -1347,8 +1353,8 @@ function execModelOf(P: ExecPlans, scope: string, opts: ExecModelOptions): ExecM
 
   // Unguarded shared state, over the whole project: the variables two or more of its threads write with no lock held in
   // common at every write. Thread membership is each plan's full reach, not the scope's cut. Empty without the data facet.
-  const unguardedVars = (() => {
-    if (P.writes.length === 0) return [];
+  const unguarded = (() => {
+    if (P.writes.length === 0) return { vars: [], sites: [] as StateWriteSite[] };
     // Project-wide membership, not this scope's cut: a function shown in a file view still counts on the thread that a
     // spawn outside the file starts, so its badge matches the project root's.
     const threadOf = P.projectThreadOf();
@@ -1363,8 +1369,28 @@ function execModelOf(P: ExecPlans, scope: string, opts: ExecModelOptions): ExecM
       }
       return threadOf.get(`${fn}#(module)`) ?? [];
     };
-    return [...unguardedFromSites(P.writes, threadsOfFn).variables.values()];
+    const vars = [...unguardedFromSites(P.writes, threadsOfFn).variables.values()];
+    const ids = new Set(vars.map((v) => v.id));
+    // The access sites: the writes of an unguarded variable that some thread runs (a write no thread runs is not counted).
+    const sites = P.writes.filter((s) => ids.has(s.variable) && threadsOfFn(s.fn).length > 0);
+    return { vars, sites };
   })();
+  const unguardedVars = unguarded.vars;
+  // The access sites by the function that makes them, keyed by the function's id in the table: a module-level write's file
+  // stands for its `<file>#(module)` entry. Built once the table is complete (see `functions` below), since threads add to it.
+  const unguardedSitesOf = (): Map<string, Set<string>> => {
+    const out = new Map<string, Set<string>>();
+    for (const s of unguarded.sites) {
+      const candidates = [s.fn, `${s.fn}#(module)`, P.foldId(s.fn)];
+      const hit = candidates.find((c) => table.has(c));
+      if (hit === undefined) continue;
+      const name = unguardedVars.find((v) => v.id === s.variable)?.name ?? s.name;
+      let names = out.get(hit);
+      if (names === undefined) out.set(hit, (names = new Set()));
+      names.add(name);
+    }
+    return out;
+  };
   const unguardedWritesOf = (threadId: string): string[] =>
     unguardedVars
       .filter((v) => v.threads.includes(threadId))
@@ -1469,11 +1495,15 @@ function execModelOf(P: ExecPlans, scope: string, opts: ExecModelOptions): ExecM
   const functionsCoroutineOnly = [...inScopeFns].filter((id) => runtimeOf(id) === "coroutine").length;
   const spawned = plans.flatMap((p) => (p.spawn !== undefined ? [p.spawn] : []));
   const countStatus = (s: ExecSpawnStatus) => spawned.filter((x) => x.status === s).length;
+  const unguardedAt = unguardedSitesOf();
 
   return {
     scope,
     truncated,
-    functions: [...table.values()],
+    functions: [...table.values()].map((f) => {
+      const names = unguardedAt.get(f.id);
+      return names === undefined ? f : { ...f, unguardedWrites: [...names].sort(byText) };
+    }),
     threads,
     programs: shownPrograms,
     dispatches,

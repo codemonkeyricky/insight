@@ -62,6 +62,11 @@ export interface SceneNode {
    * `⇆ N` badge on the card.
    */
   syncSelf?: SceneSyncResource[];
+  /**
+   * A card (see unrooted.ts) whose display name another card in the grid shares: the name with its file's stem after it
+   * ("main · guideplan"), which the map draws in place of the name. The label, the tooltip and the id keep the full name.
+   */
+  shownName?: string;
 }
 
 /**

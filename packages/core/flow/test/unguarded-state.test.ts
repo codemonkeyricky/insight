@@ -59,6 +59,10 @@ describe("unguarded shared state", () => {
     const scene = buildExecScene(model);
     const threads = [...scene.nodes.values()].filter((n) => n.kind === "thread");
     expect(threads.map((n) => n.unguarded)).toEqual([["g"], ["g"]]);
+    // The access sites are the two functions that write g, and only they carry it.
+    const writers = model.functions.filter((f) => f.unguardedWrites !== undefined).map((f) => f.id).sort();
+    expect(writers).toEqual([`${M}#main`, `${W}#work`]);
+    expect(model.functions.find((f) => f.id === `${M}#main`)?.unguardedWrites).toEqual(["g"]);
   });
 
   it("does not flag writes both under the same lock", () => {

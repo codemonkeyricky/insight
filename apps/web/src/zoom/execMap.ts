@@ -79,6 +79,7 @@ export function execMapNode(scene: Scene, id: string): MapNode | undefined {
   if (n.chart !== undefined) node.chart = n.chart;
   if (n.external === true) node.external = true;
   if (n.unguarded !== undefined) node.unguarded = [...n.unguarded];
+  if (n.shownName !== undefined) node.shownName = n.shownName;
   if (n.syncSelf !== undefined) node.syncSelf = n.syncSelf.map((r) => ({ name: r.name, kind: r.kind }));
   return node;
 }
