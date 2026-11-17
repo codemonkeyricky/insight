@@ -251,57 +251,6 @@ export interface SchemaDiagramView {
 
 export type LensView = GraphView | TableView | TreeView | StateMachineView | SchemaDiagramView;
 
-export interface LensRecord {
-  id: string;
-  title: string;
-  status: "ok" | "unavailable" | "error";
-  reason?: string;
-  reused: boolean;
-  result?: { findings: FindingRow[]; views: LensView[]; metrics: Record<string, unknown> };
-}
-
-/** What a scope is: the whole project, a folder, or one file. */
-export type ScopeLevel = "project" | "folder" | "file";
-
-export interface ScopeStats {
-  /** Nodes that belong to the scope. */
-  nodes: number;
-  edges: number;
-  findings: number;
-  /** Nodes outside the scope that an edge inside it reaches. */
-  external: number;
-}
-
-/** One lens on one scope. "not-run" means no run of the lens on this scope is stored yet. */
-export interface ScopeLensRow {
-  id: string;
-  title: string;
-  status: "ok" | "unavailable" | "error" | "not-run";
-  reason?: string;
-  findings: number | null;
-  /** Demo captures only: false when the lens has no views or findings for the scope, so its tab is dimmed. */
-  hasContent?: boolean;
-  /** A lens with no tab (its manifest's `hidden` flag). It still runs, and its results stay available. */
-  hidden?: boolean;
-}
-
-export interface ScopeLenses {
-  snapshot: string;
-  scope: string;
-  kind: ScopeLevel;
-  stats: ScopeStats;
-  facets: string[];
-  lenses: ScopeLensRow[];
-}
-
-/** One lens run on one scope. */
-export interface ScopeLensRun {
-  snapshot: string;
-  scope: string;
-  kind: ScopeLevel;
-  lens: LensRecord;
-}
-
 export interface SourceSlice {
   file: string;
   firstLine: number;
@@ -317,105 +266,6 @@ export interface NodeFacts {
   children: { id: string; kind: string }[];
   outgoing: { from: string; to: unknown; kind: string; span?: Span; provenance: { confidence: string } }[];
   incoming: { from: string; to: unknown; kind: string; span?: Span; provenance: { confidence: string } }[];
-}
-
-export interface DiffNode {
-  id: string;
-  kind: string;
-  facet: string;
-  name?: string;
-  parent?: string;
-  file?: string;
-  line?: number;
-}
-
-export interface DiffEdge {
-  from: string;
-  to: unknown;
-  kind: string;
-  facet: string;
-  count: number;
-}
-
-export interface DiffFinding {
-  key: string;
-  lens: string;
-  id: string;
-  severity: string;
-  message: string;
-  file?: string;
-  line?: number;
-}
-
-export interface LensDiff {
-  id: string;
-  comparable: boolean;
-  /** The lens status on each side, or "not run". */
-  base: string;
-  head: string;
-  added: DiffFinding[];
-  removed: DiffFinding[];
-  unchanged: number;
-}
-
-export interface SnapshotDiff {
-  ir: {
-    nodes: { added: DiffNode[]; removed: DiffNode[]; changed: DiffNode[] };
-    edges: { added: DiffEdge[]; removed: DiffEdge[] };
-    findings: { added: string[]; removed: string[] };
-  };
-  lenses: LensDiff[];
-  summary: string[];
-}
-
-export interface CompareSide {
-  commit: string;
-  snapshot: string;
-  reused: boolean;
-}
-
-export interface Compare {
-  base: CompareSide;
-  head: CompareSide;
-  diff: SnapshotDiff;
-}
-
-export type ReviewStatus = "open" | "accepted" | "dismissed";
-
-export interface ReviewItem {
-  key: string;
-  lens: string;
-  id: string;
-  severity: string;
-  message: string;
-  file?: string;
-  line?: number;
-  status: ReviewStatus;
-  note?: string;
-  updatedAt?: string;
-}
-
-export interface ReviewStale {
-  key: string;
-  status: "accepted" | "dismissed";
-  note: string;
-  updatedAt: string;
-}
-
-export interface Review {
-  snapshot: string | null;
-  items: ReviewItem[];
-  stale: ReviewStale[];
-}
-
-export type TargetType = "node" | "edge" | "finding";
-
-export interface Annotation {
-  id: string;
-  target: { type: TargetType; key: string };
-  text: string;
-  createdAt: string;
-  updatedAt: string;
 }
 
 export interface FileEntry {
@@ -481,14 +331,8 @@ const liveApi = {
       if (snapshot === undefined) models.noteLatest(`live:${id}`, o.snapshot?.id);
       return o;
     }),
-  lens: (id: string, lensId: string, snapshot?: string) =>
-    call<{ snapshot: string | null; lens: LensRecord }>("GET", `/api/projects/${id}/lenses/${lensId}${q({ snapshot })}`).then((r) => r.lens),
   findings: (id: string, filter: { lens?: string; severity?: string; snapshot?: string } = {}) =>
     call<{ findings: FindingRow[] }>("GET", `/api/projects/${id}/findings${q(filter)}`).then((r) => r.findings),
-  // The path is always sent, even when it is "" (the project), so the query is built here: q() drops empty values.
-  scopeLenses: (id: string, scope: string) => call<ScopeLenses>("GET", `/api/projects/${id}/scope/lenses?path=${encodeURIComponent(scope)}`),
-  scopeLens: (id: string, scope: string, lensId: string) =>
-    call<ScopeLensRun>("GET", `/api/projects/${id}/scope/lenses/${encodeURIComponent(lensId)}?path=${encodeURIComponent(scope)}`),
   source:(id: string, file: string, start: number, end: number, context = 3) =>
     call<SourceSlice>("GET", `/api/projects/${id}/source${q({ file, start, end, context })}`),
   files: (id: string, snapshot?: string) =>
@@ -525,18 +369,6 @@ const liveApi = {
   // The server adds scope, snapshot and kind to the model; the page does not use them. The model covers the whole project.
   getScopeArch: (id: string, scope: string) => call<ArchModel>("GET", `/api/projects/${id}/scope/arch?path=${encodeURIComponent(scope)}`),
   node: (id: string, nodeId: string) => call<NodeFacts>("GET", `/api/projects/${id}/nodes/${nodeId.split("/").map(encodeURIComponent).join("/")}`),
-  compare: (id: string, base: string, head: string) => call<Compare>("GET", `/api/projects/${id}/compare${q({ base, head })}`),
-  review: (id: string, snapshot?: string) => call<Review>("GET", `/api/projects/${id}/review${q({ snapshot })}`),
-  decide: (id: string, key: string, status: "accepted" | "dismissed", note = "") =>
-    call<{ key: string; decision: ReviewStale }>("PUT", `/api/projects/${id}/review`, { key, status, note }),
-  reopen: (id: string, key: string) => call<void>("DELETE", `/api/projects/${id}/review${q({ key })}`),
-  annotations: (id: string, filter: { type?: TargetType; key?: string } = {}) =>
-    call<{ annotations: Annotation[] }>("GET", `/api/projects/${id}/annotations${q(filter)}`).then((r) => r.annotations),
-  addAnnotation: (id: string, body: { type: TargetType; key: string; text: string }) =>
-    call<{ annotation: Annotation }>("POST", `/api/projects/${id}/annotations`, body).then((r) => r.annotation),
-  editAnnotation: (id: string, annId: string, text: string) =>
-    call<{ annotation: Annotation }>("PATCH", `/api/projects/${id}/annotations/${encodeURIComponent(annId)}`, { text }).then((r) => r.annotation),
-  removeAnnotation: (id: string, annId: string) => call<void>("DELETE", `/api/projects/${id}/annotations/${encodeURIComponent(annId)}`),
 };
 
 /** The hosted build answers from storage; the demo from captured JSON; every other build calls the server. */

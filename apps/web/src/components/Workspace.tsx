@@ -7,7 +7,7 @@ import { StatusBadge } from "../pages/Projects";
 import { useIndexProgress } from "../useIndexProgress";
 import { FirstIndex, IndexStrip } from "./IndexStrip";
 import { HostedReindex } from "./HostedReindex";
-import { scopeKind } from "./ScopeNote";
+import { scopeKind } from "../scopeKind";
 import { CodePane } from "./sheet/CodePane";
 import { FileTree } from "./sheet/FileTree";
 import { FindPalette } from "./sheet/FindPalette";
@@ -18,6 +18,7 @@ import { TopBar, type Crumb } from "./sheet/TopBar";
 import type { TitleFacts } from "./sheet/TitleBlock";
 import { shortCommit } from "./sheet/TitleBlock";
 import { ArchView } from "./views/ArchView";
+import { useCodePaneCollapse } from "./views/useCodePaneCollapse";
 import { PipelineTab } from "./views/PipelineTab";
 import { FlowView } from "./views/FlowView";
 import { SystemView } from "./views/SystemView";
@@ -25,10 +26,7 @@ import { ZoomStore } from "../zoom/scene";
 
 /** The System tab. It asks the workspace to collapse the code pane while it is shown and no code is open, and restores it on leaving. */
 function SystemTab({ id, scope, onSystemActive }: { id: string; scope: string; onSystemActive: (on: boolean) => void }) {
-  useEffect(() => {
-    onSystemActive(true);
-    return () => onSystemActive(false);
-  }, [onSystemActive]);
+  useCodePaneCollapse(onSystemActive);
   return <SystemView id={id} scope={scope} />;
 }
 
@@ -176,14 +174,14 @@ export function Workspace({ id, tab, scope, line, fn, trace, base, head, finding
   const content: ShellContent = contentOf(tab);
   // A project with no snapshot yet has nothing to chart, so its views give way to the first index's progress.
   const noSnapshot = overview.snapshot === null;
-  // The tree picks flow for the flow tab; the other tabs keep their own tab, so a picked file opens its flow with its code in the pane.
+  // The tree picks flow for the flow tab; the other tabs keep their own tab, so a picked file stays on that tab and its code shows in the pane.
   const explorerTab = content === "flow" ? "flow" : tab;
   // Views remount when the snapshot or view changes, so no state from the last one carries over. The flow map follows the scope and
   // function in place, so a scope change animates the camera rather than remounting the map. The other tabs follow the scope in place.
   const viewKey = `${overview.snapshot?.id ?? "none"}|${content}`;
 
   const parts = scope ? scope.split("/") : [];
-  // A crumb keeps the tab the reader is on (Arch, a lens) and otherwise goes to Flow, so a folder crumb always has a view.
+  // A crumb keeps the tab the reader is on (System, Pipeline or Packages) and otherwise goes to Flow, so a folder crumb always has a view.
   const crumbTab = content === "flow" ? "flow" : tab;
   const crumbs: Crumb[] = [
     { label: p.name, href: hrefView(id, "flow"), current: parts.length === 0 },

@@ -130,8 +130,9 @@ export function hrefView(id: string, tab: string, opts: ViewOptions = {}): strin
 /**
  * Where a route must be sent instead of shown, or undefined when it is shown as it is. The tab bar has four tabs (Flow,
  * System, Pipeline, Packages). Any other tab is an old view: Arch went to Packages, which is its package view, and every
- * other retired view (Overview, Compare, Triage, Source, Findings and each lens) goes to Flow. The scope and the other query
- * parameters ride along, so a link to a file's line still opens that file in the code pane. The `full` parameter is dropped.
+ * other retired view (Overview, Compare, Triage, Source, Findings and each lens) goes to Flow. The scope, line, function, trace and
+ * findings kind ride along, so a link to a file's line still opens that file in the code pane. The base and head of a compare
+ * link, and the `full` parameter, are dropped: Flow ignores them.
  */
 export function redirectFor(route: Route): string | undefined {
   if (route.name !== "workspace") return undefined;
@@ -143,8 +144,6 @@ export function redirectFor(route: Route): string | undefined {
     ...(route.fn ? { fn: route.fn } : {}),
     ...(route.trace ? { trace: route.trace } : {}),
     ...(route.kind ? { kind: route.kind } : {}),
-    ...(route.base ? { base: route.base } : {}),
-    ...(route.head ? { head: route.head } : {}),
   });
 }
 

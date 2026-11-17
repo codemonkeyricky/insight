@@ -34,44 +34,30 @@ describe("code target", () => {
 
 describe("LayerTabs", () => {
   const links: LayerLink[] = [
-    { id: "overview", title: "Overview", href: "#/o", current: true, group: "page" },
-    { id: "flow", title: "Flow", href: "#/fl", current: false, group: "page" },
-    { id: "lens-a", title: "Lens A", href: "#/l", current: false, group: "lens" },
-    { id: "lens-b", title: "Lens B", href: "#/m", current: false, group: "lens", dim: true, reason: "Not run yet" },
+    { id: "flow", title: "Flow", href: "#/fl", current: true },
+    { id: "system", title: "System", href: "#/sy", current: false },
+    { id: "pipeline", title: "Pipeline", href: "#/pi", current: false },
+    { id: "packages", title: "Packages", href: "#/pa", current: false },
   ];
 
-  it("renders one tab per page and per lens, in one tablist, with no Lenses menu", () => {
+  it("renders one tab per page, in one tablist, with no Lenses menu", () => {
     const html = renderToStaticMarkup(<LayerTabs links={links} />);
     expect(html).toContain('role="tablist"');
     expect(html.match(/role="tab"/g)?.length).toBe(4);
-    expect(html).toMatch(/aria-selected="true"[^>]*>Overview/);
-    expect(html).toMatch(/href="#\/l"[^>]*class="sh-tab"[^>]*>Lens A</);
-    expect(html).toMatch(/href="#\/m"[^>]*class="sh-tab dim"[^>]*>Lens B</);
+    expect(html).toMatch(/aria-selected="true"[^>]*>Flow</);
+    expect(html).toMatch(/href="#\/sy"[^>]*class="sh-tab"[^>]*>System</);
     expect(html).not.toContain("aria-haspopup");
     expect(html).not.toContain('role="menu"');
     expect(html).not.toContain("Lenses");
-    expect(html).not.toContain("badge-count");
+    expect(html).not.toContain("sh-tab-sep");
   });
 
-  it("selects the open lens, and keeps the lens order it was given", () => {
-    const lensOpen = links.map((l) => ({ ...l, current: l.id === "lens-a" }));
-    const html = renderToStaticMarkup(<LayerTabs links={lensOpen} />);
-    expect(html).toMatch(/aria-selected="true"[^>]*>Lens A</);
-    expect(html).toMatch(/aria-selected="false"[^>]*>Overview/);
-    expect(html.indexOf(">Lens A<")).toBeLessThan(html.indexOf(">Lens B<"));
-  });
-
-  it("shows the reason of a dim lens as its tooltip", () => {
-    const html = renderToStaticMarkup(<LayerTabs links={links} />);
-    expect(html).toContain('title="Not run yet"');
-  });
-
-  it("separates the lens tabs from the pages, and has no separator without a lens", () => {
-    const html = renderToStaticMarkup(<LayerTabs links={links} />);
-    expect(html).toContain("sh-tab-sep");
-    const pagesOnly = renderToStaticMarkup(<LayerTabs links={links.slice(0, 2)} />);
-    expect(pagesOnly).not.toContain("sh-tab-sep");
-    expect(pagesOnly.match(/role="tab"/g)?.length).toBe(2);
+  it("selects the current tab and keeps the order it was given", () => {
+    const packagesOpen = links.map((l) => ({ ...l, current: l.id === "packages" }));
+    const html = renderToStaticMarkup(<LayerTabs links={packagesOpen} />);
+    expect(html).toMatch(/aria-selected="true"[^>]*>Packages</);
+    expect(html).toMatch(/aria-selected="false"[^>]*>Flow</);
+    expect(html.indexOf(">Flow<")).toBeLessThan(html.indexOf(">Packages<"));
   });
 });
 

@@ -148,54 +148,26 @@ table.grid th { font-size: var(--t-sm); color: var(--muted); font-weight: 600; }
 /* Long paths may break anywhere so a table fits its column. Short cells keep whole words. */
 table.grid td.break-any { overflow-wrap: anywhere; }
 .log { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; max-height: 220px; overflow: auto; white-space: pre-wrap; font-size: var(--t-sm); margin: 0; }
-.findings { padding-left: 18px; margin: 0.3rem 0; }
-.findings li { margin: 3px 0; }
 .sev { font-size: var(--t-xs); font-weight: 600; text-transform: uppercase; padding: 0 5px; border-radius: 4px; }
 .sev.error { color: var(--red-text); }
 .sev.warning { color: var(--warn-text); }
 .sev.info { color: var(--muted); }
 .problems { color: var(--red-text); }
-.graph { width: 100%; height: 460px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
-.split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 380px); gap: 18px; align-items: start; }
 /* Grid items keep their content width unless told otherwise, so a wide table would push into the side column. */
-.split > * { min-width: 0; }
-.split > .main { overflow-x: auto; }
-.side { position: sticky; top: 12px; }
-.source { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; max-height: calc(100vh - 40px); overflow: auto; }
-.source header { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; margin-bottom: 8px; }
-.source.empty { color: var(--muted); }
 pre.code { margin: 0; font-size: var(--t-sm); overflow-x: auto; }
 pre.code > div { white-space: pre; }
 pre.code > div.hit { background: var(--code-hit); }
 pre.code .gutter { display: inline-block; flex: none; width: var(--gutter-ch, 4ch); color: var(--muted); text-align: right; margin-right: 0.8em; user-select: none; }
-.crumbs { margin-bottom: 4px; }
 select, textarea { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
 textarea { min-height: 3.2em; width: 100%; box-sizing: border-box; resize: vertical; }
 .row .field { min-width: 200px; }
 .badge.accepted { color: var(--ok-text); }
 .badge.dismissed { color: var(--muted); }
-.review-list, .notes { list-style: none; padding: 0; margin: 0; }
-.review-list > li, .notes > li { border-bottom: 1px solid var(--line); padding: 8px 0; }
-.review-actions { display: grid; gap: 6px; margin-top: 6px; max-width: 640px; }
-.annotations { margin-top: 12px; display: grid; gap: 8px; }
-.annotations h3 { margin: 0; }
-.annotations .field { gap: 6px; }
-.note-text { white-space: pre-wrap; }
 
-.scope-banner { margin: 0 0 6px; color: var(--muted); font-size: var(--t-md); overflow-wrap: anywhere; }
-.lens-empty { border: 1px dashed var(--line); border-radius: 8px; padding: 12px 14px; margin: 8px 0; color: var(--muted); }
-.lens-empty p { margin: 0; }
-/* The key of a graph: a dot in the colour of the nodes it stands for. */
-.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: middle; background: var(--accent); }
-.swatch.outside { background: var(--graphite); }
-.lens-empty p + p { margin-top: 4px; }
 
 /* Workspace: the explorer on the left, the view on the right */
 .ws { display: grid; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); gap: 18px; align-items: start; }
 .ws-main { min-width: 0; }
-.scope { margin-bottom: 10px; }
-.scope p { margin: 2px 0 0; }
-.scope-note { margin: 0 0 10px; }
 .sep { color: var(--muted); }
 .explorer { position: sticky; top: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; max-height: calc(100vh - 24px); overflow: auto; font-size: var(--t-md); }
 .explorer input[type="search"] { width: 100%; margin-bottom: 8px; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
@@ -393,9 +365,6 @@ a.flow-node { cursor: pointer; }
 .key-resolves { border-color: var(--accent); }
 
 /* The call graph of a folder or the project. */
-.graph-tools { display: flex; align-items: center; gap: 10px; margin: 0 0 8px; }
-.graph-tools input[type="search"] { flex: 0 1 280px; padding: 5px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--fg); font: inherit; }
-.graph-scroll { height: min(68vh, 620px); overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
 
 /* Where a function sits in the call graph, and the calls it makes and receives. */
 .back { display: inline-block; margin: 0 0 8px; }
@@ -441,12 +410,6 @@ a.flow-node { cursor: pointer; }
 .sh-pinned:has(.caller-chain[open]) { max-height: 60%; }
 
 /* Lens tree */
-.tree { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; overflow-x: auto; }
-.tree-kids { margin-left: 11px; padding-left: 12px; border-left: 1px solid var(--line); }
-.tree-row { padding: 2px 0; display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; }
-.tree-branch > summary { cursor: pointer; list-style-position: outside; }
-.tree-label { font-weight: 500; }
-.tree-detail::before { content: "· "; }
 .kind { display: inline-block; font-size: var(--t-xs); font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 0 6px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); }
 .kind.process, .kind.program { color: var(--red-text); border-color: var(--error); }
 .kind.thread { color: var(--warn-text); border-color: var(--warn); }
@@ -749,9 +712,9 @@ input[type="text"], input:not([type]), input[type="url"], input[type="search"], 
 .panel, .card, .stat, .explorer, .source { border-color: var(--hair); }
 table.grid { background: var(--glass-strong); box-shadow: var(--rim); }
 table.grid th { background: var(--faint); }
-.log, .code, pre.code, .flow-scroll, .graph, .graph-scroll, .arch-stage, .tree, .outside-list, .lens-empty { box-shadow: inset 0 0 0 0.5px var(--hair); }
+.log, .code, pre.code, .flow-scroll, .arch-stage, .outside-list { box-shadow: inset 0 0 0 0.5px var(--hair); }
 .code, pre.code { background: color-mix(in srgb, var(--graphite) 10%, transparent); border-radius: 12px; }
-.graph, .graph-scroll, .arch-stage, .flow-scroll { background: var(--sheet); }
+.arch-stage, .flow-scroll { background: var(--sheet); }
 .modes-seg, .seg { display: inline-flex; background: var(--faint); border-radius: 9px; padding: 2px; box-shadow: inset 0 0.5px 1.5px var(--shadow); }
 .seg button { background: none; box-shadow: none; border: 0; padding: 4px 11px; border-radius: 7px; font-size: var(--t-sm); font-weight: 500; color: var(--ink); -webkit-backdrop-filter: none; backdrop-filter: none; }
 .seg button:hover:not(:disabled) { background: none; }
@@ -780,7 +743,7 @@ table.grid th { background: var(--faint); }
   button, input, select, textarea, .seg, .chip { box-shadow: inset 0 0 0 1px var(--ink); }
   .fg-muted, .muted, .fc, .where, .small { color: var(--ink); }
   .fn rect, .zone-box, .cfg-node, .arch-box, .detail-bg, .zm-box-body { stroke: var(--ink); }
-  .graph, .graph-scroll, .arch-stage, .flow-scroll { box-shadow: 0 0 0 1.5px var(--ink); }
+  .arch-stage, .flow-scroll { box-shadow: 0 0 0 1.5px var(--ink); }
 }
 
 /* ---- Sheet shell (phase 2): glass top bar, full-height stage, overlays. Tokens only; dark follows the theme tokens. ---- */
@@ -887,8 +850,6 @@ table.grid th { background: var(--faint); }
 .sh-tab { display: inline-flex; align-items: center; gap: 6px; flex: none; padding: 5px 10px; border-radius: 8px; color: var(--muted); text-decoration: none; font-size: var(--t-sm); font-weight: 500; white-space: nowrap; }
 .sh-tab:hover { color: var(--ink); background: var(--faint); }
 .sh-tab[aria-selected="true"] { background: var(--thumb); color: var(--ink); box-shadow: var(--shadow); }
-.sh-tab.dim { opacity: 0.55; }
-.sh-tab-sep { flex: none; width: 1px; height: 18px; margin: 0 6px; background: var(--hair); }
 /* Count badges: one shape and type for every count. Red is a finding count, neutral a total, and an outline a warning. */
 .badge-count { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; min-width: 1.5em; height: 1.5em; padding: 0 0.4em; border-radius: 999px; font: 600 var(--t-xs, 0.75rem)/1 var(--font-ui); font-variant-numeric: tabular-nums; white-space: nowrap; background: var(--red-fill, var(--red)); color: var(--on-accent); }
 .badge-count.is-neutral { background: var(--faint); color: var(--ink); }
@@ -1384,103 +1345,3 @@ a.auth-chip { text-decoration: none; }
 .repo-list a:hover { border-color: var(--accent); }
 .repo-name { min-width: 0; overflow-wrap: anywhere; }
 .repo-lock { color: var(--muted); flex: none; }
-
-/* State diagram (states lens): one machine drawn as SVG, in the app tokens so both themes read. */
-.state-diagram { display: grid; gap: 8px; min-width: 0; }
-.state-diagram .sm-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; }
-.state-diagram .sm-tool { font: inherit; font-size: var(--t-sm); padding: 2px 10px; border: 1px solid var(--hair); border-radius: var(--r-pill); background: var(--sheet); color: var(--ink); cursor: pointer; }
-.state-diagram .sm-tool:disabled { opacity: .45; cursor: default; }
-.state-diagram .sm-wrap { width: 100%; margin: 0 auto; background: var(--sheet); border: 1px solid var(--hair); border-radius: var(--r-md); overflow: auto; touch-action: pan-y; cursor: grab; }
-.state-diagram .sm-wrap > .sm-svg { margin: 0 auto; }
-.state-diagram .sm-svg { display: block; width: 100%; height: auto; max-height: 82vh; font-family: var(--font-ui); user-select: none; }
-.state-diagram .sm-box { fill: var(--box); stroke: color-mix(in srgb, var(--ink) 45%, transparent); stroke-width: 1.5; }
-.state-diagram .sm-box--inner { fill: none; }
-.state-diagram .sm-name { fill: var(--ink); font-size: 13px; font-weight: 500; pointer-events: none; }
-.state-diagram .sm-start { fill: var(--ink); }
-.state-diagram .sm-state--any .sm-box { fill: none; stroke-dasharray: 5 4; stroke: var(--graphite); }
-.state-diagram .sm-state--any .sm-name { fill: var(--graphite); font-weight: 400; }
-.state-diagram .sm-state--unentered .sm-box { fill: none; stroke: var(--graphite); stroke-width: 1; stroke-dasharray: 3 3; }
-.state-diagram .sm-state--unentered .sm-name { fill: var(--graphite); }
-.state-diagram .sm-state { cursor: pointer; outline: none; }
-.state-diagram .sm-state:hover .sm-box, .state-diagram .sm-state:focus-visible .sm-box, .state-diagram .sm-state--hot .sm-box { stroke: var(--accent); stroke-width: 2; }
-.state-diagram .sm-state:focus-visible .sm-start, .state-diagram .sm-state--hot .sm-start { fill: var(--accent); }
-.state-diagram .sm-arc { cursor: pointer; outline: none; color: var(--graphite); }
-.state-diagram .sm-hit { fill: none; stroke: transparent; stroke-width: 14; }
-.state-diagram .sm-line { fill: none; stroke: currentColor; stroke-width: 1.5; }
-.state-diagram .sm-head { fill: currentColor; stroke: none; }
-.state-diagram .sm-arc--inferred .sm-line { stroke-dasharray: 6 4; }
-.state-diagram .sm-arc--heuristic .sm-line { stroke-dasharray: 1.5 4; stroke-linecap: round; stroke-width: 2; }
-.state-diagram .sm-label rect { fill: var(--sheet); stroke: var(--hair); stroke-width: 1; }
-.state-diagram .sm-label text { fill: var(--ink); font-size: 12px; pointer-events: none; }
-.state-diagram .sm-svg--hot .sm-arc:not(.sm-arc--hot) { opacity: .28; }
-.state-diagram .sm-arc--hot, .state-diagram .sm-arc--selected, .state-diagram .sm-arc:focus-visible { color: var(--accent); }
-.state-diagram .sm-arc--hot .sm-line, .state-diagram .sm-arc--selected .sm-line, .state-diagram .sm-arc:focus-visible .sm-line { stroke-width: 2.25; }
-.state-diagram .sm-arc--hot .sm-label rect, .state-diagram .sm-arc--selected .sm-label rect { stroke: var(--accent); }
-.state-diagram .sm-legend { list-style: none; display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0; padding: 0; font-size: var(--t-xs); color: var(--muted); }
-.state-diagram .sm-legend li { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; }
-.state-diagram .sm-legend li svg, .state-diagram .sm-legend li .sm-swatch { flex: none; }
-.state-diagram .sm-key { stroke: var(--graphite); stroke-width: 1.5; }
-.state-diagram .sm-key--inferred { stroke-dasharray: 6 4; }
-.state-diagram .sm-key--heuristic { stroke-dasharray: 1.5 4; stroke-linecap: round; stroke-width: 2; }
-.state-diagram .sm-swatch { display: inline-block; width: 22px; height: 13px; border-radius: 4px; border: 1px solid var(--graphite); }
-.state-diagram .sm-swatch--unentered { border-style: dashed; border-width: 1px; opacity: .8; }
-.state-diagram .sm-swatch--terminal { box-shadow: inset 0 0 0 2px var(--sheet), inset 0 0 0 3px var(--graphite); }
-.sm-machines { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
-/* The list sits beside the diagram when there is room, above it when the pane is narrow. */
-.sm-machines > .sm-list { flex: 1 1 150px; max-width: 220px; min-width: 0; }
-.sm-machines > div:empty { display: none; }
-.sm-machines > .state-diagram { flex: 999 1 360px; min-width: 0; }
-.sm-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
-.sm-list button { display: grid; gap: 1px; width: 100%; text-align: left; font: inherit; padding: 7px 10px; border: 1px solid var(--hair); border-radius: var(--r-md); background: var(--sheet); color: var(--ink); cursor: pointer; }
-.sm-list button[aria-current="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-.sm-list .sm-holder { font-weight: 600; overflow-wrap: anywhere; }
-.sm-sites { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
-.sm-sites li { padding: 6px 8px; border: 1px solid var(--hair); border-radius: var(--r-sm); background: var(--sheet); }
-@media (max-width: 700px) { .sm-machines > .sm-list { max-width: none; } }
-
-/* Schema diagram (lens "Schema"): one colour per facet, readable on both themes. */
-:root {
-  --sd-0: #3F73DC; --sd-1: #8A55D1; --sd-2: #139488; --sd-3: #C47F14; --sd-4: #CF4468; --sd-5: #3A9E48; --sd-6: #CB5A28; --sd-7: #2493BC; --sd-x: #7A7A80; --sd-rec: var(--accent);
-  --sd-card: var(--sheet);
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) { --sd-0: #6C9BFF; --sd-1: #B589F2; --sd-2: #3CC9B8; --sd-3: #F0B04A; --sd-4: #F27A98; --sd-5: #62CC72; --sd-6: #F28A5C; --sd-7: #5CC0E6; --sd-x: #98989D; --sd-card: #232326; }
-}
-:root[data-theme="dark"] { --sd-0: #6C9BFF; --sd-1: #B589F2; --sd-2: #3CC9B8; --sd-3: #F0B04A; --sd-4: #F27A98; --sd-5: #62CC72; --sd-6: #F28A5C; --sd-7: #5CC0E6; --sd-x: #98989D; --sd-card: #232326; }
-.sd-bar { display: flex; align-items: center; gap: 12px; margin: 6px 0; }
-.sd-wrap { position: relative; width: 100%; height: max(600px, calc(100vh - 230px)); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-bottom: 18px; }
-.sd-svg { display: block; cursor: grab; user-select: none; }
-.sd-svg:active { cursor: grabbing; }
-.sd-tools { background: color-mix(in srgb, var(--bg) 88%, transparent); border: 1px solid var(--line); border-radius: 8px; padding: 3px 4px 3px 10px; position: absolute; top: 8px; right: 10px; z-index: 2; display: flex; align-items: center; gap: 10px; }
-.sd-msg { position: absolute; top: 40%; left: 0; right: 0; text-align: center; margin: 0; }
-.sd-frame-box { fill: color-mix(in srgb, var(--g) 5%, transparent); stroke: color-mix(in srgb, var(--g) 32%, transparent); stroke-width: 1.2; }
-.sd-frame-title { fill: var(--g); font: 700 15px var(--font-ui); letter-spacing: 0.02em; text-transform: lowercase; cursor: zoom-in; }
-.sd-frame-count { fill: var(--muted); font-weight: 500; font-size: 12px; }
-.sd-card { cursor: pointer; outline: none; transition: opacity .15s; }
-.sd-card.dim { opacity: 0.22; }
-.sd-card:focus-visible .sd-body, .sd-card.hot .sd-body { stroke: var(--accent); stroke-width: 2; }
-.sd-card.linked .sd-body { stroke: var(--accent); stroke-opacity: .6; stroke-width: 1.5; }
-.sd-body { fill: var(--sd-card); stroke: color-mix(in srgb, var(--ink) 22%, transparent); stroke-width: 1; filter: drop-shadow(0 1px 2px var(--shadow)); }
-.sd-body.edge { stroke-dasharray: 5 3; }
-.sd-rule { stroke: color-mix(in srgb, var(--ink) 14%, transparent); }
-.sd-label { fill: var(--fg); font: 600 12.5px var(--font-code); }
-.sd-badge { fill: color-mix(in srgb, var(--ink) 10%, transparent); }
-.sd-badge.edge { fill: none; stroke: color-mix(in srgb, var(--ink) 35%, transparent); stroke-dasharray: 3 2; }
-.sd-badge-text { fill: var(--muted); font: 600 9.5px var(--font-ui); letter-spacing: .04em; }
-.sd-empty { fill: var(--muted); font: italic 11px var(--font-ui); }
-.sd-fname { fill: var(--muted); font: 11.5px var(--font-code); }
-.sd-field.req .sd-fname { fill: var(--fg); }
-.sd-ftype { fill: var(--muted); font: 10.5px var(--font-code); }
-.sd-ftype.ref { fill: var(--accent-text); font-weight: 600; }
-.sd-values { fill: var(--muted); font: 9.5px var(--font-code); opacity: .85; }
-.sd-note { fill: var(--accent-text); font: 600 10.5px var(--font-code); }
-.sd-dot { fill: var(--fg); }
-.sd-dot.hollow { fill: none; stroke: var(--muted); stroke-width: 1.2; }
-.sd-curve { fill: none; stroke: color-mix(in srgb, var(--ink) 45%, transparent); stroke-width: 1.3; transition: opacity .15s; }
-.sd-link.ref .sd-curve { stroke: color-mix(in srgb, var(--accent) 60%, transparent); }
-.sd-head-ref { fill: color-mix(in srgb, var(--accent) 75%, transparent); }
-.sd-head-ext { fill: var(--sd-card); stroke: color-mix(in srgb, var(--ink) 60%, transparent); stroke-width: 1.4; }
-.sd-link.off { opacity: .08; }
-.sd-link.on .sd-curve { stroke: var(--accent); stroke-width: 2.2; }
-.sd-link.on .sd-head-ref { fill: var(--accent); }
-.sd-link.on .sd-head-ext { stroke: var(--accent); }

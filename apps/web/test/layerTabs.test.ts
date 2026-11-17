@@ -9,7 +9,6 @@ describe("the tab bar", () => {
   it("is exactly Flow, System, Pipeline and Packages, in that order", () => {
     expect(tabs("flow").map((l) => l.title)).toEqual(["Flow", "System", "Pipeline", "Packages"]);
     expect(tabs("flow").map((l) => l.id)).toEqual(["flow", "system", "pipeline", "packages"]);
-    expect(tabs("flow").every((l) => l.group === "page")).toBe(true);
   });
 
   it("marks only the current tab, for each of the four", () => {
@@ -51,8 +50,9 @@ describe("old tab URLs redirect, keeping the scope", () => {
     expect(redirectFor(parseRoute("#/projects/p1/view/overview?scope=src&full=1"))).toBe("#/projects/p1/view/flow?scope=src");
   });
 
-  it("compare goes to Flow with its base and head", () => {
-    expect(redirectFor(parseRoute("#/projects/p1/compare?base=aaa&head=bbb"))).toBe("#/projects/p1/view/flow?base=aaa&head=bbb");
+  it("compare goes to Flow and drops its base and head, which Flow ignores", () => {
+    expect(redirectFor(parseRoute("#/projects/p1/compare?base=aaa&head=bbb"))).toBe("#/projects/p1/view/flow");
+    expect(redirectFor(parseRoute("#/projects/p1/view/compare?scope=src&base=aaa&head=bbb"))).toBe("#/projects/p1/view/flow?scope=src");
   });
 
   it("every lens view goes to Flow with the same scope", () => {

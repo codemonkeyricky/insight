@@ -424,7 +424,6 @@ const root = storageRoot();
 
 const readOnlyStatic = makeStaticApi(hostedBaseFor(root), {
   sourceFor: rawSource,
-  rootOnly: true,
   identify: identifyHosted,
   readOnlyMessage: "Hosted indexes are read-only. Run Insight locally to add projects and re-index.",
 });

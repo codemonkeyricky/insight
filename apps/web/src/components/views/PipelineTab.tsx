@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { PipelineView } from "./PipelineView";
 import { StagesView } from "./StagesView";
+import { useCodePaneCollapse } from "./useCodePaneCollapse";
 
 /**
  * The Pipeline tab: the processing stages of the scope's extension points (Stages), then the pipeline view. The Show tests setting
@@ -8,10 +9,7 @@ import { StagesView } from "./StagesView";
  * shown and no code is open, and restores it on leaving (the same as the System tab).
  */
 export function PipelineTab({ id, scope, onSystemActive }: { id: string; scope: string; onSystemActive?: (on: boolean) => void }) {
-  useEffect(() => {
-    onSystemActive?.(true);
-    return () => onSystemActive?.(false);
-  }, [onSystemActive]);
+  useCodePaneCollapse(onSystemActive);
   const [tests, setTests] = useState(false);
   return (
     <div className="pipeline-tab">

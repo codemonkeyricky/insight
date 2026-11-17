@@ -1,14 +1,11 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 
-/** One tab of the layers strip: a page of the project, or a lens of the scope. */
+/** One tab of the layers strip: a page of the project. */
 export interface LayerLink {
   id: string;
   title: string;
   href: string;
   current: boolean;
-  group: "page" | "lens";
-  dim?: boolean;
-  reason?: string;
 }
 
 interface Props {
@@ -16,7 +13,7 @@ interface Props {
 }
 
 /**
- * The layers as tabs over the center pane: the project's pages, then one tab per lens of the scope. Each tab is a link, so it
+ * The layers as tabs over the center pane: the project's pages. Each tab is a link, so it
  * keeps the scope and works from the keyboard and in a new tab. The strip scrolls sideways inside itself, with no scrollbar: a
  * fade marks an edge that has tabs past it, and the current tab is brought into view.
  */
@@ -66,26 +63,20 @@ export function LayerTabs({ links }: Props) {
     // fades reads the strip only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const pages = links.filter((l) => l.group === "page");
-  const lenses = links.filter((l) => l.group === "lens");
-  const tab = (l: LayerLink) => (
-    <a
-      key={l.id}
-      role="tab"
-      href={l.href}
-      aria-selected={l.current}
-      aria-current={l.current ? "page" : undefined}
-      className={["sh-tab", l.dim ? "dim" : ""].filter(Boolean).join(" ")}
-      title={l.reason}
-    >
-      {l.title}
-    </a>
-  );
   return (
     <nav className="sh-tabs" role="tablist" aria-label="Layers" ref={strip}>
-      {pages.map(tab)}
-      {lenses.length > 0 && <span className="sh-tab-sep" role="presentation" aria-hidden="true" />}
-      {lenses.map(tab)}
+      {links.map((l) => (
+        <a
+          key={l.id}
+          role="tab"
+          href={l.href}
+          aria-selected={l.current}
+          aria-current={l.current ? "page" : undefined}
+          className="sh-tab"
+        >
+          {l.title}
+        </a>
+      ))}
     </nav>
   );
 }

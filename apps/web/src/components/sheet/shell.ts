@@ -25,7 +25,6 @@ export function layerLinks({ id, tab, scope }: { id: string; tab: string; scope:
     title,
     href: hrefView(id, t, { scope }),
     current: tab === t,
-    group: "page",
   });
   return [page("flow", "Flow"), page("system", "System"), page("pipeline", "Pipeline"), page("packages", "Packages")];
 }

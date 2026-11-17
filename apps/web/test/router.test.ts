@@ -188,7 +188,7 @@ describe("hash router", () => {
     expect(parseRoute("#/projects/ab12/compare/extra?base=a")).toEqual({ name: "unknown" });
   });
 
-  it("lists the built-in tabs; any other tab id is a lens", () => {
+  it("lists the built-in tabs, and a route to any other tab redirects (see redirectFor)", () => {
     expect([...BUILTIN_TABS]).toEqual(["flow", "system", "pipeline", "packages"]);
   });
 

@@ -3,9 +3,7 @@
 // storage base). makeStaticApi takes where a project's files live; the demo and hostedApi.ts each supply one.
 import { ApiError } from "./apiError";
 import type {
-  Annotation,
   ArchModel,
-  Compare,
   ExecFunctionRef,
   ExecModel,
   FileEntry,
@@ -14,25 +12,18 @@ import type {
   FileSymbol,
   FileView,
   FindingRow,
-  LensRecord,
   NodeFacts,
   Overview,
   Project,
-  Review,
-  ReviewStale,
   ScopeFlow,
-  ScopeLensRow,
-  ScopeLenses,
-  ScopeLensRun,
   SourceSlice,
-  TargetType,
 } from "./api";
 import type { CallerOptions, PipelineModel, SerializedModel, SystemModel, TierModel } from "@insight/model";
 import { buildFileFlow, calleeMapFromNodes, couplingIndex, type CouplingIndex } from "@insight/flow";
 import type { FlowFocus } from "./zoom/detailPref";
 import { callerGraphFor, pipelineFor, refsFor, scopeCallersFor, scopeExecFor, scopeFlowFor, stagesFor, systemFor, tiersFor, type CallerGraphPayload, type ScopeRefsPayload, type StagesPayload } from "./model/payloads";
 import { models } from "./model/store";
-import { canonicalScope, scopeKey, scopeProblem } from "./scopeKey";
+import { scopeKey, scopeProblem } from "./scopeKey";
 
 interface RawNode {
   id: string;
@@ -57,15 +48,10 @@ export interface DemoMeta {
   files: number;
 }
 
-/** Why a hosted index has no lens results for a folder or file: its export covers the project root only. */
-export const ROOT_ONLY_REASON = "Hosted indexes cover the project root only";
-
 /** Options of one static project source. Every field is optional: the demo uses the defaults. */
 export interface StaticOptions {
   /** The text of one source file of a project, or undefined when the project does not hold it. Default: the demo's sources.json. */
   sourceFor?: (projectId: string, path: string) => Promise<string | undefined>;
-  /** The export holds the project root only, so a folder or file scope lists every lens as unavailable. */
-  rootOnly?: boolean;
   /** The project as the page shows it, from the export's project.json. Default: the project as exported. */
   identify?: (projectId: string, project: Project) => Project;
   /** The message a write gets. */
@@ -171,47 +157,11 @@ export function makeStaticApi(baseFor: (projectId: string) => string | Promise<s
     return { project, overview: { ...data.overview, project } };
   }
 
-  /** The listing of a folder or file on a root-only export: the root's lenses, each unavailable. */
-  async function unavailableListing(id: string, scope: string): Promise<ScopeLenses> {
-    const root = await scopeFile<ScopeLenses>(id, "", "lenses.json");
-    if (!root) throw new ApiError(404, "no such scope");
-    const path = canonicalScope(scope);
-    const files = await load<FileEntry[]>(id, "files.json");
-    return {
-      snapshot: root.snapshot,
-      scope: path,
-      kind: files.some((f) => f.path === path) ? "file" : "folder",
-      stats: { nodes: 0, edges: 0, findings: 0, external: 0 },
-      facets: [],
-      lenses: root.lenses.map((row) => ({ id: row.id, title: row.title, status: "unavailable", reason: ROOT_ONLY_REASON, findings: null, hasContent: false })),
-    };
-  }
-
-  /** The scope's listing as the export saved it. A scope the export did not reach is "no such scope", as on the server. */
-  async function scopeListing(id: string, scope: string): Promise<ScopeLenses> {
-    const problem = scopeProblem(scope);
-    if (problem) throw new ApiError(400, problem);
-    if (opts.rootOnly && canonicalScope(scope) !== "") return unavailableListing(id, scope);
-    const listing = await scopeFile<ScopeLenses>(id, scope, "lenses.json");
-    if (!listing) throw new ApiError(404, "no such scope");
-    return listing;
-  }
-
   /** The text of a source file, or the 404 a file the project does not hold gets. */
   async function sourceText(id: string, path: string): Promise<string> {
     const text = await sourceFor(id, path);
     if (text === undefined) throw new ApiError(404, `${path} is not part of this project's data`);
     return text;
-  }
-
-  /**
-   * The record of a lens whose result the export did not save. The export saves only ok results with
-   * something to show, so an ok lens here has nothing in it, and the other statuses carry their reason.
-   */
-  function recordOf(row: ScopeLensRow): LensRecord {
-    if (row.status === "ok") return { id: row.id, title: row.title, status: "ok", reused: false, result: { findings: [], views: [], metrics: {} } };
-    if (row.status === "unavailable" || row.status === "error") return { id: row.id, title: row.title, status: row.status, reason: row.reason, reused: false };
-    return { id: row.id, title: row.title, status: "unavailable", reason: "Not captured for this scope in the demo.", reused: false };
   }
 
   /**
@@ -236,26 +186,6 @@ export function makeStaticApi(baseFor: (projectId: string) => string | Promise<s
     add: async (_body: { path?: string; url?: string; name?: string; allowBuildTools: boolean }): Promise<Project> => readOnly(),
     remove: async (_id: string): Promise<void> => readOnly(),
     reindex: async (_id: string, _full = false): Promise<{ result: string }> => readOnly(),
-    lens: async (id: string, lensId: string, _snapshot?: string): Promise<LensRecord> => {
-      await checkProject(id);
-      const lens = (await load<Record<string, LensRecord>>(id, "lenses.json"))[lensId];
-      if (!lens) throw new ApiError(404, `no lens ${lensId} in this snapshot`);
-      return lens;
-    },
-    scopeLenses: async (id: string, scope: string): Promise<ScopeLenses> => {
-      await checkProject(id);
-      return scopeListing(id, scope);
-    },
-    scopeLens: async (id: string, scope: string, lensId: string): Promise<ScopeLensRun> => {
-      await checkProject(id);
-      const listing = await scopeListing(id, scope);
-      const row = listing.lenses.find((l) => l.id === lensId);
-      if (!row) throw new ApiError(404, `no lens ${lensId}`);
-      // The export writes a result file only for an ok lens with something to show, so no other lens asks for one.
-      const saved = row.status === "ok" && row.hasContent === true ? await scopeFile<ScopeLensRun>(id, scope, `${lensId}.json`) : undefined;
-      if (saved) return saved;
-      return { snapshot: listing.snapshot, scope: listing.scope, kind: listing.kind, lens: recordOf(row) };
-    },
     findings: async (id: string, filter: { lens?: string; severity?: string; snapshot?: string } = {}): Promise<FindingRow[]> => {
       await checkProject(id);
       return (await load<FindingRow[]>(id, "findings.json")).filter(
@@ -427,17 +357,6 @@ export function makeStaticApi(baseFor: (projectId: string) => string | Promise<s
       if (problem) throw new ApiError(400, problem);
       return (await scopeFile<ArchModel>(id, "", "arch.json")) ?? EMPTY_ARCH;
     },
-    // Comparing commits and keeping review decisions and notes need a git history and a writable
-    // store, which the static builds do not have. The tabs are hidden there; these keep the
-    // surface identical to the live api.
-    compare: async (_id: string, _base: string, _head: string): Promise<Compare> => readOnly(),
-    review: async (_id: string, _snapshot?: string): Promise<Review> => readOnly(),
-    decide: async (_id: string, _key: string, _status: "accepted" | "dismissed", _note = ""): Promise<{ key: string; decision: ReviewStale }> => readOnly(),
-    reopen: async (_id: string, _key: string): Promise<void> => readOnly(),
-    annotations: async (_id: string, _filter: { type?: TargetType; key?: string } = {}): Promise<Annotation[]> => [],
-    addAnnotation: async (_id: string, _body: { type: TargetType; key: string; text: string }): Promise<Annotation> => readOnly(),
-    editAnnotation: async (_id: string, _annId: string, _text: string): Promise<Annotation> => readOnly(),
-    removeAnnotation: async (_id: string, _annId: string): Promise<void> => readOnly(),
   };
 }
 

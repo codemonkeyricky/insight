@@ -12,7 +12,7 @@ import { findingCounts } from "../../zoom/findingsLayer";
 import type { ZoomStore } from "../../zoom/scene";
 import type { MapBuild } from "../../zoom/source";
 import { zoneOf } from "../../zoom/zones";
-import { scopeKind } from "../ScopeNote";
+import { scopeKind } from "../../scopeKind";
 import { LayersPanel, type LayerState } from "../sheet/LayersPanel";
 import { SHEET_MID, SHEET_MAX_WIDTH } from "../sheet/bottomSheet";
 import { TitleBlock, type TitleFacts } from "../sheet/TitleBlock";
@@ -30,7 +30,7 @@ interface Props {
   slot: HTMLElement | null;
   /** The title block's facts, without the selection, which this view works out. */
   facts: Omit<TitleFacts, "selected">;
-  /** The overview is the flow root with the title block emphasised. */
+  /** True at the project root, where the flow shows the emphasised title block. */
   emphasis: boolean;
   /** Set by "Show in Flow": the findings layer is on, drawing only the findings of this kind. */
   findingKind?: string;
