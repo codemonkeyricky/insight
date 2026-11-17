@@ -39,3 +39,13 @@ describe("fitBox", () => {
     expect(fitBox(100, 100, 0, 600, OPTS)).toEqual({ k: 1, x: 0, y: 0 });
   });
 });
+
+describe("fitBox with a top pad", () => {
+  it("a height-limited fit keeps the bottom pad below the content, so nothing is cut off under the top pad", () => {
+    const c = fitBox(100, 1000, 800, 600, { pad: 16, maxK: 10, fitMinK: 0.01, padTop: 48 });
+    // The content sits at the top pad and keeps the pad below it: (600 - 48 - 16) / 1000 = 0.536.
+    expect(c.k).toBeCloseTo(0.536, 9);
+    expect(c.y).toBe(48);
+    expect(c.y + 1000 * c.k).toBeCloseTo(600 - 16, 6);
+  });
+});
