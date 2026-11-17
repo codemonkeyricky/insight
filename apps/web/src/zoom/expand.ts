@@ -6,7 +6,7 @@
 // layout never depends on expansions (a function box keeps its compact size), so everything here is placement: where
 // each expansion goes, how a chain follows its parent, what closes with what, and how the camera shows a new one. Pure,
 // so these rules are unit tested (test/expand.test.ts).
-import { CHART_FIT_MAX_K, CHART_HEAD, CHART_PAD, relayout, unfoldChart, type Camera, type FlowNode, type FunctionFlow, type InlineEntry, type InlineTree, type Rect } from "@insight/flow";
+import { CHART_FIT_MAX_K, CHART_HEAD, CHART_PAD, fitCamera, relayout, unfoldChart, type Camera, type FlowNode, type FunctionFlow, type InlineEntry, type InlineTree, type Rect } from "@insight/flow";
 import { zoneLetter } from "./zones";
 import { callersKey, isCallersKey } from "./callers";
 
@@ -728,6 +728,29 @@ export function anchoredTo(list: readonly Expansion[], nodeId: string): Expansio
   return list.find((e) => e.kind !== "callers" && e.anchor.kind === "box" && e.anchor.nodeId === nodeId);
 }
 
+/**
+ * The box of a callee opened from the call step `stepId` of `fnId`'s chart, if one is open there. A call row's chevron shows
+ * the open state from it, and a second click on the row closes that box with every box chained from it.
+ */
+export function calleeAt(list: readonly Expansion[], fnId: string, stepId: string): Expansion | undefined {
+  return list.find((e) => e.kind !== "callers" && e.anchor.kind === "step" && e.anchor.fnId === fnId && e.anchor.stepId === stepId);
+}
+
+/**
+ * The callee boxes open from each call step, by the step's chart: `fnId` → the ids of its steps that have a box open from them
+ * (see calleeAt). Built once per render, so each row asks a set instead of scanning the expansions.
+ */
+export function openStepsOf(list: readonly Expansion[]): ReadonlyMap<string, ReadonlySet<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const e of list) {
+    if (e.kind === "callers" || e.anchor.kind !== "step" || e.anchor.stepId === undefined) continue;
+    const steps = out.get(e.anchor.fnId) ?? new Set<string>();
+    steps.add(e.anchor.stepId);
+    out.set(e.anchor.fnId, steps);
+  }
+  return out;
+}
+
 /** The inset of a callout's expansion-side edge from the expansion's top and bottom: it meets the box inside its rounded corners. */
 export const CALLOUT_INSET = 12;
 
@@ -859,4 +882,55 @@ export function sceneCamera(scene: Rect, roomWidth: number, maxK: number, narrow
 /** Whether the expansion replaces its card in the card's own slot. */
 export function isInPlace(e: Expansion): boolean {
   return e.anchor.kind === "box" && e.anchor.inPlace === true;
+}
+
+/**
+ * A box's head: the box as a reveal or a fit sees it. A tall chart needs only its header in view, so its height is clamped
+ * to the room's height on screen. `roomHeight` is in screen pixels and the box is in world units, so the clamp is
+ * `roomHeight / k` at the camera scale `k`.
+ */
+export function boxHead(box: Rect, roomHeight: number, k: number): Rect {
+  return { x: box.x, y: box.y, w: box.w, h: Math.min(box.h, roomHeight / Math.max(k, 1e-9)) };
+}
+
+const joinRects = (a: Rect, b: Rect): Rect => {
+  const x = Math.min(a.x, b.x);
+  const y = Math.min(a.y, b.y);
+  return { x, y, w: Math.max(a.x + a.w, b.x + b.w) - x, h: Math.max(a.y + a.h, b.y + b.h) - y };
+};
+
+/**
+ * The camera after a box opens from a call step (ZoomMap's openStep). The least move (expandCamera) is taken when it already
+ * shows the whole chain: the root card the chain starts at (`rootRect`, in world units), every box from it to the new one.
+ * Otherwise the chain is fitted to the stage (panned, or zoomed out to fit, never zoomed in, not below REVEAL_MIN_K). A
+ * chain still too wide for that at the smallest scale keeps the new box and the box it hangs from in view. `stage` is the
+ * room in screen pixels, its top-left where the camera's origin is drawn. Pure: the camera and the list are its only input.
+ */
+export function chainCamera(from: Camera, stage: Rect, list: readonly Expansion[], opened: Expansion, rootRect: Rect | undefined): Camera {
+  const room = { width: stage.w, height: stage.h };
+  const at = (box: Rect): Camera => expandCamera(from, box, stage, { readK: 0, fitMinK: REVEAL_MIN_K, headH: CHART_HEAD });
+  const shows = (c: Camera, r: Rect): boolean => {
+    const x = r.x * c.k + c.x;
+    const y = r.y * c.k + c.y;
+    return x >= stage.x && y >= stage.y && x + r.w * c.k <= stage.x + stage.w && y + r.h * c.k <= stage.y + stage.h;
+  };
+  // The chain from the new box up to the card it starts at: each box, then the one it hangs from.
+  const chain: Expansion[] = [];
+  for (let cur: Expansion | undefined = opened; cur !== undefined && chain.length <= list.length; ) {
+    chain.push(cur);
+    if (cur.anchor.kind !== "step") break;
+    const parentId: string = cur.anchor.fnId;
+    cur = list.find((x) => x.fnId === parentId);
+  }
+  const head = (box: Rect): Rect => boxHead(box, stage.h, from.k);
+  const whole = chain.reduce((r, e) => joinRects(r, head(e)), head(opened));
+  const all = rootRect === undefined ? whole : joinRects(whole, rootRect);
+  const minimal = at(opened);
+  if (shows(minimal, all)) return minimal;
+  const fit = fitCamera(all, room, { minK: REVEAL_MIN_K, maxK: from.k });
+  const fitted = { ...fit, x: fit.x + stage.x, y: fit.y + stage.y };
+  if (shows(fitted, all)) return fitted;
+  // Too wide for the room at the smallest scale: the new box and the box it hangs from stay in view.
+  const caller = chain[1];
+  return at(caller === undefined ? head(opened) : joinRects(head(caller), head(opened)));
 }

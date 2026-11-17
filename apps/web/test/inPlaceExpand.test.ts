@@ -1,8 +1,8 @@
 // A grid card expands in place: the expansion takes the card's own slot, the layout reflows around it, and the
-// calls inside keep the inline behaviour (same-thread nests, thread/process hops open a side box).
+// calls inside open their callees in a box to the right of the step (thread/process hops too, as a side box).
 import { describe, expect, it } from "vitest";
 import { gridRootsLayout, layoutFunction, placeSceneLayout, type FunctionFlow, type Rect, type Scene, type SceneNode } from "@insight/flow";
-import { calloutOf, closeExpansion, footprintOf, isInPlace, openExpansion, refresh, setInline, type Expansion, type ExpandAnchor } from "../src/zoom/expand.js";
+import { calloutOf, closeExpansion, EXPAND_GAP, footprintOf, isInPlace, openExpansion, refresh, type Expansion, type ExpandAnchor } from "../src/zoom/expand.js";
 
 const call = (label: string, target?: string, role: "call" | "spawn" = "call") => ({ t: "step" as const, role, label, ...(target ? { target } : {}) });
 const make = (id: string, items: ReturnType<typeof call>[]): FunctionFlow => layoutFunction({ id, name: id, async: false, items });
@@ -73,16 +73,19 @@ describe("in-place root expansion", () => {
     expect((list[0] as Expansion).x).toBeGreaterThan(rect.x + rect.w);
   });
 
-  it("a same-thread call nests inside it and the box grows in place", () => {
+  it("a same-thread call opens its callee in a box to the right of the step, and the in-place box keeps its slot", () => {
     const leaf = make("leaf", [call("z()")]);
     const root = make("root", [call("leaf()", "leaf"), call("tail()")]);
     const rect = placeOf(scene, []).rects.get("alpha") as Rect;
     const open = openExpansion([], "root", inPlace(rect, "alpha"), root, undefined);
-    const step = root.nodes.find((n) => n.label === "leaf()")?.id as string;
-    const grown = setInline(open, "root", step, leaf, undefined);
-    const e = grown[0] as Expansion;
-    expect(e.h).toBeGreaterThan((open[0] as Expansion).h);
-    expect([e.x, e.y]).toEqual([rect.x, rect.y]);
+    const stepNode = root.nodes.find((n) => n.label === "leaf()") as (typeof root.nodes)[number];
+    const step: ExpandAnchor = { kind: "step", fnId: "root", stepId: stepNode.id, rect: { x: stepNode.x, y: stepNode.y, w: stepNode.w, h: stepNode.h } };
+    const next = openExpansion(open, "leaf", step, leaf, undefined);
+    const parent = next.find((e) => e.fnId === "root") as Expansion;
+    const child = next.find((e) => e.fnId === "leaf") as Expansion;
+    expect(parent.h).toBe((open[0] as Expansion).h);
+    expect([parent.x, parent.y]).toEqual([rect.x, rect.y]);
+    expect(child.x).toBe(parent.x + parent.w + EXPAND_GAP);
   });
 
   it("a thread step still opens a side box right of the in-place box, inside the reserved room", () => {

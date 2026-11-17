@@ -13,7 +13,7 @@ export function stepCallee(node: Pick<FlowNode, "role" | "target">, owner: strin
 }
 
 export type StepGesture = "click" | "open";
-export type StepActionKind = "select" | "inline" | "fold" | "fork" | "lambda" | "unfold" | "none";
+export type StepActionKind = "select" | "box" | "fold" | "fork" | "lambda" | "unfold" | "none";
 
 /** The facts about a row the decision needs. */
 export interface StepContext {
@@ -21,7 +21,7 @@ export interface StepContext {
   hasCallee: boolean;
   /** Whether that callee is a lambda (a closure inside the caller, or a function folded into its owner). */
   isLambda: boolean;
-  /** Where the callee runs (see stepRuntime): "same" nests in the step; another thread or process opens as a parallel line. */
+  /** Where the callee runs (see stepRuntime): "same" opens a box to the right of the step; another thread or process opens as a parallel line. */
   runtime: StepRuntime;
   /** Whether the row has something to select. Default true. */
   selectable?: boolean;
@@ -31,9 +31,9 @@ export function stepAction(node: Pick<FlowNode, "shape" | "handler" | "foldId">,
   if (gesture === "click") return ctx.selectable === false ? "none" : "select";
   // A `⋯ n local` fold row opens to show the rows it folds (the coupling view).
   if (node.foldId !== undefined) return "unfold";
-  if (node.shape === "nest" || node.shape === "fork") return "fold";
+  if (node.shape === "fork") return "fold";
   if (!ctx.hasCallee) return "none";
   // A handler (`ctx.onmessage = (e) => …`) is how a worker processes its messages: it opens, even as a folded lambda.
   if (node.handler !== true && ctx.isLambda) return "lambda";
-  return ctx.runtime === "same" ? "inline" : "fork";
+  return ctx.runtime === "same" ? "box" : "fork";
 }

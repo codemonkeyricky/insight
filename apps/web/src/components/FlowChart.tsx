@@ -1,24 +1,17 @@
 import { useEffect, useId, useMemo, useRef, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import type { FlowEdge, FlowNode, FunctionFlow } from "../api";
 import { outsideScope, outsideText } from "../flowTargets";
-import { LANE_W, NEST_HEAD, ROW_H, stationOf } from "@insight/flow";
+import { LANE_W, ROW_H, stationOf } from "@insight/flow";
 import { hrefFile, hrefView } from "../router";
 import { backEdgeFlags, prefersReducedMotion, useOnScreen, usePageVisible } from "../zoom/flowMotion";
 import { runFlowToken, useTokenSlot } from "../zoom/flowToken";
 import { popDelay } from "../zoom/pop";
-import { CALLERS_BTN_H, CallersButton, callersChipW } from "./zoom/CallersControl";
-
-/** The width of one character of a step's label, in chart units: the label's 12 px code font. */
-const NEST_CHAR_W = 7.3;
 
 /** A step's click, when a caller takes it over. Return true to handle it: the link (if any) is then not followed. */
 export type FlowNodeClick = (node: FlowNode) => boolean;
 
 /** Opens or folds a step (a double-click, Enter or Space on the row, or a click on its chevron). Return true when the step took it. */
 export type FlowNodeOpen = (node: FlowNode) => boolean;
-
-/** Opens or closes the callers of a nested frame's callee (its header's Callers button). */
-export type FlowNodeCallers = (node: FlowNode) => void;
 
 /** The chevron's hit target: at least 20 px square, around the glyph, at the right end of the row. */
 const CHEV_HIT = 24;
@@ -33,7 +26,7 @@ const CHEV_INSET = 6;
  * flow along the edge paths (see zoom/flowToken.ts). Motion is off under reduced motion, while the page is hidden, and
  * while the chart is off screen (see zoom/flowMotion.ts). The token runs on the most recently opened charts only.
  */
-export function FlowChart({ id, fn, scope, onNodeClick, onNodeOpen, onCallers, callersOpenOf, k = 1, selectedId, motion = true }: { id: string; fn: FunctionFlow; scope: string; onNodeClick?: FlowNodeClick; onNodeOpen?: FlowNodeOpen; onCallers?: FlowNodeCallers; callersOpenOf?: (node: FlowNode) => boolean; /** The map's label scale, for the frames' Callers buttons (see CallersButton). */ k?: number; selectedId?: string; motion?: boolean }) {
+export function FlowChart({ id, fn, scope, onNodeClick, onNodeOpen, openOf, selectedId, motion = true }: { id: string; fn: FunctionFlow; scope: string; onNodeClick?: FlowNodeClick; onNodeOpen?: FlowNodeOpen; /** Whether a call row's callee box is open from it: its chevron shows ▾. */ openOf?: (node: FlowNode) => boolean; selectedId?: string; motion?: boolean }) {
   const uid = useId();
   const key = uid.replace(/[^a-zA-Z0-9]/g, "");
   const glow = `glow-${key}`;
@@ -70,9 +63,6 @@ export function FlowChart({ id, fn, scope, onNodeClick, onNodeOpen, onCallers, c
         {fn.nodes.filter((n) => n.line?.band !== undefined).map((n) => (
           <rect key={`band-${n.id}`} x={n.line!.band!.x} y={n.line!.band!.y} width={n.line!.band!.w} height={n.line!.band!.h} rx={10} className={`flow-band c${laneOf(n.lane)}`} data-band={n.id} style={delayStyle(nodeDelay.get(n.id) ?? 140)} />
         ))}
-        {fn.nodes.filter(isNest).map((n) => (
-          <NestFrame key={n.id} node={n} onNodeClick={onNodeClick} onNodeOpen={onNodeOpen} onCallers={onCallers} callersOpen={callersOpenOf?.(n) ?? false} k={k} selected={n.id === selectedId} delay={nodeDelay.get(n.id) ?? 140} />
-        ))}
       </g>
       <g>
         {fn.edges.map((e, i) => (
@@ -80,8 +70,8 @@ export function FlowChart({ id, fn, scope, onNodeClick, onNodeOpen, onCallers, c
         ))}
       </g>
       <g>
-        {fn.nodes.filter((n) => !isNest(n)).map((n) => (
-          <Node key={n.id} id={id} node={n} fnId={fn.id} scope={scope} width={fn.width} onNodeClick={onNodeClick} onNodeOpen={onNodeOpen} selected={n.id === selectedId} delay={nodeDelay.get(n.id) ?? 140} />
+        {fn.nodes.map((n) => (
+          <Node key={n.id} id={id} node={n} fnId={fn.id} scope={scope} width={fn.width} onNodeClick={onNodeClick} onNodeOpen={onNodeOpen} open={openOf?.(n) ?? false} selected={n.id === selectedId} delay={nodeDelay.get(n.id) ?? 140} />
         ))}
       </g>
       {tokenActive && (
@@ -101,8 +91,6 @@ export function FlowChart({ id, fn, scope, onNodeClick, onNodeOpen, onCallers, c
 const LANES = [0, 1, 2, 3, 4];
 const laneOf = (n: number | undefined): number => (n ?? 0) % 5;
 const delayStyle = (ms: number) => ({ ["--d" as string]: `${ms}ms` });
-
-const isNest = (n: FlowNode): boolean => n.shape === "nest";
 
 /** Double-click and Enter/Space on a row open or fold it. A step the handler declines is left to its link or click. */
 function openHandlers(node: FlowNode, onNodeOpen: FlowNodeOpen | undefined) {
@@ -155,52 +143,6 @@ const keywordOf = (n: FlowNode): string | undefined => {
   const kw = KEYWORD[n.role];
   return kw === undefined || n.label === kw || n.label.startsWith(`${kw} `) || n.label.startsWith(`${kw}(`) ? undefined : kw;
 };
-
-/**
- * A callee nested in the call step that calls it: a faint band of its body's lane colour with the call's row as the header
- * (a call station, the label, a fold mark). Its rows and edges are drawn over the band by the chart. A click on the header
- * selects it; a double-click, Enter or Space on it, or a click on the fold mark, folds the callee back.
- */
-function NestFrame({ node, onNodeClick, onNodeOpen, onCallers, callersOpen, k, selected, delay }: { node: FlowNode; onNodeClick?: FlowNodeClick; onNodeOpen?: FlowNodeOpen; onCallers?: FlowNodeCallers; callersOpen: boolean; k: number; selected: boolean; delay: number }) {
-  const { x, y, w, h } = node;
-  const lane = laneOf((node.lane ?? 0) + 1);
-  const lc = laneOf(node.lane);
-  const [cx, cy] = station(node);
-  // With a Callers button in the header (at its left, before the name), the label is cut to the room after it (the full name stays in the tooltip).
-  const chipW = onCallers !== undefined && node.target !== undefined ? callersChipW(k) : 0;
-  const callers = chipW > 0;
-  const room = x + w - CHEV_INSET - CHEV_HIT - 4 - chipW - 6 - labelAt(node);
-  const tagChars = node.tag !== undefined ? node.tag.length + 1 : 0;
-  const maxChars = Math.max(1, Math.floor(room / NEST_CHAR_W) - tagChars);
-  const label = callers && node.label.length > maxChars ? `${node.label.slice(0, Math.max(0, maxChars - 1))}…` : node.label;
-  return (
-    <g className={`flow-nest c${lc}${selected ? " selected" : ""}`} data-node={node.id} data-nest="" style={delayStyle(delay)}>
-      <title>{node.title ?? node.label}</title>
-      <rect x={x} y={y} width={w} height={h} rx={10} className={`flow-nest-body c${lane}`} />
-      <g
-        className="flow-nest-head"
-        role="group"
-        aria-label={node.label}
-        tabIndex={onNodeOpen ? 0 : undefined}
-        onClick={onNodeClick ? () => onNodeClick(node) : undefined}
-        {...openHandlers(node, onNodeOpen)}
-      >
-        <rect x={x} y={y} width={w} height={NEST_HEAD} rx={10} className="flow-nest-hit" />
-        <CallStation cx={cx} cy={cy} />
-        <text x={labelAt(node) + (callers ? chipW + 6 : 0)} y={cy} dominantBaseline="central" className="flow-text flow-nest-label">
-          {node.tag !== undefined && <tspan className="flow-kw">{node.tag} </tspan>}
-          {label}
-        </text>
-        <Chevron node={node} x={x + w - CHEV_INSET - CHEV_HIT / 2} y={y} fold onNodeOpen={onNodeOpen} />
-        {onCallers !== undefined && node.target !== undefined && (
-          // Left of the name: the callers of the callee this frame nests. Its box opens left when the chart replaced its
-          // card in place, and right when the chart opened from a call step (see expand.ts's opensLeft).
-          <CallersButton x={labelAt(node)} y={y + (NEST_HEAD - CALLERS_BTN_H) / 2} name={node.label} open={callersOpen} onClick={() => onCallers(node)} k={k} />
-        )}
-      </g>
-    </g>
-  );
-}
 
 /** One edge as a single path, drawn from the layout's `d` (or its points on a chart exported before the line map). */
 function Edge({ edge, index, arrow, back, delay }: { edge: FlowEdge; index: number; arrow: (lane: number) => string; back: boolean; delay: number }) {
@@ -296,7 +238,7 @@ function FoldRow({ node, width, onNodeClick, onNodeOpen, selected, delay }: { no
   );
 }
 
-function Node({ id, node, fnId, scope, width, onNodeClick, onNodeOpen, selected, delay }: { id: string; node: FlowNode; fnId: string; scope: string; width: number; onNodeClick?: FlowNodeClick; onNodeOpen?: FlowNodeOpen; selected: boolean; delay: number }) {
+function Node({ id, node, fnId, scope, width, onNodeClick, onNodeOpen, open: calleeOpen, selected, delay }: { id: string; node: FlowNode; fnId: string; scope: string; width: number; onNodeClick?: FlowNodeClick; onNodeOpen?: FlowNodeOpen; /** The callee's box is open from this row. */ open?: boolean; selected: boolean; delay: number }) {
   if (node.foldId !== undefined) return <FoldRow node={node} width={width} onNodeClick={onNodeClick} onNodeOpen={onNodeOpen} selected={selected} delay={delay} />;
   const { shape } = node;
   const [cx, cy] = station(node);
@@ -317,7 +259,7 @@ function Node({ id, node, fnId, scope, width, onNodeClick, onNodeOpen, selected,
         {node.unguarded && <tspan className="flow-warn">{" ⚠"}</tspan>}
         {outside && <tspan className="flow-mark">{" ↗"}</tspan>}
       </text>
-      {inside && <Chevron node={node} x={width - 4 - CHEV_INSET - CHEV_HIT / 2} y={node.y} fold={shape === "fork"} onNodeOpen={onNodeOpen} />}
+      {inside && <Chevron node={node} x={width - 4 - CHEV_INSET - CHEV_HIT / 2} y={node.y} fold={shape === "fork" || calleeOpen === true} onNodeOpen={onNodeOpen} />}
     </>
   );
   const cp = couplingClassOf(node);

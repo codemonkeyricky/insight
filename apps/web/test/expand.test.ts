@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CHART_HEAD, CHART_PAD, type FunctionFlow, type Rect } from "@insight/flow";
+import { CHART_HEAD, CHART_PAD, type Camera, type FunctionFlow, type Rect } from "@insight/flow";
 import {
   CALLOUT_INSET,
   EXPAND_GAP,
@@ -13,6 +13,8 @@ import {
   refresh,
   reflow,
   detailLetter,
+  boxHead,
+  chainCamera,
   expandCamera,
   revealCamera,
   sceneCamera,
@@ -404,3 +406,46 @@ describe("stepRect and revealing a nested frame", () => {
     expect(expandCamera(cam, whole, stage, lim).y).not.toBe(cam.y);
   });
 });
+
+describe("boxHead: a tall box is clamped to the room's height on screen", () => {
+  it("clamps the height to the room's height in world units at the camera scale", () => {
+    expect(boxHead({ x: 1, y: 2, w: 3, h: 1000 }, 400, 2)).toEqual({ x: 1, y: 2, w: 3, h: 200 });
+  });
+
+  it("keeps a box shorter than the room as it is", () => {
+    expect(boxHead({ x: 1, y: 2, w: 3, h: 50 }, 400, 2)).toEqual({ x: 1, y: 2, w: 3, h: 50 });
+  });
+});
+
+describe("chainCamera: the camera after a chain opens", () => {
+  const stage: Rect = { x: 0, y: 0, w: 1200, h: 800 };
+  const from: Camera = { k: 1, x: 0, y: 0 };
+  const root: Rect = { x: 0, y: 0, w: 200, h: 60 };
+  const at = (e: Rect): Rect => ({ x: e.x, y: e.y, w: e.w, h: e.h });
+  /** Whether the rect, drawn with `cam`, lies inside the stage. */
+  const inside = (cam: Camera, r: Rect): boolean => {
+    const x = r.x * cam.k + cam.x;
+    const y = r.y * cam.k + cam.y;
+    return x >= stage.x && y >= stage.y && x + r.w * cam.k <= stage.x + stage.w && y + r.h * cam.k <= stage.y + stage.h;
+  };
+  const find = (list: readonly Expansion[], fnId: string): Expansion => {
+    const e = list.find((x) => x.fnId === fnId);
+    if (e === undefined) throw new Error(`no ${fnId}`);
+    return e;
+  };
+
+  it("keeps the root box, the opened box and its caller in view when the chain fits the room", () => {
+    const a = openExpansion([], "A", { kind: "box", nodeId: "n", rect: root }, chart("A", 300, 200), view);
+    const ab = openExpansion(a, "B", { kind: "step", fnId: "A", stepId: "s1", rect: { x: 20, y: 20, w: 60, h: 20 } }, chart("B", 300, 200), view);
+    const list = openExpansion(ab, "C", { kind: "step", fnId: "B", stepId: "s2", rect: { x: 20, y: 20, w: 60, h: 20 } }, chart("C", 300, 200), view);
+    const cam = chainCamera(from, stage, list, find(list, "C"), root);
+    for (const r of [root, at(find(list, "C")), at(find(list, "B")), at(find(list, "A"))]) expect(inside(cam, r)).toBe(true);
+  });
+
+  it("does not move the camera when the whole chain is already in view", () => {
+    const a = openExpansion([], "A", { kind: "box", nodeId: "n", rect: root }, chart("A", 300, 200), view);
+    const list = openExpansion(a, "B", { kind: "step", fnId: "A", stepId: "s1", rect: { x: 20, y: 20, w: 60, h: 20 } }, chart("B", 300, 200), view);
+    expect(chainCamera(from, stage, list, find(list, "B"), root)).toEqual(from);
+  });
+});
+

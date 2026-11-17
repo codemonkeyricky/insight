@@ -24,12 +24,22 @@ The Flow tab draws the execution canvas of the scope as one flat grid of cards (
   joins the box to the expansion. A click on the box again closes its expansion. A function with no chart, or one too
   large to chart, opens nothing. A chart is drawn only once it is at least 120 px wide on screen (`CHART_MIN_PX` and
   `chartShown` in `apps/web/src/zoom/chart.ts`); narrower, the expansion shows only its header.
-- A call step in an expansion's chart opens the callee's expansion to the right of the step, at
-  `x = parent.x + parent.w + 40` and top aligned with the step, chained from the parent. Opening a function that is
-  already open moves its expansion rather than adding a second, and a chain that would cycle is refused. Closing an
-  expansion closes the expansions chained from it. Several expansions may be open at once; each new one is last.
-  Escape closes the last expansion opened (and its chain), and when that expansion hangs from the selected box the
-  selection moves to the box's parent. With nothing expanded, Escape goes up one level.
+- A call row in an expansion's chart opens the callee's expansion in a box to the right of the box that holds the row
+  (`openStep` in `apps/web/src/components/zoom/ZoomMap.tsx`), at `x = parent.x + parent.w + 40` and top aligned with the
+  row, chained from the parent, with a connector from the row. The gestures are the row's ▸ chevron, a double-click and
+  Enter. The chevron shows ▾ while the box is open, and a second open of the row closes that box with every box chained
+  from it. The callee is never drawn inside the call row: a same-thread callee always opens a box (`stepAction` returns
+  `box`). Opening a function that is already open moves its expansion rather than adding a second, and a chain that
+  would cycle is refused. Closing an expansion (its ×, or the row again) closes the expansions chained from it. Two
+  rows of one box never sit side by side: the box of the row opened later replaces the earlier one (see closeSiblings in
+  `expand.ts`). Several expansions may be open at once, in a chain; each new one is last. A call on another thread or in
+  another process draws its callee as a parallel line under its row, or opens a box beside it when the line cannot be drawn.
+  Closing is the same for the × of a box, a row's chevron, and Escape, with one difference. The × (and the chevron) only
+  close: the box and the expansions chained from it go, and when the selected function was one of them, the selection (the
+  URL and the inspector with it) moves to the box they hung from: the caller's function, or the focus for the focus's own
+  box. The map does not move and the URL is not otherwise rewritten. Escape closes the last expansion opened (and its
+  chain) the same way, and when that expansion hangs from the focus it also takes the map up a level to the focus's parent,
+  with its URL. With nothing expanded, Escape goes up one level.
 - The camera moves only as far as it must to show a new expansion (`revealCamera`): it pans the least that brings the
   expansion into the stage, and zooms in only when the chart is narrower than 120 px on screen, at most 1.5 times the
   current scale, with the expansion's top-left corner kept where it was. Zooming never opens a box, and a box toggle
@@ -74,7 +84,7 @@ The Flow tab draws the execution canvas of the scope as one flat grid of cards (
 - A focus carries its scope: `execFocus(scope, nodeId)` in `apps/web/src/zoom/execMap.ts`. A node id is unique only
   within one scope's scene. `MapSource.focusOf` turns a clicked node id into a focus.
 - Callers: a `◂ callers` button (`zm-callers-btn`, `components/zoom/CallersControl.tsx`) sits in a chart box's header
-  (left of its ×), in a nested frame's header (left of its ▾), and at the top-left of a grid card (when
+  (left of its ×), and at the top-left of a grid card (when
   the card has no chart open). The callers box opens LEFT of a grid card, and LEFT from the header of an
   in-place chart that replaced such a card; on any other chart (one opened from a call step) it opens RIGHT of the
   chart. The box lists one row per caller
@@ -87,7 +97,7 @@ The Flow tab draws the execution canvas of the scope as one flat grid of cards (
   one right-hand child: the callers box hung from its header and a call step's callee replace each other, and two rows'
   charts never sit side by side. Opening a card's chart moves the callers box hung from that card to the chart's
   header (so closing the chart closes it too), unless the chart already has a box open to its right (a callee, or a
-  nested frame's callers box): the chart keeps it and the card's box closes. A box hung from a nested frame closes when the frame folds. A caller's chart
+  parallel line's frame, as a thread callee draws it): the chart keeps it and the card's box closes. A caller's chart
   gets no async frame. Below about 0.8× the button shows only ◂, and below about 0.45× it is hidden. Not persisted
   in the URL.
 - Retired: the Hierarchy and Entry points views, and the Execution lens tab. An old `lens-execution` link (under
@@ -193,7 +203,7 @@ CFG is shown.
 - Open on click: a box opens when it is clicked, when Enter opens the item at the view centre, or when a link names it.
 - Animated focus: an Explorer or URL change moves the camera to the new focus.
 - Keyboard: `+` and `-` zoom, arrow keys pan, `Enter` opens the item at the view centre, and `Escape` collapses an
-  expanded function, then goes up one level.
+  expanded function, then goes up one level (the × of a box only closes it, see the expansions above).
 - A breadcrumb (`ZoomMap` draws it; the Flow tab's explorer trail is turned off with `ScopeNote trail={false}`).
 - A minimap, and a resolution meter that reads as text.
 - Dashed external stubs for calls that leave the open scope.
