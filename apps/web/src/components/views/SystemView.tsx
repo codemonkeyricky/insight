@@ -57,7 +57,7 @@ interface Loaded {
   reason?: string;
 }
 
-/** The Tiers | Runtime control of the System tab, as a segmented control (the same markup as the Arch tab's). */
+/** The Tiers | Runtime control of the System tab, as a segmented control (the same markup as the Packages tab's). */
 export function SystemModeToggle({ mode, onChange }: { mode: SystemMode; onChange: (m: SystemMode) => void }) {
   return (
     <div className="seg sysv-mode" role="group" aria-label="System view">

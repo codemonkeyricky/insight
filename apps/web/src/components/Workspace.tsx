@@ -74,15 +74,22 @@ export function Workspace({ id, tab, scope, line, fn, trace, base, head, finding
   /** The flow charts, shared by the map and the code pane, so both read one cache. */
   const store = useMemo(() => new ZoomStore(id), [id]);
 
-  // True when this tab wants the width (System or Pipeline) on a desktop. Derived from the tab alone, so no per-tab callback is needed.
-  const wantsWidth = !narrow && (contentOf(tab) === "system" || contentOf(tab) === "pipeline");
+  // True when this tab wants the width (System or Pipeline). Derived from the tab alone, so a resize never changes it.
+  const wantsWidth = contentOf(tab) === "system" || contentOf(tab) === "pipeline";
   // The code pane was collapsed by this effect (not by the reader), so leaving the tab restores it. A reader's own Code
   // click, or a picked code target, clears the flag, which keeps the pane as the reader left it.
   const autoCodeCollapse = useRef(false);
-  // One effect on the derived flag. Moving System to Pipeline (or back) keeps the flag true, so the pane stays collapsed.
+  // The pane's state is read through refs, so the effect does not need it as a dependency and cannot see a stale value. The
+  // effect runs on mount and on a change of tab only: narrow is not a dependency, so resizing the window leaves the pane as it
+  // is. On a narrow window the code pane is a drawer, so nothing collapses (the same rule master's System tab followed on mount).
+  const codeCollapsedNow = useRef(codeCollapsed);
+  codeCollapsedNow.current = codeCollapsed;
+  const targetNow = useRef(target);
+  targetNow.current = target;
+  // Moving System to Pipeline (or back) keeps wantsWidth true, so the pane stays collapsed.
   useEffect(() => {
     if (wantsWidth) {
-      if (!codeCollapsed && target === undefined) {
+      if (!isNarrow() && !codeCollapsedNow.current && targetNow.current === undefined) {
         autoCodeCollapse.current = true;
         setCodeCollapsed(true);
       }
@@ -227,7 +234,9 @@ export function Workspace({ id, tab, scope, line, fn, trace, base, head, finding
     }
   };
 
+  // A scope that names nothing in the snapshot has nothing to draw, so the page says so (the flow view does the same).
   const renderPage = (): ReactNode => {
+    if (scopeKind(scope, files) === "missing") return <p className="muted">Nothing at this path in the snapshot.</p>;
     switch (content) {
       case "system":
         return <SystemView id={id} scope={scope} />;

@@ -124,7 +124,7 @@ function ArchDiagram({ id, scope, model: whole }: { id: string; scope: string; m
   return (
     <div className="arch">
       {scoped !== null && (
-        // The workspace's scope crumbs above the tab keep the Arch tab, so the scope is not repeated here.
+        // The workspace's scope crumbs above the tab keep the Packages tab, so the scope is not repeated here.
         <div className="arch-scope-head">
           <p className="muted small arch-caption">
             Inside {at}: {scoped.cards === "folders" ? `${plural(innerCount, "folder")} (cut at depth ${scoped.depth})` : plural(innerCount, "file")}.

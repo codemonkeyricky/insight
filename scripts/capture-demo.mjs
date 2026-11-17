@@ -44,8 +44,9 @@ const MAX_DEMO_BYTES = 40 * 1024 * 1024;
 const KEEP_FILE_LENSES = new Set(["lens-flow-complexity"]);
 /** How far the budget trims: 0 keeps everything, 1 trims file scopes, 2 trims folder scopes too. */
 const TRIM_LEVELS = ["none", "file scopes", "file and folder scopes"];
-// The same elkjs the web app's worker runs, in its bundled form, which works under Node.
-const ELK = createRequire(join(ROOT, "apps", "web", "package.json"))("elkjs/lib/elk.bundled.js");
+// The same elkjs the flow layout runs, in its bundled form, which works under Node. The web app no longer depends on elkjs,
+// so it is resolved from packages/core/flow, which does.
+const ELK = createRequire(join(ROOT, "packages", "core", "flow", "package.json"))("elkjs/lib/elk.bundled.js");
 
 /** Positions to a tenth of a unit: a layout's JSON is mostly numbers, and the page draws no finer than that. */
 function roundLayout(layout) {
